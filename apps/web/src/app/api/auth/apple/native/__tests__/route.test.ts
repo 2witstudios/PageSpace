@@ -407,7 +407,7 @@ describe('POST /api/auth/apple/native', () => {
 
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to provision Getting Started drive',
+        'Failed to provision Home drive',
         new Error('DB error'),
         { userId: 'new-user-id', provider: 'apple-native' }
       );
@@ -466,14 +466,15 @@ describe('POST /api/auth/apple/native', () => {
       expect(authRepository.updateUser).not.toHaveBeenCalled();
     });
 
-    it('does not provision drive for existing users', async () => {
+    it('provisions Home drive for existing users (idempotent lazy provisioning)', async () => {
       const completeUser = { ...existingUser, appleId: 'apple-sub-123' };
       vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(completeUser as never);
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(completeUser as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'new-drive-id', created: false });
 
       await POST(createNativeRequest(validPayload));
 
-      expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(completeUser.id);
     });
 
     it('handles re-fetch returning null after update', async () => {

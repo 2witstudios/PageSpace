@@ -321,14 +321,15 @@ describe('POST /api/auth/google/native', () => {
       expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockNewUser.id);
     });
 
-    it('given existing user, should not provision Getting Started drive', async () => {
+    it('given existing user, should provision Home drive (idempotent lazy provisioning)', async () => {
       vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockExistingUser.id);
     });
 
     it('should create session with correct parameters', async () => {

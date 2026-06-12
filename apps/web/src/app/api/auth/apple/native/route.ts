@@ -175,15 +175,12 @@ export async function POST(req: Request) {
       loggers.auth.info('New user created via native Apple OAuth', { userId: user.id, platform });
     }
 
-    // Provision getting started drive for new users
-    if (isNewUser) {
-      await provisionHomeDriveIfNeeded(user.id).catch((error) => {
-        loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
-          userId: user.id,
-          provider: 'apple-native',
-        });
+    await provisionHomeDriveIfNeeded(user.id).catch((error) => {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
+        userId: user.id,
+        provider: 'apple-native',
       });
-    }
+    });
 
     // SESSION FIXATION PREVENTION: Revoke existing web sessions before creating a
     // new one. Admin-console sessions are scoped separately and left intact.

@@ -89,7 +89,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
 }));
 
 vi.mock('@/lib/onboarding/home-drive', () => ({
-  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
 }));
 
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({
@@ -464,21 +464,25 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('/dashboard');
       expect(location).not.toContain('provisioned');
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to provision Getting Started drive',
+        'Failed to provision Home drive',
         new Error('DB error'),
         { userId: 'test-user-id' }
       );
     });
 
-    it('does not provision drive for existing users', async () => {
+    it('provisions Home drive for existing users (lazy idempotent); uses default redirect when created:false', async () => {
       vi.mocked(verifyMagicLinkToken).mockResolvedValue({
         ok: true,
         data: { userId: 'test-user-id', isNewUser: false },
       });
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'existing-drive', created: false });
 
-      await GET(createVerifyRequest('valid-token'));
+      const response = await GET(createVerifyRequest('valid-token'));
+      const location = response.headers.get('Location')!;
 
-      expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('test-user-id');
+      expect(location).toContain('/dashboard');
+      expect(location).not.toContain('existing-drive');
     });
   });
 
