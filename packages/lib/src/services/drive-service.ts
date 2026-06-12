@@ -29,6 +29,7 @@ export interface DriveWithAccess {
   isOwned: boolean;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
   lastAccessedAt: Date | null;
+  homePageId: string | null;
 }
 
 export interface ListDrivesOptions {
@@ -44,6 +45,7 @@ export interface CreateDriveInput {
 export interface UpdateDriveInput {
   name?: string;
   drivePrompt?: string | null;
+  homePageId?: string | null;
 }
 
 export interface DriveAccessInfo {
@@ -342,6 +344,11 @@ export async function updateDrive(
     updateData.drivePrompt = input.drivePrompt;
   }
 
+  if (input.homePageId !== undefined) {
+    updateData.homePageId = input.homePageId;
+  }
+
+  // Home drives cannot be renamed; other updates (drivePrompt, homePageId) are allowed.
   const whereClause = input.name !== undefined
     ? and(eq(drives.id, driveId), ne(drives.kind, 'HOME'))
     : eq(drives.id, driveId);
@@ -353,6 +360,23 @@ export async function updateDrive(
     .returning();
 
   return updated || null;
+}
+
+/**
+ * Server-side gate for PATCH /api/drives/[driveId] homePageId: a page may be
+ * a drive's home page only if it exists, belongs to that drive, and is not
+ * trashed. Hard deletes are handled by the FK (ON DELETE set null).
+ */
+export async function isValidDriveHomePage(driveId: string, pageId: string): Promise<boolean> {
+  const page = await db.query.pages.findFirst({
+    where: and(
+      eq(pages.id, pageId),
+      eq(pages.driveId, driveId),
+      eq(pages.isTrashed, false)
+    ),
+  });
+
+  return !!page;
 }
 
 /**

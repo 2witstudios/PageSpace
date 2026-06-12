@@ -14,6 +14,7 @@ import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 
 const channelLogger = loggers.ai.child({ module: 'channel-tools' });
 
@@ -246,6 +247,17 @@ export const channelTools = {
           }
         } catch (error) {
           channelLogger.error('Failed to broadcast inbox update for AI message', error instanceof Error ? error : undefined);
+        }
+
+        // Fire-and-forget mention notifications — never fail the send
+        if (channel.driveId) {
+          void notifyMentionedUsers({
+            content: content.trim(),
+            pageId: channelId,
+            driveId: channel.driveId,
+            triggeredByUserId: userId,
+            mentionerNameOverride: senderIdentity.senderName,
+          });
         }
 
         return {

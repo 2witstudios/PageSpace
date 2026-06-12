@@ -436,7 +436,8 @@ export async function createOrUpdateMessageNotification(
 export async function createMentionNotification(
   targetUserId: string,
   pageId: string,
-  triggeredByUserId: string
+  triggeredByUserId: string,
+  options?: { mentionerNameOverride?: string }
 ) {
   // Don't notify users who mention themselves
   if (targetUserId === triggeredByUserId) return null;
@@ -450,11 +451,13 @@ export async function createMentionNotification(
 
   if (!page) return null;
 
-  const triggeredByUser = await db.query.users.findFirst({
-    where: eq(users.id, triggeredByUserId),
-  });
+  const triggeredByUser = options?.mentionerNameOverride
+    ? null
+    : await db.query.users.findFirst({
+        where: eq(users.id, triggeredByUserId),
+      });
 
-  const mentionerName = triggeredByUser?.name || 'Someone';
+  const mentionerName = options?.mentionerNameOverride || triggeredByUser?.name || 'Someone';
 
   return createNotification({
     userId: targetUserId,

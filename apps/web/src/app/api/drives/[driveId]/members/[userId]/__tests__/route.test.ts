@@ -180,6 +180,7 @@ const createDriveFixture = (overrides: {
   drivePrompt: null,
   kind: 'STANDARD' as const,
   publishSubdomain: null,
+  homePageId: null,
 });
 
 const createAccessFixture = (overrides: Partial<DriveAccessResult>): DriveAccessResult => ({

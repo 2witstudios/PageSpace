@@ -17,6 +17,9 @@ vi.mock('@pagespace/db/db', () => ({
         findMany: vi.fn(),
         findFirst: vi.fn(),
       },
+      pages: {
+        findFirst: vi.fn(),
+      },
     },
     selectDistinct: vi.fn(),
     select: vi.fn(),
@@ -26,7 +29,7 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'drives.id', ownerId: 'drives.ownerId', isTrashed: 'drives.isTrashed' },
-  pages: { driveId: 'pages.driveId', id: 'pages.id' },
+  pages: { driveId: 'pages.driveId', id: 'pages.id', isTrashed: 'pages.isTrashed' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
@@ -42,6 +45,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
 import {
   listAccessibleDrives,
   createDrive,
@@ -52,6 +56,7 @@ import {
   updateDrive,
   trashDrive,
   restoreDrive,
+  isValidDriveHomePage,
 } from '../drive-service';
 
 // ============================================================================
@@ -70,6 +75,7 @@ const createMockDrive = (overrides: { id: string; name: string; ownerId?: string
   trashedAt: null,
   drivePrompt: null,
   publishSubdomain: null,
+  homePageId: null,
 });
 
 // ============================================================================
@@ -547,6 +553,90 @@ describe('updateDrive', () => {
     const result = await updateDrive('nonexistent', { name: 'Test' });
 
     expect(result).toBeNull();
+  });
+
+  it('should include homePageId in the set payload when setting', async () => {
+    const updatedDrive = { ...createMockDrive({ id: 'drive_123', name: 'Test' }), homePageId: 'page_1' };
+    const returningMock = vi.fn().mockResolvedValue([updatedDrive]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+
+    const result = await updateDrive('drive_123', { homePageId: 'page_1' });
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      homePageId: 'page_1',
+    }));
+    expect(result).toEqual(updatedDrive);
+  });
+
+  it('should include homePageId: null in the set payload when clearing', async () => {
+    const updatedDrive = createMockDrive({ id: 'drive_123', name: 'Test' });
+    const returningMock = vi.fn().mockResolvedValue([updatedDrive]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+
+    await updateDrive('drive_123', { homePageId: null });
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      homePageId: null,
+    }));
+  });
+
+  it('should not include a homePageId key when the input omits it', async () => {
+    const updatedDrive = createMockDrive({ id: 'drive_123', name: 'X' });
+    const returningMock = vi.fn().mockResolvedValue([updatedDrive]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+
+    await updateDrive('drive_123', { name: 'X' });
+
+    const setCallArg = setMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(setCallArg).not.toHaveProperty('homePageId');
+  });
+});
+
+// ============================================================================
+// isValidDriveHomePage
+// ============================================================================
+
+describe('isValidDriveHomePage', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    // resetAllMocks clears the operator factory implementations; restore them
+    // so the where-clause composition is observable in the recorded call.
+    (eq as unknown as ReturnType<typeof vi.fn>).mockImplementation((a: unknown, b: unknown) => ({ op: 'eq', a, b }));
+    (and as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => ({ op: 'and', args }));
+  });
+
+  it('should return true when a non-trashed page exists in the drive', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: 'page_1' } as never);
+
+    const result = await isValidDriveHomePage('drive_123', 'page_1');
+
+    expect(result).toBe(true);
+    // The trash + drive-membership filtering must be enforced by the QUERY
+    // itself, not by JS filtering after the fact.
+    expect(db.query.pages.findFirst).toHaveBeenCalledWith({
+      where: {
+        op: 'and',
+        args: [
+          { op: 'eq', a: 'pages.id', b: 'page_1' },
+          { op: 'eq', a: 'pages.driveId', b: 'drive_123' },
+          { op: 'eq', a: 'pages.isTrashed', b: false },
+        ],
+      },
+    });
+  });
+
+  it('should return false when no matching page exists', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined as never);
+
+    const result = await isValidDriveHomePage('drive_123', 'page_gone');
+
+    expect(result).toBe(false);
   });
 });
 

@@ -18,7 +18,7 @@ export const agentTools = {
    * Update an existing AI agent's configuration
    */
   update_agent_config: tool({
-    description: 'Update the configuration of an existing AI agent, including system prompt, enabled tools, AI provider, and model settings.',
+    description: 'Update the configuration of an existing AI agent, including system prompt, enabled tools, AI provider, and model settings. Does not manage triggers — use set_calendar_trigger, set_task_trigger, or create_workflow for scheduling.',
     inputSchema: z.object({
       agentPath: z.string().describe('The agent path using titles like "/driveSlug/Agent Name" for semantic context'),
       agentId: z.string().describe('The unique ID of the AI agent to update'),

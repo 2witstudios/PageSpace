@@ -547,6 +547,93 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     return <MemberListRenderer members={parsedOutput.collaborators as MemberInfo[]} title="Collaborators" />;
   },
 
+  // === ROLE MANAGEMENT TOOLS ===
+  list_drive_roles: ({ parsedOutput }) => {
+    if (!Array.isArray(parsedOutput.roles)) return null;
+    const roles = parsedOutput.roles as Array<{ name: string; description?: string | null; driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null }>;
+    const driveName = (parsedOutput.stats as { driveName?: string } | undefined)?.driveName;
+    const content = roles.length
+      ? roles.map((r) => {
+          const dwp = r.driveWidePermissions;
+          const scope = dwp ? ` (drive-wide: ${[dwp.canView && 'view', dwp.canEdit && 'edit', dwp.canShare && 'share'].filter(Boolean).join('/') || 'none'})` : '';
+          return `• ${r.name}${scope}${r.description ? ` — ${r.description}` : ''}`;
+        }).join('\n')
+      : 'No custom roles yet';
+    return <RichContentRenderer title={driveName ? `Roles · ${driveName}` : 'Roles'} content={content} />;
+  },
+
+  get_drive_role: ({ parsedOutput }) => {
+    const role = parsedOutput.role as { name: string; description?: string | null; driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null; permissions?: Record<string, unknown> } | undefined;
+    if (!role) return null;
+    const dwp = role.driveWidePermissions;
+    const lines = [
+      role.description ? `${role.description}` : null,
+      dwp ? `Drive-wide: ${[dwp.canView && 'view', dwp.canEdit && 'edit', dwp.canShare && 'share'].filter(Boolean).join('/') || 'none'}` : 'Drive-wide: not set',
+      `Per-page grants: ${Object.keys(role.permissions ?? {}).length}`,
+    ].filter(Boolean).join('\n');
+    return <RichContentRenderer title={`Role · ${role.name}`} content={lines} />;
+  },
+
+  create_drive_role: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="create"
+      success={parsedOutput.success !== false}
+      title={(parsedOutput.role as { name?: string } | undefined)?.name ?? 'Role'}
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  update_drive_role: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title={(parsedOutput.role as { name?: string } | undefined)?.name ?? 'Role'}
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  delete_drive_role: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="delete"
+      success={parsedOutput.success !== false}
+      title="Role"
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  set_role_page_permissions: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title="Role Page Permissions"
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  set_role_drive_wide_permissions: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title="Role Drive-Wide Permissions"
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  remove_role_page_permissions: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="remove"
+      success={parsedOutput.success !== false}
+      title="Role Page Permissions"
+      message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
   // === AGENT TOOLS ===
   list_agents: ({ parsedOutput }) => {
     if (!parsedOutput.agents) return null;
@@ -806,6 +893,54 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     );
   },
 
+  // === COMMAND TOOLS ===
+  create_command: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="create"
+      success={parsedOutput.success !== false}
+      title={typeof parsedOutput.trigger === 'string' ? `/${parsedOutput.trigger}` : undefined}
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  update_command: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title={typeof parsedOutput.trigger === 'string' ? `/${parsedOutput.trigger}` : undefined}
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  delete_command: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="delete"
+      success={parsedOutput.success !== false}
+      title={typeof parsedOutput.trigger === 'string' ? `/${parsedOutput.trigger}` : undefined}
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  list_commands: ({ parsedOutput }) => {
+    const cmds = parsedOutput.commands;
+    if (!Array.isArray(cmds) || cmds.length === 0) return null;
+    return (
+      <PageTreeRenderer
+        tree={(cmds as Array<{ id: string; trigger: string; description: string; scope: string; enabled?: boolean }>).map((c) => ({
+          path: `/${c.trigger}`,
+          title: `/${c.trigger}`,
+          type: 'DOCUMENT',
+          pageId: c.id,
+          children: [],
+        }))}
+        title="Commands"
+      />
+    );
+  },
+
   // === WORKFLOWS ===
   list_workflows: ({ parsedOutput }) => {
     if (!Array.isArray(parsedOutput.workflows)) return null;
@@ -839,6 +974,47 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       success={parsedOutput.success !== false}
       title="Workflow"
       message={parsedOutput.summary as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  // === TRIGGER TOOLS ===
+  set_calendar_trigger: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title="Calendar Trigger"
+      message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  delete_calendar_trigger: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="delete"
+      success={parsedOutput.success !== false}
+      title="Calendar Trigger"
+      message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  set_task_trigger: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title="Task Trigger"
+      message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  delete_task_trigger: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="delete"
+      success={parsedOutput.success !== false}
+      title="Task Trigger"
+      message={(parsedOutput.summary || parsedOutput.message) as string | undefined}
       errorMessage={parsedOutput.error as string | undefined}
     />
   ),

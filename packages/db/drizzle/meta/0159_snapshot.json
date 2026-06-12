@@ -1,5 +1,5 @@
 {
-  "id": "8e9f9f2b-0740-4907-a350-4f5758c801ab",
+  "id": "f2362b43-9d4a-49a2-a0c7-f86334bdae27",
   "prevId": "880cf3d0-6d25-49c2-b581-06a8fcd6219e",
   "version": "7",
   "dialect": "postgresql",
@@ -1566,14 +1566,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "kind": {
-          "name": "kind",
-          "type": "DriveKind",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'STANDARD'"
-        },
         "isTrashed": {
           "name": "isTrashed",
           "type": "boolean",
@@ -1608,6 +1600,12 @@
         },
         "publishSubdomain": {
           "name": "publishSubdomain",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "homePageId": {
+          "name": "homePageId",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1649,22 +1647,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "drives_owner_home_unique": {
-          "name": "drives_owner_home_unique",
-          "columns": [
-            {
-              "expression": "ownerId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"drives\".\"kind\" = 'HOME'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -1679,6 +1661,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "drives_homePageId_pages_id_fk": {
+          "name": "drives_homePageId_pages_id_fk",
+          "tableFrom": "drives",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "homePageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -16497,14 +16492,6 @@
       "values": [
         "user",
         "admin"
-      ]
-    },
-    "public.DriveKind": {
-      "name": "DriveKind",
-      "schema": "public",
-      "values": [
-        "STANDARD",
-        "HOME"
       ]
     },
     "public.FavoriteItemType": {

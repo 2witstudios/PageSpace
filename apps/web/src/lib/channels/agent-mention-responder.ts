@@ -10,6 +10,7 @@ import {
   broadcastInboxEvent,
   broadcastThreadReplyCountUpdated,
 } from '@/lib/websocket/socket-utils';
+import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
@@ -222,6 +223,7 @@ async function postAgentThreadReply(input: {
   parentId: string;
   agent: MentionedAgent;
   commandExecution?: CommandExecutionData;
+  driveId?: string | null;
 }): Promise<void> {
   const result = await channelMessageRepository.insertChannelThreadReply({
     parentId: input.parentId,
@@ -303,6 +305,17 @@ async function postAgentThreadReply(input: {
       error instanceof Error ? error : undefined,
       { channelId: input.channelId, parentId: input.parentId }
     );
+  }
+
+  // Fire-and-forget mention notifications for the agent's reply content
+  if (input.driveId) {
+    void notifyMentionedUsers({
+      content: input.content,
+      pageId: input.channelId,
+      driveId: input.driveId,
+      triggeredByUserId: input.userId,
+      mentionerNameOverride: input.agent.title,
+    });
   }
 }
 
@@ -457,6 +470,7 @@ export async function triggerMentionedAgentResponses(
             parentId: trimmedParent,
             agent,
             commandExecution,
+            driveId: params.driveId,
           });
         } else {
           await sendChannelExecute(

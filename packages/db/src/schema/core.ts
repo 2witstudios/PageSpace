@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, uniqueIndex, integer, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, uniqueIndex, integer, check, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
@@ -20,6 +20,7 @@ export const drives = pgTable('drives', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   drivePrompt: text('drivePrompt'), // Custom AI instructions for this drive
   publishSubdomain: text('publishSubdomain').unique(), // Globally-unique subdomain for published pages; set on first publish
+  homePageId: text('homePageId').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }), // Drive landing page shown at drive root
 }, (table) => {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),
