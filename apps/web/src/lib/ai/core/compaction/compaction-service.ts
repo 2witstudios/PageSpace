@@ -8,6 +8,7 @@ import { buildSummarizationPrompt } from '@pagespace/lib/ai/summarization-prompt
 import { estimateTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { maskIdentifier } from '@/lib/logging/mask';
 import { getState, upsertState } from './compaction-repository';
 
 const MIN_GAP_SECONDS = 60;
@@ -146,7 +147,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
     });
 
     if (!won) {
-      console.debug('[compaction] lost race, discarding result for:', conversationId);
+      console.debug('[compaction] lost race, discarding result for:', maskIdentifier(conversationId));
       return;
     }
 
