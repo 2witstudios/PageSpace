@@ -6,7 +6,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 type RouteParams = { params: Promise<{ pageId: string; messageId: string }> };
 

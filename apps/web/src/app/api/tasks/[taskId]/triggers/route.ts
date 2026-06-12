@@ -15,8 +15,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const logger = loggers.api.child({ module: 'task-triggers-api' });
 
-const SESSION_READ = { allow: ['session'] as const, requireCSRF: false };
-const SESSION_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const SESSION_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 const upsertTriggerSchema = z.object({
   triggerType: z.enum(['due_date', 'completion']),

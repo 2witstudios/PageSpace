@@ -6,8 +6,8 @@ import type { SelectCommand } from '@pagespace/db/schema/commands';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import type { CommandScope } from '@pagespace/lib/commands/command-core';
 
-export const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-export const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+export const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+export const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 export interface CommandResponse {
   id: string;

@@ -4,7 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 export async function GET(
   request: Request,
