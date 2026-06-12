@@ -32,7 +32,7 @@ export interface PreparedContext {
    * Use this instead of scheduleCompaction() in tool-execution contexts
    * where after() from next/server is unavailable.
    */
-  pendingCompaction: Omit<RunCompactionParams, never> | null;
+  pendingCompaction: RunCompactionParams | null;
 }
 
 export async function prepareConversationContext(
@@ -72,6 +72,8 @@ export async function prepareConversationContext(
     : null;
 
   const systemPromptTokens = systemPrompt ? estimateTokens(systemPrompt) : 0;
+  // JSON.stringify strips function properties (execute closures), so this estimates
+  // only the schema/description payload — which is exactly what the model receives.
   const toolTokens = tools ? estimateTokens(JSON.stringify(tools)) : 0;
 
   const result = buildModelContext({

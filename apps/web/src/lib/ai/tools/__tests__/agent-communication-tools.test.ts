@@ -96,9 +96,15 @@ vi.mock('../../core/integration-tool-resolver', () => ({
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { role: 'role' },
 }));
-vi.mock('../../core/compaction/prepare-context', () => ({
-  prepareConversationContext: vi.fn().mockImplementation(({ messages }: { messages: unknown[] }) =>
-    Promise.resolve({ messages, scheduleCompaction: vi.fn(), pendingCompaction: null })
+vi.mock('../../core/context-assembly', () => ({
+  prepareHistoryForModel: vi.fn().mockImplementation(({ history }: { history: unknown[] }) =>
+    Promise.resolve({
+      messages: history,
+      summaryText: '',
+      stableBoundaryIndex: 0,
+      scheduleCompaction: vi.fn(),
+      pendingCompaction: null,
+    })
   ),
 }));
 vi.mock('../../core/compaction/compaction-service', () => ({
@@ -141,7 +147,7 @@ import type { ToolExecutionContext } from '../../core/types';
 import { generateText, convertToModelMessages } from 'ai';
 import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-resolver';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
-import { prepareConversationContext } from '../../core/compaction/prepare-context';
+import { prepareHistoryForModel } from '../../core/context-assembly';
 import { runCompaction } from '../../core/compaction/compaction-service';
 
 const mockDb = vi.mocked(db);
@@ -744,11 +750,8 @@ describe('agent-communication-tools', () => {
         } as never);
       });
 
-      it('passes the full prepared.messages (including synthetic summary) to convertToModelMessages', async () => {
-        const syntheticSummary = {
-          role: 'user' as const,
-          parts: [{ type: 'text', text: '<conversation_summary>\nold stuff\n</conversation_summary>' }],
-        };
+      it('prepends the seam summaryText as a user ModelMessage before the converted tail', async () => {
+        const summaryText = '<conversation_summary>\nold stuff\n</conversation_summary>';
         const tailMsg = {
           id: 'msg-1',
           role: 'user' as const,
@@ -757,8 +760,10 @@ describe('agent-communication-tools', () => {
         };
         const mockModelMessages = [{ role: 'user', content: 'converted' }];
 
-        vi.mocked(prepareConversationContext).mockResolvedValueOnce({
-          messages: [syntheticSummary, tailMsg] as never,
+        vi.mocked(prepareHistoryForModel).mockResolvedValueOnce({
+          messages: [tailMsg] as never,
+          summaryText,
+          stableBoundaryIndex: 1,
           pendingCompaction: null,
           scheduleCompaction: vi.fn(),
         });
@@ -773,17 +778,19 @@ describe('agent-communication-tools', () => {
           context
         );
 
-        // convertToModelMessages must receive the full array including the synthetic summary
+        // convertToModelMessages receives the tail only (summary travels as summaryText)
         expect(convertToModelMessages).toHaveBeenCalledWith(
-          expect.arrayContaining([syntheticSummary, tailMsg])
+          expect.arrayContaining([tailMsg])
         );
-        // generateText receives the converted result
+        // generateText receives the summary prepended as a user ModelMessage
         expect(generateText).toHaveBeenCalledWith(
-          expect.objectContaining({ messages: mockModelMessages })
+          expect.objectContaining({
+            messages: [{ role: 'user', content: summaryText }, ...mockModelMessages],
+          })
         );
       });
 
-      it('fires runCompaction when prepareConversationContext returns pendingCompaction', async () => {
+      it('fires runCompaction when the seam returns pendingCompaction', async () => {
         const pendingCompaction = {
           conversationId: 'conv-1',
           source: 'page' as const,
@@ -803,8 +810,10 @@ describe('agent-communication-tools', () => {
           },
         };
 
-        vi.mocked(prepareConversationContext).mockResolvedValueOnce({
+        vi.mocked(prepareHistoryForModel).mockResolvedValueOnce({
           messages: [] as never,
+          summaryText: '',
+          stableBoundaryIndex: 0,
           pendingCompaction,
           scheduleCompaction: vi.fn(),
         });

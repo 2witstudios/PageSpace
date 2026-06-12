@@ -45,6 +45,7 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
+import { isSyntheticSummaryMessage } from '@pagespace/lib/ai/context-window';
 
 export const maxDuration = 300;
 
@@ -380,15 +381,17 @@ export async function POST(request: Request): Promise<Response> {
         user: { id: authResult.userId, role: gateUser?.role ?? null },
       });
       v1ScheduleCompaction = prepared.scheduleCompaction;
-      const firstText = prepared.messages[0]?.parts?.[0]?.text ?? '';
+      // Shared sentinel check — keeps this route in lockstep with the
+      // context-assembly seam if the synthetic summary format ever changes.
       const hasSummary =
-        prepared.messages.length > 0 &&
-        !prepared.messages[0].id &&
-        firstText.startsWith('<conversation_summary>');
+        prepared.messages.length > 0 && isSyntheticSummaryMessage(prepared.messages[0]);
+      const summaryContent = hasSummary
+        ? (prepared.messages[0].parts?.find((p) => p.type === 'text')?.text ?? '')
+        : '';
       const tailUIMessages = (hasSummary ? prepared.messages.slice(1) : prepared.messages) as Parameters<typeof convertToModelMessages>[0];
       const tailModelMessages = convertToModelMessages(tailUIMessages);
       compactedModelMessages = hasSummary
-        ? [{ role: 'user' as const, content: firstText }, ...tailModelMessages]
+        ? [{ role: 'user' as const, content: summaryContent }, ...tailModelMessages]
         : tailModelMessages;
     }
 

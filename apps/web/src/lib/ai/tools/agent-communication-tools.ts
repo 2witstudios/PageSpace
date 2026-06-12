@@ -7,7 +7,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
-import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
+import { prepareHistoryForModel } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope } from './actor-permissions';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
@@ -550,6 +550,10 @@ export const agentCommunicationTools = {
         } catch (error) {
           loggers.ai.error('ask_agent: failed to resolve integration tools, falling back to built-in tools only', error as Error);
         }
+        // Key order is already deterministic — agentTools filters the module-constant
+        // base map (stable insertion order) and the integration resolver returns
+        // sorted keys — so the serialized tool bytes are prefix-cache-stable without
+        // re-sorting here (same guarantee as the chat/global route merges).
         const allAgentTools = { ...agentTools, ...integrationTools };
 
         // 10. Create enhanced execution context for nested calls
@@ -584,20 +588,27 @@ export const agentCommunicationTools = {
         } catch {
           // Fallback: role unknown → non-admin path
         }
-        const prepared = await prepareConversationContext({
+        // Full seam (sanitize → compact → elide): sub-agent histories accumulate the
+        // same stale read-tool outputs as top-level chats, so they get the same
+        // chunk-aligned elision treatment, not just compaction. The seam re-sanitizes
+        // internally, which is idempotent over sanitizedMessages.
+        const prepared = await prepareHistoryForModel({
+          history: sanitizedMessages,
           conversationId: activeConversationId,
           source: 'page',
           pageId: agentId,
-          messages: sanitizedMessages as never,
           model: resolvedModelName,
           provider: resolvedProvider,
           systemPrompt,
           tools: allAgentTools,
           user: { id: userId, role: callerUserRole },
         });
-        const agentModelMessages: ModelMessage[] = convertToModelMessages(
+        const tailModelMessages: ModelMessage[] = convertToModelMessages(
           prepared.messages as Parameters<typeof convertToModelMessages>[0]
         );
+        const agentModelMessages: ModelMessage[] = prepared.summaryText
+          ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]
+          : tailModelMessages;
 
         // 11. Process with target agent's configuration (ephemeral - no persistence)
         const response = Object.keys(allAgentTools).length > 0

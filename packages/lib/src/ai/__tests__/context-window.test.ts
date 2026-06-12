@@ -373,6 +373,50 @@ describe('buildModelContext', () => {
     expect(result.emergencyTruncated).toBe(false);
   });
 
+  it('recovers a tail that starts mid-turn by advancing to the next user message (integrity gate)', () => {
+    // History starting with an assistant message (edited/imported conversations):
+    // the integrity gate must advance the cut to the first user turn.
+    const messages: CompactionMessage[] = [
+      makeAssistant('a0', 'orphan assistant opener'),
+      makeUser('u1', 'real first question'),
+      makeAssistant('a1', 'answer'),
+    ];
+    const result = buildModelContext({
+      messages,
+      compaction: null,
+      model: 'gpt-3.5',
+      provider: 'openai',
+      systemPromptTokens: 0,
+      toolTokens: 0,
+    });
+    expect(result.tailMessages[0]?.role).toBe('user');
+    expect(result.tailMessages.map((m) => m.id)).toEqual(['u1', 'a1']);
+  });
+
+  it('keeps the tail unchanged when only an intra-message orphan tool-result fails validation', () => {
+    // Orphan tool-results inside a message are repaired upstream by
+    // sanitizeMessagesForModel — moving the cut cannot fix them, so the gate
+    // must not discard user turns over it.
+    const messages: CompactionMessage[] = [
+      makeUser('u1', 'question'),
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [{ type: 'tool-result', toolCallId: 'missing-call', result: 'data' }],
+        createdAt: new Date('2024-01-01T00:00:02Z'),
+      },
+    ];
+    const result = buildModelContext({
+      messages,
+      compaction: null,
+      model: 'gpt-3.5',
+      provider: 'openai',
+      systemPromptTokens: 0,
+      toolTokens: 0,
+    });
+    expect(result.tailMessages.map((m) => m.id)).toEqual(['u1', 'a1']);
+  });
+
   it('compaction plan has cutBeforeIndex pointing at a user turn in the original messages', () => {
     const bigMessages: CompactionMessage[] = [];
     for (let i = 1; i <= 12; i++) {

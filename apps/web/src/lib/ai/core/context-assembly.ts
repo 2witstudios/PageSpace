@@ -22,6 +22,10 @@ import {
   type PreparedContext,
 } from '@/lib/ai/core/compaction/prepare-context';
 import {
+  isSyntheticSummaryMessage,
+  type CompactionMessage,
+} from '@pagespace/lib/ai/context-window';
+import {
   computeElisionBoundary,
   elideStaleToolOutputs,
   DEFAULT_ELIDABLE_TOOLS,
@@ -94,22 +98,22 @@ export async function prepareHistoryForModel(
   const sanitized = sanitizeMessagesForModel(history);
 
   // Step 2: compaction (admin-gated; non-admin is a passthrough)
+  // UIMessage and CompactionMessage are structurally compatible today; the explicit
+  // cast (instead of `as never`) makes future shape drift a TypeScript error here
+  // rather than a silent runtime mismatch.
   const { messages: compacted, scheduleCompaction, pendingCompaction } =
     await prepareConversationContext({
-      messages: sanitized as never,
+      messages: sanitized as CompactionMessage[],
       ...compactionParams,
     });
 
-  // Detect whether compaction prepended a synthetic summary.
-  // Guard: also check that the text starts with <conversation_summary> so that
-  // client-supplied UIMessages that legitimately lack DB ids (v1 route) are not
-  // misclassified as summaries when they arrive as the first message.
-  const firstText = compacted[0]?.parts?.[0]?.text ?? '';
-  const hasSummary =
-    compacted.length > 0 &&
-    !compacted[0].id &&
-    firstText.startsWith('<conversation_summary>');
-  const summaryText = hasSummary ? firstText : '';
+  // Detect whether compaction prepended a synthetic summary. The sentinel check
+  // (no DB id + <conversation_summary> prefix) lives in isSyntheticSummaryMessage
+  // so this seam and the v1 route cannot drift apart.
+  const hasSummary = compacted.length > 0 && isSyntheticSummaryMessage(compacted[0]);
+  const summaryText = hasSummary
+    ? (compacted[0].parts?.find((p) => p.type === 'text')?.text ?? '')
+    : '';
   const tailUIMessages = (hasSummary ? compacted.slice(1) : compacted) as UIMessage[];
 
   // Step 3: elide stale tool outputs from the tail

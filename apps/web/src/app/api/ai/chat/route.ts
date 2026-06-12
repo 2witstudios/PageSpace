@@ -930,7 +930,10 @@ export async function POST(request: Request) {
       ? [{ role: 'user' as const, content: summaryText }, ...tailModelMessages]
       : tailModelMessages;
 
-    // sanitizedMessages is still needed by createUIMessageStream for full UI history.
+    // Intentional second sanitize (prepareHistoryForModel already sanitized once):
+    // createUIMessageStream must receive the FULL conversation history for the UI
+    // (originalMessages), not the compacted/elided model tail in preparedMessages —
+    // so conversationHistory is sanitized directly instead of reusing the seam output.
     const sanitizedMessages = sanitizeMessagesForModel(conversationHistory);
 
     loggers.ai.debug('AI Chat API: Tools configured for Page AI', { toolCount: Object.keys(filteredTools).length });

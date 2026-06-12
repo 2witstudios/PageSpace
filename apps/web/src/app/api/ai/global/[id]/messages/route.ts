@@ -567,11 +567,6 @@ export async function POST(
         return msg;
       });
 
-    // Placeholder — will be assigned after finalSystemPrompt + finalTools are built.
-    let modelMessages: ModelMessage[] = [];
-    let stableBoundaryIndex = 0;
-    let scheduleCompaction: () => void = () => undefined;
-
     // Fetch user personalization and timezone for AI system prompt injection
     const [personalization, userTimezone] = await Promise.all([
       getUserPersonalization(userId),
@@ -868,41 +863,59 @@ MENTION PROCESSING:
 
     // Sanitize, compact, and elide via the unified seam.
     // finalSystemPrompt + finalTools are now known — pass for accurate token budgeting.
-    {
-      const prepared = await prepareHistoryForModel({
-        history: conversationHistory,
-        conversationId,
-        source: 'global',
-        model: currentModel,
-        provider: currentProvider,
-        systemPrompt: finalSystemPrompt,
-        tools: finalTools as Record<string, unknown>,
-        user: { id: userId, role: auth.role ?? null },
-      });
-      scheduleCompaction = prepared.scheduleCompaction;
-      stableBoundaryIndex = prepared.stableBoundaryIndex;
+    // IIFE keeps the outputs const (each is assigned exactly once).
+    const { modelMessages, stableBoundaryIndex, scheduleCompaction, contextMessagesForTracking } =
+      await (async () => {
+        const prepared = await prepareHistoryForModel({
+          history: conversationHistory,
+          conversationId,
+          source: 'global',
+          model: currentModel,
+          provider: currentProvider,
+          systemPrompt: finalSystemPrompt,
+          tools: finalTools as Record<string, unknown>,
+          user: { id: userId, role: auth.role ?? null },
+        });
 
-      // Limit visual-content injection to the last MAX_MESSAGES_WITH_IMAGES items;
-      // the earlier head is kept intact so the full prepared context reaches the model.
-      const visualCutoff = Math.max(0, prepared.messages.length - MAX_MESSAGES_WITH_IMAGES);
-      const headMessages = prepared.messages.slice(0, visualCutoff);
-      const recentTail = prepared.messages.slice(visualCutoff);
-      const processedTail = [
-        ...headMessages,
-        ...injectVisualContent(recentTail),
-      ] as Parameters<typeof convertToModelMessages>[0];
-      const tailModelMessages = convertToModelMessages(processedTail);
-      modelMessages = prepared.summaryText
-        ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]
-        : tailModelMessages;
-    }
+        // Limit visual-content injection to the last MAX_MESSAGES_WITH_IMAGES items;
+        // the earlier head is kept intact so the full prepared context reaches the model.
+        const visualCutoff = Math.max(0, prepared.messages.length - MAX_MESSAGES_WITH_IMAGES);
+        const headMessages = prepared.messages.slice(0, visualCutoff);
+        const recentTail = prepared.messages.slice(visualCutoff);
+        const processedTail = [
+          ...headMessages,
+          ...injectVisualContent(recentTail),
+        ] as Parameters<typeof convertToModelMessages>[0];
+        const tailModelMessages = convertToModelMessages(processedTail);
+
+        // Post-compaction view for context tracking: summary (as a synthetic
+        // UIMessage) + retained tail — what the model is actually sent, not the
+        // full stored history.
+        const contextMessagesForTracking = prepared.summaryText
+          ? [
+              { role: 'user' as const, parts: [{ type: 'text' as const, text: prepared.summaryText }] },
+              ...prepared.messages,
+            ]
+          : prepared.messages;
+
+        return {
+          modelMessages: prepared.summaryText
+            ? ([{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages] as ModelMessage[])
+            : (tailModelMessages as ModelMessage[]),
+          stableBoundaryIndex: prepared.stableBoundaryIndex,
+          scheduleCompaction: prepared.scheduleCompaction,
+          contextMessagesForTracking,
+        };
+      })();
 
     loggers.api.debug('Global Assistant Chat API: Starting streamText', { model: currentModel, isReadOnly: readOnlyMode });
 
-    // Calculate context size BEFORE streaming (for real context window tracking)
+    // Calculate context size BEFORE streaming (for real context window tracking).
+    // Uses the post-compaction message set so the admin context viewer and
+    // monitoring agree with what was actually sent to the model.
     const contextCalculation = calculateTotalContextSize({
       systemPrompt: finalSystemPrompt,
-      messages: sanitizedMessages, // full UIMessage history for accurate context tracking
+      messages: contextMessagesForTracking,
       tools: finalTools,
       model: currentModel,
       provider: currentProvider,

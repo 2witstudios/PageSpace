@@ -165,6 +165,18 @@ export function validateTailIntegrity(messages: CompactionMessage[]): boolean {
   return true;
 }
 
+/**
+ * Detect the synthetic summary message produced by formatSummaryMessage.
+ * The sentinel is: no DB id AND the first text part starts with the
+ * <conversation_summary> wrapper. Every consumer that needs to split summary
+ * from tail (context-assembly seam, v1 completions route) must use this helper
+ * so the sentinel format lives in exactly one place.
+ */
+export function isSyntheticSummaryMessage(msg: CompactionMessage): boolean {
+  const text = msg.parts?.find((p) => p.type === 'text')?.text ?? '';
+  return !msg.id && text.startsWith('<conversation_summary>');
+}
+
 export function formatSummaryMessage(summary: string): CompactionMessage {
   const text = [
     '<conversation_summary>',
@@ -212,8 +224,21 @@ export function buildModelContext(params: BuildModelContextParams): BuildModelCo
   const config = { ...DEFAULT_CONFIG, ...rawConfig };
   const contextWindow = getContextWindowSize(model, provider);
 
-  const tailStart = applyPointerCut(messages, compaction);
-  const tail = messages.slice(tailStart);
+  let tailStart = applyPointerCut(messages, compaction);
+  let tail = messages.slice(tailStart);
+  // Defensive integrity gate: applyPointerCut lands on user turns for well-formed
+  // histories, but edited/imported histories can leave the remainder starting
+  // mid-turn. When validation fails because of the start role, advance the cut to
+  // the next user turn. The other failure mode (orphaned tool-results inside a
+  // message) is repaired upstream by sanitizeMessagesForModel, not by moving the cut.
+  if (tail.length > 0 && !validateTailIntegrity(tail) && tail[0].role !== 'user') {
+    let next = tailStart + 1;
+    while (next < messages.length && messages[next].role !== 'user') next++;
+    if (next < messages.length) {
+      tailStart = next;
+      tail = messages.slice(tailStart);
+    }
+  }
 
   const summaryMessage = compaction?.summary ? formatSummaryMessage(compaction.summary) : null;
   // Use the token count of the *formatted* summary (includes wrapper text overhead)

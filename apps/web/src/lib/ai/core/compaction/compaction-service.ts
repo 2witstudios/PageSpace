@@ -30,7 +30,13 @@ async function summarize(
   previousSummary: string | null,
   maxSummaryTokens: number
 ): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
-  // maxSummaryTokens is passed to buildSummarizationPrompt as a token-cap instruction
+  // Known accepted surface — prompt injection via summarized content: the
+  // summarization prompt quotes user rules VERBATIM, so instruction-shaped user
+  // text can persist into the stored summary and be re-quoted across future
+  // requests until the next recompaction. Mitigations: the summary is injected as
+  // a USER message (never system — no elevated trust), it is bounded by
+  // maxSummaryTokens, and any pre-pointer edit/delete invalidates and rebuilds it
+  // from source history. Revisit if summaries ever gain system-level placement.
   if (isProviderError(model)) {
     throw new Error(`Provider error: ${model.error}`);
   }
