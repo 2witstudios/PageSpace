@@ -40,6 +40,7 @@ const mockSelectLimit = vi.fn();
 const mockInsertValues = vi.fn();
 const mockInsertOnConflictDoNothing = vi.fn();
 const mockInsertReturning = vi.fn();
+const mockTxInsertValues = vi.fn();
 const mockUpdateSet = vi.fn();
 const mockUpdateWhere = vi.fn();
 const mockUpdateReturning = vi.fn();
@@ -49,9 +50,9 @@ vi.mock('@pagespace/db/db', () => {
   // Create a mock transaction function
   const mockTx = {
     insert: vi.fn(() => ({
-      values: vi.fn(() => ({
+      values: mockTxInsertValues.mockReturnValue({
         onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
-      })),
+      }),
     })),
     update: vi.fn(() => ({
       set: mockUpdateSet.mockReturnValue({
@@ -277,6 +278,9 @@ describe('POST /api/stripe/webhook', () => {
     });
     // Default: the idempotency insert wins the race (fresh row) → event is processed.
     mockInsertReturning.mockResolvedValue([{ id: 'evt_test' }]);
+    mockTxInsertValues.mockReturnValue({
+      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+    });
     // update().set().where() is awaited directly (completion/error marks) and also
     // chains .returning() on the reclaim takeover path.
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
@@ -494,6 +498,45 @@ describe('POST /api/stripe/webhook', () => {
         expect.objectContaining({
           subscriptionTier: 'founder',
         })
+      );
+    });
+
+    it('should set gifted=true when subscription has gift_subscription metadata', async () => {
+      const subscription = {
+        ...mockSubscription({ priceAmount: 1500 }),
+        metadata: { type: 'gift_subscription', giftedBy: 'admin_123', reason: 'Test gift' },
+      };
+      const event = mockStripeEvent('customer.subscription.created', subscription);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      expect(mockTxInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ gifted: true })
+      );
+    });
+
+    it('should set gifted=false for regular (non-gift) subscriptions', async () => {
+      const subscription = mockSubscription({ priceAmount: 1500 });
+      const event = mockStripeEvent('customer.subscription.created', subscription);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      expect(mockTxInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ gifted: false })
       );
     });
 
