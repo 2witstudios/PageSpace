@@ -179,10 +179,10 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
     expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
   });
 
-  it('does not provision drive for existing desktop users', async () => {
+  it('provisions Home drive for existing desktop users (lazy idempotent)', async () => {
     await GET(createVerifyRequest());
 
-    expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
+    expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
   });
 
   it('falls through to web flow when no desktop metadata', async () => {

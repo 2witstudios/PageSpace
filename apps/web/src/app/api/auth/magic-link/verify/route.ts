@@ -237,7 +237,7 @@ export async function GET(req: Request) {
               : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
                 ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`
                 : await resolvePostLoginRedirectPath({
-                    isNewUser, userId, next: safeNext, invitedDriveId,
+                    userId, next: safeNext, invitedDriveId,
                   });
           const desktopRedirectUrl = new URL(desktopRedirectPath, baseUrl);
           desktopRedirectUrl.searchParams.set('auth', 'success');
@@ -304,7 +304,7 @@ export async function GET(req: Request) {
         : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
           ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`
           : await resolvePostLoginRedirectPath({
-              isNewUser, userId, next: safeNext, invitedDriveId,
+              userId, next: safeNext, invitedDriveId,
             });
 
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
@@ -364,12 +364,10 @@ function redirectWithError(error: string): NextResponse {
  * and swallowed — the user still lands on /dashboard.
  */
 async function resolvePostLoginRedirectPath({
-  isNewUser,
   userId,
   next,
   invitedDriveId,
 }: {
-  isNewUser: boolean;
   userId: string;
   next?: string;
   invitedDriveId?: string | null;
@@ -382,17 +380,13 @@ async function resolvePostLoginRedirectPath({
     return next;
   }
 
-  if (!isNewUser) {
-    return '/dashboard';
-  }
-
   try {
     const provisionedDrive = await provisionHomeDriveIfNeeded(userId);
-    if (provisionedDrive) {
+    if (provisionedDrive?.created) {
       return `/dashboard/${provisionedDrive.driveId}`;
     }
   } catch (error) {
-    loggers.auth.error('Failed to provision Getting Started drive', error as Error, { userId });
+    loggers.auth.error('Failed to provision Home drive', error as Error, { userId });
   }
 
   return '/dashboard';
