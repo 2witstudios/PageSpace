@@ -6,9 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ChevronLeft, Shield, Users, Brain, Cable, HardDrive, Trash2, SlashSquare } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
-import { canUseCommands } from '@/lib/commands/command-gating';
 import { SettingsRow, type SettingsItem } from '@/app/settings/SettingsRow';
 
 interface SettingsSection {
@@ -20,7 +18,6 @@ export default function DriveSettingsPage() {
   const params = useParams();
   const router = useRouter();
   const driveId = params.driveId as string;
-  const { user } = useAuth();
   const drives = useDriveStore((state) => state.drives);
   const isLoading = useDriveStore((state) => state.isLoading);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
@@ -32,21 +29,15 @@ export default function DriveSettingsPage() {
   const drive = drives.find((d) => d.id === driveId);
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
 
-  // Launch exposure gate (universal-commands spec §0): admin accounts only.
-  // Listed outside the manager-only sections because the commands route is
-  // readable by every drive member (read-only view, spec §4.1) — this row is
-  // the navigation path to it for plain members.
-  const commandsItems: SettingsItem[] = canUseCommands(user)
-    ? [
-        {
-          title: 'Commands',
-          description: 'Slash commands for everyone in this drive',
-          icon: SlashSquare,
-          href: `/dashboard/${driveId}/settings/commands`,
-          available: true,
-        },
-      ]
-    : [];
+  const commandsItems: SettingsItem[] = [
+    {
+      title: 'Commands',
+      description: 'Slash commands for everyone in this drive',
+      icon: SlashSquare,
+      href: `/dashboard/${driveId}/settings/commands`,
+      available: true,
+    },
+  ];
 
   if (isLoading) {
     return (
@@ -66,27 +57,7 @@ export default function DriveSettingsPage() {
     );
   }
 
-  if (!canManage && commandsItems.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <Shield className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
-          <h2 className="text-lg font-semibold mb-2">Access Denied</h2>
-          <p className="text-muted-foreground">Only drive owners and admins can access settings.</p>
-          <Button
-            variant="outline"
-            className="mt-4"
-            onClick={() => router.push(`/dashboard/${driveId}`)}
-          >
-            Go Back
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  // Plain members (with the commands gate) see only the member-accessible
-  // rows; everything else in drive settings stays owner/admin-only.
+  // Plain members see only the Commands row; everything else is owner/admin-only.
   const settingsSections: SettingsSection[] = !canManage
     ? [{ title: 'Drive', items: commandsItems }]
     : [
