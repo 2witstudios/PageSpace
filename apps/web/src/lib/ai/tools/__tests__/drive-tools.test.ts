@@ -170,7 +170,6 @@ describe('drive-tools', () => {
       ).rejects.toThrow('Drive not found or you do not have permission to rename it');
     });
   });
-});
 
   describe('set_home_page', () => {
     it('has correct tool definition', () => {
