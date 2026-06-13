@@ -3,7 +3,7 @@
 import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { conversationState } from '@/lib/ai/core/conversation-state';
+import { conversationState, classifyConversationLoadResponse } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
 import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
 import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
@@ -94,10 +94,17 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       const messagesResponse = await fetchWithAuth(
         `/api/ai/global/${conversationId}/messages?limit=50`
       );
-      if (messagesResponse.ok) {
+      const responseClass = classifyConversationLoadResponse(messagesResponse.status);
+      if (responseClass === 'ok') {
         const messageData = await messagesResponse.json();
         const loadedMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
         setInitialMessages(loadedMessages);
+        setCurrentConversationId(conversationId);
+        conversationState.setActiveConversationId(conversationId);
+        setIsInitialized(true);
+      } else if (responseClass === 'not-found') {
+        // Conversation not yet persisted (lazy creation) — treat as empty
+        setInitialMessages([]);
         setCurrentConversationId(conversationId);
         conversationState.setActiveConversationId(conversationId);
         setIsInitialized(true);
