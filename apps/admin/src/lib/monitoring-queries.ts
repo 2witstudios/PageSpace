@@ -1258,7 +1258,6 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
     .from(users)
     .innerJoin(subscriptions, eq(subscriptions.userId, users.id))
     .where(and(
-      sql`${users.subscriptionTier} != 'free'`,
       inArray(subscriptions.status, ['active', 'trialing']),
       eq(subscriptions.gifted, false)
     ));
