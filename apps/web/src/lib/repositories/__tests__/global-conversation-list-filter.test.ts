@@ -85,7 +85,7 @@ beforeAll(() => {
 
 describe('globalConversationRepository — hasMessages constant', () => {
   it('calls exists() exactly once when the module loads (to build hasMessages)', () => {
-    expect(existsCallCountAtModuleLoad).toBeGreaterThanOrEqual(1);
+    expect(existsCallCountAtModuleLoad).toBe(1);
   });
 });
 

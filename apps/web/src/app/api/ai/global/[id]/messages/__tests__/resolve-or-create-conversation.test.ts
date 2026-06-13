@@ -28,7 +28,9 @@ const makeDb = (selectResult: object[], insertResult: object[] = []) => ({
   }),
   insert: vi.fn().mockReturnValue({
     values: vi.fn().mockReturnValue({
-      returning: vi.fn().mockResolvedValue(insertResult),
+      onConflictDoNothing: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue(insertResult),
+      }),
     }),
   }),
 });
@@ -53,12 +55,10 @@ describe('resolveOrCreateConversation', () => {
 
   it('given existing conversation owned by a different user, throws ConversationOwnershipError', async () => {
     const otherUserConv = { ...CONV, userId: 'user2' };
-    // select returns the conversation but userId doesn't match
     const db = {
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
-            // First call (broad select without userId): return the conv
             limit: vi.fn().mockResolvedValue([otherUserConv]),
           }),
         }),
@@ -76,5 +76,52 @@ describe('resolveOrCreateConversation', () => {
     await resolveOrCreateConversation('user1', 'conv1', db as never);
     await resolveOrCreateConversation('user1', 'conv1', db as never);
     expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it('given an invalid conversationId (not CUID2 format), throws ConversationOwnershipError without hitting DB', async () => {
+    const db = makeDb([]);
+    await expect(
+      resolveOrCreateConversation('user1', 'INVALID_ID!!', db as never)
+    ).rejects.toThrow(ConversationOwnershipError);
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
+  it('given an existing conversation with a non-global type, throws ConversationOwnershipError', async () => {
+    const pageConv = { ...CONV, type: 'page' };
+    const db = makeDb([pageConv]);
+    await expect(
+      resolveOrCreateConversation('user1', 'conv1', db as never)
+    ).rejects.toThrow(ConversationOwnershipError);
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it('given a concurrent insert race (ON CONFLICT returns no row), falls back to select and returns winner', async () => {
+    // insert returns [] (another writer won the race), then fallback select finds the winner
+    const winner = { ...CONV };
+    const db = {
+      select: vi.fn()
+        // First call: no existing row (triggers insert path)
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+          }),
+        })
+        // Second call: fallback select finds the winner
+        .mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([winner]) }),
+          }),
+        }),
+      insert: vi.fn().mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          onConflictDoNothing: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([]), // empty — conflict
+          }),
+        }),
+      }),
+    };
+    const result = await resolveOrCreateConversation('user1', 'conv1', db as never);
+    expect(result).toEqual(winner);
+    expect(db.insert).toHaveBeenCalledTimes(1);
   });
 });

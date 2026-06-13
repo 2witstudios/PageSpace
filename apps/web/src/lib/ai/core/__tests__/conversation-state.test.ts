@@ -6,7 +6,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
 }));
 
-import { post } from '@/lib/auth/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 describe('conversationState agent methods', () => {
   beforeEach(() => {
@@ -38,6 +38,7 @@ describe('conversationState.createAndSetActiveConversation', () => {
   it('does NOT call post() or any network fetch', async () => {
     await conversationState.createAndSetActiveConversation({ type: 'global' });
     expect(post).not.toHaveBeenCalled();
+    expect(fetchWithAuth).not.toHaveBeenCalled();
   });
 
   it('returns an object with a non-empty string id', async () => {
@@ -48,7 +49,7 @@ describe('conversationState.createAndSetActiveConversation', () => {
 
   it('returns id matching CUID2 format', async () => {
     const result = await conversationState.createAndSetActiveConversation({ type: 'global' });
-    expect(result.id).toMatch(/^[a-z0-9]{24,}$/);
+    expect(result.id).toMatch(/^[a-z][a-z0-9]{1,31}$/);
   });
 
   it('returns null title and null lastMessageAt', async () => {

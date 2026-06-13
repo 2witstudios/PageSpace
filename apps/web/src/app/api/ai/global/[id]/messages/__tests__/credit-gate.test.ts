@@ -262,6 +262,7 @@ import type { SessionAuthResult } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { streamText } from 'ai';
+import { resolveOrCreateConversation, ConversationOwnershipError } from '../resolve-or-create-conversation';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',
@@ -333,6 +334,16 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
 
     expect(canConsumeAI).toHaveBeenCalled();
     expect(response.status).not.toBe(402);
+  });
+
+  it('returns 404 when resolveOrCreateConversation throws ConversationOwnershipError and does not start stream', async () => {
+    vi.mocked(resolveOrCreateConversation).mockRejectedValueOnce(new ConversationOwnershipError());
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(404);
+    expect(streamText).not.toHaveBeenCalled();
+    expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
   });
 
 });
