@@ -1254,9 +1254,13 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
     : null;
 
   const [payingResult] = await db
-    .select({ count: count() })
+    .select({ count: sql<number>`COUNT(DISTINCT ${users.id})::int` })
     .from(users)
-    .where(sql`${users.subscriptionTier} != 'free'`);
+    .innerJoin(subscriptions, eq(subscriptions.userId, users.id))
+    .where(and(
+      inArray(subscriptions.status, ['active', 'trialing']),
+      eq(subscriptions.gifted, false)
+    ));
   const payingUsers = payingResult?.count ?? 0;
 
   // MAU trend (12 months) from activity_logs — comprehensive audit trail

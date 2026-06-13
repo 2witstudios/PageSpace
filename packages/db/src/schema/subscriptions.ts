@@ -12,6 +12,7 @@ export const subscriptions = pgTable('subscriptions', {
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }).notNull(),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }).notNull(),
   cancelAtPeriodEnd: boolean('cancelAtPeriodEnd').default(false).notNull(),
+  gifted: boolean('gifted').default(false).notNull(),
   // Schedule tracking for pending plan changes (downgrades)
   stripeScheduleId: text('stripeScheduleId'),
   scheduledPriceId: text('scheduledPriceId'),

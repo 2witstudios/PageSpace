@@ -361,6 +361,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   // Use transaction to ensure subscription and user updates are atomic
   await db.transaction(async (tx) => {
     // Upsert subscription record
+    const isGifted = subscription.metadata?.type === 'gift_subscription';
     await tx.insert(subscriptions).values({
       userId,
       stripeSubscriptionId: subscription.id,
@@ -369,6 +370,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       currentPeriodStart,
       currentPeriodEnd,
       cancelAtPeriodEnd: subscription.cancel_at_period_end,
+      gifted: isGifted,
       // Clear schedule fields on insert (schedule details set by update-subscription route)
       stripeScheduleId: subscription.schedule ? String(subscription.schedule) : null,
       scheduledPriceId: null,
@@ -380,6 +382,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
         currentPeriodStart,
         currentPeriodEnd,
         cancelAtPeriodEnd: subscription.cancel_at_period_end,
+        gifted: isGifted,
         // Clear schedule fields if schedule was released/completed
         ...(subscription.schedule === null && {
           stripeScheduleId: null,
