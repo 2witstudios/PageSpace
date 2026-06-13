@@ -138,6 +138,14 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
     expect(filtered).toHaveProperty('read_page');
   });
 
+  it('classifies set_home_page as a write tool and excludes it in read-only mode', () => {
+    expect(isWriteTool('set_home_page')).toBe(true);
+    const tools = { set_home_page: 'w', list_pages: 'r' };
+    const filtered = filterToolsForReadOnly(tools, true);
+    expect(filtered).not.toHaveProperty('set_home_page');
+    expect(filtered).toHaveProperty('list_pages');
+  });
+
   it('classifies workflow tools: writes are write tools, list is read', () => {
     expect(isWriteTool('create_workflow')).toBe(true);
     expect(isWriteTool('update_workflow')).toBe(true);
