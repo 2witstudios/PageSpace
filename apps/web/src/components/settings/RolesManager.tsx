@@ -29,6 +29,7 @@ interface Role {
   color?: string;
   isDefault: boolean;
   permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+  driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
   position: number;
 }
 

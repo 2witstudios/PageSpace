@@ -215,13 +215,13 @@ export const PermissionsGrid = forwardRef<PermissionsGridRef, PermissionsGridPro
     const perms = permissions.get(page.id) || { canView: false, canEdit: false, canShare: false };
     return (
       <div key={page.id} className="flex items-center p-2 bg-blue-50 dark:bg-blue-900/20 border-b-2 border-blue-200 dark:border-blue-700">
-        <div className="flex-1 flex items-center space-x-2">
+        <div className="flex-1 flex items-center space-x-2 min-w-0 overflow-hidden">
           <HardDrive className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
-          <span className="font-semibold truncate">{page.title}</span>
-          <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">
+          <span className="font-semibold shrink-0">{page.title}</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
             {readOnlyDriveRoot
-              ? '(drive root — access derived from membership role)'
-              : '(drive root — controls root-level page creation)'}
+              ? '(access derived from membership role)'
+              : '(controls root-level page creation)'}
           </span>
         </div>
         <div className="w-[100px] flex justify-center">
