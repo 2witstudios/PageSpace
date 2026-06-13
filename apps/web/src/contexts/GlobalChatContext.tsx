@@ -101,6 +101,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         setCurrentConversationId(conversationId);
         conversationState.setActiveConversationId(conversationId);
         setIsInitialized(true);
+      } else if (messagesResponse.status === 404) {
+        // Conversation not yet persisted (lazy creation) — treat as empty
+        setInitialMessages([]);
+        setCurrentConversationId(conversationId);
+        conversationState.setActiveConversationId(conversationId);
+        setIsInitialized(true);
       } else {
         console.error('Failed to load conversation:', conversationId);
         setIsInitialized(true);
