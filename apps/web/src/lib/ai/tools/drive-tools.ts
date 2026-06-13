@@ -7,12 +7,12 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { getDriveAccessWithDrive, isValidDriveHomePage, updateDrive } from '@pagespace/lib/services/drive-service';
+import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
-import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped } from './actor-permissions';
+import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -506,19 +506,13 @@ This context persists across conversations and helps provide better assistance. 
         throw new Error('User authentication required');
       }
 
-      if (await driveDeniedByAppToken(context as ToolExecutionContext, driveId, 'manage')) {
-        throw new Error('This token does not have access to this drive');
-      }
-
       try {
-        const result = await getDriveAccessWithDrive(driveId, userId);
-        if (!result) {
+        const drive = await getDriveById(driveId);
+        if (!drive) {
           throw new Error('Drive not found');
         }
 
-        const { drive, access } = result;
-
-        if (!access.isOwner && !access.isAdmin) {
+        if (!(await canActorManageDrive(context as ToolExecutionContext, driveId))) {
           throw new Error('Only drive owners and admins can set the home page');
         }
 
@@ -532,29 +526,40 @@ This context persists across conversations and helps provide better assistance. 
         const previousHomePageId = drive.homePageId;
 
         const updatedDrive = await updateDrive(driveId, { homePageId: pageId });
+        if (!updatedDrive) {
+          throw new Error('Drive update failed');
+        }
 
-        const recipientUserIds = await getDriveRecipientUserIds(driveId);
-        await broadcastDriveEvent(
-          createDriveEventPayload(drive.id, 'updated', {
-            name: updatedDrive?.name ?? drive.name,
-            slug: updatedDrive?.slug ?? drive.slug,
-          }),
-          recipientUserIds
-        );
+        try {
+          const recipientUserIds = await getDriveRecipientUserIds(driveId);
+          await broadcastDriveEvent(
+            createDriveEventPayload(drive.id, 'updated', {
+              name: updatedDrive.name,
+              slug: updatedDrive.slug,
+            }),
+            recipientUserIds
+          );
+        } catch (sideEffectError) {
+          console.error('Home page updated, but drive broadcast failed:', sideEffectError);
+        }
 
-        const aiContext = await getAiContextWithActor(context as ToolExecutionContext);
-        logDriveActivity(userId, 'update', {
-          id: driveId,
-          name: updatedDrive?.name ?? drive.name,
-        }, {
-          ...aiContext,
-          previousValues: { homePageId: previousHomePageId },
-          newValues: { homePageId: pageId },
-          metadata: {
-            ...aiContext.metadata,
-            updateType: 'homePageId',
-          },
-        });
+        try {
+          const aiContext = await getAiContextWithActor(context as ToolExecutionContext);
+          logDriveActivity(userId, 'update', {
+            id: driveId,
+            name: updatedDrive.name,
+          }, {
+            ...aiContext,
+            previousValues: { homePageId: previousHomePageId },
+            newValues: { homePageId: pageId },
+            metadata: {
+              ...aiContext.metadata,
+              updateType: 'homePageId',
+            },
+          });
+        } catch (sideEffectError) {
+          console.error('Home page updated, but activity logging failed:', sideEffectError);
+        }
 
         const message = pageId
           ? `Successfully set home page for "${drive.name}"`
