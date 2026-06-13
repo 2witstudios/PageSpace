@@ -18,6 +18,7 @@ export const WRITE_TOOLS = new Set([
   'create_drive',
   'rename_drive',
   'update_drive_context',
+  'set_home_page',
   // Explicit per-entity trash/restore (pages and drives)
   'trash_page',
   'trash_drive',
