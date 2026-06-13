@@ -230,6 +230,16 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     />
   ),
 
+  set_home_page: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title="Home Page"
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
   // === PAGE READ TOOLS ===
   list_pages: ({ parsedOutput }) => {
     if (parsedOutput.tree) {
