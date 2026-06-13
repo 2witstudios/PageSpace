@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // We test resolveOrCreateConversation in isolation from the route.
 // All DB interactions are mocked — no real DB connection.

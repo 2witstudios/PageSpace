@@ -100,6 +100,14 @@ vi.mock('@pagespace/db/db', () => {
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(), and: vi.fn(), desc: vi.fn(), gt: vi.fn(), lt: vi.fn(),
+  exists: vi.fn((sub) => ({ type: 'exists', sub })),
+}));
+
+vi.mock('../resolve-or-create-conversation', () => ({
+  resolveOrCreateConversation: vi.fn().mockResolvedValue({
+    id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true,
+  }),
+  ConversationOwnershipError: class ConversationOwnershipError extends Error {},
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'id', drivePrompt: 'drivePrompt' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { __label: 'users', id: 'id', name: 'name', subscriptionTier: 'subscriptionTier' } }));

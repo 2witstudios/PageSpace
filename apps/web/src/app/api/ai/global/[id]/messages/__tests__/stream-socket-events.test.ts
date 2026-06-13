@@ -116,6 +116,16 @@ vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn(),
   gt: vi.fn(),
   lt: vi.fn(),
+  exists: vi.fn((sub) => ({ type: 'exists', sub })),
+}));
+
+// resolveOrCreateConversation is tested in its own file; here we stub it so
+// the route tests don't have to wire up the conversations db mock for it.
+vi.mock('../resolve-or-create-conversation', () => ({
+  resolveOrCreateConversation: vi.fn().mockResolvedValue({
+    id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true,
+  }),
+  ConversationOwnershipError: class ConversationOwnershipError extends Error {},
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
