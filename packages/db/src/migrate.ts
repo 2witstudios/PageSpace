@@ -32,14 +32,17 @@ async function main() {
     )`
   );
 
-  // Get last applied migration
+  // Load all applied migration hashes — checking by hash (not by max timestamp) is
+  // required because migrations regenerated after a collision can receive timestamps
+  // older than already-applied migrations, causing the simpler "last timestamp" check
+  // to silently skip them.
   const dbMigrations = await db.execute(
-    sql`SELECT id, hash, created_at FROM ${sql.identifier(migrationsSchema)}.${sql.identifier(migrationsTable)} ORDER BY created_at DESC LIMIT 1`
+    sql`SELECT hash FROM ${sql.identifier(migrationsSchema)}.${sql.identifier(migrationsTable)}`
   );
-  const lastDbMigration = dbMigrations.rows[0] as { id: number; hash: string; created_at: string } | undefined;
+  const appliedHashes = new Set((dbMigrations.rows as { hash: string }[]).map((r) => r.hash));
 
   for (const migration of migrations) {
-    if (!lastDbMigration || Number(lastDbMigration.created_at) < migration.folderMillis) {
+    if (!appliedHashes.has(migration.hash)) {
       console.log(`  Applying: ${migration.hash.substring(0, 8)}... (${migration.folderMillis})`);
 
       await db.transaction(async (tx) => {
