@@ -4,7 +4,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, sql, lt } from '@pagespace/db/operators'
+import { eq, and, desc, sql, lt, exists } from '@pagespace/db/operators'
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
@@ -153,6 +153,22 @@ export interface PaginatedConversationsResult {
   };
 }
 
+/**
+ * SQL condition: conversation has at least one active message.
+ * Used to filter history — empty (never-messaged) conversations are hidden.
+ * Handles both new rows (lastMessageAt=null) and existing stale rows from before
+ * lazy creation was introduced.
+ */
+const hasMessages = exists(
+  db
+    .select({ one: sql`1` })
+    .from(messages)
+    .where(and(
+      eq(messages.conversationId, conversations.id),
+      eq(messages.isActive, true),
+    ))
+);
+
 export const globalConversationRepository = {
   /**
    * List all active conversations for a user, ordered by lastMessageAt
@@ -171,7 +187,8 @@ export const globalConversationRepository = {
       .from(conversations)
       .where(and(
         eq(conversations.userId, userId),
-        eq(conversations.isActive, true)
+        eq(conversations.isActive, true),
+        hasMessages,
       ))
       .orderBy(desc(conversations.lastMessageAt));
   },
@@ -189,7 +206,8 @@ export const globalConversationRepository = {
     // Build query conditions
     const conditions = [
       eq(conversations.userId, userId),
-      eq(conversations.isActive, true)
+      eq(conversations.isActive, true),
+      hasMessages,
     ];
 
     // Add cursor condition if provided - use compound cursor (lastMessageAt + id) for stable ordering
@@ -278,7 +296,8 @@ export const globalConversationRepository = {
         title: input.title || null,
         type: input.type || 'global',
         contextId: input.contextId || null,
-        lastMessageAt: now,
+        // lastMessageAt stays null until the first message is saved.
+        // This prevents the conversation from appearing in history before any messages exist.
         createdAt: now,
         updatedAt: now,
         isActive: true,
@@ -307,7 +326,7 @@ export const globalConversationRepository = {
         eq(conversations.type, 'global'),
         eq(conversations.isActive, true)
       ))
-      .orderBy(desc(conversations.createdAt))
+      .orderBy(sql`${conversations.lastMessageAt} DESC NULLS LAST`, desc(conversations.createdAt))
       .limit(1);
 
     return results[0] || null;

@@ -100,6 +100,14 @@ vi.mock('@pagespace/db/db', () => {
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(), and: vi.fn(), desc: vi.fn(), gt: vi.fn(), lt: vi.fn(),
+  exists: vi.fn((sub) => ({ type: 'exists', sub })),
+}));
+
+vi.mock('../resolve-or-create-conversation', () => ({
+  resolveOrCreateConversation: vi.fn().mockResolvedValue({
+    id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true,
+  }),
+  ConversationOwnershipError: class ConversationOwnershipError extends Error {},
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'id', drivePrompt: 'drivePrompt' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { __label: 'users', id: 'id', name: 'name', subscriptionTier: 'subscriptionTier' } }));
@@ -254,6 +262,7 @@ import type { SessionAuthResult } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { streamText } from 'ai';
+import { resolveOrCreateConversation, ConversationOwnershipError } from '../resolve-or-create-conversation';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',
@@ -325,6 +334,16 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
 
     expect(canConsumeAI).toHaveBeenCalled();
     expect(response.status).not.toBe(402);
+  });
+
+  it('returns 404 when resolveOrCreateConversation throws ConversationOwnershipError and does not start stream', async () => {
+    vi.mocked(resolveOrCreateConversation).mockRejectedValueOnce(new ConversationOwnershipError());
+
+    const response = await POST(makeRequest(), makeContext());
+
+    expect(response.status).toBe(404);
+    expect(streamText).not.toHaveBeenCalled();
+    expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
   });
 
 });

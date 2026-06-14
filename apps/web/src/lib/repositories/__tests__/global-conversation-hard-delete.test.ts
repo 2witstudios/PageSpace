@@ -40,6 +40,7 @@ vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn((field) => ({ type: 'desc', field })),
   sql: vi.fn(),
   lt: vi.fn((field, value) => ({ type: 'lt', field, value })),
+  exists: vi.fn((sub) => ({ type: 'exists', sub })),
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: {
