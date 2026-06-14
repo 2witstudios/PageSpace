@@ -134,7 +134,6 @@ export const AI_PRICING = {
   'glm-5':       { input: 1.00, output: 3.20 },
 
   // OpenRouter - Chinese/Asian (source: openrouter.ai/api/v1/models)
-  'z-ai/glm-5.2': { input: 0.98, output: 3.08 },
   'z-ai/glm-5.1': { input: 0.98, output: 3.08 },
   'z-ai/glm-5-turbo': { input: 1.20, output: 4.00 },
   'z-ai/glm-5': { input: 0.80, output: 2.56 },
@@ -423,7 +422,6 @@ export const MODEL_CONTEXT_WINDOWS = {
   'glm-5':       202752, // legacy fallback for historical billing rows
 
   // OpenRouter Models - Chinese/Asian
-  'z-ai/glm-5.2': 1000000,
   'z-ai/glm-5.1': 202752,
   'z-ai/glm-5-turbo': 202752,
   'z-ai/glm-5': 202752,
