@@ -261,6 +261,7 @@ export const AI_PROVIDERS = {
     // normally. Distinct from the admin-only `glm` provider below, which routes
     // directly to the Z.ai Coder Plan endpoint and is exempt from billing.
     models: {
+      'z-ai/glm-5.2':      'GLM-5.2',
       'z-ai/glm-5.1':      'GLM-5.1',
       'z-ai/glm-5-turbo':  'GLM-5 Turbo',
       'z-ai/glm-5':        'GLM-5',
@@ -279,6 +280,7 @@ export const AI_PROVIDERS = {
     // NOT billed against the shared credit pool (see METERING_EXEMPT_PROVIDERS).
     // Models officially supported by that endpoint; bare `glm-*` ids (no vendor prefix).
     models: {
+      'glm-5.2':     'GLM-5.2',
       'glm-5.1':     'GLM-5.1',
       'glm-5-turbo': 'GLM-5 Turbo',
       'glm-4.7':     'GLM-4.7',
