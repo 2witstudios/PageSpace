@@ -70,6 +70,7 @@ import {
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { resolveOrCreateConversation, ConversationOwnershipError } from './resolve-or-create-conversation';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -243,20 +244,16 @@ export async function POST(
     const { id: conversationId } = await context.params;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
 
-    // Verify user owns the conversation
-    const [conversation] = await db
-      .select()
-      .from(conversations)
-      .where(and(
-        eq(conversations.id, conversationId),
-        eq(conversations.userId, userId),
-        eq(conversations.isActive, true)
-      ));
-
-    if (!conversation) {
-      return NextResponse.json({ 
-        error: 'Conversation not found' 
-      }, { status: 404 });
+    // Resolve existing conversation or auto-create on first message (lazy creation).
+    // Clients generate the ID locally; this is the point where the DB row is guaranteed.
+    let conversation: typeof conversations.$inferSelect;
+    try {
+      conversation = await resolveOrCreateConversation(userId, conversationId);
+    } catch (e) {
+      if (e instanceof ConversationOwnershipError) {
+        return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+      }
+      throw e;
     }
 
     // Body size guard — reject payloads over 25MB before parsing

@@ -170,6 +170,22 @@ describe('drive-tools', () => {
       ).rejects.toThrow('Drive not found or you do not have permission to rename it');
     });
   });
+
+  describe('set_home_page', () => {
+    it('has correct tool definition', () => {
+      expect(typeof driveTools.set_home_page).toBe('object');
+      expect(typeof driveTools.set_home_page.description).toBe('string');
+      expect(driveTools.set_home_page.description).toContain('home');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        driveTools.set_home_page.execute!({ driveId: 'drive-1', pageId: 'page-1' }, context)
+      ).rejects.toThrow('User authentication required');
+    });
+  });
 });
 
 // ============================================================================

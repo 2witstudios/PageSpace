@@ -48,6 +48,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
   'create_drive': 'Create Workspace',
   'rename_drive': 'Rename Workspace',
   'update_drive_context': 'Update Context',
+  'set_home_page': 'Set Home Page',
   // Member tools
   'list_drive_members': 'Members',
   'list_collaborators': 'Collaborators',
