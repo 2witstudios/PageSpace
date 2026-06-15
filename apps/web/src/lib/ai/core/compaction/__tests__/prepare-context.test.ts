@@ -58,8 +58,8 @@ beforeEach(() => {
   mockGetState.mockResolvedValue(null);
 });
 
-describe('prepareConversationContext — admin gate', () => {
-  it('non-admin users get the exact legacy message array (passthrough, no DB reads)', async () => {
+describe('prepareConversationContext — authenticated gate', () => {
+  it('authenticated non-admin users run through the compaction path (under threshold: messages unchanged)', async () => {
     const messages = smallHistory();
 
     const result = await prepareConversationContext({
@@ -68,14 +68,14 @@ describe('prepareConversationContext — admin gate', () => {
       user: { id: 'u1', role: 'user' },
     });
 
-    expect(result.messages).toBe(messages); // same reference — untouched
+    expect(result.messages).toEqual(messages); // same content; gate is open so a new array is returned
     expect(result.pendingCompaction).toBeNull();
-    expect(mockGetState).not.toHaveBeenCalled();
+    expect(mockGetState).toHaveBeenCalled(); // DB is read (gate is open for all authenticated users)
     result.scheduleCompaction();
-    expect(mockAfter).not.toHaveBeenCalled();
+    expect(mockAfter).not.toHaveBeenCalled(); // no compaction needed (under threshold)
   });
 
-  it('missing or null user is treated as non-admin (fail closed)', async () => {
+  it('null user is treated as unauthenticated (fail closed — exact passthrough, no DB reads)', async () => {
     const messages = smallHistory();
 
     const result = await prepareConversationContext({
@@ -84,7 +84,7 @@ describe('prepareConversationContext — admin gate', () => {
       user: null,
     });
 
-    expect(result.messages).toBe(messages);
+    expect(result.messages).toBe(messages); // exact same reference — true passthrough
     expect(mockGetState).not.toHaveBeenCalled();
   });
 });
