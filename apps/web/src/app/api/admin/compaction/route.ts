@@ -2,27 +2,27 @@ import { withAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { conversationCompactions } from '@pagespace/db/schema/ai-compaction';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { desc, eq, gte, sql } from '@pagespace/db/operators';
+import { and, desc, eq, gte, sql } from '@pagespace/db/operators';
 
 async function handleCompactionStats(): Promise<Response> {
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   const [recent, total7d, compactionLogs] = await Promise.all([
-    // 20 most recent compaction rows
+    // 20 most recently compacted conversations
     db
       .select()
       .from(conversationCompactions)
       .orderBy(desc(conversationCompactions.lastCompactedAt))
       .limit(20),
 
-    // Total compaction count in 7 days
+    // Count of distinct compacted conversations updated in last 7 days
     db
       .select({ count: sql<number>`count(*)` })
       .from(conversationCompactions)
       .where(gte(conversationCompactions.lastCompactedAt, since7d)),
 
-    // Usage log rows for compaction source in last 24h
+    // Usage log rows for compaction model runs in last 24h
     db
       .select({
         conversationId: aiUsageLogs.conversationId,
@@ -33,14 +33,14 @@ async function handleCompactionStats(): Promise<Response> {
         timestamp: aiUsageLogs.timestamp,
       })
       .from(aiUsageLogs)
-      .where(eq(aiUsageLogs.source, 'compaction'))
+      .where(and(eq(aiUsageLogs.source, 'compaction'), gte(aiUsageLogs.timestamp, since24h)))
       .orderBy(desc(aiUsageLogs.timestamp))
       .limit(50),
   ]);
 
   const compactionCount7d = Number(total7d[0]?.count ?? 0);
 
-  // Aggregate cost and token stats for recent compaction runs
+  // Aggregate cost across the 24h compaction run window
   const totalCompactionCostCents = compactionLogs.reduce(
     (sum, r) => sum + Math.round((r.cost ?? 0) * 100),
     0,
