@@ -12,6 +12,7 @@ export interface CompactionMessagePart {
   toolName?: string;
   args?: unknown;
   result?: unknown;
+  output?: unknown; // SDK UIMessage dialect (type: 'tool-{name}')
 }
 
 export interface CompactionMessage {
@@ -219,6 +220,21 @@ const TOOL_RESULT_MAX_CHARS = 8000;
  * minTailMessages floor prevents any cut (e.g. 6 messages with 40k-token tool
  * results each). Applied after hard truncation so it's a last-resort safety net.
  */
+function isToolOutputPartForCap(part: CompactionMessagePart): boolean {
+  if (part.type === 'tool-result') return true;
+  // SDK UIMessage dialect: type is 'tool-{name}' with an output field
+  if (
+    part.type !== 'text' &&
+    part.type !== 'file' &&
+    part.type !== 'step-start' &&
+    part.type.startsWith('tool-') &&
+    'output' in part
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function capToolResultSize(
   messages: CompactionMessage[],
   maxChars = TOOL_RESULT_MAX_CHARS,
@@ -227,11 +243,15 @@ export function capToolResultSize(
     if (!msg.parts) return msg;
     let didCap = false;
     const parts = msg.parts.map((part) => {
-      if (part.type !== 'tool-result') return part;
-      if (typeof part.result !== 'string' || part.result.length <= maxChars) return part;
+      if (!isToolOutputPartForCap(part)) return part;
+      // Canonical format uses `result`; SDK UIMessage format uses `output`
+      // Canonical format: `result` field; SDK UIMessage format: `output` field
+      const value = 'result' in part ? part.result : part.output;
+      if (typeof value !== 'string' || value.length <= maxChars) return part;
       didCap = true;
-      const truncated = part.result.slice(0, maxChars);
-      return { ...part, result: `${truncated}\n[truncated: output exceeded ${maxChars} chars]` };
+      const truncated = value.slice(0, maxChars);
+      const capped = `${truncated}\n[truncated: output exceeded ${maxChars} chars]`;
+      return 'result' in part ? { ...part, result: capped } : { ...part, output: capped };
     });
     return didCap ? { ...msg, parts } : msg;
   });

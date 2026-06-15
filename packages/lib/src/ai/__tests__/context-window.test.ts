@@ -545,4 +545,36 @@ describe('capToolResultSize', () => {
     const part = result[0].parts?.find((p) => p.type === 'tool-result');
     expect(part?.result).toEqual({ nested: 'object' }); // object untouched
   });
+
+  it('truncates SDK UIMessage-format tool outputs (type: tool-{name}, output field)', () => {
+    const big = 'x'.repeat(200);
+    // SDK UIMessage format: type is 'tool-{name}', output field instead of result
+    const msg: CompactionMessage = {
+      id: 'a1',
+      role: 'assistant',
+      parts: [{ type: 'tool-read_page', toolCallId: 'tc1', toolName: 'read_page', output: big }],
+    };
+    const result = capToolResultSize([msg], 100);
+    const part = result[0].parts?.[0];
+    expect(typeof part?.output).toBe('string');
+    expect((part?.output as string).length).toBeLessThan(big.length);
+    expect(part?.output as string).toContain('[truncated:');
+  });
+
+  it('does not truncate SDK UIMessage text parts even when long', () => {
+    const big = 'y'.repeat(200);
+    const msg: CompactionMessage = {
+      id: 'a1',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: big },
+        { type: 'tool-read_page', toolCallId: 'tc1', toolName: 'read_page', output: big },
+      ],
+    };
+    const result = capToolResultSize([msg], 100);
+    const textPart = result[0].parts?.[0];
+    expect((textPart?.text as string).length).toBe(200); // text untouched
+    const toolPart = result[0].parts?.[1];
+    expect(toolPart?.output as string).toContain('[truncated:'); // output capped
+  });
 });
