@@ -236,7 +236,7 @@ export default function AdminCompactionPage() {
       <Card>
         <CardHeader>
           <CardTitle>Recent Compaction Runs (24h)</CardTitle>
-          <CardDescription>Latest compaction usage log entries (source = 'compaction')</CardDescription>
+          <CardDescription>Latest compaction usage log entries (source = &apos;compaction&apos;)</CardDescription>
         </CardHeader>
         <CardContent>
           {recentLogs.length === 0 ? (

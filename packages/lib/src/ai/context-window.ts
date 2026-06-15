@@ -244,7 +244,6 @@ export function capToolResultSize(
     let didCap = false;
     const parts = msg.parts.map((part) => {
       if (!isToolOutputPartForCap(part)) return part;
-      // Canonical format uses `result`; SDK UIMessage format uses `output`
       // Canonical format: `result` field; SDK UIMessage format: `output` field
       const value = 'result' in part ? part.result : part.output;
       if (typeof value !== 'string' || value.length <= maxChars) return part;
