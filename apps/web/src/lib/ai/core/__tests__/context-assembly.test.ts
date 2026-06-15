@@ -130,8 +130,10 @@ describe('prepareHistoryForModel — summary detection', () => {
 });
 
 describe('prepareHistoryForModel — elision/compaction coincidence', () => {
-  it('suppresses elision entirely when a summary exists (compactionPointer = 0)', async () => {
-    // 20 assistant turns would normally elide aggressively — the summary must prevent it.
+  it('elides stale outputs on the tail even when a summary exists', async () => {
+    // 20 assistant turns: chunkSize=8, keepLastTurns=4 → boundary = floor(20/8)*8 - 4 = 12.
+    // Turns 0-11 must be elided; turns 12-19 must remain intact.
+    // The summary covers the HEAD — the tail still needs elision.
     const tail = pairs(20);
     mockPrepare.mockResolvedValueOnce({
       messages: [summaryMsg(), ...tail] as never,
@@ -141,8 +143,15 @@ describe('prepareHistoryForModel — elision/compaction coincidence', () => {
 
     const result = await prepareHistoryForModel({ ...baseParams, history: tail });
 
-    for (const m of result.messages.filter((m) => m.role === 'assistant')) {
-      expect(toolOutputOf(m)).toBe(BIG_OUTPUT);
+    const assistants = result.messages.filter((m) => m.role === 'assistant');
+    expect(assistants).toHaveLength(20);
+    // First 12 assistant turns must be elided
+    for (let i = 0; i < 12; i++) {
+      expect(toolOutputOf(assistants[i])).toContain('[output elided to save context');
+    }
+    // Last 8 assistant turns must be intact
+    for (let i = 12; i < 20; i++) {
+      expect(toolOutputOf(assistants[i])).toBe(BIG_OUTPUT);
     }
   });
 

@@ -510,6 +510,27 @@ describe('trackAIUsage', () => {
     expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ totalTokens: 999 }));
   });
 
+  it('sanitizes NaN token counts to undefined before DB write (400-error onFinish guard)', async () => {
+    // When a provider returns a 400 error, onFinish fires with NaN usage fields.
+    // Passing NaN to a Postgres integer column crashes with "invalid input syntax for type integer".
+    await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      inputTokens: NaN,
+      outputTokens: NaN,
+      totalTokens: NaN,
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputTokens: undefined,
+        outputTokens: undefined,
+        totalTokens: undefined,
+      }),
+    );
+  });
+
   it('should pass through optional context tracking fields', async () => {
     await trackAIUsage({
       userId: 'user-1',

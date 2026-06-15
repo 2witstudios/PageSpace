@@ -6,6 +6,7 @@ import {
   formatSummaryMessage,
   stripNonTextForSummarizer,
   buildModelContext,
+  capToolResultSize,
 } from '../context-window';
 import type { CompactionMessage, CompactionState } from '../context-window';
 
@@ -393,6 +394,39 @@ describe('buildModelContext', () => {
     expect(result.tailMessages.map((m) => m.id)).toEqual(['u1', 'a1']);
   });
 
+  it('caps oversized tool-result strings (capToolResultSize safety net)', () => {
+    // Build a message with a 40k-token tool-result so that minTailMessages=1 would
+    // normally prevent a whole-message cut but the cap still trims within the message.
+    const bigResult = 'x'.repeat(20_000); // well above the 8000-char cap
+    const messages: CompactionMessage[] = [
+      makeUser('u1', 'read this page'),
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          { type: 'tool-call', toolCallId: 'tc1', toolName: 'read_page', args: {} },
+          { type: 'tool-result', toolCallId: 'tc1', result: bigResult },
+        ],
+        createdAt: new Date('2024-01-01T00:00:02Z'),
+      },
+    ];
+    const result = buildModelContext({
+      messages,
+      compaction: null,
+      model: 'gpt-3.5',
+      provider: 'openai',
+      systemPromptTokens: 0,
+      toolTokens: 0,
+      config: { triggerRatio: 0.01, hardRatio: 0.01, targetRatio: 0.005, minTailMessages: 2 },
+    });
+    const resultPart = result.tailMessages
+      .flatMap((m) => m.parts ?? [])
+      .find((p) => p.type === 'tool-result');
+    expect(typeof resultPart?.result).toBe('string');
+    expect((resultPart?.result as string).length).toBeLessThan(bigResult.length);
+    expect((resultPart?.result as string)).toContain('[truncated:');
+  });
+
   it('keeps the tail unchanged when only an intra-message orphan tool-result fails validation', () => {
     // Orphan tool-results inside a message are repaired upstream by
     // sanitizeMessagesForModel — moving the cut cannot fix them, so the gate
@@ -417,7 +451,7 @@ describe('buildModelContext', () => {
     expect(result.tailMessages.map((m) => m.id)).toEqual(['u1', 'a1']);
   });
 
-  it('compaction plan has cutBeforeIndex pointing at a user turn in the original messages', () => {
+  it('compaction plan has cutBeforeIndex pointing at a user turn in the original messages (capToolResultSize suite lives below)', () => {
     const bigMessages: CompactionMessage[] = [];
     for (let i = 1; i <= 12; i++) {
       bigMessages.push(makeUser(`u${i}`, 'a'.repeat(200)));
@@ -435,5 +469,80 @@ describe('buildModelContext', () => {
     if (result.compactionPlan && result.compactionPlan.cutBeforeIndex < bigMessages.length) {
       expect(bigMessages[result.compactionPlan.cutBeforeIndex].role).toBe('user');
     }
+  });
+});
+
+// --- capToolResultSize ---
+
+describe('capToolResultSize', () => {
+  function makeToolResult(id: string, result: string): CompactionMessage {
+    return {
+      id,
+      role: 'assistant',
+      parts: [
+        { type: 'tool-call', toolCallId: id, toolName: 'read_page', args: {} },
+        { type: 'tool-result', toolCallId: id, result },
+      ],
+    };
+  }
+
+  it('leaves messages with no parts unchanged', () => {
+    const msgs: CompactionMessage[] = [makeUser('u1', 'hi')];
+    expect(capToolResultSize(msgs, 100)).toEqual(msgs);
+  });
+
+  it('passes through tool-result parts within the limit', () => {
+    const msgs = [makeToolResult('a1', 'short result')];
+    const result = capToolResultSize(msgs, 100);
+    const part = result[0].parts?.find((p) => p.type === 'tool-result');
+    expect(part?.result).toBe('short result');
+  });
+
+  it('truncates tool-result strings that exceed the limit', () => {
+    const big = 'x'.repeat(200);
+    const msgs = [makeToolResult('a1', big)];
+    const result = capToolResultSize(msgs, 100);
+    const part = result[0].parts?.find((p) => p.type === 'tool-result');
+    expect(typeof part?.result).toBe('string');
+    expect((part?.result as string).length).toBeLessThan(big.length);
+    expect(part?.result).toContain('[truncated:');
+  });
+
+  it('does not mutate original messages (pure function)', () => {
+    const big = 'y'.repeat(200);
+    const original = makeToolResult('a1', big);
+    capToolResultSize([original], 100);
+    const part = original.parts?.find((p) => p.type === 'tool-result');
+    expect(part?.result).toBe(big); // unchanged
+  });
+
+  it('only truncates tool-result parts, not text parts', () => {
+    const msg: CompactionMessage = {
+      id: 'a1',
+      role: 'assistant',
+      parts: [
+        { type: 'text', text: 'x'.repeat(200) },
+        { type: 'tool-call', toolCallId: 'tc1', toolName: 'read_page', args: {} },
+        { type: 'tool-result', toolCallId: 'tc1', result: 'x'.repeat(200) },
+      ],
+    };
+    const result = capToolResultSize([msg], 100);
+    const textPart = result[0].parts?.find((p) => p.type === 'text');
+    expect((textPart?.text as string).length).toBe(200); // text untouched
+    const toolPart = result[0].parts?.find((p) => p.type === 'tool-result');
+    expect((toolPart?.result as string)).toContain('[truncated:');
+  });
+
+  it('skips non-string result fields', () => {
+    const msg: CompactionMessage = {
+      id: 'a1',
+      role: 'assistant',
+      parts: [
+        { type: 'tool-result', toolCallId: 'tc1', result: { nested: 'object' } },
+      ],
+    };
+    const result = capToolResultSize([msg], 10);
+    const part = result[0].parts?.find((p) => p.type === 'tool-result');
+    expect(part?.result).toEqual({ nested: 'object' }); // object untouched
   });
 });
