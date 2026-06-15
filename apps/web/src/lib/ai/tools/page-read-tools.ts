@@ -548,12 +548,12 @@ export const pageReadTools = {
             type: page.type,
             contentMode: page.contentMode || 'html',
             isTaskLinked,
+            totalLines: totalMessages,
+            totalMessages,
+            lineCount: selectedMessages.length,
+            messageCount: selectedMessages.length,
             content,
             rawContent,
-            lineCount: selectedMessages.length,
-            totalLines: totalMessages,
-            messageCount: selectedMessages.length,
-            totalMessages,
             channelMessages: selectedMessages.map((message, index) => {
               const sender = getSenderInfo(message);
               const messageText = extractMessageText(message.content);
@@ -642,11 +642,11 @@ export const pageReadTools = {
           type: page.type,
           contentMode: page.contentMode || 'html',
           isTaskLinked,
+          totalLines,
+          lineCount: selectedLines.length,
+          ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
           content: numberedContent,
           rawContent,
-          lineCount: selectedLines.length,
-          totalLines,
-          ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
           summary: isRangeRequest
             ? `Read lines ${effectiveStart}-${effectiveEnd} of "${page.title}" (${selectedLines.length} of ${totalLines} lines)`
             : `Read "${page.title}" (${totalLines} lines, ${page.type.toLowerCase()})${isTaskLinked ? ' - linked to task' : ''}`,
@@ -1065,10 +1065,10 @@ export const pageReadTools = {
           success: true,
           pageId,
           conversationId,
-          content,
-          messageCount: selectedMessages.length,
           totalMessages,
+          messageCount: selectedMessages.length,
           ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
+          content,
           summary: isRangeRequest
             ? `Read messages ${effectiveStart}-${effectiveEnd} of "${title}" conversation (${selectedMessages.length} of ${totalMessages} messages)`
             : `Read "${title}" conversation with ${totalMessages} messages`,
