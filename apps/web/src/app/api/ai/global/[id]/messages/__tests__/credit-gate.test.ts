@@ -255,6 +255,12 @@ vi.mock('@/lib/ai/core/tool-utils', () => ({
 }));
 vi.mock('@/lib/ai/tools/finish-tool', () => ({ finishTool: {}, FINISH_TOOL_NAME: 'finish' }));
 vi.mock('@/lib/ai/tools/tool-search-tool', () => ({ createToolSearchTool: vi.fn().mockReturnValue({}) }));
+vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
+  prepareConversationContext: vi.fn().mockImplementation(
+    ({ messages }: { messages: unknown[] }) =>
+      Promise.resolve({ messages, scheduleCompaction: () => {}, pendingCompaction: null }),
+  ),
+}));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';

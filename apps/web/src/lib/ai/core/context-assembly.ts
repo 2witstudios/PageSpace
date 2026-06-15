@@ -149,12 +149,12 @@ export async function prepareHistoryForModel(
 
   // Step 3: elide stale tool outputs from the tail
   //
-  // Boundary coincidence rule:
-  //  - If a summary exists, the early turns are already condensed; set compactionPointer=0
-  //    so elision is a no-op on the tail (stableBoundaryIndex=1 serves as the B breakpoint).
-  //  - Otherwise, compute a chunk-aligned boundary from the tail's assistant turn count.
+  // Always compute a chunk-aligned boundary from the tail's assistant turn count,
+  // regardless of whether a summary exists. The summary covers the HEAD; the tail
+  // still has many turns with large tool outputs that need elision to stay within
+  // the context window between compaction fires.
   const assistantTurnCount = tailUIMessages.filter((m) => m.role === 'assistant').length;
-  const compactionPointer: number | undefined = hasSummary ? 0 : undefined;
+  const compactionPointer: number | undefined = undefined;
 
   const elisionBoundary = computeElisionBoundary(assistantTurnCount, {
     keepLastTurns: ELISION_KEEP_LAST_TURNS,
