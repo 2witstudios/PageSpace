@@ -827,6 +827,11 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
   try {
     // Calculate tokens if not provided
     let { inputTokens, outputTokens, totalTokens } = data;
+    // Sanitize NaN/Infinity (occurs when provider returns 400 and onFinish fires
+    // with no usage metadata — passing NaN into a Postgres integer column crashes).
+    if (!Number.isFinite(inputTokens)) inputTokens = undefined;
+    if (!Number.isFinite(outputTokens)) outputTokens = undefined;
+    if (!Number.isFinite(totalTokens)) totalTokens = undefined;
     // Calculate total if not provided
     if (!totalTokens && (inputTokens || outputTokens)) {
       totalTokens = (inputTokens || 0) + (outputTokens || 0);

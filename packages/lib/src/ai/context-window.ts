@@ -210,6 +210,33 @@ function estimateTailTokens(tail: CompactionMessage[]): number {
   );
 }
 
+const TOOL_RESULT_MAX_CHARS = 8000;
+
+/**
+ * Truncate oversized tool-result parts within each message in place.
+ *
+ * Hard truncation can only drop whole messages; this handles the case where the
+ * minTailMessages floor prevents any cut (e.g. 6 messages with 40k-token tool
+ * results each). Applied after hard truncation so it's a last-resort safety net.
+ */
+export function capToolResultSize(
+  messages: CompactionMessage[],
+  maxChars = TOOL_RESULT_MAX_CHARS,
+): CompactionMessage[] {
+  return messages.map((msg) => {
+    if (!msg.parts) return msg;
+    let didCap = false;
+    const parts = msg.parts.map((part) => {
+      if (part.type !== 'tool-result') return part;
+      if (typeof part.result !== 'string' || part.result.length <= maxChars) return part;
+      didCap = true;
+      const truncated = part.result.slice(0, maxChars);
+      return { ...part, result: `${truncated}\n[truncated: output exceeded ${maxChars} chars]` };
+    });
+    return didCap ? { ...msg, parts } : msg;
+  });
+}
+
 export function buildModelContext(params: BuildModelContextParams): BuildModelContextResult {
   const {
     messages,
@@ -345,6 +372,12 @@ export function buildModelContext(params: BuildModelContextParams): BuildModelCo
       }
     }
   }
+
+  // Safety net: cap oversized tool-result strings within each message.
+  // Hard truncation can only drop whole messages; when minTailMessages prevents
+  // any cut (e.g. 6 messages each containing 40k-token read_page results) this
+  // trims within the remaining messages so the model never sees a 400-error context.
+  tailMessages = capToolResultSize(tailMessages);
 
   const finalTailTokens = estimateTailTokens(tailMessages);
   const finalTotal = systemPromptTokens + toolTokens + summaryTokens + finalTailTokens;
