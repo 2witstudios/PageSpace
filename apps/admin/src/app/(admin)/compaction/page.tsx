@@ -159,7 +159,7 @@ export default function AdminCompactionPage() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader>
-            <CardDescription>Compactions (7d)</CardDescription>
+            <CardDescription>Compaction runs (7d)</CardDescription>
             <CardTitle className="text-3xl">{summary.totalCompactions7d}</CardTitle>
           </CardHeader>
         </Card>
