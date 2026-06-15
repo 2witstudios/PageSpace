@@ -2,7 +2,7 @@ import { withAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { conversationCompactions } from '@pagespace/db/schema/ai-compaction';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { and, desc, eq, gte, sql } from '@pagespace/db/operators';
+import { and, desc, eq, gte, isNotNull, sql } from '@pagespace/db/operators';
 
 async function handleCompactionStats(): Promise<Response> {
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -13,6 +13,7 @@ async function handleCompactionStats(): Promise<Response> {
     db
       .select()
       .from(conversationCompactions)
+      .where(isNotNull(conversationCompactions.lastCompactedAt))
       .orderBy(desc(conversationCompactions.lastCompactedAt))
       .limit(20),
 
