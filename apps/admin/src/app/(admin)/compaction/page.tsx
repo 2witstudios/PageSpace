@@ -36,7 +36,7 @@ interface CompactionRow {
 }
 
 interface CompactionLogRow {
-  conversationId: string;
+  conversationId: string | null;
   model: string;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -55,7 +55,8 @@ function usd(cents: number): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: 3,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
   }).format(cents / 100);
 }
 
