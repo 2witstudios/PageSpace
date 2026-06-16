@@ -48,6 +48,49 @@ function withBaseTime(d: Date, base: Date): Date {
  * including those before `from`. If the series is exhausted before `from`,
  * returns [].
  */
+/**
+ * Expand a list of calendar events into concrete instances within [windowStart, windowEnd].
+ * Non-recurring events pass through unchanged. Recurring events are replaced by
+ * one synthetic entry per occurrence, carrying recurringBaseStartAt/EndAt so callers
+ * can restore the series anchor when editing.
+ */
+export function expandRecurringEvents<
+  T extends {
+    startAt: Date;
+    endAt: Date;
+    recurrenceRule: RecurrenceRule | null;
+    recurrenceExceptions: string[] | null;
+  },
+>(events: T[], windowStart: Date, windowEnd: Date): T[] {
+  const result: T[] = [];
+  for (const event of events) {
+    if (!event.recurrenceRule) {
+      result.push(event);
+      continue;
+    }
+    const parentStartISO = event.startAt.toISOString();
+    const parentEndISO = event.endAt.toISOString();
+    const duration = event.endAt.getTime() - event.startAt.getTime();
+    const occurrences = expandOccurrences(
+      event.recurrenceRule,
+      event.startAt,
+      windowStart,
+      windowEnd,
+      event.recurrenceExceptions ?? [],
+    );
+    for (const occStart of occurrences) {
+      result.push({
+        ...event,
+        startAt: occStart,
+        endAt: new Date(occStart.getTime() + duration),
+        recurringBaseStartAt: parentStartISO,
+        recurringBaseEndAt: parentEndISO,
+      } as T);
+    }
+  }
+  return result;
+}
+
 export function expandOccurrences(
   rule: RecurrenceRule,
   baseStartAt: Date,

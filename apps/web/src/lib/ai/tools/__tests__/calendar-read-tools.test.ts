@@ -23,6 +23,7 @@ vi.mock('@pagespace/db/operators', () => ({
   lte: vi.fn(),
   inArray: vi.fn(),
   isNull: vi.fn(),
+  isNotNull: vi.fn(),
   desc: vi.fn(),
   not: vi.fn(),
 }));
@@ -35,6 +36,8 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
     isTrashed: 'isTrashed',
     startAt: 'startAt',
     endAt: 'endAt',
+    recurrenceRule: 'recurrenceRule',
+    recurrenceExceptions: 'recurrenceExceptions',
   },
   calendarEventDrives: {
     eventId: 'eventId',
@@ -387,6 +390,110 @@ describe('calendar-read-tools', () => {
           should: 'return events',
           actual: (result as { data: { events: unknown[] } }).data.events.length,
           expected: 2,
+        });
+      });
+    });
+
+    describe('recurring event expansion', () => {
+      const createRecurringEvent = (overrides = {}) => ({
+        ...createMockEvent(),
+        startAt: new Date('2026-05-19T10:00:00Z'),
+        endAt: new Date('2026-05-19T11:00:00Z'),
+        recurrenceRule: { frequency: 'WEEKLY' as const, interval: 2 },
+        recurrenceExceptions: [],
+        metadata: null,
+        ...overrides,
+      });
+
+      it('drive context: expands biweekly recurring event into window instances when base is before window', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+        // shared events
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+        // attendee events
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            innerJoin: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+          }),
+        });
+        mockDb.query.calendarEvents.findMany = vi.fn().mockResolvedValue([createRecurringEvent()]);
+
+        const result = await calendarReadTools.list_calendar_events.execute!(
+          { startDate: '2026-06-01', endDate: '2026-07-01', context: 'drive', driveId: 'drive-1' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'drive context: biweekly event (base May 19) queried Jun 1 – Jul 1',
+          should: 'return success',
+          actual: (result as { success: boolean }).success,
+          expected: true,
+        });
+
+        const events = (result as { data: { events: Array<{ startAt: string }> } }).data.events;
+
+        assert({
+          given: 'biweekly recurring event with May 19 base, querying Jun 1 – Jul 1',
+          should: 'return 3 June instances (Jun 2, Jun 16, Jun 30)',
+          actual: events.length,
+          expected: 3,
+        });
+
+        assert({
+          given: 'biweekly recurring event with May 19 base, querying Jun 1 – Jul 1',
+          should: 'all returned instances fall within the queried window',
+          actual: events.every(
+            (e) =>
+              new Date(e.startAt) >= new Date('2026-06-01') &&
+              new Date(e.startAt) < new Date('2026-07-01')
+          ),
+          expected: true,
+        });
+      });
+
+      it('user context: expands biweekly recurring event into window instances when base is before window', async () => {
+        mockGetDriveIdsForUser.mockResolvedValue(['drive-1']);
+        // shared events into user drives
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+        // attendee events
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+        mockDb.query.calendarEvents.findMany = vi.fn().mockResolvedValue([createRecurringEvent()]);
+
+        const result = await calendarReadTools.list_calendar_events.execute!(
+          { startDate: '2026-06-01', endDate: '2026-07-01', context: 'user' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'user context: biweekly event (base May 19) queried Jun 1 – Jul 1',
+          should: 'return success',
+          actual: (result as { success: boolean }).success,
+          expected: true,
+        });
+
+        const events = (result as { data: { events: Array<{ startAt: string }> } }).data.events;
+
+        assert({
+          given: 'biweekly recurring event with May 19 base, querying Jun 1 – Jul 1',
+          should: 'return 3 June instances (Jun 2, Jun 16, Jun 30)',
+          actual: events.length,
+          expected: 3,
+        });
+
+        assert({
+          given: 'biweekly recurring event with May 19 base, querying Jun 1 – Jul 1',
+          should: 'all returned instances fall within the queried window',
+          actual: events.every(
+            (e) =>
+              new Date(e.startAt) >= new Date('2026-06-01') &&
+              new Date(e.startAt) < new Date('2026-07-01')
+          ),
+          expected: true,
         });
       });
     });

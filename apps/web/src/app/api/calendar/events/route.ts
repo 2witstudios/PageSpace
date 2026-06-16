@@ -15,7 +15,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkM
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
 import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
-import { expandOccurrences, RecurrenceRule } from '@/lib/workflows/recurrence-utils';
+import { expandRecurringEvents, RecurrenceRule } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -84,6 +84,7 @@ async function getTriggeredEventIds(eventIds: string[]): Promise<Set<string>> {
 
 /**
  * Expand workflow schedules into virtual calendar events within a date range.
+ * expandRecurringEvents is imported from recurrence-utils.
  * - Cron workflows: expand cron expression into future occurrences
  * - Past actual runs (any source): join workflow_runs and surface each fire
  *   that landed inside the requested window.
@@ -204,48 +205,6 @@ async function getWorkflowVirtualEvents(driveIds: string[], startDate: Date, end
   }
 
   return virtualEvents;
-}
-
-/**
- * Expand recurring events in a fetched list into one synthetic entry per
- * occurrence within [windowStart, windowEnd]. Non-recurring events pass
- * through unchanged. The synthetic entries share all fields with the parent
- * except startAt / endAt which are shifted to each occurrence.
- */
-function expandRecurringEvents<T extends { startAt: Date; endAt: Date; recurrenceRule: RecurrenceRule | null; recurrenceExceptions: string[] | null }>(
-  events: T[],
-  windowStart: Date,
-  windowEnd: Date,
-): T[] {
-  const result: T[] = [];
-  for (const event of events) {
-    if (!event.recurrenceRule) {
-      result.push(event);
-      continue;
-    }
-    const parentStartISO = event.startAt.toISOString();
-    const parentEndISO = event.endAt.toISOString();
-    const duration = event.endAt.getTime() - event.startAt.getTime();
-    const occurrences = expandOccurrences(
-      event.recurrenceRule,
-      event.startAt,
-      windowStart,
-      windowEnd,
-      event.recurrenceExceptions ?? [],
-    );
-    for (const occStart of occurrences) {
-      // Carry the parent's base start/end so the edit modal can restore them,
-      // preventing accidental anchor-shifting when saving a non-first occurrence.
-      result.push({
-        ...event,
-        startAt: occStart,
-        endAt: new Date(occStart.getTime() + duration),
-        recurringBaseStartAt: parentStartISO,
-        recurringBaseEndAt: parentEndISO,
-      } as T);
-    }
-  }
-  return result;
 }
 
 /**

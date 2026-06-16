@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, gte, lte, inArray, isNull, desc, sql } from '@pagespace/db/operators'
+import { eq, and, or, gte, lte, inArray, isNull, isNotNull, desc, sql } from '@pagespace/db/operators'
 import { calendarEvents, calendarEventDrives, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
@@ -11,6 +11,7 @@ import { isUserMemberOfAnyEventDrive, listEventDrives, getAllDriveIdsForEvent } 
 import type { ToolExecutionContext } from '../core/types';
 import { driveDeniedByAppToken, filterDriveIdsByAppTokenScope, isMcpScoped } from './actor-permissions';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
+import { expandRecurringEvents } from '../../workflows/recurrence-utils';
 
 /**
  * Check if user can access an event based on visibility rules
@@ -301,8 +302,16 @@ export const calendarReadTools = {
                   : eq(calendarEvents.id, '__never_match__')
               ),
               eq(calendarEvents.isTrashed, false),
-              lte(calendarEvents.startAt, parsedEndDate),
-              gte(calendarEvents.endAt, parsedStartDate),
+              or(
+                and(
+                  lte(calendarEvents.startAt, parsedEndDate),
+                  gte(calendarEvents.endAt, parsedStartDate),
+                ),
+                and(
+                  isNotNull(calendarEvents.recurrenceRule),
+                  lte(calendarEvents.startAt, parsedEndDate),
+                ),
+              ),
               or(
                 eq(calendarEvents.visibility, 'DRIVE'),
                 and(
@@ -339,15 +348,16 @@ export const calendarReadTools = {
           });
 
           const userTz = (ctx as ToolExecutionContext)?.timezone;
-          const triggerMap = await fetchTriggerInfoForEvents(events);
-          const formattedEvents = events.map((e) => formatEventForResponse(e, userTz, triggerMap.get(e.id)));
+          const expandedEvents = expandRecurringEvents(events, parsedStartDate, parsedEndDate);
+          const triggerMap = await fetchTriggerInfoForEvents(expandedEvents);
+          const formattedEvents = expandedEvents.map((e) => formatEventForResponse(e, userTz, triggerMap.get(e.id)));
 
           return {
             success: true,
             data: { events: formattedEvents },
-            summary: `Found ${events.length} event${events.length === 1 ? '' : 's'} in drive calendar from ${startDate} to ${endDate}`,
+            summary: `Found ${formattedEvents.length} event${formattedEvents.length === 1 ? '' : 's'} in drive calendar from ${startDate} to ${endDate}`,
             stats: {
-              eventCount: events.length,
+              eventCount: formattedEvents.length,
               dateRange: { start: startDate, end: endDate },
               context: 'drive',
               driveId,
@@ -428,8 +438,16 @@ export const calendarReadTools = {
           where: and(
             or(...conditions),
             eq(calendarEvents.isTrashed, false),
-            lte(calendarEvents.startAt, parsedEndDate),
-            gte(calendarEvents.endAt, parsedStartDate)
+            or(
+              and(
+                lte(calendarEvents.startAt, parsedEndDate),
+                gte(calendarEvents.endAt, parsedStartDate),
+              ),
+              and(
+                isNotNull(calendarEvents.recurrenceRule),
+                lte(calendarEvents.startAt, parsedEndDate),
+              ),
+            ),
           ),
           with: {
             createdBy: {
@@ -461,24 +479,25 @@ export const calendarReadTools = {
           await filterDriveIdsByAppTokenScope(ctx as ToolExecutionContext, eventDriveIds),
         );
         const scopedEvents = events.filter((e) => !e.driveId || allowedEventDriveIds.has(e.driveId));
+        const expandedScopedEvents = expandRecurringEvents(scopedEvents, parsedStartDate, parsedEndDate);
 
         const userTzForList = (ctx as ToolExecutionContext)?.timezone;
-        const triggerMapAll = await fetchTriggerInfoForEvents(scopedEvents);
-        const formattedEvents = scopedEvents.map((e) => formatEventForResponse(e, userTzForList, triggerMapAll.get(e.id)));
+        const triggerMapAll = await fetchTriggerInfoForEvents(expandedScopedEvents);
+        const formattedEvents = expandedScopedEvents.map((e) => formatEventForResponse(e, userTzForList, triggerMapAll.get(e.id)));
 
         return {
           success: true,
           data: { events: formattedEvents },
-          summary: `Found ${scopedEvents.length} event${scopedEvents.length === 1 ? '' : 's'} from ${startDate} to ${endDate}`,
+          summary: `Found ${formattedEvents.length} event${formattedEvents.length === 1 ? '' : 's'} from ${startDate} to ${endDate}`,
           stats: {
-            eventCount: scopedEvents.length,
+            eventCount: formattedEvents.length,
             dateRange: { start: startDate, end: endDate },
             context: 'user',
             includedDrives: driveIds.length,
             includePersonal,
           },
           nextSteps:
-            scopedEvents.length > 0
+            formattedEvents.length > 0
               ? [
                   'Use get_calendar_event to see full details of a specific event',
                   'Use create_calendar_event to schedule new meetings',
