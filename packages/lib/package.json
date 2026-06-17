@@ -317,6 +317,11 @@
       "import": "./dist/services/sandbox/session-manager.js",
       "require": "./dist/services/sandbox/session-manager.js"
     },
+    "./services/sandbox/terminal-session-manager": {
+      "types": "./dist/services/sandbox/terminal-session-manager.d.ts",
+      "import": "./dist/services/sandbox/terminal-session-manager.js",
+      "require": "./dist/services/sandbox/terminal-session-manager.js"
+    },
     "./services/sandbox/command-policy": {
       "types": "./dist/services/sandbox/command-policy.d.ts",
       "import": "./dist/services/sandbox/command-policy.js",
@@ -1114,6 +1119,9 @@
       ],
       "services/sandbox/session-manager": [
         "./dist/services/sandbox/session-manager.d.ts"
+      ],
+      "services/sandbox/terminal-session-manager": [
+        "./dist/services/sandbox/terminal-session-manager.d.ts"
       ],
       "services/sandbox/command-policy": [
         "./dist/services/sandbox/command-policy.d.ts"
