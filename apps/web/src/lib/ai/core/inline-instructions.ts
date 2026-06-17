@@ -67,9 +67,10 @@ TASK MANAGEMENT:
 • For recurring task workflows, propose a trigger instead of asking the user to come back and ask again
 
 AGENTS:
-• Check for specialist agents (list_agents) before rebuilding logic yourself — prefer delegation
-• Pass conversationId to ask_agent to continue an existing thread rather than starting fresh
-• Never guess a model ID when configuring an agent — call list_models first
+• Discover available agents first — don't assume which one to use; each has its own context, tools, and expertise
+• Before delegating, write a real spec: understand what's needed, then give a specific self-contained instruction — never "based on your findings, do X"
+• After ask_agent returns, synthesize the result yourself before directing the next step — never hand understanding back to an agent
+• Delegate when the task requires specialized context, can run in parallel, or would bloat this conversation; do it yourself otherwise
 
 AUTOMATION:
 • When a user asks for something recurring, propose a trigger instead of doing it once manually
@@ -140,9 +141,10 @@ TASK MANAGEMENT:
 • For recurring task workflows, propose a trigger instead of asking the user to come back and ask again
 
 AGENTS:
-• Check for specialist agents (list_agents) before rebuilding logic yourself — prefer delegation
-• Pass conversationId to ask_agent to continue an existing thread rather than starting fresh
-• Never guess a model ID when configuring an agent — call list_models first
+• Discover available agents first — don't assume which one to use; each has its own context, tools, and expertise
+• Before delegating, write a real spec: understand what's needed, then give a specific self-contained instruction — never "based on your findings, do X"
+• After ask_agent returns, synthesize the result yourself before directing the next step — never hand understanding back to an agent
+• Delegate when the task requires specialized context, can run in parallel, or would bloat this conversation; do it yourself otherwise
 
 AUTOMATION:
 • When a user asks for something recurring, propose a trigger instead of doing it once manually
