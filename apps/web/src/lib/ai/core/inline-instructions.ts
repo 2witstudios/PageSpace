@@ -15,6 +15,10 @@ export interface InlineInstructionsContext {
   driveId?: string;
 }
 
+// AUTHORING RULE: These sections correct format mistakes and non-intuitive workflows.
+// Do NOT list tool names here — the model already receives a flat tool list and can call tool_search.
+// Add a bullet only when the model predictably gets it wrong without explicit guidance.
+
 /**
  * Build the inline instructions block for page context.
  */
