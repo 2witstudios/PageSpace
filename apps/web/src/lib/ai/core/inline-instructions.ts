@@ -54,8 +54,8 @@ PAGE TYPES:
 • DOCUMENT: Rich text stored as HTML. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.
 • CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
-• CANVAS: Raw HTML/CSS rendered in an isolated sandbox. body/html/:root styles auto-remap to the sandbox root. Edit as HTML.
-• TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.
+• CANVAS: Raw HTML/CSS rendered in a sandboxed iframe. Author HTML renders into a real &lt;body&gt; — write standard HTML/CSS/JS.
+• TASK_LIST: Task manager where each task auto-creates a linked child TASK_LIST page for its description and sub-tasks.
 • AI_CHAT: Custom AI agent with configurable system prompt and tool permissions.
 • CHANNEL: Team discussion thread with real-time messaging.
 • FILE: Uploaded file. Text-based files are readable via read_page.
@@ -129,8 +129,8 @@ PAGE TYPES:
 • DOCUMENT: Rich text stored as HTML. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.
 • CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).
 • SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
-• CANVAS: Raw HTML/CSS rendered in an isolated sandbox. body/html/:root styles auto-remap to the sandbox root. Edit as HTML.
-• TASK_LIST: Task manager where each task auto-creates a linked child DOCUMENT page.
+• CANVAS: Raw HTML/CSS rendered in a sandboxed iframe. Author HTML renders into a real &lt;body&gt; — write standard HTML/CSS/JS.
+• TASK_LIST: Task manager where each task auto-creates a linked child TASK_LIST page for its description and sub-tasks.
 • AI_CHAT: Custom AI agent with configurable system prompt and tool permissions.
 • CHANNEL: Team discussion thread with real-time messaging.
 • FILE: Uploaded file. Text-based files are readable via read_page.
