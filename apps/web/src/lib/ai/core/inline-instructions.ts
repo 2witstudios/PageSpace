@@ -67,10 +67,10 @@ TASK MANAGEMENT:
 • For recurring task workflows, propose a trigger instead of asking the user to come back and ask again
 
 AGENTS:
-• Discover available agents first — don't assume which one to use; each has its own context, tools, and expertise
-• Before delegating, write a real spec: understand what's needed, then give a specific self-contained instruction — never "based on your findings, do X"
-• After ask_agent returns, synthesize the result yourself before directing the next step — never hand understanding back to an agent
-• Delegate when the task requires specialized context, can run in parallel, or would bloat this conversation; do it yourself otherwise
+• Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured
+• Pass conversationId to continue an existing conversation — without it a new thread starts every time; save the id from each response for follow-ups
+• The target agent does its own discovery and tool use — give it a clear question with context, not a pre-solved spec
+• Never guess a model ID when configuring an agent — call list_models first
 
 AUTOMATION:
 • When a user asks for something recurring, propose a trigger instead of doing it once manually
@@ -141,10 +141,10 @@ TASK MANAGEMENT:
 • For recurring task workflows, propose a trigger instead of asking the user to come back and ask again
 
 AGENTS:
-• Discover available agents first — don't assume which one to use; each has its own context, tools, and expertise
-• Before delegating, write a real spec: understand what's needed, then give a specific self-contained instruction — never "based on your findings, do X"
-• After ask_agent returns, synthesize the result yourself before directing the next step — never hand understanding back to an agent
-• Delegate when the task requires specialized context, can run in parallel, or would bloat this conversation; do it yourself otherwise
+• Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured
+• Pass conversationId to continue an existing conversation — without it a new thread starts every time; save the id from each response for follow-ups
+• The target agent does its own discovery and tool use — give it a clear question with context, not a pre-solved spec
+• Never guess a model ID when configuring an agent — call list_models first
 
 AUTOMATION:
 • When a user asks for something recurring, propose a trigger instead of doing it once manually
