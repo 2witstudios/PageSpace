@@ -163,4 +163,20 @@ describe('buildNonCoreToolNamesPrompt', () => {
     expect(result).toContain('execute_tool');
     expect(result).toContain('tool_search');
   });
+
+  it('groups permission tools into permissions category', () => {
+    const result = buildNonCoreToolNamesPrompt(['list_drive_roles', 'create_drive_role', 'set_role_page_permissions']);
+    expect(result).toContain('permissions: list_drive_roles, create_drive_role, set_role_page_permissions');
+  });
+
+  it('groups command tools into commands category', () => {
+    const result = buildNonCoreToolNamesPrompt(['list_commands', 'create_command']);
+    expect(result).toContain('commands: list_commands, create_command');
+  });
+
+  it('groups trigger tools into tasks and calendar categories', () => {
+    const result = buildNonCoreToolNamesPrompt(['set_task_trigger', 'delete_calendar_trigger']);
+    expect(result).toContain('tasks: set_task_trigger');
+    expect(result).toContain('calendar: delete_calendar_trigger');
+  });
 });
