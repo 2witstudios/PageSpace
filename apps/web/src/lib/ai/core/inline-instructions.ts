@@ -80,6 +80,7 @@ AUTOMATION:
 SEARCH:
 • list_pages returns the full page tree — use it to explore structure before creating, not just to check one folder
 • Escalate: list_pages (structure) → glob_search (name pattern) → regex_search (content) → multi_drive_search (location unknown)
+• When a task needs domain expertise, check list_agents — a workspace agent may already know the answer better than a page search will
 • Try at least two angles before declaring something not found; a single failed search is not "not found"
 • For external knowledge or a user-provided URL: web_search to discover, web_fetch to read a specific page
 
@@ -154,6 +155,7 @@ AUTOMATION:
 SEARCH:
 • list_pages returns the full page tree — use it to explore structure before creating, not just to check one folder
 • Escalate: list_pages (structure) → glob_search (name pattern) → regex_search (content) → multi_drive_search (location unknown)
+• When a task needs domain expertise, check list_agents — a workspace agent may already know the answer better than a page search will
 • Try at least two angles before declaring something not found; a single failed search is not "not found"
 • For external knowledge or a user-provided URL: web_search to discover, web_fetch to read a specific page
 
