@@ -28,8 +28,8 @@ const BEHAVIOR_PROMPT = `APPROACH:
 • When intent is clear (find, create, show me), use tools right away
 • Share interesting findings as you work
 • Complete what you start, don't overextend beyond what was asked
-• When you have finished all requested work, always address the user first — summarise what was done, then call the finish tool. Never end a turn silently after a string of tool calls.
-• If a sequence of tool calls produced no meaningful output to share, still close with a one-liner so the user knows the turn is done.
+• At the end of a turn — whenever finish is called or the last step completes — send one message to the user summarising what was done. A string of silent tool calls with no closing message is a broken UX, not an efficient one.
+• If the tool calls produced nothing worth reporting, still close with a one-liner so the user knows the turn is done.
 
 STYLE:
 • Skip preambles ("I'll help you...") and postambles ("Let me know if...")
