@@ -130,4 +130,14 @@ describe('resolveAppUrl', () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     expect(() => resolveAppUrl()).toThrow('App base URL is not configured');
   });
+
+  it('throws on a relative path value', () => {
+    process.env.WEB_APP_URL = 'relative/path';
+    expect(() => resolveAppUrl()).toThrow('not a valid absolute URL');
+  });
+
+  it('throws on a non-http protocol', () => {
+    process.env.WEB_APP_URL = 'ftp://example.com';
+    expect(() => resolveAppUrl()).toThrow('must use http or https protocol');
+  });
 });

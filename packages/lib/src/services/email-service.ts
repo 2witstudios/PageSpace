@@ -31,7 +31,19 @@ export function resolveAppUrl(): string {
       'App base URL is not configured. Set WEB_APP_URL or NEXT_PUBLIC_APP_URL environment variable.'
     );
   }
-  return url.replace(/\/+$/, '');
+  const normalized = url.replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error(
+      `App base URL is not a valid absolute URL: ${normalized}. Set WEB_APP_URL or NEXT_PUBLIC_APP_URL to a valid URL.`
+    );
+  }
+  if (!parsed.protocol.startsWith('http')) {
+    throw new Error(`App base URL must use http or https protocol, got: ${parsed.protocol}`);
+  }
+  return normalized;
 }
 
 export interface SendEmailOptions {
