@@ -30,6 +30,7 @@ vi.mock('@pagespace/db/operators', () => ({
 
 vi.mock('../email-service', () => ({
   sendEmail: vi.fn().mockResolvedValue(undefined),
+  resolveAppUrl: vi.fn().mockReturnValue('https://pagespace.ai'),
 }));
 
 // Mock all email templates

@@ -18,6 +18,7 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { resolveAppUrl } from '@pagespace/lib/services/email-service';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
@@ -366,7 +367,7 @@ function redirectWithError(error: string, requestUrl?: string): NextResponse {
   const baseUrl =
     process.env.WEB_APP_URL ||
     process.env.NEXT_PUBLIC_APP_URL ||
-    (requestUrl ? new URL(requestUrl).origin : undefined);
+    (requestUrl ? new URL(requestUrl).origin : resolveAppUrl());
   const redirectUrl = new URL('/auth/signin', baseUrl);
   redirectUrl.searchParams.set('error', error);
 
