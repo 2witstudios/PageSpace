@@ -14,7 +14,8 @@ import {
   chargeCodeExecutionBudget,
 } from '@pagespace/lib/services/sandbox/quota';
 import { truncateToBytes } from '@pagespace/lib/services/sandbox/output-limit';
-import { createSpritesSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -57,6 +58,7 @@ export async function POST(
   // 3. Page permission: editor+ required to run code.
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
+    auditRequest(req, { eventType: 'authz.access.denied', userId, resourceType: 'terminal_session', resourceId: pageId, details: { reason: 'no_edit_permission', method: 'POST' }, riskScore: 0.5 });
     return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
   }
 
@@ -86,7 +88,7 @@ export async function POST(
 
   const [driveRow, actorRow] = await Promise.all([
     db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1),
-    db.select({ subscriptionTier: users.subscriptionTier }).from(users).where(eq(users.id, userId)).limit(1),
+    db.select({ subscriptionTier: users.subscriptionTier, email: users.email, name: users.name }).from(users).where(eq(users.id, userId)).limit(1),
   ]);
   const tenantId = driveRow[0]?.ownerId ?? '';
   const tier = toTier(actorRow[0]?.subscriptionTier);
@@ -106,10 +108,13 @@ export async function POST(
   const startMs = Date.now();
   try {
     // 8. Acquire (or resume) the page's terminal sandbox.
-    const [store, client] = await Promise.all([
+    // @fly/sprites is ESM-only — import dynamically so webpack does not attempt
+    // to bundle it at build time (same pattern as sandbox-tools-runtime.ts).
+    const [store, { createSpritesSandboxClient }] = await Promise.all([
       createDbTerminalSessionStore(),
-      Promise.resolve(createSpritesSandboxClient()),
+      import('@pagespace/lib/services/sandbox/sandbox-client/sprites'),
     ]);
+    const client = createSpritesSandboxClient();
 
     const sandboxResult = await acquireTerminalSandbox({
       pageId,
@@ -149,11 +154,25 @@ export async function POST(
     const { text: output } = truncateToBytes({ text: rawOutput, maxBytes: MAX_OUTPUT_BYTES });
     const durationMs = Date.now() - startMs;
 
-    // Charge the sliding-window budget. Fire-and-forget: a charge failure should
-    // not cause the command output to be discarded (the command already ran).
+    // Charge the sliding-window budget, emit the security audit event, and write
+    // the code execution audit record. All three are fire-and-forget: a failure
+    // in any must not discard output the command already produced.
     chargeCodeExecutionBudget({ userId, driveId, tenantId }).catch(() => {});
-
-    // TODO: writeCodeExecutionAudit — needs actorEmail/displayName DB lookup; defer to a follow-up.
+    auditRequest(req, { eventType: 'data.write', userId, resourceType: 'terminal_session', resourceId: pageId, details: { exitCode: result.exitCode, durationMs }, riskScore: 0 });
+    writeCodeExecutionAudit({
+      input: {
+        userId,
+        actorEmail: actorRow[0]?.email ?? '',
+        actorDisplayName: actorRow[0]?.name ?? undefined,
+        driveId,
+        requestOrigin: 'user',
+        profile: 'default',
+        code: command,
+        exitCode: result.exitCode,
+        durationMs,
+        timestamp: new Date(),
+      },
+    }).catch(() => {});
 
     return NextResponse.json({ output, exitCode: result.exitCode, durationMs });
   } catch {

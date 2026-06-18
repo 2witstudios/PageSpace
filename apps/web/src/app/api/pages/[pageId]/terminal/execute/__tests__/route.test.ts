@@ -69,6 +69,14 @@ vi.mock('@pagespace/lib/services/sandbox/output-limit', () => ({
   truncateToBytes: vi.fn(({ text }: { text: string }) => ({ text, truncated: false, originalBytes: text.length })),
 }));
 
+vi.mock('@pagespace/lib/services/sandbox/audit', () => ({
+  writeCodeExecutionAudit: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+
 // ─── Import SUT and mocked modules ────────────────────────────────────────
 
 import { POST } from '../route';
@@ -118,7 +126,7 @@ function makeParams(pageId = mockPageId): { params: Promise<{ pageId: string }> 
 function setupDbMocks({
   page = { driveId: mockDriveId } as Record<string, unknown> | null,
   drive = { ownerId: mockTenantId } as Record<string, unknown>,
-  user = { subscriptionTier: 'free' } as Record<string, unknown>,
+  user = { subscriptionTier: 'free', email: 'actor@example.com', name: 'Test Actor' } as Record<string, unknown>,
 } = {}) {
   asMock(db.select).mockImplementation((fields?: Record<string, unknown>) => {
     const fieldKeys = fields ? Object.keys(fields) : [];
