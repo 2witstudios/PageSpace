@@ -89,10 +89,23 @@ ${everyoneLine}`;
 // Exported builders
 // ---------------------------------------------------------------------------
 
+/** Returns true if any of `toolNames` appears in `availableTools`, or if `availableTools` is undefined (include-all sentinel). */
+function hasAny(availableTools: string[] | undefined, toolNames: string[]): boolean {
+  if (!availableTools) return true;
+  return toolNames.some(t => availableTools.includes(t));
+}
+
 /**
  * Build the inline instructions block for page context.
+ *
+ * Pass `availableTools` (the filtered tool name list) to omit sections for
+ * capabilities the agent doesn't have. Omitting `availableTools` includes
+ * all sections — used by the admin prompt viewer for a complete preview.
  */
-export function buildInlineInstructions(context: InlineInstructionsContext): string {
+export function buildInlineInstructions(
+  context: InlineInstructionsContext,
+  availableTools?: string[]
+): string {
   const {
     pageTitle = 'current',
     pageType = 'DOCUMENT',
@@ -105,29 +118,29 @@ export function buildInlineInstructions(context: InlineInstructionsContext): str
 
   const taskSuffix = isTaskLinked ? ' (Task-linked page)' : '';
 
-  return `
-${WORKSPACE_RULES}
+  const includeTaskManagement = hasAny(availableTools, ['create_task', 'update_task', 'delete_task', 'create_task_status', 'reorder_task', 'get_assigned_tasks']);
+  const includeAgents = hasAny(availableTools, ['ask_agent', 'list_agents', 'multi_drive_list_agents', 'update_agent_config', 'list_models']);
+  const includeAutomation = hasAny(availableTools, ['set_task_trigger', 'delete_task_trigger', 'set_calendar_trigger', 'delete_calendar_trigger', 'create_workflow', 'list_workflows']);
+  const includeSearch = hasAny(availableTools, ['glob_search', 'regex_search', 'multi_drive_search', 'web_search', 'web_fetch']);
 
-CONTEXT:
+  const sections = [
+    WORKSPACE_RULES,
+    `CONTEXT:
 • Current location: "${pageTitle}" [${pageType}]${taskSuffix} at ${pagePath} in "${driveName}"
 • DriveSlug: ${driveSlug}, DriveId: ${driveId}
 • When user says "here" or "this", they mean this location
 • Explore current drive first (list_pages) before other drives${isTaskLinked ? `
-• This page is linked to a task - use task management tools to update task status` : ''}
+• This page is linked to a task - use task management tools to update task status` : ''}`,
+    PAGE_TYPES,
+    includeTaskManagement ? TASK_MANAGEMENT : null,
+    includeAgents ? AGENTS : null,
+    includeAutomation ? AUTOMATION : null,
+    includeSearch ? SEARCH : null,
+    AFTER_TOOLS,
+    buildMentions(true),
+  ].filter(Boolean);
 
-${PAGE_TYPES}
-
-${TASK_MANAGEMENT}
-
-${AGENTS}
-
-${AUTOMATION}
-
-${SEARCH}
-
-${AFTER_TOOLS}
-
-${buildMentions(true)}`;
+  return '\n' + sections.join('\n\n');
 }
 
 /**

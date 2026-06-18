@@ -49,6 +49,7 @@ import {
 import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
+import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
@@ -640,6 +641,10 @@ export async function POST(request: Request) {
     // search mode too — routing it through execute_tool would hit that tool's
     // allowlist check and be rejected whenever the agent's saved enabledTools omit it.
     const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
+    // Capture BEFORE exposure so capability sections (TASK_MANAGEMENT, AGENTS, etc.) are
+    // correctly included in search mode where non-core tools become callable via execute_tool
+    // and disappear from filteredTools.
+    const allowedToolNames = Object.keys(filteredTools);
     const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
     filteredTools = exposure.tools;
     const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -832,6 +837,19 @@ export async function POST(request: Request) {
         } : undefined,
         readOnlyMode,
         personalization ?? undefined
+      );
+
+      // Append workspace knowledge (tool-aware). Custom systemPrompt = opt-out (blank slate).
+      systemPrompt += buildInlineInstructions(
+        {
+          pageTitle: pageContext?.pageTitle,
+          pageType: pageContext?.pageType,
+          driveName: pageContext?.driveName,
+          pagePath: pageContext?.pagePath,
+          driveSlug: pageContext?.driveSlug,
+          driveId: pageContext?.driveId,
+        },
+        allowedToolNames
       );
     }
 
