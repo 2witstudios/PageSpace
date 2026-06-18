@@ -107,7 +107,7 @@ export async function GET(
     }
 
     // Redirect to a confirmation page
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const appUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(request.url).origin;
 
     audit({ eventType: 'data.write', userId, resourceType: 'notification_prefs', resourceId: 'self' });
 

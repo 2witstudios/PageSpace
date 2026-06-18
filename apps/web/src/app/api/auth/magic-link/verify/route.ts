@@ -47,7 +47,7 @@ export async function GET(req: Request) {
     // Validate token format
     const validation = verifyTokenSchema.safeParse({ token });
     if (!validation.success) {
-      return redirectWithError('invalid_token');
+      return redirectWithError('invalid_token', req.url);
     }
 
     // Verify the magic link token
@@ -73,7 +73,7 @@ export async function GET(req: Request) {
         details: { reason: `magic_link_${result.error.code.toLowerCase()}` },
       });
 
-      return redirectWithError(errorCode);
+      return redirectWithError(errorCode, req.url);
     }
 
     const { userId, isNewUser, metadata } = result.data;
@@ -143,7 +143,7 @@ export async function GET(req: Request) {
     const sessionClaims = await sessionService.validateSession(sessionToken);
     if (!sessionClaims) {
       loggers.auth.error('Failed to validate newly created session', { userId });
-      return redirectWithError('session_error');
+      return redirectWithError('session_error', req.url);
     }
 
     // Generate CSRF token bound to session ID
@@ -245,7 +245,7 @@ export async function GET(req: Request) {
           // will detect this and trigger pagespace://auth-exchange client-side.
           // If the link was opened on a different device, the exchange code is
           // ignored and the user still has a valid cookie session.
-          const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+          const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(req.url).origin;
           const desktopRedirectPath =
             inviteResult?.kind === 'connection'
               ? '/dashboard/connections'
@@ -322,7 +322,7 @@ export async function GET(req: Request) {
               provisionedDriveId, next: safeNext, invitedDriveId,
             });
 
-    const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(req.url).origin;
     const redirectUrl = new URL(redirectPath, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
     if (inviteResult?.kind === 'connection') {
@@ -358,12 +358,15 @@ export async function GET(req: Request) {
 
   } catch (error) {
     loggers.auth.error('Magic link verify error', error as Error);
-    return redirectWithError('server_error');
+    return redirectWithError('server_error', req.url);
   }
 }
 
-function redirectWithError(error: string): NextResponse {
-  const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+function redirectWithError(error: string, requestUrl?: string): NextResponse {
+  const baseUrl =
+    process.env.WEB_APP_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (requestUrl ? new URL(requestUrl).origin : undefined);
   const redirectUrl = new URL('/auth/signin', baseUrl);
   redirectUrl.searchParams.set('error', error);
 

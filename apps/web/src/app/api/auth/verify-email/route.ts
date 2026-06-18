@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'email_verification', resourceId: userId });
 
     // Redirect to dashboard - triggers auth refresh via ?auth=success
-    const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(request.url).origin;
     return NextResponse.redirect(new URL('/dashboard?auth=success', baseUrl), {
       status: 303, // See Other - forces GET on redirect
     });

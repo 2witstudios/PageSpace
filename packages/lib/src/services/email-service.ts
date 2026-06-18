@@ -24,6 +24,16 @@ function getResend(): Resend {
   return resendInstance;
 }
 
+export function resolveAppUrl(): string {
+  const url = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
+  if (!url) {
+    throw new Error(
+      'App base URL is not configured. Set WEB_APP_URL or NEXT_PUBLIC_APP_URL environment variable.'
+    );
+  }
+  return url.replace(/\/+$/, '');
+}
+
 export interface SendEmailOptions {
   to: string;
   subject: string;
