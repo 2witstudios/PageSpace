@@ -37,6 +37,7 @@ const GridlandTerminal = dynamic(
 
 const TerminalView = ({ pageId }: TerminalViewProps) => {
   const [isReadOnly, setIsReadOnly] = useState(false);
+  const [isExecuting, setIsExecuting] = useState(false);
   const [session, setSession] = useState<TerminalSession>({ history: [] });
   const isDirtyRef = useRef(false);
   const socket = useSocket();
@@ -136,28 +137,43 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
   }, [socket, pageId, updateContentFromServer]);
 
   // Handle command submission — gated on document initialization
-  const handleCommand = useCallback((command: string) => {
-    if (!documentState) {
-      toast.error('Terminal is still loading');
-      return;
-    }
-    if (isReadOnly) {
-      toast.error('You do not have permission to edit this page');
-      return;
+  const handleCommand = useCallback(async (command: string) => {
+    if (!documentState) { toast.error('Terminal is still loading'); return; }
+    if (isReadOnly) { toast.error('You do not have permission to edit this page'); return; }
+
+    setIsExecuting(true);
+    let output: string;
+    try {
+      const response = await fetchWithAuth(`/api/pages/${pageId}/terminal/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command }),
+      });
+      if (response.ok) {
+        const data = await response.json() as { output: string };
+        output = data.output ?? '';
+      } else {
+        const data = await response.json().catch(() => ({} as { error?: string }));
+        switch (response.status) {
+          case 403: output = 'Permission denied'; break;
+          case 429: output = 'Quota exceeded'; break;
+          case 503: output = 'Code execution disabled'; break;
+          default:  output = `Error: ${data.error ?? response.statusText}`; break;
+        }
+      }
+    } catch (err) {
+      output = `Error: ${err instanceof Error ? err.message : 'Network error'}`;
+    } finally {
+      setIsExecuting(false);
     }
 
-    const entry = {
-      command,
-      output: 'Shell connection not yet configured.',
-      timestamp: Date.now(),
-    };
-
+    const entry = { command, output, timestamp: Date.now() };
     const updated: TerminalSession = { history: [...session.history, entry] };
     setSession(updated);
     const serialized = serializeSession(updated);
     updateContent(serialized);
     saveWithDebounce(serialized);
-  }, [isReadOnly, documentState, session.history, updateContent, saveWithDebounce]);
+  }, [isReadOnly, documentState, session.history, pageId, isExecuting, updateContent, saveWithDebounce]);
 
   // Handle clearing the terminal
   const handleClear = useCallback(() => {
@@ -232,7 +248,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
           onCommand={handleCommand}
           onClear={handleClear}
           isDark={isDark}
-          isReadOnly={isReadOnly || isLoading || !documentState}
+          isReadOnly={isReadOnly || isLoading || !documentState || isExecuting}
         />
       </div>
 
