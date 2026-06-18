@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { users, emailUnsubscribeTokens } from '@pagespace/db/schema/auth';
 import { emailNotificationPreferences, emailNotificationLog } from '@pagespace/db/schema/email-notifications';
-import { sendEmail } from './email-service';
+import { sendEmail, resolveAppUrl } from './email-service';
 import { DriveInvitationEmail } from '../email-templates/DriveInvitationEmail';
 import { ConnectionInvitationEmail } from '../email-templates/ConnectionInvitationEmail';
 import { PageShareInvitationEmail } from '../email-templates/PageShareInvitationEmail';
@@ -113,7 +113,7 @@ interface TemplateData {
 }
 
 function getEmailTemplate(data: NotificationEmailData, user: { name: string; email: string }, unsubscribeUrl: string): TemplateData | null {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const appUrl = resolveAppUrl();
 
   switch (data.type) {
     case 'DRIVE_INVITED':
@@ -388,8 +388,7 @@ export async function sendNotificationEmail(data: NotificationEmailData): Promis
 
     // Generate unsubscribe URL
     const unsubscribeToken = await generateUnsubscribeToken(data.userId, data.type);
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const unsubscribeUrl = `${appUrl}/api/notifications/unsubscribe/${unsubscribeToken}`;
+    const unsubscribeUrl = `${resolveAppUrl()}/api/notifications/unsubscribe/${unsubscribeToken}`;
 
     // Get email template
     const templateData = getEmailTemplate(data, user, unsubscribeUrl);

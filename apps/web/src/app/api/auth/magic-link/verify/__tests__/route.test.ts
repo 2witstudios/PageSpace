@@ -545,14 +545,16 @@ describe('GET /api/auth/magic-link/verify', () => {
       expect(location).toContain('https://public.example.com');
     });
 
-    it('uses localhost as final fallback', async () => {
+    it('derives base URL from request origin when no env vars are set', async () => {
       delete process.env.WEB_APP_URL;
       delete process.env.NEXT_PUBLIC_APP_URL;
 
+      // Request origin is http://localhost; route falls back to new URL(req.url).origin
       const response = await GET(createVerifyRequest('valid-token'));
       const location = response.headers.get('Location')!;
 
-      expect(location).toContain('http://localhost:3000');
+      expect(location).toContain('http://localhost');
+      expect(location).not.toContain('localhost:3000');
     });
 
     it('logs successful magic link login', async () => {

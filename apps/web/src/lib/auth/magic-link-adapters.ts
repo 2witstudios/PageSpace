@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users, verificationTokens } from '@pagespace/db/schema/auth';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
-import { sendEmail } from '@pagespace/lib/services/email-service';
+import { sendEmail, resolveAppUrl } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { MagicLinkPorts } from '@pagespace/lib/services/invites';
@@ -88,10 +88,8 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
 
   sendMagicLinkEmail: async ({ email, token, next }) => {
     try {
-      const baseUrl =
-        process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
       const nextSuffix = next ? `&next=${encodeURIComponent(next)}` : '';
-      const magicLinkUrl = `${baseUrl}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}${nextSuffix}`;
+      const magicLinkUrl = `${resolveAppUrl()}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}${nextSuffix}`;
       await sendEmail({
         to: email,
         subject: 'Sign in to PageSpace',
