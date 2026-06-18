@@ -155,10 +155,11 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
       } else {
         const data = await response.json().catch(() => ({} as { error?: string }));
         switch (response.status) {
+          case 401: output = 'Session expired — please reload'; break;
           case 403: output = 'Permission denied'; break;
           case 429: output = 'Quota exceeded'; break;
           case 503: output = 'Code execution disabled'; break;
-          default:  output = `Error: ${data.error ?? response.statusText}`; break;
+          default:  output = `Error ${response.status}: ${data.error ?? (response.statusText || 'Unknown error')}`; break;
         }
       }
     } catch (err) {
@@ -168,12 +169,15 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
     }
 
     const entry = { command, output, timestamp: Date.now() };
-    const updated: TerminalSession = { history: [...session.history, entry] };
-    setSession(updated);
-    const serialized = serializeSession(updated);
-    updateContent(serialized);
-    saveWithDebounce(serialized);
-  }, [isReadOnly, documentState, session.history, pageId, isExecuting, updateContent, saveWithDebounce]);
+    // Functional form avoids stale closure on session.history across concurrent renders.
+    setSession(prev => {
+      const updated: TerminalSession = { history: [...prev.history, entry] };
+      const serialized = serializeSession(updated);
+      updateContent(serialized);
+      saveWithDebounce(serialized);
+      return updated;
+    });
+  }, [isReadOnly, documentState, pageId, updateContent, saveWithDebounce]);
 
   // Handle clearing the terminal
   const handleClear = useCallback(() => {
