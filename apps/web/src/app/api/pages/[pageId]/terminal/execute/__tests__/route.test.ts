@@ -49,6 +49,7 @@ vi.mock('@pagespace/lib/services/sandbox/quota', () => ({
   checkCodeExecutionQuota: vi.fn().mockResolvedValue({ allowed: true }),
   acquireCodeExecutionSlot: vi.fn().mockReturnValue(true),
   releaseCodeExecutionSlot: vi.fn(),
+  chargeCodeExecutionBudget: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/lib/services/sandbox/terminal-session-manager', () => ({
@@ -119,9 +120,6 @@ function setupDbMocks({
   drive = { ownerId: mockTenantId } as Record<string, unknown>,
   user = { subscriptionTier: 'free' } as Record<string, unknown>,
 } = {}) {
-  const { pages: pagesTable, drives: drivesTable } = require('@pagespace/db/schema/core');
-  const { users: usersTable } = require('@pagespace/db/schema/auth');
-
   asMock(db.select).mockImplementation((fields?: Record<string, unknown>) => {
     const fieldKeys = fields ? Object.keys(fields) : [];
     const isDriveQuery = fieldKeys.includes('ownerId');
@@ -274,6 +272,15 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
       const res = await POST(makeRequest(), makeParams());
       expect(res.status).toBe(403);
     });
+
+    it('returns 500 when sprite is gone after acquire succeeds', async () => {
+      setupDbMocks();
+      const mockClient = { getOrCreate: vi.fn(), get: vi.fn().mockResolvedValue(null), stop: vi.fn() };
+      asMock(createSpritesSandboxClient).mockReturnValue(mockClient);
+      asMock(acquireTerminalSandbox).mockResolvedValue({ ok: true, sandboxId: 'sprite-123', resumed: false });
+      const res = await POST(makeRequest(), makeParams());
+      expect(res.status).toBe(500);
+    });
   });
 
   describe('happy path', () => {
@@ -332,6 +339,14 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
     it('does NOT call releaseCodeExecutionSlot when slot was never acquired (quota denied)', async () => {
       setupDbMocks();
       asMock(checkCodeExecutionQuota).mockResolvedValue({ allowed: false, reason: 'rate_limited' });
+
+      await POST(makeRequest(), makeParams());
+      expect(vi.mocked(releaseCodeExecutionSlot)).not.toHaveBeenCalled();
+    });
+
+    it('does NOT call releaseCodeExecutionSlot when acquireCodeExecutionSlot returns false', async () => {
+      setupDbMocks();
+      asMock(acquireCodeExecutionSlot).mockReturnValue(false);
 
       await POST(makeRequest(), makeParams());
       expect(vi.mocked(releaseCodeExecutionSlot)).not.toHaveBeenCalled();

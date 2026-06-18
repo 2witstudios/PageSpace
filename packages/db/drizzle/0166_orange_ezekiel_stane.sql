@@ -22,6 +22,5 @@ EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "terminal_sessions_session_key_idx" ON "terminal_sessions" USING btree ("sessionKey");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "terminal_sessions_page_id_idx" ON "terminal_sessions" USING btree ("pageId");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "terminal_sessions_last_active_at_idx" ON "terminal_sessions" USING btree ("lastActiveAt");

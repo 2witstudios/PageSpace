@@ -44,7 +44,6 @@ export const terminalSessions = pgTable('terminal_sessions', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
-  sessionKeyIdx: index('terminal_sessions_session_key_idx').on(table.sessionKey),
   pageIdIdx: index('terminal_sessions_page_id_idx').on(table.pageId),
   lastActiveAtIdx: index('terminal_sessions_last_active_at_idx').on(table.lastActiveAt),
 }));

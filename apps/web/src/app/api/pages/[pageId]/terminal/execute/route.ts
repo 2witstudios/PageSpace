@@ -11,6 +11,7 @@ import {
   checkCodeExecutionQuota,
   acquireCodeExecutionSlot,
   releaseCodeExecutionSlot,
+  chargeCodeExecutionBudget,
 } from '@pagespace/lib/services/sandbox/quota';
 import { truncateToBytes } from '@pagespace/lib/services/sandbox/output-limit';
 import { createSpritesSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
@@ -147,6 +148,12 @@ export async function POST(
     const rawOutput = result.stdout + (result.stderr ? '\n' + result.stderr : '');
     const { text: output } = truncateToBytes({ text: rawOutput, maxBytes: MAX_OUTPUT_BYTES });
     const durationMs = Date.now() - startMs;
+
+    // Charge the sliding-window budget. Fire-and-forget: a charge failure should
+    // not cause the command output to be discarded (the command already ran).
+    chargeCodeExecutionBudget({ userId, driveId, tenantId }).catch(() => {});
+
+    // TODO: writeCodeExecutionAudit — needs actorEmail/displayName DB lookup; defer to a follow-up.
 
     return NextResponse.json({ output, exitCode: result.exitCode, durationMs });
   } catch {
