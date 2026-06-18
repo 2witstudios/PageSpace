@@ -32,7 +32,10 @@ const loadUserAccountByEmailMock = vi.hoisted(() =>
 
 vi.mock('@pagespace/db/db', () => ({ db: { insert: dbInsertMock } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ verificationTokens: {} }));
-vi.mock('@pagespace/lib/services/email-service', () => ({ sendEmail: sendEmailMock }));
+vi.mock('@pagespace/lib/services/email-service', async () => {
+  const actual = await vi.importActual<typeof import('@pagespace/lib/services/email-service')>('@pagespace/lib/services/email-service');
+  return { ...actual, sendEmail: sendEmailMock };
+});
 vi.mock('@pagespace/lib/email-templates/MagicLinkEmail', () => ({
   MagicLinkEmail: () => null,
 }));
