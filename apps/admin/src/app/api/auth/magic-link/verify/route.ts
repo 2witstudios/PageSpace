@@ -17,6 +17,33 @@ function getAdminUrl(): string {
   return process.env.ADMIN_URL;
 }
 
+/**
+ * Sanitizes the `next` redirect parameter to prevent open-redirect attacks.
+ *
+ * The simple `startsWith('/')` guard is insufficient — backslash variants like
+ * `/\evil.example` and percent-encoded forms `/%5Cevil.example` pass the string
+ * check but are normalized by `new URL` into external hostnames. This helper uses
+ * URL parsing against a sentinel origin to ensure the value is truly a relative
+ * path before it is used.
+ */
+function sanitizeNext(raw: string | null): string {
+  if (!raw) return '/';
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return '/';
+  }
+  let candidate: URL;
+  try {
+    candidate = new URL(decoded, 'https://internal.invalid');
+  } catch {
+    return '/';
+  }
+  if (candidate.hostname !== 'internal.invalid') return '/';
+  return candidate.pathname + candidate.search + candidate.hash;
+}
+
 function redirectWithError(code: string): NextResponse {
   const url = new URL('/login', getAdminUrl());
   url.searchParams.set('error', code);
@@ -27,6 +54,7 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const token = searchParams.get('token') ?? '';
+    const next = sanitizeNext(searchParams.get('next'));
 
     const result = await verifyMagicLinkToken({ token });
 
@@ -85,7 +113,7 @@ export async function GET(req: Request) {
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
-    return NextResponse.redirect(new URL('/', getAdminUrl()), { status: 302, headers });
+    return NextResponse.redirect(new URL(next, getAdminUrl()), { status: 302, headers });
   } catch (error) {
     loggers.auth.error('Admin magic link verify error', error as Error);
     return redirectWithError('server_error');
