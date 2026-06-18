@@ -28,11 +28,13 @@ export default function LoginPage() {
     setStatus("loading");
     setError(null);
 
+    const next = params.get("next") ?? undefined;
+
     try {
       const res = await fetch("/api/auth/magic-link/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, next }),
         credentials: "include",
       });
 

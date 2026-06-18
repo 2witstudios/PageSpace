@@ -19,6 +19,7 @@ function getAdminUrl(): string {
 
 const schema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),
+  next: z.string().optional(),
 });
 
 const MAGIC_LINK_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes
@@ -85,7 +86,14 @@ export async function POST(req: Request) {
       expiresAt,
     });
 
-    const magicLinkUrl = `${getAdminUrl()}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
+    const verifyUrl = new URL('/api/auth/magic-link/verify', getAdminUrl());
+    verifyUrl.searchParams.set('token', token);
+    // Carry the intended destination through the email link so verify can redirect there
+    const next = parsed.data.next;
+    if (next && next.startsWith('/') && !next.startsWith('//')) {
+      verifyUrl.searchParams.set('next', next);
+    }
+    const magicLinkUrl = verifyUrl.toString();
 
     await sendEmail({
       to: email,

@@ -27,6 +27,8 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const token = searchParams.get('token') ?? '';
+    const rawNext = searchParams.get('next') ?? '';
+    const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
 
     const result = await verifyMagicLinkToken({ token });
 
@@ -85,7 +87,7 @@ export async function GET(req: Request) {
 
     const headers = new Headers();
     appendSessionCookie(headers, sessionToken);
-    return NextResponse.redirect(new URL('/', getAdminUrl()), { status: 302, headers });
+    return NextResponse.redirect(new URL(next, getAdminUrl()), { status: 302, headers });
   } catch (error) {
     loggers.auth.error('Admin magic link verify error', error as Error);
     return redirectWithError('server_error');
