@@ -161,6 +161,7 @@ describe('acquireTerminalSandbox', () => {
     const { client } = makeClient();
     const result = await acquireTerminalSandbox({
       ...actor,
+      canRun: true,
       pageId: '',
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
@@ -172,6 +173,7 @@ describe('acquireTerminalSandbox', () => {
     const { client } = makeClient();
     const result = await acquireTerminalSandbox({
       ...actor,
+      canRun: true,
       deps: { store, client, now: () => NOW, secret: '' },
     });
     expect(result).toEqual({ ok: false, reason: 'error' });
@@ -182,6 +184,7 @@ describe('acquireTerminalSandbox', () => {
     const { client, calls } = makeClient();
     const result = await acquireTerminalSandbox({
       ...actor,
+      canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
@@ -194,6 +197,7 @@ describe('acquireTerminalSandbox', () => {
     const { client, calls } = makeClient();
     const result = await acquireTerminalSandbox({
       ...actor,
+      canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
@@ -207,6 +211,7 @@ describe('acquireTerminalSandbox', () => {
     const { client, calls } = makeClient({ get: async () => null });
     const result = await acquireTerminalSandbox({
       ...actor,
+      canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
@@ -222,9 +227,42 @@ describe('acquireTerminalSandbox', () => {
     const { client, calls } = makeClient();
     const result = await acquireTerminalSandbox({
       ...actor,
+      canRun: true,
       deps: { store: failingStore.store, client, now: () => NOW, secret: SECRET },
     });
     expect(result).toEqual({ ok: false, reason: 'provision_failed' });
     expect(calls.stop).toEqual(['sbx-new']);
+  });
+
+  it('given canRun=false, returns { ok: false, reason: deny } without calling client', async () => {
+    const { store } = makeStore(seedRecord());
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: false,
+      deps: { store, client, now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: false, reason: 'deny' });
+    expect(calls.get).toEqual([]);
+    expect(calls.getOrCreate).toEqual([]);
+    expect(calls.stop).toEqual([]);
+  });
+
+  it('given teardown plan and safeStop fails, keeps the session link and returns { ok: false, reason: error }', async () => {
+    // lastActiveAt 20 min ago triggers idle teardown (default timeout = 15 min)
+    const stale = seedRecord({ lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) });
+    const { store, calls: storeCalls } = makeStore(stale);
+    const { client } = makeClient({
+      stop: async () => {
+        throw new Error('stop failed');
+      },
+    });
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: { store, client, now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(storeCalls.remove).toBe(0);
   });
 });

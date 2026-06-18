@@ -102,6 +102,8 @@ export interface AcquireTerminalSandboxInput {
   driveId: string;
   tenantId: string;
   userId: string;
+  /** Caller re-checks authz every request and passes the result through to the planner. */
+  canRun: boolean;
   deps: {
     store: TerminalSessionStore;
     client: SandboxClient;
@@ -172,7 +174,7 @@ async function provisionFreshTerminal({
 export async function acquireTerminalSandbox(
   input: AcquireTerminalSandboxInput,
 ): Promise<AcquireTerminalSandboxResult> {
-  const { deps, pageId, driveId, tenantId, userId } = input;
+  const { deps, pageId, driveId, tenantId, userId, canRun } = input;
 
   // Fail closed if any namespacing component or the secret is missing.
   if (!deps.secret || !pageId || !driveId || !tenantId || !userId) {
@@ -185,7 +187,7 @@ export async function acquireTerminalSandbox(
     const existing = await deps.store.findBySessionKey(key);
 
     const plan = planTerminalLifecycle({
-      canRun: true,
+      canRun,
       existingSession: existing
         ? { sandboxId: existing.sandboxId, lastActiveAt: existing.lastActiveAt }
         : null,
@@ -212,7 +214,11 @@ export async function acquireTerminalSandbox(
       }
 
       case 'teardown': {
-        await safeStop(deps.client, plan.sandboxId);
+        const stopped = await safeStop(deps.client, plan.sandboxId);
+        if (!stopped) {
+          // VM may still be running — keep the link so the idle reaper can reclaim it.
+          return { ok: false, reason: 'error' };
+        }
         await safeRemove(deps.store, key);
         return await provisionFreshTerminal({ key, input });
       }
