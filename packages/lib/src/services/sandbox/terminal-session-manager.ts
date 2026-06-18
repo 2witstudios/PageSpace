@@ -230,3 +230,55 @@ export async function acquireTerminalSandbox(
     return { ok: false, reason: 'error' };
   }
 }
+
+/**
+ * Production DB-backed implementation of TerminalSessionStore.
+ * Lazily resolves the db client, schema table, and `eq` operator so callers
+ * that inject a fake (in tests) never load the DB module graph.
+ */
+export async function createDbTerminalSessionStore(): Promise<TerminalSessionStore> {
+  const [{ db }, { eq }, { terminalSessions }] = await Promise.all([
+    import('@pagespace/db/db'),
+    import('@pagespace/db/operators'),
+    import('@pagespace/db/schema/terminal-sessions'),
+  ]);
+
+  return {
+    async findBySessionKey(sessionKey) {
+      const [row] = await db
+        .select()
+        .from(terminalSessions)
+        .where(eq(terminalSessions.sessionKey, sessionKey))
+        .limit(1);
+      if (!row) return null;
+      return {
+        sessionKey: row.sessionKey,
+        pageId: row.pageId,
+        sandboxId: row.sandboxId,
+        userId: row.userId,
+        lastActiveAt: row.lastActiveAt,
+      };
+    },
+
+    async save({ sessionKey, pageId, sandboxId, userId, now }) {
+      await db
+        .insert(terminalSessions)
+        .values({ sessionKey, pageId, sandboxId, userId, lastActiveAt: now, updatedAt: now })
+        .onConflictDoUpdate({
+          target: terminalSessions.sessionKey,
+          set: { sandboxId, userId, lastActiveAt: now, updatedAt: now },
+        });
+    },
+
+    async touch({ sessionKey, now }) {
+      await db
+        .update(terminalSessions)
+        .set({ lastActiveAt: now, updatedAt: now })
+        .where(eq(terminalSessions.sessionKey, sessionKey));
+    },
+
+    async remove(sessionKey) {
+      await db.delete(terminalSessions).where(eq(terminalSessions.sessionKey, sessionKey));
+    },
+  };
+}
