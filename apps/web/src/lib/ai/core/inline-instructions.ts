@@ -89,6 +89,7 @@ ${everyoneLine}`;
 // Exported builders
 // ---------------------------------------------------------------------------
 
+/** Returns true if any of `toolNames` appears in `availableTools`, or if `availableTools` is undefined (include-all sentinel). */
 function hasAny(availableTools: string[] | undefined, toolNames: string[]): boolean {
   if (!availableTools) return true;
   return toolNames.some(t => availableTools.includes(t));

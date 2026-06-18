@@ -641,6 +641,10 @@ export async function POST(request: Request) {
     // search mode too — routing it through execute_tool would hit that tool's
     // allowlist check and be rejected whenever the agent's saved enabledTools omit it.
     const toolExposureMode = (page.toolExposureMode as 'upfront' | 'search' | null) ?? 'upfront';
+    // Capture BEFORE exposure so capability sections (TASK_MANAGEMENT, AGENTS, etc.) are
+    // correctly included in search mode where non-core tools become callable via execute_tool
+    // and disappear from filteredTools.
+    const allowedToolNames = Object.keys(filteredTools);
     const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
     filteredTools = exposure.tools;
     const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -845,7 +849,7 @@ export async function POST(request: Request) {
           driveSlug: pageContext?.driveSlug,
           driveId: pageContext?.driveId,
         },
-        Object.keys(filteredTools)
+        allowedToolNames
       );
     }
 
