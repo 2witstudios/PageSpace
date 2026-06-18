@@ -27,6 +27,10 @@
       "types": "./dist/schema/sandbox-sessions.d.ts",
       "default": "./dist/schema/sandbox-sessions.js"
     },
+    "./schema/terminal-sessions": {
+      "types": "./dist/schema/terminal-sessions.d.ts",
+      "default": "./dist/schema/terminal-sessions.js"
+    },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
       "default": "./dist/schema/share-links.js"
