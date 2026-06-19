@@ -32,6 +32,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
+import { addOneMonth } from './credit-gate';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 export interface CreditBalanceSummary {
@@ -134,6 +135,12 @@ export async function getCreditBalance(
   const allowance = row.monthlyAllowanceCents || allowanceFor(tier);
   const periodEnd = row.monthlyPeriodEnd;
   const expired = periodEnd === null || periodEnd < now;
+  // For display: never show a past renewal date. Free users will get addOneMonth(now)
+  // stamped by the gate on their next AI call; project that for display. Paid users
+  // wait for invoice.paid — we don't know the date, so show nothing.
+  const displayPeriodEnd: Date | null = expired
+    ? (tier === 'free' ? addOneMonth(now) : null)
+    : periodEnd;
 
   // Rollover: credits never expire. The carry balance is always spendable (both
   // in the gate and here) — the renewal adds the allowance and nets outstanding debt.
@@ -166,7 +173,7 @@ export async function getCreditBalance(
     monthly: {
       remaining: monthlyRemaining,
       allowance,
-      periodEnd: periodEnd ? periodEnd.toISOString() : null,
+      periodEnd: displayPeriodEnd ? displayPeriodEnd.toISOString() : null,
     },
     topup: { remaining: topupRemaining },
     debt,
