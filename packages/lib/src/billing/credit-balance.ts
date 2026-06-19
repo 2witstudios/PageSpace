@@ -32,8 +32,19 @@ import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
-import { addOneMonth } from './credit-gate';
 import type { SubscriptionTier } from '../services/subscription-utils';
+
+// Mirror of addOneMonth in credit-gate (same logic, kept local to avoid pulling
+// credit-gate's DB imports into this display-only module and its unit-test mocks).
+function addOneMonth(from: Date): Date {
+  const d = new Date(from.getTime());
+  const day = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDay));
+  return d;
+}
 
 export interface CreditBalanceSummary {
   /** false on billing-disabled deployments (tenant/onprem); the widget then hides. */
