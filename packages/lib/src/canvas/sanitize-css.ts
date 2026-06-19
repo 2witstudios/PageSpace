@@ -17,7 +17,7 @@
  *
  * Pure string transform: no DOM dependency, safe to run server-side.
  */
-export function sanitizeCSS(css: string): string {
+export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }): string {
   if (!css) return '';
 
   let sanitized = css;
@@ -42,11 +42,15 @@ export function sanitizeCSS(css: string): string {
   sanitized = sanitized.replace(
     /url\s*\(\s*(['"]?)(?!data:)([^'")]+)\1\s*\)/gi,
     (match, quote, url) => {
-      // Log blocked URL for monitoring (in development)
+      const trimmed = url.trim();
+      if (trimmed.startsWith('https://') && opts?.allowedHttpsHosts?.length) {
+        const host = trimmed.slice('https://'.length).split('/')[0];
+        if (opts.allowedHttpsHosts.includes(host)) return match;
+      }
       if (process.env.NODE_ENV === 'development') {
         console.warn(`[Canvas Security] Blocked external URL: ${url}`);
       }
-      return 'url("")'; // Replace with empty URL
+      return 'url("")';
     }
   );
 

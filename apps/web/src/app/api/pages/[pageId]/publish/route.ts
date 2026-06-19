@@ -11,7 +11,8 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { renderPublishedPage } from '@/lib/canvas/render-published';
-import { buildPublishedKey, putPublishedArtifact, deletePublishedArtifact, isPublishConfigured } from '@/lib/canvas/published-storage';
+import { buildPublishedKey, putPublishedArtifact, deletePublishedArtifact, isPublishConfigured, getPublishAssetBaseUrl } from '@/lib/canvas/published-storage';
+import { rewriteCanvasAssets } from '@/lib/canvas/asset-pipeline';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -196,7 +197,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const rawPath = parsedBody?.path ?? page.title ?? '';
     const path = slugify(rawPath) || pageId;
 
-    const html = renderPublishedPage({ html: page.content ?? '', title: page.title ?? undefined });
+    const { html: rewrittenHtml } = await rewriteCanvasAssets({ html: page.content ?? '', db });
+    const assetBaseUrl = getPublishAssetBaseUrl();
+    const html = renderPublishedPage({ html: rewrittenHtml, title: page.title ?? undefined, assetBaseUrl });
     const key = buildPublishedKey(subdomain, path);
 
     // Capture the artifact this page currently points at, so we can clean it up

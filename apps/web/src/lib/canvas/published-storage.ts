@@ -1,6 +1,7 @@
 import 'server-only';
 
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 
 /**
  * Storage helper for PUBLISHED canvas artifacts.
@@ -111,6 +112,107 @@ export async function deletePublishedArtifact(key: string): Promise<void> {
     new DeleteObjectCommand({
       Bucket: getPublishBucket(),
       Key: key,
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Asset pipeline helpers (CDN copy of embedded PageSpace files)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the S3 object key for a content-addressed asset in the publish bucket.
+ *
+ * Assets are keyed by content hash so:
+ *  - identical files share a single object (no duplication)
+ *  - re-publishing the same canvas is fully idempotent
+ *  - orphaned keys are harmless (same content, never an old/wrong version)
+ */
+export function buildAssetKey(contentHash: string): string {
+  return `assets/${contentHash}`;
+}
+
+/**
+ * Resolve the public base URL for CDN assets.
+ *
+ * Priority:
+ *  1. `PUBLISH_ASSET_BASE_URL` — explicit override (e.g. a custom CDN)
+ *  2. Derived from `PUBLISH_BUCKET` → `https://{bucket}.t3.tigrisfiles.io`
+ *     (Tigris public domain; anonymous GET works here — NOT the authed S3 endpoint)
+ *  3. Throws if neither is set.
+ */
+export function getPublishAssetBaseUrl(): string {
+  if (process.env.PUBLISH_ASSET_BASE_URL) {
+    return process.env.PUBLISH_ASSET_BASE_URL;
+  }
+  const bucket = process.env.PUBLISH_BUCKET;
+  if (!bucket) {
+    throw new Error(
+      'Cannot derive asset base URL: PUBLISH_BUCKET is not configured and PUBLISH_ASSET_BASE_URL is not set',
+    );
+  }
+  return `https://${bucket}.t3.tigrisfiles.io`;
+}
+
+/**
+ * Build the full public URL for a content-addressed asset.
+ *
+ * Trailing slashes in the base URL are normalised so the result never contains
+ * a double slash.
+ */
+export function buildAssetUrl(contentHash: string): string {
+  const base = getPublishAssetBaseUrl();
+  const trimmedBase = base.endsWith('/') ? base.slice(0, -1) : base;
+  return `${trimmedBase}/${buildAssetKey(contentHash)}`;
+}
+
+/**
+ * Copy a file from the private uploads bucket to the public CDN publish bucket.
+ *
+ * Content-addressed: if the asset key already exists in the publish bucket
+ * (HeadObject → 200) the copy is skipped — the bytes are identical by hash.
+ * This makes concurrent publishes fully idempotent.
+ *
+ * Private key: `files/{contentHash}/original` (standard Tigris upload layout).
+ * Public key:  `assets/{contentHash}` (via buildAssetKey).
+ */
+export async function copyAssetToPublishBucket(params: {
+  contentHash: string;
+  mimeType: string;
+}): Promise<void> {
+  const { contentHash, mimeType } = params;
+  const assetKey = buildAssetKey(contentHash);
+  const publishBucket = getPublishBucket();
+
+  // Dedup check — content-addressed, so existence = already correct
+  try {
+    await getPublishClient().send(new HeadObjectCommand({ Bucket: publishBucket, Key: assetKey }));
+    return;
+  } catch (err: unknown) {
+    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+    const is404 =
+      anyErr?.name === 'NotFound' ||
+      anyErr?.name === 'NoSuchKey' ||
+      anyErr?.$metadata?.httpStatusCode === 404;
+    if (!is404) throw err;
+    // Not found — proceed with copy
+  }
+
+  const privateKey = `files/${contentHash}/original`;
+  const getResult = await getS3Client().send(
+    new GetObjectCommand({ Bucket: getS3Bucket(), Key: privateKey }),
+  );
+
+  const body = getResult.Body
+    ? await (getResult.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray()
+    : new Uint8Array(0);
+
+  await getPublishClient().send(
+    new PutObjectCommand({
+      Bucket: publishBucket,
+      Key: assetKey,
+      Body: body,
+      ContentType: mimeType,
     }),
   );
 }
