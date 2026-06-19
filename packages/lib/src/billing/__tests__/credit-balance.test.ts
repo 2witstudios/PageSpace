@@ -201,6 +201,77 @@ describe('getCreditBalance', () => {
     expect(b.reserved).toBe(50);
     expect(b.spendable).toBe(10);
   });
+
+  describe('monthly.periodEnd display projection', () => {
+    it('returns an active periodEnd as-is (ISO string)', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 400,
+          monthlyAllowanceCents: 500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: future,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'free');
+      expect(b.monthly.periodEnd).toBe(future.toISOString());
+    });
+
+    it('projects addOneMonth(now) for a free user with an expired period — never shows a past date', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 0,
+          monthlyAllowanceCents: 500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: past,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'free');
+      // periodEnd must be in the future (not the stale past date from the DB)
+      expect(b.monthly.periodEnd).not.toBeNull();
+      expect(new Date(b.monthly.periodEnd!).getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('returns null for a paid user with an expired period — hides the line rather than showing stale Stripe date', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 900,
+          monthlyAllowanceCents: 1500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: past,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'pro');
+      expect(b.monthly.periodEnd).toBeNull();
+    });
+
+    it('projects addOneMonth(now) for a free user when no periodEnd has been stamped yet (null in DB)', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 500,
+          monthlyAllowanceCents: 500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: null,
+        },
+      ];
+      // null DB periodEnd counts as expired; free tier projects addOneMonth
+      const b = await getCreditBalance('u1', 'free');
+      expect(b.monthly.periodEnd).not.toBeNull();
+      expect(new Date(b.monthly.periodEnd!).getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('returns null for a paid user when no periodEnd has been stamped yet (null in DB)', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 1500,
+          monthlyAllowanceCents: 1500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: null,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'pro');
+      expect(b.monthly.periodEnd).toBeNull();
+    });
+  });
 });
 
 describe('resolveTier', () => {
