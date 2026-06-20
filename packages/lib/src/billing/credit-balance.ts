@@ -146,11 +146,11 @@ export async function getCreditBalance(
   const allowance = row.monthlyAllowanceCents || allowanceFor(tier);
   const periodEnd = row.monthlyPeriodEnd;
   const expired = periodEnd === null || periodEnd < now;
-  // For display: never show a past renewal date. Free users will get addOneMonth(now)
-  // stamped by the gate on their next AI call; project that for display. Paid users
-  // wait for invoice.paid — we don't know the date, so show nothing.
+  // For display: never show a past renewal date. Project addOneMonth from the last known
+  // period end (or now if none recorded) — free users get the same date the gate will stamp
+  // on their next call; paid users get the Stripe cycle date (same day next month).
   const displayPeriodEnd: Date | null = expired
-    ? (tier === 'free' ? addOneMonth(now) : null)
+    ? addOneMonth(periodEnd ?? now)
     : periodEnd;
 
   // Rollover: credits never expire. The carry balance is always spendable (both

@@ -77,7 +77,8 @@ export function UsageBreakdownCard() {
     };
   }, [socket, mutate]);
 
-  const renewDate = data?.periodEnd ? new Date(data.periodEnd) : null;
+  const renewDate =
+    data?.periodEnd && new Date(data.periodEnd) > new Date() ? new Date(data.periodEnd) : null;
 
   return (
     <Card>
