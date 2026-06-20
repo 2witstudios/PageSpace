@@ -31,6 +31,12 @@ describe('buildInlineInstructions — always-on sections', () => {
     expect(result).toContain('PAGE TYPES');
   });
 
+  it('instructs canvas authors to use dashboard file view URLs for embedded uploaded files', () => {
+    const result = buildInlineInstructions(BASE_CONTEXT, []);
+    expect(result).toContain('/dashboard/{driveId}/{filePageId}/view');
+    expect(result).toContain('not /api/files');
+  });
+
   it('includes AFTER TOOLS regardless of tool list', () => {
     const result = buildInlineInstructions(BASE_CONTEXT, []);
     expect(result).toContain('AFTER TOOLS');
