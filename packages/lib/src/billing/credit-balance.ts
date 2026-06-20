@@ -149,9 +149,14 @@ export async function getCreditBalance(
   // For display: never show a past renewal date. Project addOneMonth from the last known
   // period end (or now if none recorded) — free users get the same date the gate will stamp
   // on their next call; paid users get the Stripe cycle date (same day next month).
-  const displayPeriodEnd: Date | null = expired
-    ? addOneMonth(periodEnd ?? now)
-    : periodEnd;
+  const displayPeriodEnd: Date | null = (() => {
+    if (!expired) return periodEnd;
+    let projected = addOneMonth(periodEnd ?? now);
+    while (projected <= now) {
+      projected = addOneMonth(projected);
+    }
+    return projected;
+  })();
 
   // Rollover: credits never expire. The carry balance is always spendable (both
   // in the gate and here) — the renewal adds the allowance and nets outstanding debt.

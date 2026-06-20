@@ -224,15 +224,20 @@ export default function BillingPage() {
     : null;
   const displayPeriodEnd = (() => {
     if (!rawPeriodEnd) return null;
-    if (rawPeriodEnd >= new Date()) return rawPeriodEnd;
-    // Project forward one month from the last known period end.
-    const d = new Date(rawPeriodEnd);
-    const day = d.getUTCDate();
-    d.setUTCDate(1);
-    d.setUTCMonth(d.getUTCMonth() + 1);
-    const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-    d.setUTCDate(Math.min(day, lastDay));
-    return d;
+    const now = new Date();
+    if (rawPeriodEnd >= now) return rawPeriodEnd;
+    const addMonth = (from: Date): Date => {
+      const d = new Date(from);
+      const day = d.getUTCDate();
+      d.setUTCDate(1);
+      d.setUTCMonth(d.getUTCMonth() + 1);
+      const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+      d.setUTCDate(Math.min(day, lastDay));
+      return d;
+    };
+    let projected = addMonth(rawPeriodEnd);
+    while (projected <= now) projected = addMonth(projected);
+    return projected;
   })();
 
   return (
