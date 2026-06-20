@@ -5,6 +5,7 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
 }));
 vi.mock('@pagespace/lib/services/email-service', () => ({
   sendEmail: vi.fn().mockResolvedValue(undefined),
+  resolveAppUrl: vi.fn().mockReturnValue('https://app.example.com'),
 }));
 vi.mock('@pagespace/lib/email-templates/VerificationEmail', () => ({
   VerificationEmail: () => null,
@@ -41,11 +42,8 @@ describe('sendVerificationEmail', () => {
     expect(args.subject).toBe('Verify your PageSpace email');
   });
 
-  it('falls back through WEB_APP_URL -> NEXT_PUBLIC_APP_URL -> localhost', async () => {
-    delete process.env.WEB_APP_URL;
-    delete process.env.NEXT_PUBLIC_APP_URL;
-
-    // Should not throw with no env configured (localhost fallback).
+  it('delegates URL resolution to resolveAppUrl and always calls sendEmail', async () => {
+    // resolveAppUrl is mocked; URL env-var behavior is tested in email-service.test.ts
     await expect(
       sendVerificationEmail({ userId: 'u1', email: 'a@example.com', userName: 'Ann' }),
     ).resolves.toBeUndefined();

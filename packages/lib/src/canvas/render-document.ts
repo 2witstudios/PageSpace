@@ -31,6 +31,7 @@ export interface RenderCanvasDocumentInput {
    * only restricts a `<base href>`, not `<base target>`, so this is allowed.
    */
   baseTarget?: '_blank' | '_self' | '_parent' | '_top';
+  allowedAssetHosts?: string[];
 }
 
 /**
@@ -84,14 +85,14 @@ export function escapeHtml(value: string): string {
  * source (e.g. a web-component template literal) is never mistaken for a real
  * stylesheet — the script is preserved verbatim.
  */
-function extractAndSanitizeStyles(html: string): { css: string; body: string } {
+function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): { css: string; body: string } {
   const scriptOrStyle = /<script\b[^>]*>[\s\S]*?<\/script\s*>|<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
   const cssParts: string[] = [];
   const body = html.replace(scriptOrStyle, (match, styleContent: string | undefined) => {
     // styleContent is the capture group; defined only when a real <style>
     // element matched (not a <script> block).
     if (styleContent !== undefined) {
-      cssParts.push(sanitizeCSS(styleContent));
+      cssParts.push(sanitizeCSS(styleContent, allowedHttpsHosts?.length ? { allowedHttpsHosts } : undefined));
       return '';
     }
     return match; // <script> block — leave verbatim
@@ -103,9 +104,9 @@ function extractAndSanitizeStyles(html: string): { css: string; body: string } {
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget } = input;
+  const { html, title, baseTarget, allowedAssetHosts } = input;
 
-  const { css, body } = extractAndSanitizeStyles(html ?? '');
+  const { css, body } = extractAndSanitizeStyles(html ?? '', allowedAssetHosts);
   const safeTitle = escapeHtml(title && title.trim() ? title : 'Untitled');
   const baseTag = baseTarget ? `<base target="${baseTarget}">` : '';
 

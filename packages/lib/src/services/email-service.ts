@@ -24,6 +24,28 @@ function getResend(): Resend {
   return resendInstance;
 }
 
+export function resolveAppUrl(): string {
+  const url = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
+  if (!url) {
+    throw new Error(
+      'App base URL is not configured. Set WEB_APP_URL or NEXT_PUBLIC_APP_URL environment variable.'
+    );
+  }
+  const normalized = url.replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error(
+      `App base URL is not a valid absolute URL: ${normalized}. Set WEB_APP_URL or NEXT_PUBLIC_APP_URL to a valid URL.`
+    );
+  }
+  if (!parsed.protocol.startsWith('http')) {
+    throw new Error(`App base URL must use http or https protocol, got: ${parsed.protocol}`);
+  }
+  return normalized;
+}
+
 export interface SendEmailOptions {
   to: string;
   subject: string;

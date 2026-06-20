@@ -124,3 +124,48 @@ describe('renderCanvasDocument', () => {
     expect(out).not.toContain('<base');
   });
 });
+
+describe('renderCanvasDocument — allowedAssetHosts', () => {
+  it('given allowedAssetHosts containing the CDN host, should preserve that host in CSS url()', () => {
+    const out = renderCanvasDocument({
+      html: '<style>body { background: url("https://cdn.example.com/assets/abc"); }</style>',
+      allowedAssetHosts: ['cdn.example.com'],
+    });
+    expect(out).toContain('https://cdn.example.com/assets/abc');
+    expect(out).not.toContain('url("")');
+  });
+
+  it('given allowedAssetHosts set, should still block non-matching HTTPS hosts in CSS url()', () => {
+    const out = renderCanvasDocument({
+      html: '<style>body { background: url("https://tracker.evil.com/px.gif"); }</style>',
+      allowedAssetHosts: ['cdn.example.com'],
+    });
+    expect(out).not.toContain('tracker.evil.com');
+    expect(out).toContain('url("")');
+  });
+
+  it('given allowedAssetHosts, should NOT affect HTML img src attributes — they are never sanitized', () => {
+    const out = renderCanvasDocument({
+      html: '<img src="https://cdn.example.com/photo.jpg">',
+      allowedAssetHosts: ['cdn.example.com'],
+    });
+    expect(out).toContain('https://cdn.example.com/photo.jpg');
+  });
+
+  it('given allowedAssetHosts: [] (empty), should block all external HTTPS url() values', () => {
+    const out = renderCanvasDocument({
+      html: '<style>body { background: url("https://cdn.example.com/x.png"); }</style>',
+      allowedAssetHosts: [],
+    });
+    expect(out).not.toContain('cdn.example.com');
+    expect(out).toContain('url("")');
+  });
+
+  it('given no allowedAssetHosts field, should block all external HTTPS url() values (existing default)', () => {
+    const out = renderCanvasDocument({
+      html: '<style>body { background: url("https://cdn.example.com/x.png"); }</style>',
+    });
+    expect(out).not.toContain('cdn.example.com');
+    expect(out).toContain('url("")');
+  });
+});

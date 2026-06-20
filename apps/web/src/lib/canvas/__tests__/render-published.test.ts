@@ -66,3 +66,39 @@ describe('renderPublishedPage', () => {
     expect(out).toContain('<title>Untitled</title>');
   });
 });
+
+describe('renderPublishedPage — assetBaseUrl', () => {
+  it('given assetBaseUrl, should allow that host in CSS url() values', () => {
+    const out = renderPublishedPage({
+      html: '<style>body { background: url("https://pagespace-published.t3.tigrisfiles.io/assets/abc123"); }</style>',
+      assetBaseUrl: 'https://pagespace-published.t3.tigrisfiles.io',
+    });
+    expect(out).toContain('https://pagespace-published.t3.tigrisfiles.io/assets/abc123');
+    expect(out).not.toContain('url("")');
+  });
+
+  it('given assetBaseUrl, should still block other HTTPS hosts in CSS url()', () => {
+    const out = renderPublishedPage({
+      html: '<style>body { background: url("https://evil.com/tracker.gif"); }</style>',
+      assetBaseUrl: 'https://pagespace-published.t3.tigrisfiles.io',
+    });
+    expect(out).not.toContain('evil.com');
+    expect(out).toContain('url("")');
+  });
+
+  it('given no assetBaseUrl, should block all external HTTPS url() values (existing default)', () => {
+    const out = renderPublishedPage({
+      html: '<style>body { background: url("https://pagespace-published.t3.tigrisfiles.io/assets/abc"); }</style>',
+    });
+    expect(out).not.toContain('pagespace-published.t3.tigrisfiles.io');
+    expect(out).toContain('url("")');
+  });
+
+  it('given assetBaseUrl with trailing slash, should derive host correctly and allow it', () => {
+    const out = renderPublishedPage({
+      html: '<style>body { background: url("https://cdn.example.com/assets/x"); }</style>',
+      assetBaseUrl: 'https://cdn.example.com/',
+    });
+    expect(out).toContain('https://cdn.example.com/assets/x');
+  });
+});

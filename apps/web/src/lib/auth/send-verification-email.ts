@@ -1,6 +1,6 @@
 import React from 'react';
 import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
-import { sendEmail } from '@pagespace/lib/services/email-service';
+import { sendEmail, resolveAppUrl } from '@pagespace/lib/services/email-service';
 import { VerificationEmail } from '@pagespace/lib/email-templates/VerificationEmail';
 
 /**
@@ -27,9 +27,7 @@ export async function sendVerificationEmail(params: {
     email,
   });
 
-  const baseUrl =
-    process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-  const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${verificationToken}`;
+  const verificationUrl = `${resolveAppUrl()}/api/auth/verify-email?token=${verificationToken}`;
 
   await sendEmail({
     to: email,

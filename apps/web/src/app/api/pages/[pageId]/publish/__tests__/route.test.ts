@@ -43,11 +43,18 @@ const buildPublishedKey = vi.fn();
 const putPublishedArtifact = vi.fn();
 const deletePublishedArtifact = vi.fn();
 const isPublishConfigured = vi.fn();
+const getPublishAssetBaseUrl = vi.fn();
 vi.mock('@/lib/canvas/published-storage', () => ({
   buildPublishedKey: (...args: unknown[]) => buildPublishedKey(...args),
   putPublishedArtifact: (...args: unknown[]) => putPublishedArtifact(...args),
   deletePublishedArtifact: (...args: unknown[]) => deletePublishedArtifact(...args),
   isPublishConfigured: (...args: unknown[]) => isPublishConfigured(...args),
+  getPublishAssetBaseUrl: (...args: unknown[]) => getPublishAssetBaseUrl(...args),
+}));
+
+const rewriteCanvasAssets = vi.fn();
+vi.mock('@/lib/canvas/asset-pipeline', () => ({
+  rewriteCanvasAssets: (...args: unknown[]) => rewriteCanvasAssets(...args),
 }));
 
 const renderPublishedPage = vi.fn();
@@ -110,6 +117,8 @@ beforeEach(() => {
   canUserEditPage.mockResolvedValue(true);
   validatePublishSubdomain.mockReturnValue({ valid: true });
   isPublishConfigured.mockReturnValue(true);
+  getPublishAssetBaseUrl.mockReturnValue('https://test-publish.t3.tigrisfiles.io');
+  rewriteCanvasAssets.mockImplementation(async ({ html }: { html: string }) => ({ html }));
   buildPublishedKey.mockImplementation((subdomain: string, path: string) => `published/${subdomain}/${path}/index.html`);
   putPublishedArtifact.mockResolvedValue({ key: 'published/acme/welcome/index.html' });
   renderPublishedPage.mockReturnValue('<html>rendered</html>');
@@ -185,7 +194,8 @@ describe('POST /api/pages/[pageId]/publish', () => {
     // 2 updates: subdomain allocation + post-upload updatedAt advancement
     expect(updateWhere).toHaveBeenCalledTimes(2);
 
-    expect(renderPublishedPage).toHaveBeenCalledWith({ html: '<p>hi</p>', title: 'Welcome' });
+    expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
+    expect(renderPublishedPage).toHaveBeenCalledWith({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io' });
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
     expect(onConflictDoUpdate).toHaveBeenCalledTimes(1);
 
