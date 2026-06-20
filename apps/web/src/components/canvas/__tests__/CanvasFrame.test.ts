@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { CANVAS_IFRAME_SANDBOX } from '../CanvasFrame';
+import React from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+
+const fetchWithAuthMock = vi.fn();
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: (...args: unknown[]) => fetchWithAuthMock(...args),
+}));
+
+import { CANVAS_IFRAME_SANDBOX, CanvasFrame } from '../CanvasFrame';
 
 /**
  * Security invariant guard for the in-app canvas iframe.
@@ -24,5 +32,39 @@ describe('CANVAS_IFRAME_SANDBOX', () => {
     // Must not be able to navigate the app's own (top) tab.
     expect(tokens).not.toContain('allow-top-navigation');
     expect(tokens).not.toContain('allow-top-navigation-by-user-activation');
+  });
+});
+
+describe('CanvasFrame', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchWithAuthMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        links: [{
+          driveId: 'drive-1',
+          pageId: 'file-1',
+          url: '/dashboard/drive-1/file-1/view?token=signed',
+        }],
+      }),
+    });
+  });
+
+  it('given dashboard file links in canvas HTML, should render tokenized preview links for the sandboxed iframe', async () => {
+    render(React.createElement(CanvasFrame, {
+      html: '<img src="/dashboard/drive-1/file-1/view">',
+      title: 'Canvas',
+    }));
+
+    await waitFor(() => {
+      const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+      expect(iframe.srcdoc).toContain('/dashboard/drive-1/file-1/view?token=signed');
+    });
+
+    expect(fetchWithAuthMock).toHaveBeenCalledWith('/api/canvas/file-view-tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refs: [{ driveId: 'drive-1', pageId: 'file-1' }] }),
+    });
   });
 });

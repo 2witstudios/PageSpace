@@ -1,7 +1,12 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { renderCanvasDocument } from '@pagespace/lib/canvas/render-document';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import {
+  extractDashboardFileViewRefs,
+  rewriteDashboardFileViewLinks,
+} from '@/lib/canvas/file-view-links';
 
 interface CanvasFrameProps {
   html: string;
@@ -38,12 +43,54 @@ export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to
  * in-app view and the published artifact render identically.
  */
 export function CanvasFrame({ html, title }: CanvasFrameProps) {
+  const [previewHtml, setPreviewHtml] = useState(html);
+
+  useEffect(() => {
+    const refs = extractDashboardFileViewRefs(html);
+    if (refs.length === 0) {
+      setPreviewHtml(html);
+      return;
+    }
+
+    let cancelled = false;
+    setPreviewHtml(html);
+
+    fetchWithAuth('/api/canvas/file-view-tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refs }),
+    })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return response.json() as Promise<{
+          links: Array<{ driveId: string; pageId: string; url: string }>;
+        }>;
+      })
+      .then((body) => {
+        if (cancelled || !body) return;
+        const urlsByRef = new Map(
+          body.links.map((link) => [`${link.driveId}:${link.pageId}`, link.url]),
+        );
+        setPreviewHtml(rewriteDashboardFileViewLinks(
+          html,
+          ({ driveId, pageId }) => urlsByRef.get(`${driveId}:${pageId}`),
+        ));
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewHtml(html);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [html]);
+
   // baseTarget '_blank': inside the sandboxed frame an ordinary <a href> (no
   // target) would navigate the frame itself — and many sites refuse framing —
   // so default links to a new tab (works with the iframe's allow-popups).
   const srcDoc = useMemo(
-    () => renderCanvasDocument({ html, title, baseTarget: '_blank' }),
-    [html, title],
+    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank' }),
+    [previewHtml, title],
   );
 
   return (

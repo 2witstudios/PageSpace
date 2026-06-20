@@ -169,6 +169,22 @@ describe('rewriteCanvasAssets', () => {
     expect(result.html).toContain('/dashboard/attacker-drive/fileId1/view');
   });
 
+  it('given the same file is referenced by a valid API URL and a wrong dashboard drive, should only rewrite the valid reference', async () => {
+    const html = [
+      '<img src="/api/files/fileId1/view">',
+      '<img src="/dashboard/attacker-drive/fileId1/view">',
+    ].join('');
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'fileId1', driveId: 'real-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+    ]);
+
+    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+
+    expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
+    expect(result.html).not.toContain('/api/files/fileId1/view');
+    expect(result.html).toContain('/dashboard/attacker-drive/fileId1/view');
+  });
+
   it('given a file ID that cannot be resolved in the DB, should leave the URL as-is (graceful degradation)', async () => {
     const html = '<img src="/api/files/missingId/view">';
     mockDb.query.pages.findMany.mockResolvedValue([]); // not found

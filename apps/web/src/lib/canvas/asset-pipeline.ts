@@ -28,13 +28,15 @@ const CONTENT_HASH_RE = /^[0-9a-f]{64}$/i;
 const createFileRefRegex = (): RegExp =>
   /(?:https?:\/\/[^/'">\s]*)?(?:\/api\/files\/([a-zA-Z0-9_-]+)\/(view|thumbnail)|\/dashboard\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)\/(view))(?=$|[?#"')\s>])/g;
 
-const referenceKey = ({ id, kind }: FileReference): string => `${id}:${kind}`;
+const referenceKey = ({ id, kind, driveId }: FileReference): string =>
+  driveId ? `dashboard:${driveId}:${id}:${kind}` : `api:${id}:${kind}`;
 
 /**
  * Extract all unique PageSpace file IDs referenced in canvas HTML.
  *
  * Scans `src`, `href`, CSS `url()` values — any occurrence of the pattern
- * `/api/files/{id}/view` or `/api/files/{id}/thumbnail`.
+ * `/api/files/{id}/view`, `/api/files/{id}/thumbnail`, or
+ * `/dashboard/{driveId}/{pageId}/view`.
  *
  * Pure function: no I/O, no env reads.
  */
@@ -126,9 +128,9 @@ async function filterViewableRows(userId: string, rows: FilePageRow[]): Promise<
 }
 
 /**
- * Rewrite all `/api/files/{id}/view` (and `/thumbnail`) references in the
- * canvas HTML to public CDN asset URLs, copying any referenced files to the
- * publish bucket along the way.
+ * Rewrite all `/api/files/{id}/view`, `/api/files/{id}/thumbnail`, and
+ * `/dashboard/{driveId}/{pageId}/view` references in canvas HTML to public CDN
+ * asset URLs, copying any referenced files to the publish bucket along the way.
  *
  * - Unresolvable IDs (file not found in DB, or page has no contentHash) are
  *   left as-is — publish still succeeds; the image just won't load publicly.
