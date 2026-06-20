@@ -9,6 +9,7 @@ import { isFilePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { createCanvasFileViewToken } from '@/lib/canvas/file-view-token';
 import { safeParseBody } from '@/lib/validation/parse-body';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]+$/);
 
@@ -24,6 +25,13 @@ const refKey = (driveId: string, pageId: string): string => `${driveId}:${pageId
 export async function POST(request: Request) {
   const user = await verifyAuth(request);
   if (!user) {
+    auditRequest(request, {
+      eventType: 'authz.access.denied',
+      resourceType: 'canvas_file_view_token',
+      resourceId: 'bulk',
+      details: { reason: 'auth_failed', method: 'POST' },
+      riskScore: 0.4,
+    });
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -56,6 +64,14 @@ export async function POST(request: Request) {
     };
   }))).filter((link): link is { driveId: string; pageId: string; url: string } => link !== null);
 
+  auditRequest(request, {
+    eventType: 'auth.token.created',
+    userId: user.id,
+    resourceType: 'canvas_file_view_token',
+    resourceId: 'bulk',
+    details: { requested: uniqueRefs.length, issued: links.length },
+    riskScore: 0.2,
+  });
+
   return NextResponse.json({ links });
 }
-

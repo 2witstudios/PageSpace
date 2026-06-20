@@ -204,4 +204,51 @@ describe('GET /dashboard/[driveId]/[pageId]/view', () => {
     expect(response.status).toBe(500);
     expect(generatePresignedUrl).not.toHaveBeenCalled();
   });
+
+  it('given the file page has a malformed storage path, should fail closed before presigning', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({
+      id: 'file-1',
+      driveId: 'drive-1',
+      type: 'FILE',
+      filePath: '../private-object',
+      mimeType: 'image/png',
+      originalFileName: 'image.png',
+      title: 'Image',
+    } as never);
+
+    const response = await GET(
+      new Request('https://pagespace.ai/dashboard/drive-1/file-1/view'),
+      { params: params() },
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Invalid file path' });
+    expect(generatePresignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('given the file page stores a bare content hash, should presign that validated hash', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({
+      id: 'file-1',
+      driveId: 'drive-1',
+      type: 'FILE',
+      filePath: 'b'.repeat(64),
+      mimeType: 'image/png',
+      originalFileName: 'image.png',
+      title: 'Image',
+    } as never);
+
+    const response = await GET(
+      new Request('https://pagespace.ai/dashboard/drive-1/file-1/view'),
+      { params: params() },
+    );
+
+    expect(response.status).toBe(307);
+    expect(generatePresignedUrl).toHaveBeenCalledWith(
+      'b'.repeat(64),
+      'original',
+      3600,
+      undefined,
+      'image/png',
+    );
+  });
 });

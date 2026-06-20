@@ -32,11 +32,16 @@ vi.mock('@/lib/canvas/file-view-token', () => ({
   createCanvasFileViewToken: vi.fn(({ driveId, pageId }) => `token-for-${driveId}-${pageId}`),
 }));
 
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+
 import { POST } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createCanvasFileViewToken } from '@/lib/canvas/file-view-token';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const jsonRequest = (body: unknown) =>
   new Request('https://pagespace.ai/api/canvas/file-view-tokens', {
@@ -72,6 +77,16 @@ describe('POST /api/canvas/file-view-tokens', () => {
       driveId: 'drive-1',
       pageId: 'file-1',
     });
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({
+        eventType: 'auth.token.created',
+        userId: 'user-1',
+        resourceType: 'canvas_file_view_token',
+        resourceId: 'bulk',
+        details: { requested: 1, issued: 1 },
+      }),
+    );
   });
 
   it('given no authenticated user, should return 401', async () => {
@@ -83,6 +98,14 @@ describe('POST /api/canvas/file-view-tokens', () => {
 
     expect(response.status).toBe(401);
     expect(createCanvasFileViewToken).not.toHaveBeenCalled();
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({
+        eventType: 'authz.access.denied',
+        resourceType: 'canvas_file_view_token',
+        resourceId: 'bulk',
+      }),
+    );
   });
 
   it('given a ref for a different drive, should omit it without minting a token', async () => {

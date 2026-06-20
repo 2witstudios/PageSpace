@@ -18,9 +18,10 @@ interface RouteParams {
 }
 
 /** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
-function toContentHash(storagePath: string): string {
+function toContentHash(storagePath: string): string | null {
   const m = storagePath.match(/^files\/([a-f0-9]{64})\/original$/i);
-  return m ? m[1].toLowerCase() : storagePath;
+  if (m) return m[1].toLowerCase();
+  return /^[a-f0-9]{64}$/i.test(storagePath) ? storagePath.toLowerCase() : null;
 }
 
 export async function GET(request: Request, context: RouteParams) {
@@ -64,6 +65,9 @@ export async function GET(request: Request, context: RouteParams) {
   }
 
   const contentHash = toContentHash(page.filePath);
+  if (!contentHash) {
+    return NextResponse.json({ error: 'Invalid file path' }, { status: 500 });
+  }
   const mimeType = page.mimeType || 'application/octet-stream';
   const ttl = getPresignedUrlTtl(mimeType);
   const filename = sanitizeFilenameForHeader(page.originalFileName || page.title || contentHash);

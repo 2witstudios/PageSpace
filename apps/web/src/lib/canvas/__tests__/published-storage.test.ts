@@ -206,6 +206,16 @@ describe('getPublishAssetBaseUrl', () => {
     process.env.PUBLISH_ASSET_BASE_URL = 'https://user:pass@cdn.example.com';
     expect(() => getPublishAssetBaseUrl()).toThrow(/origin/i);
   });
+
+  it('given PUBLISH_ASSET_BASE_URL includes a path, should reject the public asset origin', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com/prefix';
+    expect(() => getPublishAssetBaseUrl()).toThrow(/path/i);
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL has a trailing slash, should normalize to the origin only', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com/';
+    expect(getPublishAssetBaseUrl()).toBe('https://cdn.example.com');
+  });
 });
 
 describe('buildAssetUrl', () => {

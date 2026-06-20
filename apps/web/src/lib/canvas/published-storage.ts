@@ -76,8 +76,11 @@ function assertPublicAssetOrigin(baseUrl: string): string {
   if (parsed.search || parsed.hash) {
     throw new Error('Public asset origin must not include query or fragment components');
   }
+  if (parsed.pathname !== '/') {
+    throw new Error('Public asset origin must not include path components');
+  }
 
-  return parsed.toString().replace(/\/$/, '');
+  return parsed.origin;
 }
 
 function assertAssetKey(assetKey: string): string {
