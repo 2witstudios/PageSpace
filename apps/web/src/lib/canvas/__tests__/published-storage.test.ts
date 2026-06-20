@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import {
   buildPublishedKey,
   putPublishedArtifact,
   deletePublishedArtifact,
   isPublishConfigured,
+  buildAssetKey,
+  buildAssetUrl,
+  buildAssetUrlFromKey,
+  getPublishAssetBaseUrl,
+  copyAssetToPublishBucket,
+  copyObjectToPublishBucket,
 } from '../published-storage';
 
 const send = vi.fn();
@@ -129,5 +135,215 @@ describe('publish bucket configuration', () => {
       if (prev === undefined) delete process.env.PUBLISH_BUCKET;
       else process.env.PUBLISH_BUCKET = prev;
     }
+  });
+});
+
+describe('buildAssetKey', () => {
+  it('given a contentHash, should return assets/{contentHash}', () => {
+    expect(buildAssetKey('abc123def456')).toBe('assets/abc123def456');
+  });
+
+  it('given a 64-char SHA-256 hex hash, should return the correctly prefixed key', () => {
+    const hash = 'a'.repeat(64);
+    expect(buildAssetKey(hash)).toBe(`assets/${hash}`);
+  });
+});
+
+describe('getPublishAssetBaseUrl', () => {
+  let origAssetUrl: string | undefined;
+  let origBucket: string | undefined;
+
+  beforeEach(() => {
+    origAssetUrl = process.env.PUBLISH_ASSET_BASE_URL;
+    origBucket = process.env.PUBLISH_BUCKET;
+  });
+
+  afterEach(() => {
+    if (origAssetUrl === undefined) delete process.env.PUBLISH_ASSET_BASE_URL;
+    else process.env.PUBLISH_ASSET_BASE_URL = origAssetUrl;
+    if (origBucket === undefined) delete process.env.PUBLISH_BUCKET;
+    else process.env.PUBLISH_BUCKET = origBucket;
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL is set, should return it', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com';
+    expect(getPublishAssetBaseUrl()).toBe('https://cdn.example.com');
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL unset but PUBLISH_BUCKET set, should derive Tigris public URL', () => {
+    delete process.env.PUBLISH_ASSET_BASE_URL;
+    process.env.PUBLISH_BUCKET = 'pagespace-published';
+    expect(getPublishAssetBaseUrl()).toBe('https://pagespace-published.t3.tigrisfiles.io');
+  });
+
+  it('given both PUBLISH_ASSET_BASE_URL and PUBLISH_BUCKET set, should prefer PUBLISH_ASSET_BASE_URL', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com';
+    process.env.PUBLISH_BUCKET = 'pagespace-published';
+    expect(getPublishAssetBaseUrl()).toBe('https://cdn.example.com');
+  });
+
+  it('given both unset, should throw a descriptive error', () => {
+    delete process.env.PUBLISH_ASSET_BASE_URL;
+    delete process.env.PUBLISH_BUCKET;
+    expect(() => getPublishAssetBaseUrl()).toThrow(/PUBLISH_BUCKET/);
+  });
+});
+
+describe('buildAssetUrl', () => {
+  let origAssetUrl: string | undefined;
+  let origBucket: string | undefined;
+
+  beforeEach(() => {
+    origAssetUrl = process.env.PUBLISH_ASSET_BASE_URL;
+    origBucket = process.env.PUBLISH_BUCKET;
+    process.env.PUBLISH_BUCKET = 'pagespace-published';
+    delete process.env.PUBLISH_ASSET_BASE_URL;
+  });
+
+  afterEach(() => {
+    if (origAssetUrl === undefined) delete process.env.PUBLISH_ASSET_BASE_URL;
+    else process.env.PUBLISH_ASSET_BASE_URL = origAssetUrl;
+    if (origBucket === undefined) delete process.env.PUBLISH_BUCKET;
+    else process.env.PUBLISH_BUCKET = origBucket;
+  });
+
+  it('given a contentHash, should return the full public asset URL', () => {
+    expect(buildAssetUrl('abc123')).toBe('https://pagespace-published.t3.tigrisfiles.io/assets/abc123');
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL with trailing slash, should produce a clean URL without double slash', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com/';
+    expect(buildAssetUrl('abc123')).toBe('https://cdn.example.com/assets/abc123');
+  });
+});
+
+describe('buildAssetUrlFromKey', () => {
+  let origAssetUrl: string | undefined;
+  let origBucket: string | undefined;
+
+  beforeEach(() => {
+    origAssetUrl = process.env.PUBLISH_ASSET_BASE_URL;
+    origBucket = process.env.PUBLISH_BUCKET;
+    process.env.PUBLISH_BUCKET = 'pagespace-published';
+    delete process.env.PUBLISH_ASSET_BASE_URL;
+  });
+
+  afterEach(() => {
+    if (origAssetUrl === undefined) delete process.env.PUBLISH_ASSET_BASE_URL;
+    else process.env.PUBLISH_ASSET_BASE_URL = origAssetUrl;
+    if (origBucket === undefined) delete process.env.PUBLISH_BUCKET;
+    else process.env.PUBLISH_BUCKET = origBucket;
+  });
+
+  it('given a resolved asset key, should return the full public asset URL', () => {
+    expect(buildAssetUrlFromKey('assets/cache/abc123/thumbnail.webp')).toBe(
+      'https://pagespace-published.t3.tigrisfiles.io/assets/cache/abc123/thumbnail.webp',
+    );
+  });
+});
+
+describe('copyAssetToPublishBucket', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-publish';
+    process.env.BUCKET_NAME = 'test-files';
+  });
+
+  it('given the asset already exists in the publish bucket (HeadObject 200), should skip GetObject and PutObject', async () => {
+    // HeadObject resolves → asset exists
+    send.mockResolvedValueOnce({});
+
+    await copyAssetToPublishBucket({ contentHash: 'abc123', mimeType: 'image/png' });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const cmd = send.mock.calls[0][0];
+    expect(cmd).toBeInstanceOf(HeadObjectCommand);
+    expect(cmd.input).toMatchObject({ Bucket: 'test-publish', Key: 'assets/abc123' });
+  });
+
+  it('given the asset does not exist in the publish bucket (HeadObject 404), should GetObject from private bucket then PutObject to publish bucket', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { name: 'NotFound' });
+    const fakeBody = { transformToByteArray: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])) };
+
+    // HeadObject throws NotFound → GetObject succeeds → PutObject succeeds
+    send
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({ Body: fakeBody })
+      .mockResolvedValueOnce({});
+
+    await copyAssetToPublishBucket({ contentHash: 'abc123', mimeType: 'image/png' });
+
+    expect(send).toHaveBeenCalledTimes(3);
+
+    const [headCmd, getCmd, putCmd] = send.mock.calls.map((c) => c[0]);
+
+    expect(headCmd).toBeInstanceOf(HeadObjectCommand);
+    expect(headCmd.input).toMatchObject({ Bucket: 'test-publish', Key: 'assets/abc123' });
+
+    expect(getCmd).toBeInstanceOf(GetObjectCommand);
+    expect(getCmd.input).toMatchObject({ Bucket: 'test-files', Key: 'files/abc123/original' });
+
+    expect(putCmd).toBeInstanceOf(PutObjectCommand);
+    expect(putCmd.input).toMatchObject({
+      Bucket: 'test-publish',
+      Key: 'assets/abc123',
+      ContentType: 'image/png',
+    });
+    expect(putCmd.input.Body).toBeInstanceOf(Uint8Array);
+  });
+
+  it('given HeadObject throws a non-404 error, should propagate the error without copying', async () => {
+    const serverError = Object.assign(new Error('Server Error'), { name: 'ServiceUnavailable' });
+    send.mockRejectedValueOnce(serverError);
+
+    await expect(copyAssetToPublishBucket({ contentHash: 'abc123', mimeType: 'image/png' })).rejects.toThrow('Server Error');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('copyObjectToPublishBucket', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-publish';
+    process.env.BUCKET_NAME = 'test-files';
+  });
+
+  it('given a thumbnail cache object, should copy it to the requested public asset key', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { name: 'NotFound' });
+    const fakeBody = { transformToByteArray: vi.fn().mockResolvedValue(new Uint8Array([4, 5, 6])) };
+
+    send
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({ Body: fakeBody })
+      .mockResolvedValueOnce({});
+
+    await copyObjectToPublishBucket({
+      sourceKey: 'cache/abc123/thumbnail.webp',
+      assetKey: 'assets/cache/abc123/thumbnail.webp',
+      contentType: 'image/webp',
+    });
+
+    expect(send).toHaveBeenCalledTimes(3);
+
+    const [headCmd, getCmd, putCmd] = send.mock.calls.map((c) => c[0]);
+
+    expect(headCmd).toBeInstanceOf(HeadObjectCommand);
+    expect(headCmd.input).toMatchObject({
+      Bucket: 'test-publish',
+      Key: 'assets/cache/abc123/thumbnail.webp',
+    });
+
+    expect(getCmd).toBeInstanceOf(GetObjectCommand);
+    expect(getCmd.input).toMatchObject({
+      Bucket: 'test-files',
+      Key: 'cache/abc123/thumbnail.webp',
+    });
+
+    expect(putCmd).toBeInstanceOf(PutObjectCommand);
+    expect(putCmd.input).toMatchObject({
+      Bucket: 'test-publish',
+      Key: 'assets/cache/abc123/thumbnail.webp',
+      ContentType: 'image/webp',
+    });
   });
 });

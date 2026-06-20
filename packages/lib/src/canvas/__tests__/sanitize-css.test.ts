@@ -1,6 +1,65 @@
 import { describe, it, expect } from 'vitest'
 import { sanitizeCSS } from '../sanitize-css'
 
+describe('sanitizeCSS — allowedHttpsHosts option', () => {
+  it('given allowedHttpsHosts containing the url host, should preserve the url() unchanged', () => {
+    const css = 'background: url("https://assets.pagespace.ai/assets/abc123");'
+    const result = sanitizeCSS(css, { allowedHttpsHosts: ['assets.pagespace.ai'] })
+    expect(result).toContain('https://assets.pagespace.ai/assets/abc123')
+    expect(result).not.toContain('url("")')
+  })
+
+  it('given an allowed HTTPS URL with uppercase host and explicit port, should preserve it', () => {
+    const css = 'background: url("https://ASSETS.PAGESPACE.AI:443/assets/abc123");'
+    const result = sanitizeCSS(css, { allowedHttpsHosts: ['assets.pagespace.ai'] })
+    expect(result).toContain('https://ASSETS.PAGESPACE.AI:443/assets/abc123')
+    expect(result).not.toContain('url("")')
+  })
+
+  it('given allowedHttpsHosts with uppercase host and port, should normalize before matching', () => {
+    const css = 'background: url("https://assets.pagespace.ai/assets/abc123");'
+    const result = sanitizeCSS(css, { allowedHttpsHosts: ['ASSETS.PAGESPACE.AI:443'] })
+    expect(result).toContain('https://assets.pagespace.ai/assets/abc123')
+    expect(result).not.toContain('url("")')
+  })
+
+  it('given allowedHttpsHosts set but url host does not match, should still replace with url("")', () => {
+    const css = 'background: url("https://evil.com/pixel.png");'
+    const result = sanitizeCSS(css, { allowedHttpsHosts: ['assets.pagespace.ai'] })
+    expect(result).not.toContain('evil.com')
+    expect(result).toContain('url("")')
+  })
+
+  it('given allowedHttpsHosts: [] (empty), should replace any HTTPS url() with url("")', () => {
+    const css = 'background: url("https://assets.pagespace.ai/x.png");'
+    const result = sanitizeCSS(css, { allowedHttpsHosts: [] })
+    expect(result).not.toContain('assets.pagespace.ai')
+    expect(result).toContain('url("")')
+  })
+
+  it('given url uses HTTP (not HTTPS), should replace with url("") even if host is in allowedHttpsHosts', () => {
+    const css = 'background: url("http://assets.pagespace.ai/x.png");'
+    const result = sanitizeCSS(css, { allowedHttpsHosts: ['assets.pagespace.ai'] })
+    expect(result).not.toContain('http://assets.pagespace.ai')
+    expect(result).toContain('url("")')
+  })
+
+  it('given the host appears as a substring of another host, should not allow it through', () => {
+    // 'pagespace.ai' in allowlist must NOT allow 'evil-pagespace.ai'
+    const css = 'background: url("https://evil-pagespace.ai/x.png");'
+    const result = sanitizeCSS(css, { allowedHttpsHosts: ['pagespace.ai'] })
+    expect(result).not.toContain('evil-pagespace.ai')
+    expect(result).toContain('url("")')
+  })
+
+  it('given no opts argument, should block all external HTTPS url() values (existing default)', () => {
+    const css = 'background: url("https://assets.pagespace.ai/x.png");'
+    const result = sanitizeCSS(css)
+    expect(result).not.toContain('assets.pagespace.ai')
+    expect(result).toContain('url("")')
+  })
+})
+
 describe('sanitizeCSS', () => {
   it('given empty input, should return an empty string', () => {
     expect(sanitizeCSS('')).toBe('')

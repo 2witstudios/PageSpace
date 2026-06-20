@@ -14,11 +14,24 @@ import { renderCanvasDocument } from '@pagespace/lib/canvas/render-document';
 export interface RenderPublishedPageInput {
   html: string;
   title?: string;
+  /**
+   * Base URL of the public CDN bucket used for published assets
+   * (e.g. `https://pagespace-published.t3.tigrisfiles.io`). When provided,
+   * that host is allowed through the CSS `url()` sanitizer so that
+   * background-image references to copied assets survive in the published
+   * artifact. Omit for in-app rendering — the sanitizer keeps blocking all
+   * external HTTPS `url()` values.
+   */
+  assetBaseUrl?: string;
 }
 
 /**
  * Render a complete, standalone HTML document for a published canvas page.
  */
 export function renderPublishedPage(input: RenderPublishedPageInput): string {
-  return renderCanvasDocument(input);
+  const { assetBaseUrl, ...rest } = input;
+  const allowedAssetHosts = assetBaseUrl
+    ? [new URL(assetBaseUrl.endsWith('/') ? assetBaseUrl.slice(0, -1) : assetBaseUrl).host]
+    : [];
+  return renderCanvasDocument({ ...rest, allowedAssetHosts });
 }

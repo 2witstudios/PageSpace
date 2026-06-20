@@ -17,8 +17,14 @@
  *
  * Pure string transform: no DOM dependency, safe to run server-side.
  */
-export function sanitizeCSS(css: string): string {
+export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }): string {
   if (!css) return '';
+
+  const allowedHttpsHosts = new Set(
+    (opts?.allowedHttpsHosts ?? [])
+      .map((host) => normalizeAllowedHttpsHost(host))
+      .filter((host): host is string => Boolean(host)),
+  );
 
   let sanitized = css;
 
@@ -42,11 +48,21 @@ export function sanitizeCSS(css: string): string {
   sanitized = sanitized.replace(
     /url\s*\(\s*(['"]?)(?!data:)([^'")]+)\1\s*\)/gi,
     (match, quote, url) => {
-      // Log blocked URL for monitoring (in development)
+      const trimmed = url.trim();
+      if (allowedHttpsHosts.size > 0) {
+        try {
+          const parsed = new URL(trimmed);
+          if (parsed.protocol === 'https:' && allowedHttpsHosts.has(parsed.hostname.toLowerCase())) {
+            return match;
+          }
+        } catch {
+          // Invalid URLs fall through to the default block.
+        }
+      }
       if (process.env.NODE_ENV === 'development') {
         console.warn(`[Canvas Security] Blocked external URL: ${url}`);
       }
-      return 'url("")'; // Replace with empty URL
+      return 'url("")';
     }
   );
 
@@ -72,4 +88,16 @@ export function sanitizeCSS(css: string): string {
   );
 
   return sanitized;
+}
+
+function normalizeAllowedHttpsHost(host: string): string | null {
+  const trimmed = host.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
 }
