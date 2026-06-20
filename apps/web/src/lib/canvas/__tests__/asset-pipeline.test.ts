@@ -11,6 +11,10 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: (...args: unknown[]) => canUserViewPage(...args),
 }));
 
+const HASH_A = 'a'.repeat(64);
+const HASH_B = 'b'.repeat(64);
+const HASH_C = 'c'.repeat(64);
+
 // ---------------------------------------------------------------------------
 // extractFileIds — pure, no I/O
 // ---------------------------------------------------------------------------
@@ -24,6 +28,11 @@ describe('extractFileIds', () => {
   it('given an absolute https://pagespace.ai/api/files/{id}/view src, should extract the id', () => {
     const html = '<img src="https://pagespace.ai/api/files/def456/view">';
     expect(extractFileIds(html)).toEqual(['def456']);
+  });
+
+  it('given a dashboard file page /view src, should extract the page id', () => {
+    const html = '<img src="/dashboard/drive123/page456/view">';
+    expect(extractFileIds(html)).toEqual(['page456']);
   });
 
   it('given a /api/files/{id}/thumbnail src, should extract the id', () => {
@@ -118,21 +127,62 @@ describe('rewriteCanvasAssets', () => {
   it('given a file ID that resolves to a page with contentHash, should rewrite the URL to CDN and copy the asset', async () => {
     const html = '<img src="/api/files/fileId1/view">';
     mockDb.query.pages.findMany.mockResolvedValue([
-      { id: 'fileId1', contentHash: 'hash001', mimeType: 'image/png', extractionMetadata: null },
+      { id: 'fileId1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
 
     const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
 
-    expect(result.html).toContain('https://cdn.example.com/assets/hash001');
+    expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
     expect(result.html).not.toContain('/api/files/fileId1/view');
     const { copyObjectToPublishBucket } = await import('../published-storage');
     expect(copyObjectToPublishBucket).toHaveBeenCalledWith({
       id: 'fileId1',
       kind: 'view',
-      sourceKey: 'files/hash001/original',
-      assetKey: 'assets/hash001',
+      sourceKey: `files/${HASH_A}/original`,
+      assetKey: `assets/${HASH_A}`,
       contentType: 'image/png',
     });
+  });
+
+  it('given a dashboard file page /view URL with matching drive, should rewrite it to CDN', async () => {
+    const html = '<img src="https://pagespace.ai/dashboard/drive-1/fileId1/view">';
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'fileId1', driveId: 'drive-1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+    ]);
+
+    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+
+    expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
+    expect(result.html).not.toContain('/dashboard/drive-1/fileId1/view');
+  });
+
+  it('given a dashboard file page /view URL with a mismatched drive, should not copy or rewrite it', async () => {
+    const html = '<img src="/dashboard/attacker-drive/fileId1/view">';
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'fileId1', driveId: 'real-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+    ]);
+
+    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+    expect(result.html).toContain('/dashboard/attacker-drive/fileId1/view');
+  });
+
+  it('given the same file is referenced by a valid API URL and a wrong dashboard drive, should only rewrite the valid reference', async () => {
+    const html = [
+      '<img src="/api/files/fileId1/view">',
+      '<img src="/dashboard/attacker-drive/fileId1/view">',
+    ].join('');
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'fileId1', driveId: 'real-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+    ]);
+
+    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+
+    expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
+    expect(result.html).not.toContain('/api/files/fileId1/view');
+    expect(result.html).toContain('/dashboard/attacker-drive/fileId1/view');
   });
 
   it('given a file ID that cannot be resolved in the DB, should leave the URL as-is (graceful degradation)', async () => {
@@ -155,25 +205,38 @@ describe('rewriteCanvasAssets', () => {
     expect(result.html).toContain('/api/files/noHashId/view');
   });
 
+  it('given a page with a non-content-address hash, should not copy or rewrite it', async () => {
+    const html = '<img src="/api/files/hostileHash/view">';
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'hostileHash', contentHash: '../private-object', mimeType: 'image/png', extractionMetadata: null },
+    ]);
+
+    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+    expect(result.html).toContain('/api/files/hostileHash/view');
+  });
+
   it('given multiple distinct file IDs, should batch-query the DB once and rewrite all resolved URLs', async () => {
     const html =
       '<img src="/api/files/f1/view"><img src="/api/files/f2/view">';
     mockDb.query.pages.findMany.mockResolvedValue([
-      { id: 'f1', contentHash: 'h1', mimeType: 'image/png', extractionMetadata: null },
-      { id: 'f2', contentHash: 'h2', mimeType: 'image/jpeg', extractionMetadata: null },
+      { id: 'f1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+      { id: 'f2', contentHash: HASH_B, mimeType: 'image/jpeg', extractionMetadata: null },
     ]);
 
     const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
 
     expect(mockDb.query.pages.findMany).toHaveBeenCalledTimes(1);
-    expect(result.html).toContain('https://cdn.example.com/assets/h1');
-    expect(result.html).toContain('https://cdn.example.com/assets/h2');
+    expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
+    expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_B}`);
   });
 
   it('given the publisher cannot view a referenced file, should not copy or rewrite it', async () => {
     const html = '<img src="/api/files/privateFile/view">';
     mockDb.query.pages.findMany.mockResolvedValue([
-      { id: 'privateFile', contentHash: 'privateHash', mimeType: 'image/png', extractionMetadata: null },
+      { id: 'privateFile', contentHash: HASH_C, mimeType: 'image/png', extractionMetadata: null },
     ]);
     canUserViewPage.mockResolvedValue(false);
 
@@ -190,7 +253,7 @@ describe('rewriteCanvasAssets', () => {
     mockDb.query.pages.findMany.mockResolvedValue([
       {
         id: 'videoId',
-        contentHash: 'videoHash',
+        contentHash: HASH_C,
         mimeType: 'video/mp4',
         extractionMetadata: { thumbnailKey: 'cache/abcd1234/thumbnail.webp' },
       },
@@ -213,7 +276,7 @@ describe('rewriteCanvasAssets', () => {
   it('given a thumbnail reference without valid thumbnail metadata, should leave the URL as-is', async () => {
     const html = '<video poster="/api/files/videoId/thumbnail"></video>';
     mockDb.query.pages.findMany.mockResolvedValue([
-      { id: 'videoId', contentHash: 'videoHash', mimeType: 'video/mp4', extractionMetadata: null },
+      { id: 'videoId', contentHash: HASH_C, mimeType: 'video/mp4', extractionMetadata: null },
     ]);
 
     const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
@@ -224,7 +287,7 @@ describe('rewriteCanvasAssets', () => {
   it('given an asset copy fails, should leave that file URL as-is', async () => {
     const html = '<img src="/api/files/fileId1/view">';
     mockDb.query.pages.findMany.mockResolvedValue([
-      { id: 'fileId1', contentHash: 'hash001', mimeType: 'image/png', extractionMetadata: null },
+      { id: 'fileId1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
     const { copyObjectToPublishBucket } = await import('../published-storage');
     vi.mocked(copyObjectToPublishBucket).mockRejectedValueOnce(new Error('copy failed'));

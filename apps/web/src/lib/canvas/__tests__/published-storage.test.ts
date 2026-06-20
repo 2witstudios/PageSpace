@@ -14,6 +14,7 @@ import {
 } from '../published-storage';
 
 const send = vi.fn();
+const HASH = 'a'.repeat(64);
 
 vi.mock('server-only', () => ({}));
 
@@ -140,12 +141,20 @@ describe('publish bucket configuration', () => {
 
 describe('buildAssetKey', () => {
   it('given a contentHash, should return assets/{contentHash}', () => {
-    expect(buildAssetKey('abc123def456')).toBe('assets/abc123def456');
+    expect(buildAssetKey(HASH)).toBe(`assets/${HASH}`);
   });
 
   it('given a 64-char SHA-256 hex hash, should return the correctly prefixed key', () => {
     const hash = 'a'.repeat(64);
     expect(buildAssetKey(hash)).toBe(`assets/${hash}`);
+  });
+
+  it('given a contentHash with path traversal, should reject it before building a public key', () => {
+    expect(() => buildAssetKey('../private-secret')).toThrow(/content hash/i);
+  });
+
+  it('given a contentHash with a slash, should reject it before building a public key', () => {
+    expect(() => buildAssetKey('abc123/original')).toThrow(/content hash/i);
   });
 });
 
@@ -187,6 +196,26 @@ describe('getPublishAssetBaseUrl', () => {
     delete process.env.PUBLISH_BUCKET;
     expect(() => getPublishAssetBaseUrl()).toThrow(/PUBLISH_BUCKET/);
   });
+
+  it('given PUBLISH_ASSET_BASE_URL is not HTTPS, should reject the public asset origin', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'http://cdn.example.com';
+    expect(() => getPublishAssetBaseUrl()).toThrow(/HTTPS/i);
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL includes credentials, should reject the public asset origin', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://user:pass@cdn.example.com';
+    expect(() => getPublishAssetBaseUrl()).toThrow(/origin/i);
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL includes a path, should reject the public asset origin', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com/prefix';
+    expect(() => getPublishAssetBaseUrl()).toThrow(/path/i);
+  });
+
+  it('given PUBLISH_ASSET_BASE_URL has a trailing slash, should normalize to the origin only', () => {
+    process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com/';
+    expect(getPublishAssetBaseUrl()).toBe('https://cdn.example.com');
+  });
 });
 
 describe('buildAssetUrl', () => {
@@ -208,12 +237,12 @@ describe('buildAssetUrl', () => {
   });
 
   it('given a contentHash, should return the full public asset URL', () => {
-    expect(buildAssetUrl('abc123')).toBe('https://pagespace-published.t3.tigrisfiles.io/assets/abc123');
+    expect(buildAssetUrl(HASH)).toBe(`https://pagespace-published.t3.tigrisfiles.io/assets/${HASH}`);
   });
 
   it('given PUBLISH_ASSET_BASE_URL with trailing slash, should produce a clean URL without double slash', () => {
     process.env.PUBLISH_ASSET_BASE_URL = 'https://cdn.example.com/';
-    expect(buildAssetUrl('abc123')).toBe('https://cdn.example.com/assets/abc123');
+    expect(buildAssetUrl(HASH)).toBe(`https://cdn.example.com/assets/${HASH}`);
   });
 });
 
@@ -240,6 +269,14 @@ describe('buildAssetUrlFromKey', () => {
       'https://pagespace-published.t3.tigrisfiles.io/assets/cache/abc123/thumbnail.webp',
     );
   });
+
+  it('given an asset key outside the assets prefix, should reject it before building a public URL', () => {
+    expect(() => buildAssetUrlFromKey('published/acme/index.html')).toThrow(/asset key/i);
+  });
+
+  it('given an asset key with traversal, should reject it before building a public URL', () => {
+    expect(() => buildAssetUrlFromKey('assets/../published/acme/index.html')).toThrow(/asset key/i);
+  });
 });
 
 describe('copyAssetToPublishBucket', () => {
@@ -253,12 +290,12 @@ describe('copyAssetToPublishBucket', () => {
     // HeadObject resolves → asset exists
     send.mockResolvedValueOnce({});
 
-    await copyAssetToPublishBucket({ contentHash: 'abc123', mimeType: 'image/png' });
+    await copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' });
 
     expect(send).toHaveBeenCalledTimes(1);
     const cmd = send.mock.calls[0][0];
     expect(cmd).toBeInstanceOf(HeadObjectCommand);
-    expect(cmd.input).toMatchObject({ Bucket: 'test-publish', Key: 'assets/abc123' });
+    expect(cmd.input).toMatchObject({ Bucket: 'test-publish', Key: `assets/${HASH}` });
   });
 
   it('given the asset does not exist in the publish bucket (HeadObject 404), should GetObject from private bucket then PutObject to publish bucket', async () => {
@@ -271,22 +308,22 @@ describe('copyAssetToPublishBucket', () => {
       .mockResolvedValueOnce({ Body: fakeBody })
       .mockResolvedValueOnce({});
 
-    await copyAssetToPublishBucket({ contentHash: 'abc123', mimeType: 'image/png' });
+    await copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' });
 
     expect(send).toHaveBeenCalledTimes(3);
 
     const [headCmd, getCmd, putCmd] = send.mock.calls.map((c) => c[0]);
 
     expect(headCmd).toBeInstanceOf(HeadObjectCommand);
-    expect(headCmd.input).toMatchObject({ Bucket: 'test-publish', Key: 'assets/abc123' });
+    expect(headCmd.input).toMatchObject({ Bucket: 'test-publish', Key: `assets/${HASH}` });
 
     expect(getCmd).toBeInstanceOf(GetObjectCommand);
-    expect(getCmd.input).toMatchObject({ Bucket: 'test-files', Key: 'files/abc123/original' });
+    expect(getCmd.input).toMatchObject({ Bucket: 'test-files', Key: `files/${HASH}/original` });
 
     expect(putCmd).toBeInstanceOf(PutObjectCommand);
     expect(putCmd.input).toMatchObject({
       Bucket: 'test-publish',
-      Key: 'assets/abc123',
+      Key: `assets/${HASH}`,
       ContentType: 'image/png',
     });
     expect(putCmd.input.Body).toBeInstanceOf(Uint8Array);
@@ -296,7 +333,7 @@ describe('copyAssetToPublishBucket', () => {
     const serverError = Object.assign(new Error('Server Error'), { name: 'ServiceUnavailable' });
     send.mockRejectedValueOnce(serverError);
 
-    await expect(copyAssetToPublishBucket({ contentHash: 'abc123', mimeType: 'image/png' })).rejects.toThrow('Server Error');
+    await expect(copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' })).rejects.toThrow('Server Error');
     expect(send).toHaveBeenCalledTimes(1);
   });
 });
@@ -306,6 +343,26 @@ describe('copyObjectToPublishBucket', () => {
     send.mockReset();
     process.env.PUBLISH_BUCKET = 'test-publish';
     process.env.BUCKET_NAME = 'test-files';
+  });
+
+  it('given a source key outside the private file/cache prefixes, should reject before any S3 command', async () => {
+    await expect(copyObjectToPublishBucket({
+      sourceKey: 'published/acme/index.html',
+      assetKey: `assets/${HASH}`,
+      contentType: 'text/html',
+    })).rejects.toThrow(/source key/i);
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('given a public asset key with traversal, should reject before any S3 command', async () => {
+    await expect(copyObjectToPublishBucket({
+      sourceKey: `files/${HASH}/original`,
+      assetKey: 'assets/../published/acme/index.html',
+      contentType: 'image/png',
+    })).rejects.toThrow(/asset key/i);
+
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('given a thumbnail cache object, should copy it to the requested public asset key', async () => {

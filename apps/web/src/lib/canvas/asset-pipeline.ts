@@ -12,6 +12,7 @@ type FileReferenceKind = 'view' | 'thumbnail';
 interface FileReference {
   id: string;
   kind: FileReferenceKind;
+  driveId?: string;
 }
 
 interface PublishAsset {
@@ -22,16 +23,20 @@ interface PublishAsset {
   contentType: string;
 }
 
-const createFileRefRegex = (): RegExp =>
-  /(?:https?:\/\/[^/'">\s]*)?\/api\/files\/([a-zA-Z0-9_-]+)\/(view|thumbnail)(?=$|[?#"')\s>])/g;
+const CONTENT_HASH_RE = /^[0-9a-f]{64}$/i;
 
-const referenceKey = ({ id, kind }: FileReference): string => `${id}:${kind}`;
+const createFileRefRegex = (): RegExp =>
+  /(?:https?:\/\/[^/'">\s]*)?(?:\/api\/files\/([a-zA-Z0-9_-]+)\/(view|thumbnail)|\/dashboard\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)\/(view))(?=$|[?#"')\s>])/g;
+
+const referenceKey = ({ id, kind, driveId }: FileReference): string =>
+  driveId ? `dashboard:${driveId}:${id}:${kind}` : `api:${id}:${kind}`;
 
 /**
  * Extract all unique PageSpace file IDs referenced in canvas HTML.
  *
  * Scans `src`, `href`, CSS `url()` values — any occurrence of the pattern
- * `/api/files/{id}/view` or `/api/files/{id}/thumbnail`.
+ * `/api/files/{id}/view`, `/api/files/{id}/thumbnail`, or
+ * `/dashboard/{driveId}/{pageId}/view`.
  *
  * Pure function: no I/O, no env reads.
  */
@@ -46,7 +51,9 @@ export function extractFileIds(html: string): string[] {
 function extractFileReferences(html: string): FileReference[] {
   const refsByKey = new Map<string, FileReference>();
   for (const match of html.matchAll(createFileRefRegex())) {
-    const ref = { id: match[1], kind: match[2] as FileReferenceKind };
+    const ref = match[1]
+      ? { id: match[1], kind: match[2] as FileReferenceKind }
+      : { driveId: match[3], id: match[4], kind: match[5] as FileReferenceKind };
     refsByKey.set(referenceKey(ref), ref);
   }
   return Array.from(refsByKey.values());
@@ -57,6 +64,7 @@ function extractFileReferences(html: string): FileReference[] {
  */
 interface FilePageRow {
   id: string;
+  driveId: string | null;
   contentHash: string | null;
   mimeType: string | null;
   extractionMetadata: unknown;
@@ -87,14 +95,19 @@ function resolvePublishAsset(row: FilePageRow, kind: FileReferenceKind): Publish
     };
   }
 
-  if (!row.contentHash) return null;
-  return {
-    id: row.id,
-    kind,
-    sourceKey: `files/${row.contentHash}/original`,
-    assetKey: buildAssetKey(row.contentHash),
-    contentType: row.mimeType ?? 'application/octet-stream',
-  };
+  if (!row.contentHash || !CONTENT_HASH_RE.test(row.contentHash)) return null;
+  try {
+    const contentHash = row.contentHash.toLowerCase();
+    return {
+      id: row.id,
+      kind,
+      sourceKey: `files/${contentHash}/original`,
+      assetKey: buildAssetKey(contentHash),
+      contentType: row.mimeType ?? 'application/octet-stream',
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function filterViewableRows(userId: string, rows: FilePageRow[]): Promise<FilePageRow[]> {
@@ -115,9 +128,9 @@ async function filterViewableRows(userId: string, rows: FilePageRow[]): Promise<
 }
 
 /**
- * Rewrite all `/api/files/{id}/view` (and `/thumbnail`) references in the
- * canvas HTML to public CDN asset URLs, copying any referenced files to the
- * publish bucket along the way.
+ * Rewrite all `/api/files/{id}/view`, `/api/files/{id}/thumbnail`, and
+ * `/dashboard/{driveId}/{pageId}/view` references in canvas HTML to public CDN
+ * asset URLs, copying any referenced files to the publish bucket along the way.
  *
  * - Unresolvable IDs (file not found in DB, or page has no contentHash) are
  *   left as-is — publish still succeeds; the image just won't load publicly.
@@ -138,7 +151,7 @@ export async function rewriteCanvasAssets(params: {
   // Batch-query referenced page rows; permission checks below decide which assets can publish.
   const rows = (await db.query.pages.findMany({
     where: inArray(pages.id, fileIds),
-    columns: { id: true, contentHash: true, mimeType: true, extractionMetadata: true },
+    columns: { id: true, driveId: true, contentHash: true, mimeType: true, extractionMetadata: true },
   })) as FilePageRow[];
 
   const rowsById = new Map((await filterViewableRows(userId, rows)).map((row) => [row.id, row]));
@@ -148,6 +161,7 @@ export async function rewriteCanvasAssets(params: {
   for (const ref of references) {
     const row = rowsById.get(ref.id);
     if (!row) continue;
+    if (ref.driveId && row.driveId !== ref.driveId) continue;
     const asset = resolvePublishAsset(row, ref.kind);
     if (!asset) continue;
     resolved.set(referenceKey(ref), asset);
@@ -175,8 +189,18 @@ export async function rewriteCanvasAssets(params: {
     }),
   );
 
-  const rewritten = html.replace(createFileRefRegex(), (match, id: string, kind: FileReferenceKind) => {
-    const asset = resolved.get(referenceKey({ id, kind }));
+  const rewritten = html.replace(createFileRefRegex(), (
+    match,
+    apiId: string | undefined,
+    apiKind: FileReferenceKind | undefined,
+    dashboardDriveId: string | undefined,
+    dashboardPageId: string | undefined,
+    dashboardKind: FileReferenceKind | undefined,
+  ) => {
+    const ref = apiId
+      ? { id: apiId, kind: apiKind as FileReferenceKind }
+      : { driveId: dashboardDriveId, id: dashboardPageId as string, kind: dashboardKind as FileReferenceKind };
+    const asset = resolved.get(referenceKey(ref));
     return asset && copiedAssetKeys.has(asset.assetKey) ? buildAssetUrlFromKey(asset.assetKey) : match;
   });
 

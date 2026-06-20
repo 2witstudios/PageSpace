@@ -101,4 +101,18 @@ describe('renderPublishedPage — assetBaseUrl', () => {
     });
     expect(out).toContain('https://cdn.example.com/assets/x');
   });
+
+  it('given a non-HTTPS assetBaseUrl, should reject it instead of allowlisting the host', () => {
+    expect(() => renderPublishedPage({
+      html: '<style>body { background: url("http://cdn.example.com/assets/x"); }</style>',
+      assetBaseUrl: 'http://cdn.example.com',
+    })).toThrow(/HTTPS/i);
+  });
+
+  it('given an assetBaseUrl with credentials, should reject it instead of allowlisting the host', () => {
+    expect(() => renderPublishedPage({
+      html: '<style>body { background: url("https://cdn.example.com/assets/x"); }</style>',
+      assetBaseUrl: 'https://user:pass@cdn.example.com',
+    })).toThrow(/origin/i);
+  });
 });

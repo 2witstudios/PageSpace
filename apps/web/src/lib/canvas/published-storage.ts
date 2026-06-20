@@ -3,6 +3,11 @@ import 'server-only';
 import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 
+const CONTENT_HASH_RE = /^[0-9a-f]{64}$/i;
+const THUMBNAIL_SOURCE_KEY_RE = /^cache\/[0-9a-f]+\/thumbnail\.webp$/i;
+const FILE_SOURCE_KEY_RE = /^files\/[0-9a-f]{64}\/original$/i;
+const ASSET_KEY_RE = /^assets\/(?:[0-9a-f]{64}|cache\/[0-9a-f]+\/thumbnail\.webp)$/i;
+
 /**
  * Storage helper for PUBLISHED canvas artifacts.
  *
@@ -45,6 +50,55 @@ function getPublishBucket(): string {
     throw new Error('PUBLISH_BUCKET is not configured (dedicated public bucket for canvas publishing)');
   }
   return bucket;
+}
+
+function assertContentHash(contentHash: string): string {
+  if (!CONTENT_HASH_RE.test(contentHash)) {
+    throw new Error('Invalid content hash for public asset key');
+  }
+  return contentHash.toLowerCase();
+}
+
+function assertPublicAssetOrigin(baseUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error('Public asset origin must be a valid HTTPS URL');
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Public asset origin must use HTTPS');
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('Public asset origin must not include credentials');
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error('Public asset origin must not include query or fragment components');
+  }
+  if (parsed.pathname !== '/') {
+    throw new Error('Public asset origin must not include path components');
+  }
+
+  return parsed.origin;
+}
+
+function assertAssetKey(assetKey: string): string {
+  if (!ASSET_KEY_RE.test(assetKey)) {
+    throw new Error('Invalid public asset key');
+  }
+  return assetKey;
+}
+
+function assertPrivateSourceKey(sourceKey: string): string {
+  if (!FILE_SOURCE_KEY_RE.test(sourceKey) && !THUMBNAIL_SOURCE_KEY_RE.test(sourceKey)) {
+    throw new Error('Invalid private source key');
+  }
+  return sourceKey;
+}
+
+export function getPublicAssetHost(assetBaseUrl: string): string {
+  return new URL(assertPublicAssetOrigin(assetBaseUrl)).host;
 }
 
 /**
@@ -129,7 +183,7 @@ export async function deletePublishedArtifact(key: string): Promise<void> {
  *  - orphaned keys are harmless (same content, never an old/wrong version)
  */
 export function buildAssetKey(contentHash: string): string {
-  return `assets/${contentHash}`;
+  return `assets/${assertContentHash(contentHash)}`;
 }
 
 /**
@@ -143,7 +197,7 @@ export function buildAssetKey(contentHash: string): string {
  */
 export function getPublishAssetBaseUrl(): string {
   if (process.env.PUBLISH_ASSET_BASE_URL) {
-    return process.env.PUBLISH_ASSET_BASE_URL;
+    return assertPublicAssetOrigin(process.env.PUBLISH_ASSET_BASE_URL);
   }
   const bucket = process.env.PUBLISH_BUCKET;
   if (!bucket) {
@@ -151,7 +205,7 @@ export function getPublishAssetBaseUrl(): string {
       'Cannot derive asset base URL: PUBLISH_BUCKET is not configured and PUBLISH_ASSET_BASE_URL is not set',
     );
   }
-  return `https://${bucket}.t3.tigrisfiles.io`;
+  return assertPublicAssetOrigin(`https://${bucket}.t3.tigrisfiles.io`);
 }
 
 /**
@@ -170,7 +224,7 @@ export function buildAssetUrl(contentHash: string): string {
 export function buildAssetUrlFromKey(assetKey: string): string {
   const base = getPublishAssetBaseUrl();
   const trimmedBase = base.endsWith('/') ? base.slice(0, -1) : base;
-  return `${trimmedBase}/${assetKey}`;
+  return `${trimmedBase}/${assertAssetKey(assetKey)}`;
 }
 
 /**
@@ -181,7 +235,9 @@ export async function copyObjectToPublishBucket(params: {
   assetKey: string;
   contentType: string;
 }): Promise<void> {
-  const { sourceKey, assetKey, contentType } = params;
+  const sourceKey = assertPrivateSourceKey(params.sourceKey);
+  const assetKey = assertAssetKey(params.assetKey);
+  const { contentType } = params;
   const publishBucket = getPublishBucket();
 
   // Dedup check — existence at the resolved public key means it was already promoted.

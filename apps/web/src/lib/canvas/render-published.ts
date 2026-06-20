@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { renderCanvasDocument } from '@pagespace/lib/canvas/render-document';
+import { getPublicAssetHost } from './published-storage';
 
 /**
  * Server-side renderer for PUBLISHED canvas pages.
@@ -30,8 +31,6 @@ export interface RenderPublishedPageInput {
  */
 export function renderPublishedPage(input: RenderPublishedPageInput): string {
   const { assetBaseUrl, ...rest } = input;
-  const allowedAssetHosts = assetBaseUrl
-    ? [new URL(assetBaseUrl.endsWith('/') ? assetBaseUrl.slice(0, -1) : assetBaseUrl).host]
-    : [];
+  const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
   return renderCanvasDocument({ ...rest, allowedAssetHosts });
 }
