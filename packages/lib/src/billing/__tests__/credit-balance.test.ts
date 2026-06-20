@@ -231,7 +231,7 @@ describe('getCreditBalance', () => {
       expect(new Date(b.monthly.periodEnd!).getTime()).toBeGreaterThan(Date.now());
     });
 
-    it('returns null for a paid user with an expired period — hides the line rather than showing stale Stripe date', async () => {
+    it('projects addOneMonth(pastPeriodEnd) for a paid user with an expired period — shows next expected Stripe cycle date', async () => {
       balanceRows = [
         {
           monthlyRemainingCents: 900,
@@ -241,7 +241,8 @@ describe('getCreditBalance', () => {
         },
       ];
       const b = await getCreditBalance('u1', 'pro');
-      expect(b.monthly.periodEnd).toBeNull();
+      expect(b.monthly.periodEnd).not.toBeNull();
+      expect(new Date(b.monthly.periodEnd!).getTime()).toBeGreaterThan(Date.now());
     });
 
     it('projects addOneMonth(now) for a free user when no periodEnd has been stamped yet (null in DB)', async () => {
@@ -259,7 +260,7 @@ describe('getCreditBalance', () => {
       expect(new Date(b.monthly.periodEnd!).getTime()).toBeGreaterThan(Date.now());
     });
 
-    it('returns null for a paid user when no periodEnd has been stamped yet (null in DB)', async () => {
+    it('projects addOneMonth(now) for a paid user when no periodEnd has been stamped yet (null in DB)', async () => {
       balanceRows = [
         {
           monthlyRemainingCents: 1500,
@@ -269,7 +270,8 @@ describe('getCreditBalance', () => {
         },
       ];
       const b = await getCreditBalance('u1', 'pro');
-      expect(b.monthly.periodEnd).toBeNull();
+      expect(b.monthly.periodEnd).not.toBeNull();
+      expect(new Date(b.monthly.periodEnd!).getTime()).toBeGreaterThan(Date.now());
     });
   });
 });

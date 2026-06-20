@@ -217,6 +217,29 @@ export default function BillingPage() {
   const scheduledPlan = scheduledPriceId ? getPlanFromPriceId(scheduledPriceId) : null;
   const scheduledChangeDate = subscriptionData?.subscription?.scheduledChangeDate;
 
+  // Never display a past period-end date. If Stripe's currentPeriodEnd is stale (webhook
+  // delay or renewal in progress), project the next expected date instead.
+  const rawPeriodEnd = subscriptionData?.subscription?.currentPeriodEnd
+    ? new Date(subscriptionData.subscription.currentPeriodEnd)
+    : null;
+  const displayPeriodEnd = (() => {
+    if (!rawPeriodEnd) return null;
+    const now = new Date();
+    if (rawPeriodEnd >= now) return rawPeriodEnd;
+    const addMonth = (from: Date): Date => {
+      const d = new Date(from);
+      const day = d.getUTCDate();
+      d.setUTCDate(1);
+      d.setUTCMonth(d.getUTCMonth() + 1);
+      const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+      d.setUTCDate(Math.min(day, lastDay));
+      return d;
+    };
+    let projected = addMonth(rawPeriodEnd);
+    while (projected <= now) projected = addMonth(projected);
+    return projected;
+  })();
+
   return (
     <div className="container mx-auto p-6 space-y-8 max-w-4xl">
       <div>
@@ -282,11 +305,11 @@ export default function BillingPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {isPaid && subscriptionData?.subscription && (
+                {isPaid && displayPeriodEnd && (
                   <div className="text-sm text-muted-foreground flex items-center gap-1 mr-4">
                     <Clock className="h-4 w-4" />
                     {isCanceling ? 'Ends' : 'Renews'}{' '}
-                    {new Date(subscriptionData.subscription.currentPeriodEnd).toLocaleDateString()}
+                    {displayPeriodEnd.toLocaleDateString()}
                   </div>
                 )}
                 <Link href="/settings/plan">
@@ -302,7 +325,7 @@ export default function BillingPage() {
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription>
                   Your subscription will end on{' '}
-                  {new Date(subscriptionData!.subscription!.currentPeriodEnd).toLocaleDateString()}.
+                  {displayPeriodEnd?.toLocaleDateString()}.
                   You can reactivate anytime before then.
                 </AlertDescription>
               </Alert>
