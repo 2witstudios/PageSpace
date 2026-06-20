@@ -194,6 +194,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
     // 2 updates: subdomain allocation + post-upload updatedAt advancement
     expect(updateWhere).toHaveBeenCalledTimes(2);
 
+    expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
     expect(renderPublishedPage).toHaveBeenCalledWith({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io' });
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
     expect(onConflictDoUpdate).toHaveBeenCalledTimes(1);

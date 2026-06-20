@@ -161,9 +161,58 @@ export function getPublishAssetBaseUrl(): string {
  * a double slash.
  */
 export function buildAssetUrl(contentHash: string): string {
+  return buildAssetUrlFromKey(buildAssetKey(contentHash));
+}
+
+/**
+ * Build the full public URL for an already-resolved publish-bucket asset key.
+ */
+export function buildAssetUrlFromKey(assetKey: string): string {
   const base = getPublishAssetBaseUrl();
   const trimmedBase = base.endsWith('/') ? base.slice(0, -1) : base;
-  return `${trimmedBase}/${buildAssetKey(contentHash)}`;
+  return `${trimmedBase}/${assetKey}`;
+}
+
+/**
+ * Copy an object from private file storage to a public publish-bucket asset key.
+ */
+export async function copyObjectToPublishBucket(params: {
+  sourceKey: string;
+  assetKey: string;
+  contentType: string;
+}): Promise<void> {
+  const { sourceKey, assetKey, contentType } = params;
+  const publishBucket = getPublishBucket();
+
+  // Dedup check — existence at the resolved public key means it was already promoted.
+  try {
+    await getPublishClient().send(new HeadObjectCommand({ Bucket: publishBucket, Key: assetKey }));
+    return;
+  } catch (err: unknown) {
+    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+    const is404 =
+      anyErr?.name === 'NotFound' ||
+      anyErr?.name === 'NoSuchKey' ||
+      anyErr?.$metadata?.httpStatusCode === 404;
+    if (!is404) throw err;
+  }
+
+  const getResult = await getS3Client().send(
+    new GetObjectCommand({ Bucket: getS3Bucket(), Key: sourceKey }),
+  );
+
+  const body = getResult.Body
+    ? await (getResult.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray()
+    : new Uint8Array(0);
+
+  await getPublishClient().send(
+    new PutObjectCommand({
+      Bucket: publishBucket,
+      Key: assetKey,
+      Body: body,
+      ContentType: contentType,
+    }),
+  );
 }
 
 /**
@@ -181,38 +230,9 @@ export async function copyAssetToPublishBucket(params: {
   mimeType: string;
 }): Promise<void> {
   const { contentHash, mimeType } = params;
-  const assetKey = buildAssetKey(contentHash);
-  const publishBucket = getPublishBucket();
-
-  // Dedup check — content-addressed, so existence = already correct
-  try {
-    await getPublishClient().send(new HeadObjectCommand({ Bucket: publishBucket, Key: assetKey }));
-    return;
-  } catch (err: unknown) {
-    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-    const is404 =
-      anyErr?.name === 'NotFound' ||
-      anyErr?.name === 'NoSuchKey' ||
-      anyErr?.$metadata?.httpStatusCode === 404;
-    if (!is404) throw err;
-    // Not found — proceed with copy
-  }
-
-  const privateKey = `files/${contentHash}/original`;
-  const getResult = await getS3Client().send(
-    new GetObjectCommand({ Bucket: getS3Bucket(), Key: privateKey }),
-  );
-
-  const body = getResult.Body
-    ? await (getResult.Body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray()
-    : new Uint8Array(0);
-
-  await getPublishClient().send(
-    new PutObjectCommand({
-      Bucket: publishBucket,
-      Key: assetKey,
-      Body: body,
-      ContentType: mimeType,
-    }),
-  );
+  await copyObjectToPublishBucket({
+    sourceKey: `files/${contentHash}/original`,
+    assetKey: buildAssetKey(contentHash),
+    contentType: mimeType,
+  });
 }

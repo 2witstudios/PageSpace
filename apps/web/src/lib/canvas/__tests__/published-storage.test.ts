@@ -7,8 +7,10 @@ import {
   isPublishConfigured,
   buildAssetKey,
   buildAssetUrl,
+  buildAssetUrlFromKey,
   getPublishAssetBaseUrl,
   copyAssetToPublishBucket,
+  copyObjectToPublishBucket,
 } from '../published-storage';
 
 const send = vi.fn();
@@ -215,6 +217,31 @@ describe('buildAssetUrl', () => {
   });
 });
 
+describe('buildAssetUrlFromKey', () => {
+  let origAssetUrl: string | undefined;
+  let origBucket: string | undefined;
+
+  beforeEach(() => {
+    origAssetUrl = process.env.PUBLISH_ASSET_BASE_URL;
+    origBucket = process.env.PUBLISH_BUCKET;
+    process.env.PUBLISH_BUCKET = 'pagespace-published';
+    delete process.env.PUBLISH_ASSET_BASE_URL;
+  });
+
+  afterEach(() => {
+    if (origAssetUrl === undefined) delete process.env.PUBLISH_ASSET_BASE_URL;
+    else process.env.PUBLISH_ASSET_BASE_URL = origAssetUrl;
+    if (origBucket === undefined) delete process.env.PUBLISH_BUCKET;
+    else process.env.PUBLISH_BUCKET = origBucket;
+  });
+
+  it('given a resolved asset key, should return the full public asset URL', () => {
+    expect(buildAssetUrlFromKey('assets/cache/abc123/thumbnail.webp')).toBe(
+      'https://pagespace-published.t3.tigrisfiles.io/assets/cache/abc123/thumbnail.webp',
+    );
+  });
+});
+
 describe('copyAssetToPublishBucket', () => {
   beforeEach(() => {
     send.mockReset();
@@ -271,5 +298,52 @@ describe('copyAssetToPublishBucket', () => {
 
     await expect(copyAssetToPublishBucket({ contentHash: 'abc123', mimeType: 'image/png' })).rejects.toThrow('Server Error');
     expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('copyObjectToPublishBucket', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-publish';
+    process.env.BUCKET_NAME = 'test-files';
+  });
+
+  it('given a thumbnail cache object, should copy it to the requested public asset key', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { name: 'NotFound' });
+    const fakeBody = { transformToByteArray: vi.fn().mockResolvedValue(new Uint8Array([4, 5, 6])) };
+
+    send
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({ Body: fakeBody })
+      .mockResolvedValueOnce({});
+
+    await copyObjectToPublishBucket({
+      sourceKey: 'cache/abc123/thumbnail.webp',
+      assetKey: 'assets/cache/abc123/thumbnail.webp',
+      contentType: 'image/webp',
+    });
+
+    expect(send).toHaveBeenCalledTimes(3);
+
+    const [headCmd, getCmd, putCmd] = send.mock.calls.map((c) => c[0]);
+
+    expect(headCmd).toBeInstanceOf(HeadObjectCommand);
+    expect(headCmd.input).toMatchObject({
+      Bucket: 'test-publish',
+      Key: 'assets/cache/abc123/thumbnail.webp',
+    });
+
+    expect(getCmd).toBeInstanceOf(GetObjectCommand);
+    expect(getCmd.input).toMatchObject({
+      Bucket: 'test-files',
+      Key: 'cache/abc123/thumbnail.webp',
+    });
+
+    expect(putCmd).toBeInstanceOf(PutObjectCommand);
+    expect(putCmd.input).toMatchObject({
+      Bucket: 'test-publish',
+      Key: 'assets/cache/abc123/thumbnail.webp',
+      ContentType: 'image/webp',
+    });
   });
 });

@@ -20,6 +20,12 @@
 export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }): string {
   if (!css) return '';
 
+  const allowedHttpsHosts = new Set(
+    (opts?.allowedHttpsHosts ?? [])
+      .map((host) => normalizeAllowedHttpsHost(host))
+      .filter((host): host is string => Boolean(host)),
+  );
+
   let sanitized = css;
 
   // Remove JavaScript execution vectors and dangerous URL schemes
@@ -43,9 +49,15 @@ export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }
     /url\s*\(\s*(['"]?)(?!data:)([^'")]+)\1\s*\)/gi,
     (match, quote, url) => {
       const trimmed = url.trim();
-      if (trimmed.startsWith('https://') && opts?.allowedHttpsHosts?.length) {
-        const host = trimmed.slice('https://'.length).split('/')[0];
-        if (opts.allowedHttpsHosts.includes(host)) return match;
+      if (allowedHttpsHosts.size > 0) {
+        try {
+          const parsed = new URL(trimmed);
+          if (parsed.protocol === 'https:' && allowedHttpsHosts.has(parsed.hostname.toLowerCase())) {
+            return match;
+          }
+        } catch {
+          // Invalid URLs fall through to the default block.
+        }
       }
       if (process.env.NODE_ENV === 'development') {
         console.warn(`[Canvas Security] Blocked external URL: ${url}`);
@@ -76,4 +88,16 @@ export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }
   );
 
   return sanitized;
+}
+
+function normalizeAllowedHttpsHost(host: string): string | null {
+  const trimmed = host.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
 }

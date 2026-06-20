@@ -197,7 +197,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const rawPath = parsedBody?.path ?? page.title ?? '';
     const path = slugify(rawPath) || pageId;
 
-    const { html: rewrittenHtml } = await rewriteCanvasAssets({ html: page.content ?? '', db });
+    const { html: rewrittenHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId, db });
     const assetBaseUrl = getPublishAssetBaseUrl();
     const html = renderPublishedPage({ html: rewrittenHtml, title: page.title ?? undefined, assetBaseUrl });
     const key = buildPublishedKey(subdomain, path);

@@ -9,6 +9,20 @@ describe('sanitizeCSS — allowedHttpsHosts option', () => {
     expect(result).not.toContain('url("")')
   })
 
+  it('given an allowed HTTPS URL with uppercase host and explicit port, should preserve it', () => {
+    const css = 'background: url("https://ASSETS.PAGESPACE.AI:443/assets/abc123");'
+    const result = sanitizeCSS(css, { allowedHttpsHosts: ['assets.pagespace.ai'] })
+    expect(result).toContain('https://ASSETS.PAGESPACE.AI:443/assets/abc123')
+    expect(result).not.toContain('url("")')
+  })
+
+  it('given allowedHttpsHosts with uppercase host and port, should normalize before matching', () => {
+    const css = 'background: url("https://assets.pagespace.ai/assets/abc123");'
+    const result = sanitizeCSS(css, { allowedHttpsHosts: ['ASSETS.PAGESPACE.AI:443'] })
+    expect(result).toContain('https://assets.pagespace.ai/assets/abc123')
+    expect(result).not.toContain('url("")')
+  })
+
   it('given allowedHttpsHosts set but url host does not match, should still replace with url("")', () => {
     const css = 'background: url("https://evil.com/pixel.png");'
     const result = sanitizeCSS(css, { allowedHttpsHosts: ['assets.pagespace.ai'] })
