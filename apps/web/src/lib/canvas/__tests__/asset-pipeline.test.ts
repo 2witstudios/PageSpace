@@ -41,6 +41,11 @@ describe('extractFileIds', () => {
     expect(extractFileIds(html)).toEqual(['href002']);
   });
 
+  it('given a longer endpoint that starts with /view, should not extract a partial file reference', () => {
+    const html = '<img src="/api/files/notARealFile/viewer">';
+    expect(extractFileIds(html)).toEqual([]);
+  });
+
   it('given multiple references to the same id, should deduplicate', () => {
     const html =
       '<img src="/api/files/dup1/view"><img src="/api/files/dup1/view"><img src="/api/files/dup2/view">';
@@ -98,6 +103,14 @@ describe('rewriteCanvasAssets', () => {
   it('given no file IDs in the HTML, should return the HTML unchanged', async () => {
     const html = '<p>No files here</p>';
     const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    expect(result.html).toBe(html);
+    expect(mockDb.query.pages.findMany).not.toHaveBeenCalled();
+  });
+
+  it('given a longer endpoint that starts with /view, should leave it unchanged without querying files', async () => {
+    const html = '<img src="/api/files/notARealFile/viewer">';
+    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+
     expect(result.html).toBe(html);
     expect(mockDb.query.pages.findMany).not.toHaveBeenCalled();
   });

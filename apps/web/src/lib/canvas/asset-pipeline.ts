@@ -22,8 +22,8 @@ interface PublishAsset {
   contentType: string;
 }
 
-const fileRefPattern = String.raw`(?:https?:\/\/[^/'">\s]*)?\/api\/files\/([a-zA-Z0-9_-]+)\/(view|thumbnail)`;
-const createFileRefRegex = (): RegExp => new RegExp(fileRefPattern, 'g');
+const createFileRefRegex = (): RegExp =>
+  /(?:https?:\/\/[^/'">\s]*)?\/api\/files\/([a-zA-Z0-9_-]+)\/(view|thumbnail)(?=$|[?#"')\s>])/g;
 
 const referenceKey = ({ id, kind }: FileReference): string => `${id}:${kind}`;
 
