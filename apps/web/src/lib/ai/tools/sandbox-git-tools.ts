@@ -3,10 +3,11 @@
  *
  * Pure factory — no DB imports, no Sprites SDK. Production wiring lives in
  * `sandbox-git-tools-runtime.ts`. Each tool's execute handler:
- *   1. Resolves the actor context.
- *   2. Runs the call-time gate (same gate as bash/writeFile/readFile).
- *   3. For remote/gh tools: pre-checks the GitHub token (fails fast, no quota).
- *   4. Delegates to `runGitInSandbox` with cmd + args[] (never sh -c).
+ *   1. Validates input (defense-in-depth; schema validation happens at the AI layer).
+ *   2. Resolves the actor context.
+ *   3. Runs the call-time gate (same gate as bash/writeFile/readFile).
+ *   4. For remote/gh tools: pre-checks the GitHub token (fails fast, no quota).
+ *   5. Delegates to `runGitInSandbox` with cmd + args[] (never sh -c).
  *
  * Security: cmd is always a literal ('git' or 'gh'). Args are string[]. No
  * shell interpolation is possible. Token is injected per-command by the
@@ -15,6 +16,7 @@
 
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
+import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { runGitInSandbox } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import type { ResolveSandboxContext, SandboxGate } from './sandbox-tools';
@@ -42,7 +44,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   const open = async (
     options: unknown,
   ): Promise<
-    | { ok: true; userId: string; ctx: Parameters<typeof runGitInSandbox>[0]['ctx'] }
+    | { ok: true; userId: string; ctx: SandboxActorContext }
     | { ok: false; error: { success: false; error: string } }
   > => {
     const ctx = await resolveContext(readContext(options));
@@ -52,10 +54,17 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     return { ok: true, userId: ctx.userId, ctx };
   };
 
-  /** For remote/gh tools: check token BEFORE opening a sandbox (no quota charge on failure). */
+  /** Direct-exec helper for local git commands (no token needed). */
+  const git = (cmd: 'git' | 'gh', args: string[], ctx: SandboxActorContext) =>
+    runGitInSandbox({ cmd, args, ctx, deps: gitRunDeps });
+
+  /**
+   * For remote/gh tools: pre-checks the GitHub token before opening a sandbox.
+   * Passes the already-resolved token to `runGitInSandbox` to avoid a second DB fetch.
+   */
   const withToken = async (
     options: unknown,
-    run: (ctx: Parameters<typeof runGitInSandbox>[0]['ctx'], token: string) => Promise<unknown>,
+    run: (ctx: SandboxActorContext, token: string) => Promise<unknown>,
   ) => {
     const opened = await open(options);
     if (!opened.ok) return opened.error;
@@ -64,25 +73,29 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     return run(opened.ctx, token);
   };
 
-  const git = (cmd: string, args: string[], ctx: Parameters<typeof runGitInSandbox>[0]['ctx']) =>
-    runGitInSandbox({ cmd, args, ctx, deps: gitRunDeps });
+  /** Remote-exec helper: passes the pre-resolved token to skip the second DB lookup. */
+  const gitR = (cmd: 'git' | 'gh', args: string[], ctx: SandboxActorContext, token: string) =>
+    runGitInSandbox({ cmd, args, ctx, deps: gitRunDeps, preResolvedToken: token });
 
   // ── Repo + config ───────────────────────────────────────────────────────
 
-  const git_clone = tool({
+  const gitClone = tool({
     description: 'Clone a GitHub repository into the sandbox. Use HTTPS URLs only.',
     inputSchema: z.object({
       repo_url: z
         .string()
         .url()
         .refine(
-          (u) => !u.startsWith('git@') && !u.startsWith('ssh://'),
-          'Use HTTPS URLs for git clone (SSH is not supported with token auth)',
+          (u) => u.startsWith('https://'),
+          'Only HTTPS URLs are supported (e.g. https://github.com/owner/repo.git)',
         ),
       path: z.string().optional(),
       depth: z.number().int().positive().optional(),
     }),
     execute: async ({ repo_url, path, depth }, options) => {
+      if (!repo_url.startsWith('https://')) {
+        return { success: false as const, error: 'Only HTTPS URLs are supported for git clone.' };
+      }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
       const args = [
@@ -95,7 +108,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_init = tool({
+  const gitInit = tool({
     description: 'Initialize a new git repository in the sandbox.',
     inputSchema: z.object({ path: z.string().optional() }),
     execute: async ({ path }, options) => {
@@ -105,7 +118,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_config = tool({
+  const gitConfig = tool({
     description: 'Set a git config value.',
     inputSchema: z.object({
       key: z.string().min(1),
@@ -119,10 +132,19 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_remote_add = tool({
-    description: 'Add a remote to the repository.',
-    inputSchema: z.object({ name: z.string().min(1), url: z.string().url() }),
+  const gitRemoteAdd = tool({
+    description: 'Add a remote to the repository. Use HTTPS URLs only.',
+    inputSchema: z.object({
+      name: z.string().min(1),
+      url: z
+        .string()
+        .url()
+        .refine((u) => u.startsWith('https://'), 'Only HTTPS remote URLs are supported'),
+    }),
     execute: async ({ name, url }, options) => {
+      if (!url.startsWith('https://')) {
+        return { success: false as const, error: 'Only HTTPS URLs are supported for git remote add.' };
+      }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
       return git('git', ['remote', 'add', name, url], opened.ctx);
@@ -131,7 +153,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   // ── Working tree ────────────────────────────────────────────────────────
 
-  const git_status = tool({
+  const gitStatus = tool({
     description: 'Show the working tree status in porcelain format.',
     inputSchema: z.object({ path: z.string().optional() }),
     execute: async ({ path }, options) => {
@@ -141,7 +163,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_diff = tool({
+  const gitDiff = tool({
     description: 'Show changes in the working tree or staged changes.',
     inputSchema: z.object({ staged: z.boolean().optional(), path: z.string().optional() }),
     execute: async ({ staged, path }, options) => {
@@ -155,7 +177,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_add = tool({
+  const gitAdd = tool({
     description: 'Stage files for commit.',
     inputSchema: z
       .object({ paths: z.array(z.string()).optional(), all: z.boolean().optional() })
@@ -163,13 +185,16 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
         message: 'Provide paths or set all: true',
       }),
     execute: async ({ paths, all }, options) => {
+      if (!all && (!paths || paths.length === 0)) {
+        return { success: false as const, error: 'Provide paths or set all: true' };
+      }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
       return git('git', ['add', ...(all ? ['-A'] : paths!)], opened.ctx);
     },
   });
 
-  const git_reset = tool({
+  const gitReset = tool({
     description: 'Reset HEAD to a given ref.',
     inputSchema: z.object({
       mode: z.enum(['soft', 'mixed', 'hard']),
@@ -182,7 +207,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_stash = tool({
+  const gitStash = tool({
     description: 'Stash, pop, list, or drop the stash.',
     inputSchema: z.object({
       action: z.enum(['push', 'pop', 'list', 'drop']),
@@ -201,13 +226,16 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   // ── Commits, history, branching ─────────────────────────────────────────
 
-  const git_commit = tool({
+  const gitCommit = tool({
     description: 'Create a commit with the given message.',
     inputSchema: z.object({
       message: z.string().min(1),
       amend: z.boolean().optional(),
     }),
     execute: async ({ message, amend }, options) => {
+      if (!message) {
+        return { success: false as const, error: 'commit message is required' };
+      }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
       return git(
@@ -218,7 +246,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_log = tool({
+  const gitLog = tool({
     description: 'Show commit history. Defaults to last 20 commits in oneline format.',
     inputSchema: z.object({
       n: z.number().int().positive().max(100).optional(),
@@ -242,7 +270,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_merge = tool({
+  const gitMerge = tool({
     description: 'Merge a branch.',
     inputSchema: z.object({
       branch: z.string().min(1),
@@ -257,7 +285,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_rebase = tool({
+  const gitRebase = tool({
     description: 'Rebase onto a branch or ref. Non-interactive only.',
     inputSchema: z.object({ branch_or_ref: z.string().min(1) }),
     execute: async ({ branch_or_ref }, options) => {
@@ -267,7 +295,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_checkout = tool({
+  const gitCheckout = tool({
     description: 'Switch branches or create a new one.',
     inputSchema: z.object({ ref: z.string().min(1), create: z.boolean().optional() }),
     execute: async ({ ref, create }, options) => {
@@ -277,12 +305,15 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     },
   });
 
-  const git_branch = tool({
+  const gitBranch = tool({
     description: 'List, create, or delete branches.',
     inputSchema: z
       .object({ action: z.enum(['list', 'create', 'delete']), name: z.string().optional() })
       .refine((d) => d.action === 'list' || !!d.name, { message: 'name required for create/delete' }),
     execute: async ({ action, name }, options) => {
+      if ((action === 'create' || action === 'delete') && !name) {
+        return { success: false as const, error: 'name is required for create/delete' };
+      }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
       const args =
@@ -293,16 +324,16 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   // ── Remote sync (token required) ────────────────────────────────────────
 
-  const git_fetch = tool({
+  const gitFetch = tool({
     description: 'Fetch from a remote. Requires a connected GitHub account.',
     inputSchema: z.object({ remote: z.string().optional(), branch: z.string().optional() }),
     execute: async ({ remote, branch }, options) =>
-      withToken(options, (ctx) =>
-        git('git', ['fetch', remote ?? 'origin', ...(branch ? [branch] : [])], ctx),
+      withToken(options, (ctx, token) =>
+        gitR('git', ['fetch', remote ?? 'origin', ...(branch ? [branch] : [])], ctx, token),
       ),
   });
 
-  const git_pull = tool({
+  const gitPull = tool({
     description: 'Pull from a remote. Requires a connected GitHub account.',
     inputSchema: z.object({
       remote: z.string().optional(),
@@ -310,16 +341,17 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       rebase: z.boolean().optional(),
     }),
     execute: async ({ remote, branch, rebase }, options) =>
-      withToken(options, (ctx) =>
-        git(
+      withToken(options, (ctx, token) =>
+        gitR(
           'git',
           ['pull', ...(rebase ? ['--rebase'] : []), remote ?? 'origin', ...(branch ? [branch] : [])],
           ctx,
+          token,
         ),
       ),
   });
 
-  const git_push = tool({
+  const gitPush = tool({
     description: 'Push to a remote. Requires a connected GitHub account.',
     inputSchema: z.object({
       remote: z.string().optional(),
@@ -328,8 +360,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       set_upstream: z.boolean().optional(),
     }),
     execute: async ({ remote, branch, force, set_upstream }, options) =>
-      withToken(options, (ctx) =>
-        git(
+      withToken(options, (ctx, token) =>
+        gitR(
           'git',
           [
             'push',
@@ -339,13 +371,14 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             ...(branch ? [branch] : []),
           ],
           ctx,
+          token,
         ),
       ),
   });
 
   // ── GitHub PRs (token required) ─────────────────────────────────────────
 
-  const gh_pr_create = tool({
+  const ghPrCreate = tool({
     description: 'Create a pull request. Requires a connected GitHub account.',
     inputSchema: z.object({
       title: z.string().min(1),
@@ -354,9 +387,12 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       draft: z.boolean().optional(),
       labels: z.array(z.string()).optional(),
     }),
-    execute: async ({ title, body, base, draft, labels }, options) =>
-      withToken(options, (ctx) =>
-        git(
+    execute: async ({ title, body, base, draft, labels }, options) => {
+      if (!title) {
+        return { success: false as const, error: 'title is required' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
           'gh',
           [
             'pr', 'create',
@@ -367,19 +403,21 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             ...(labels?.length ? ['--label', labels.join(',')] : []),
           ],
           ctx,
+          token,
         ),
-      ),
+      );
+    },
   });
 
-  const gh_pr_list = tool({
+  const ghPrList = tool({
     description: 'List pull requests. Requires a connected GitHub account.',
     inputSchema: z.object({
       state: z.enum(['open', 'closed', 'merged', 'all']).optional(),
       limit: z.number().int().positive().max(100).optional(),
     }),
     execute: async ({ state, limit }, options) =>
-      withToken(options, (ctx) =>
-        git(
+      withToken(options, (ctx, token) =>
+        gitR(
           'gh',
           [
             'pr', 'list',
@@ -388,16 +426,17 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             '--json', 'number,title,state,url,headRefName,createdAt',
           ],
           ctx,
+          token,
         ),
       ),
   });
 
-  const gh_pr_view = tool({
+  const ghPrView = tool({
     description: 'View a pull request. Requires a connected GitHub account.',
     inputSchema: z.object({ number: z.number().int().positive().optional() }),
     execute: async ({ number }, options) =>
-      withToken(options, (ctx) =>
-        git(
+      withToken(options, (ctx, token) =>
+        gitR(
           'gh',
           [
             'pr', 'view',
@@ -405,19 +444,20 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             '--json', 'number,title,body,state,url,headRefName,baseRefName,mergeable',
           ],
           ctx,
+          token,
         ),
       ),
   });
 
-  const gh_pr_merge = tool({
+  const ghPrMerge = tool({
     description: 'Merge a pull request. Requires a connected GitHub account.',
     inputSchema: z.object({
       number: z.number().int().positive().optional(),
       strategy: z.enum(['merge', 'squash', 'rebase']),
     }),
     execute: async ({ number, strategy }, options) =>
-      withToken(options, (ctx) =>
-        git(
+      withToken(options, (ctx, token) =>
+        gitR(
           'gh',
           [
             'pr', 'merge',
@@ -426,29 +466,33 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             '--auto',
           ],
           ctx,
+          token,
         ),
       ),
   });
 
-  const gh_pr_checkout = tool({
+  const ghPrCheckout = tool({
     description: 'Check out a pull request locally. Requires a connected GitHub account.',
     inputSchema: z.object({ number: z.number().int().positive() }),
     execute: async ({ number }, options) =>
-      withToken(options, (ctx) => git('gh', ['pr', 'checkout', String(number)], ctx)),
+      withToken(options, (ctx, token) => gitR('gh', ['pr', 'checkout', String(number)], ctx, token)),
   });
 
   // ── GitHub Issues (token required) ──────────────────────────────────────
 
-  const gh_issue_create = tool({
+  const ghIssueCreate = tool({
     description: 'Create an issue. Requires a connected GitHub account.',
     inputSchema: z.object({
       title: z.string().min(1),
       body: z.string(),
       labels: z.array(z.string()).optional(),
     }),
-    execute: async ({ title, body, labels }, options) =>
-      withToken(options, (ctx) =>
-        git(
+    execute: async ({ title, body, labels }, options) => {
+      if (!title) {
+        return { success: false as const, error: 'title is required' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
           'gh',
           [
             'issue', 'create',
@@ -457,19 +501,21 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             ...(labels?.length ? ['--label', labels.join(',')] : []),
           ],
           ctx,
+          token,
         ),
-      ),
+      );
+    },
   });
 
-  const gh_issue_list = tool({
+  const ghIssueList = tool({
     description: 'List issues. Requires a connected GitHub account.',
     inputSchema: z.object({
       state: z.enum(['open', 'closed', 'all']).optional(),
       limit: z.number().int().positive().max(100).optional(),
     }),
     execute: async ({ state, limit }, options) =>
-      withToken(options, (ctx) =>
-        git(
+      withToken(options, (ctx, token) =>
+        gitR(
           'gh',
           [
             'issue', 'list',
@@ -478,16 +524,17 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             '--json', 'number,title,state,url,createdAt,labels',
           ],
           ctx,
+          token,
         ),
       ),
   });
 
-  const gh_issue_view = tool({
+  const ghIssueView = tool({
     description: 'View an issue. Requires a connected GitHub account.',
     inputSchema: z.object({ number: z.number().int().positive() }),
     execute: async ({ number }, options) =>
-      withToken(options, (ctx) =>
-        git(
+      withToken(options, (ctx, token) =>
+        gitR(
           'gh',
           [
             'issue', 'view',
@@ -495,36 +542,37 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             '--json', 'number,title,body,state,url,labels,comments,assignees',
           ],
           ctx,
+          token,
         ),
       ),
   });
 
   return {
-    git_clone,
-    git_init,
-    git_config,
-    git_remote_add,
-    git_status,
-    git_diff,
-    git_add,
-    git_reset,
-    git_stash,
-    git_commit,
-    git_log,
-    git_merge,
-    git_rebase,
-    git_checkout,
-    git_branch,
-    git_fetch,
-    git_pull,
-    git_push,
-    gh_pr_create,
-    gh_pr_list,
-    gh_pr_view,
-    gh_pr_merge,
-    gh_pr_checkout,
-    gh_issue_create,
-    gh_issue_list,
-    gh_issue_view,
+    git_clone: gitClone,
+    git_init: gitInit,
+    git_config: gitConfig,
+    git_remote_add: gitRemoteAdd,
+    git_status: gitStatus,
+    git_diff: gitDiff,
+    git_add: gitAdd,
+    git_reset: gitReset,
+    git_stash: gitStash,
+    git_commit: gitCommit,
+    git_log: gitLog,
+    git_merge: gitMerge,
+    git_rebase: gitRebase,
+    git_checkout: gitCheckout,
+    git_branch: gitBranch,
+    git_fetch: gitFetch,
+    git_pull: gitPull,
+    git_push: gitPush,
+    gh_pr_create: ghPrCreate,
+    gh_pr_list: ghPrList,
+    gh_pr_view: ghPrView,
+    gh_pr_merge: ghPrMerge,
+    gh_pr_checkout: ghPrCheckout,
+    gh_issue_create: ghIssueCreate,
+    gh_issue_list: ghIssueList,
+    gh_issue_view: ghIssueView,
   };
 }

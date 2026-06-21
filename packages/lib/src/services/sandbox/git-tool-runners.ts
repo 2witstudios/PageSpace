@@ -28,12 +28,15 @@ export async function runGitInSandbox({
   cwd,
   ctx,
   deps,
+  preResolvedToken,
 }: {
-  cmd: string;
+  cmd: 'git' | 'gh';
   args: string[];
   cwd?: string;
   ctx: SandboxActorContext;
   deps: GitSandboxRunDeps;
+  /** If provided, skip the DB token lookup (avoids a double-fetch when the caller already resolved it). */
+  preResolvedToken?: string | null;
 }): Promise<GitToolResult> {
   if (!deps.isEnabled()) {
     return { success: false, error: 'Code execution is disabled.', reason: 'kill_switch_off' };
@@ -43,7 +46,10 @@ export async function runGitInSandbox({
 
   // Pre-fetch token BEFORE acquiring a sandbox slot — a missing token on a
   // network-requiring command must not consume quota.
-  const token = await deps.resolveGitHubToken(ctx.userId);
+  const token =
+    preResolvedToken !== undefined
+      ? preResolvedToken
+      : await deps.resolveGitHubToken(ctx.userId);
 
   const pre = await deps.quota.preflight({
     userId: ctx.userId,

@@ -9,7 +9,6 @@
 import type { Tool } from 'ai';
 import { db } from '@pagespace/db/db';
 import { defaultBuildEnv, type SandboxRunDeps } from '@pagespace/lib/services/sandbox/tool-runners';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
 import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
