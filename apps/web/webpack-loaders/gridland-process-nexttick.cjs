@@ -21,11 +21,14 @@ module.exports = function gridlandProcessNextTickLoader(source) {
 
   // The local `process` object gridland ships. Match the full object literal
   // (`var process = { env: { NODE_ENV: "production" } }`) and replace it with a
-  // complete object that also defines `nextTick`. Only patch when `nextTick` is
-  // NOT already present on that literal (so an upstream fix is a no-op).
-  const PROCESS_OBJECT_RE = /var\s+process\s*=\s*\{\s*env\s*:\s*\{\s*NODE_ENV\s*:\s*"[^"]*"\s*\}\s*\}/;
+  // complete object that also defines `nextTick`. Capture the original
+  // `NODE_ENV` value so we preserve upstream behavior exactly rather than
+  // hardcoding "production". Only patch when `nextTick` is NOT already present
+  // on that literal (so an upstream fix is a no-op).
+  const PROCESS_OBJECT_RE = /var\s+process\s*=\s*\{\s*env\s*:\s*\{\s*NODE_ENV\s*:\s*"([^"]*)"\s*\}\s*\}/;
 
-  if (!PROCESS_OBJECT_RE.test(source)) {
+  const match = PROCESS_OBJECT_RE.exec(source);
+  if (!match) {
     // Shape changed upstream (e.g. they fixed it or renamed). Don't guess.
     return source;
   }
@@ -33,9 +36,10 @@ module.exports = function gridlandProcessNextTickLoader(source) {
   // queueMicrotask is the closest browser analog to process.nextTick for a
   // single deferred microtask. Fallback to setTimeout(...,0) for very old
   // environments; both satisfy gridland's "defer this render request" intent.
+  const nodeEnv = match[1];
   const patched = source.replace(
     PROCESS_OBJECT_RE,
-    'var process = { env: { NODE_ENV: "production" }, ' +
+    'var process = { env: { NODE_ENV: "' + nodeEnv + '" }, ' +
     'nextTick: function(cb) { ' +
     'if (typeof queueMicrotask === "function") { queueMicrotask(function() { cb(); }); } ' +
     'else { setTimeout(function() { cb(); }, 0); } ' +
