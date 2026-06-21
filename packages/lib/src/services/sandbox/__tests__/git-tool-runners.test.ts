@@ -109,11 +109,33 @@ describe('runGitInSandbox', () => {
     });
   });
 
+  it('configures a one-shot credential helper for git HTTPS authentication', async () => {
+    const { deps, runCommandCalls } = makeDepsWithSpy('ghp_abc123');
+    await runGitInSandbox({ cmd: 'git', args: ['fetch', 'origin'], ctx: makeCtx(), deps });
+    const call = runCommandCalls[0];
+    expect(call).toBeDefined();
+    if (!call) throw new Error('expected runCommand call');
+    const env = call.env;
+    expect(env).toBeDefined();
+    if (!env) throw new Error('expected runCommand env');
+    expect(env).toMatchObject({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+    });
+    const credentialHelper = env.GIT_CONFIG_VALUE_0;
+    expect(credentialHelper).toBeDefined();
+    if (!credentialHelper) throw new Error('expected credential helper');
+    expect(credentialHelper).toContain('username=x-access-token');
+    expect(credentialHelper).toContain('password=$GITHUB_TOKEN');
+    expect(credentialHelper).not.toContain('ghp_abc123');
+  });
+
   it('does not include GH_TOKEN or GITHUB_TOKEN when resolver returns null', async () => {
     const { deps, runCommandCalls } = makeDepsWithSpy(null);
     await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx(), deps });
     expect(runCommandCalls[0].env).not.toHaveProperty('GH_TOKEN');
     expect(runCommandCalls[0].env).not.toHaveProperty('GITHUB_TOKEN');
+    expect(runCommandCalls[0].env).not.toHaveProperty('GIT_CONFIG_VALUE_0');
   });
 
   it('always injects GIT_TERMINAL_PROMPT=0', async () => {

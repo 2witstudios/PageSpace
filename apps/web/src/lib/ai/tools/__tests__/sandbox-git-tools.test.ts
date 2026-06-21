@@ -82,15 +82,26 @@ describe('git_clone', () => {
     );
     const calls = getRunCalls(deps);
     expect(calls[0].cmd).toBe('git');
-    expect(calls[0].args).toEqual(['clone', '--depth', '1', 'https://github.com/owner/repo.git']);
+    expect(calls[0].args).toEqual(['clone', '--depth', '1', 'https://github.com/owner/repo.git', '.']);
   });
 
-  it('omits trailing path arg when no path given', async () => {
+  it('clones into the default working directory when no path is given', async () => {
     const deps = makeDeps();
     const { git_clone } = createSandboxGitTools(deps);
     await git_clone.execute!({ repo_url: 'https://github.com/owner/repo.git' }, {} as never);
     const calls = getRunCalls(deps);
-    expect(calls[0].args).toEqual(['clone', 'https://github.com/owner/repo.git']);
+    expect(calls[0].args).toEqual(['clone', 'https://github.com/owner/repo.git', '.']);
+  });
+
+  it('uses the explicit clone path when provided', async () => {
+    const deps = makeDeps();
+    const { git_clone } = createSandboxGitTools(deps);
+    await git_clone.execute!(
+      { repo_url: 'https://github.com/owner/repo.git', path: 'repo' },
+      {} as never,
+    );
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toEqual(['clone', 'https://github.com/owner/repo.git', 'repo']);
   });
 });
 

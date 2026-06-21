@@ -10,6 +10,9 @@ export interface GitSandboxRunDeps extends SandboxRunDeps {
 
 export type GitToolResult = BashToolResult;
 
+const GITHUB_CREDENTIAL_HELPER =
+  '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f';
+
 /**
  * Runs a git or gh command inside a 'dev' profile sandbox.
  *
@@ -18,6 +21,8 @@ export type GitToolResult = BashToolResult;
  * - args is a string[], never passed through a shell.
  * - Token appears in env for this one runCommand call only — not persisted,
  *   not logged, not included in returned output.
+ * - Git receives the token through a one-shot credential helper configured via
+ *   env-only git config, so HTTPS remotes work without putting the token in argv.
  * - GIT_CONFIG_NOSYSTEM prevents system gitconfig credential caching.
  * - GH_CONFIG_DIR isolates gh config from the persistent sandbox home dir.
  * - GIT_TERMINAL_PROMPT=0 prevents git from blocking on a credential prompt.
@@ -109,7 +114,15 @@ export async function runGitInSandbox({
           GIT_TERMINAL_PROMPT: '0',
           GIT_CONFIG_NOSYSTEM: '1',
           GH_CONFIG_DIR: '/tmp/gh-config',
-          ...(token ? { GH_TOKEN: token, GITHUB_TOKEN: token } : {}),
+          ...(token
+            ? {
+                GH_TOKEN: token,
+                GITHUB_TOKEN: token,
+                GIT_CONFIG_COUNT: '1',
+                GIT_CONFIG_KEY_0: 'credential.helper',
+                GIT_CONFIG_VALUE_0: GITHUB_CREDENTIAL_HELPER,
+              }
+            : {}),
         },
         timeoutMs: policy.timeoutMs,
         maxBytes: policy.maxOutputBytes,

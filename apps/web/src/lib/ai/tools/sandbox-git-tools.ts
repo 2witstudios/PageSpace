@@ -98,12 +98,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      const args = [
-        'clone',
-        ...(depth ? ['--depth', String(depth)] : []),
-        repo_url,
-        ...(path ? [path] : []),
-      ];
+      const args = ['clone', ...(depth ? ['--depth', String(depth)] : []), repo_url, path ?? '.'];
       return git('git', args, opened.ctx);
     },
   });
