@@ -291,6 +291,7 @@ describe('ai-tools', () => {
             writeFile: { name: 'writeFile' },
             readFile: { name: 'readFile' },
           }) as never,
+        sandboxGitToolsFactory: () => ({}),
       });
       expect(tools).toHaveProperty('bash');
       expect(tools).toHaveProperty('writeFile');
