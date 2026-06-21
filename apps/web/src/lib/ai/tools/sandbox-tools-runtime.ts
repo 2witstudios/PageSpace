@@ -48,13 +48,13 @@ function getStore() {
   return storePromise;
 }
 
-// The Fly Sprites driver is loaded via a DYNAMIC import, never a static one:
-// `@fly/sprites` is ESM-only and declares `engines.node >= 24`, while the web
-// images run Node 22. A static import would pull the SDK into the module graph
-// at load — i.e. on every chat request, including the default code-execution-OFF
-// path — and evaluate an unsupported SDK. Deferring it here keeps `@fly/sprites`
-// out of the graph until a sandbox tool actually runs (only possible once the
-// kill-switch is on), so the off-path never touches it.
+// The Fly Sprites driver is loaded via a DYNAMIC import, never a static one.
+// @fly/sprites is ESM-only and @pagespace/lib compiles to CJS, so a static
+// import in lib would emit require('@fly/sprites') which Node rejects with
+// ERR_REQUIRE_ESM. The factory lives in apps/web/src/lib/sandbox/sprites-client.ts
+// instead, where Next.js handles the ESM import correctly. Deferring it here
+// also keeps the SDK out of the module graph until code execution is actually
+// invoked (only possible once the kill-switch is on).
 const MIN_SANDBOX_NODE_MAJOR = 24;
 
 // Deferring the import only protects the OFF path; the ENABLED path still has to
@@ -77,8 +77,8 @@ function assertSandboxRuntime(): void {
 function getSandboxClient(): Promise<ExecSandboxClient> {
   sandboxClientPromise ??= (async () => {
     assertSandboxRuntime();
-    const m = await import('@pagespace/lib/services/sandbox/sandbox-client/sprites');
-    return m.createSpritesSandboxClient();
+    const { createProductionSpritesSandboxClient } = await import('@/lib/sandbox/sprites-client');
+    return createProductionSpritesSandboxClient();
   })().catch((error) => {
     // Never memoize a rejection: a transient lazy-load failure (or a fixable
     // runtime/version misconfiguration) must not poison every later

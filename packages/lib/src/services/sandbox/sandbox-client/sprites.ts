@@ -41,7 +41,10 @@
  * Sprite — is unit-tested with a fake, never against the real Sprites API.
  */
 
-import { SpritesClient, type NetworkPolicy } from '@fly/sprites';
+// SpritesClient is ESM-only. Instantiation lives in apps/web (sprites-client.ts)
+// where Next.js handles the ESM import correctly. This module only holds the
+// pure transformation logic and type-safe wrappers; it never touches the SDK.
+import type { NetworkPolicy } from '@fly/sprites';
 import { getValidatedEnv } from '../../../config/env-validation';
 import { buildSpriteNetworkPolicy } from '../egress';
 import { SANDBOX_ROOT } from '../sandbox-paths';
@@ -318,16 +321,6 @@ export function isSpriteNotFoundError(error: unknown): boolean {
   return /\bnot found\b|no such|does not exist|\b404\b|\b410\b|\bgone\b|vanished/.test(message);
 }
 
-const defaultSdk = (): SpritesSdk => {
-  const client = new SpritesClient(resolveSpritesToken());
-  return {
-    getSprite: (name) => client.getSprite(name) as unknown as Promise<SpriteInstanceLike>,
-    createSprite: (name, config) =>
-      client.createSprite(name, config) as unknown as Promise<SpriteInstanceLike>,
-    deleteSprite: (name) => client.deleteSprite(name),
-  };
-};
-
 // Apply the deny-by-default egress policy and ensure the sandbox root exists.
 // Called on every hand-back (fresh or resumed) so a Sprite is never returned
 // with open/unknown egress. When `destroyOnFailure` is set (a FRESH create), a
@@ -360,9 +353,7 @@ async function applyEgressLockdown({
   }
 }
 
-export function createSpritesSandboxClient({
-  sdk = defaultSdk(),
-}: { sdk?: SpritesSdk } = {}): ExecSandboxClient {
+export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSandboxClient {
   return {
     async getOrCreate({ name, options }) {
       // Resume by name when the Sprite already exists; create fresh ONLY on a

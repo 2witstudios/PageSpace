@@ -13,6 +13,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@fly/sprites": "0.0.1-rc37",
     "@ai-sdk/anthropic": "^2.0.4",
     "@ai-sdk/google": "^2.0.6",
     "@ai-sdk/openai": "^2.0.15",
