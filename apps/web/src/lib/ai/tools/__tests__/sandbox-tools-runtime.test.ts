@@ -27,6 +27,60 @@ const basePageContext: ToolExecutionContext = {
 };
 
 describe('resolveSandboxActorContext', () => {
+  describe('given no context (unauthenticated)', () => {
+    it('should return an authentication error', async () => {
+      const resolve = createResolveSandboxActorContext(makeDeps());
+      const result = await resolve(undefined);
+      expect('error' in result).toBe(true);
+      if (!('error' in result)) return;
+      expect(result.error).toContain('Code execution requires an authenticated user.');
+    });
+  });
+
+  describe('given userId present but no conversationId', () => {
+    it('should return a conversation error', async () => {
+      const context: ToolExecutionContext = { userId: 'u1', chatSource: { type: 'global' } };
+      const resolve = createResolveSandboxActorContext(makeDeps());
+      const result = await resolve(context);
+      expect('error' in result).toBe(true);
+      if (!('error' in result)) return;
+      expect(result.error).toContain('Code execution requires a conversation.');
+    });
+  });
+
+  describe('given chatSource type "page" and currentDrive present', () => {
+    it('should resolve with driveId and tenantId from drive ownerId', async () => {
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd1', name: 'Drive 1', slug: 'drive-1' } },
+      };
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({ findDrive: async () => ({ ownerId: 'owner-1' }) }),
+      );
+      const result = await resolve(context);
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.driveId).toBe('d1');
+      expect(result.tenantId).toBe('owner-1');
+    });
+  });
+
+  describe('given chatSource type "global", currentDrive present, but drive not found in DB', () => {
+    it('should return an active drive error', async () => {
+      const context: ToolExecutionContext = {
+        ...baseGlobalContext,
+        locationContext: { currentDrive: { id: 'd-missing', name: 'X', slug: 'x' } },
+      };
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({ findDrive: async () => undefined }),
+      );
+      const result = await resolve(context);
+      expect('error' in result).toBe(true);
+      if (!('error' in result)) return;
+      expect(result.error).toContain('Code execution requires an active drive.');
+    });
+  });
+
   describe('given chatSource type "global" and no currentDrive', () => {
     it('should resolve successfully with driveId undefined and tenantId equal to userId', async () => {
       const resolve = createResolveSandboxActorContext(makeDeps());

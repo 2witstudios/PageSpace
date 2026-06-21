@@ -147,12 +147,10 @@ const defaultResolveDeps: ResolveSandboxActorContextDeps = {
  * default export (`resolveSandboxActorContext`) wires the real DB implementations;
  * pass fakes in tests.
  *
- * Discriminates by chatSource.type BEFORE checking driveId so the global
- * assistant (no drive) is a first-class path, not a fallback:
- *  - 'page': driveId REQUIRED — fail closed if absent.
- *  - 'global': driveId OPTIONAL — intentional absence resolves with
- *    tenantId = userId (user is their own isolation boundary).
- *  - undefined: treated as 'page' (fail closed — conservative default).
+ * Discriminates by chatSource.type BEFORE checking driveId — three cases:
+ *  - driveId present (page or global): look up drive.ownerId for tenantId.
+ *  - page / undefined chatSource, no driveId: fail closed.
+ *  - global, no driveId: tenantId = userId (user is their own isolation boundary).
  */
 export function createResolveSandboxActorContext(
   deps: ResolveSandboxActorContextDeps = defaultResolveDeps,
@@ -166,35 +164,14 @@ export function createResolveSandboxActorContext(
     const chatSourceType = context?.chatSource?.type;
     const driveId = context?.locationContext?.currentDrive?.id;
 
-    // Page AI: driveId is required. Also the conservative default for undefined
-    // chatSource (fail closed — don't assume global intent).
-    if (chatSourceType !== 'global') {
-      if (!driveId) return { error: 'Code execution requires an active drive.' };
-
-      const [drive, actorRow, actorInfo] = await Promise.all([
-        deps.findDrive(driveId),
-        deps.findUser(userId),
-        deps.getActorInfo(userId),
-      ]);
-      if (!drive) return { error: 'Code execution requires an active drive.' };
-
-      return {
-        userId,
-        tenantId: drive.ownerId,
-        driveId,
-        conversationId,
-        requestOrigin: context?.requestOrigin,
-        agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
-        actorEmail: actorInfo.actorEmail,
-        actorDisplayName: actorInfo.actorDisplayName,
-        aiProvider: context?.aiProvider,
-        aiModel: context?.aiModel,
-        tier: toTier(actorRow?.subscriptionTier),
-        profile: 'default',
-      };
+    // Page AI (or undefined chatSource) with no driveId — fail closed. Don't
+    // assume global intent when the source type is absent.
+    if (chatSourceType !== 'global' && !driveId) {
+      return { error: 'Code execution requires an active drive.' };
     }
 
-    // Global AI: driveId is intentionally optional.
+    // driveId present for both page AI and global AI: resolve tenantId from the
+    // drive's owning account. Both surfaces share identical resolution logic here.
     if (driveId) {
       const [drive, actorRow, actorInfo] = await Promise.all([
         deps.findDrive(driveId),
@@ -220,6 +197,11 @@ export function createResolveSandboxActorContext(
     }
 
     // Global AI without a drive: user is their own isolation boundary.
+    // tenantId = userId keeps the session key and quota scopes user-owned.
+    // Side-effect: the tenant quota bucket becomes code-exec:tenant:<userId>,
+    // a second user-keyed window alongside code-exec:user:<userId>. This
+    // over-counts conservatively (only tightens budget) and is acceptable while
+    // the feature is admin-gated. Revisit if tenant-scope quota semantics matter.
     const [actorRow, actorInfo] = await Promise.all([
       deps.findUser(userId),
       deps.getActorInfo(userId),
@@ -228,7 +210,6 @@ export function createResolveSandboxActorContext(
     return {
       userId,
       tenantId: userId,
-      driveId: undefined,
       conversationId,
       requestOrigin: context?.requestOrigin,
       agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,

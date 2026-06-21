@@ -6,9 +6,10 @@
  * it (subject to the resume re-authz gate in the lifecycle layer). The key must
  * therefore be both:
  *
- *  - **Namespaced** by `tenant + drive + conversation`, so two different
- *    conversations — or the same conversation id reused across drives/tenants —
- *    never collide onto one shared sandbox.
+ *  - **Namespaced** by `tenant + drive + conversation` (drive defaults to `''`
+ *    for global/non-drive contexts, which is unambiguous given the `\0`
+ *    delimiters), so two different conversations — or the same conversation id
+ *    reused across drives/tenants — never collide onto one shared sandbox.
  *  - **Unguessable**, so an actor who knows (or guesses) a conversation id cannot
  *    reconstruct the sandbox name and probe for another session's warm VM.
  *
