@@ -104,7 +104,9 @@ const defaultDeps: CodeExecutionQuotaDeps = {
 
 export interface CheckCodeExecutionQuotaInput {
   userId: string;
-  driveId: string;
+  /** Absent for global (non-drive) contexts; drive scope is omitted from the
+   *  budget check when driveId is not provided. */
+  driveId?: string;
   tenantId?: string;
   tier: SubscriptionTier;
   deps?: CodeExecutionQuotaDeps;
@@ -112,18 +114,19 @@ export interface CheckCodeExecutionQuotaInput {
 
 // The scope identifiers a single run is metered against. Shared by the
 // non-incrementing preflight and the real charge so the two never diverge.
+// Drive scope is omitted when driveId is absent (global context).
 function budgetScopeIds({
   userId,
   driveId,
   tenantId,
 }: {
   userId: string;
-  driveId: string;
+  driveId?: string;
   tenantId?: string;
 }): string[] {
   return [
     `code-exec:user:${userId}`,
-    `code-exec:drive:${driveId}`,
+    ...(driveId ? [`code-exec:drive:${driveId}`] : []),
     ...(tenantId ? [`code-exec:tenant:${tenantId}`] : []),
   ];
 }
@@ -187,7 +190,7 @@ export async function chargeCodeExecutionBudget({
   deps = defaultChargeDeps,
 }: {
   userId: string;
-  driveId: string;
+  driveId?: string;
   tenantId?: string;
   deps?: ChargeBudgetDeps;
 }): Promise<void> {

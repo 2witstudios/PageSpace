@@ -54,4 +54,20 @@ describe('deriveSessionKey', () => {
   it('given an empty secret, should throw (fail closed — never derive a guessable key)', () => {
     expect(() => deriveSessionKey({ ...base, secret: '' })).toThrow(/non-empty secret/);
   });
+
+  it('given no driveId, should derive a key using empty string for the drive segment', () => {
+    const { driveId: _, ...withoutDrive } = base;
+    const key = deriveSessionKey(withoutDrive);
+    expect(key).toMatch(/^pgs-sbx-[0-9a-f]{64}$/);
+  });
+
+  it('given no driveId, should produce identical keys for identical inputs (deterministic)', () => {
+    const { driveId: _, ...withoutDrive } = base;
+    expect(deriveSessionKey(withoutDrive)).toBe(deriveSessionKey(withoutDrive));
+  });
+
+  it('given undefined driveId vs a real driveId, should produce distinct keys', () => {
+    const { driveId: _, ...withoutDrive } = base;
+    expect(deriveSessionKey(withoutDrive)).not.toBe(deriveSessionKey(base));
+  });
 });

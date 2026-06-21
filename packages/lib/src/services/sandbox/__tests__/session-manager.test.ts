@@ -225,6 +225,19 @@ describe('acquireConversationSandbox', () => {
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
   });
 
+  it('given no driveId and all other required fields present, should pass the guard and proceed to provisioning', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireConversationSandbox({
+      tenantId: 't1',
+      conversationId: 'c1',
+      userId: 'u1',
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
+    expect(calls.getOrCreate.length).toBe(1);
+  });
+
   it('given an empty session secret, should deny without provisioning (fail closed)', async () => {
     const { store } = makeStore();
     const { client, calls } = makeClient();

@@ -6,9 +6,10 @@
  * it (subject to the resume re-authz gate in the lifecycle layer). The key must
  * therefore be both:
  *
- *  - **Namespaced** by `tenant + drive + conversation`, so two different
- *    conversations — or the same conversation id reused across drives/tenants —
- *    never collide onto one shared sandbox.
+ *  - **Namespaced** by `tenant + drive + conversation` (drive defaults to `''`
+ *    for global/non-drive contexts, which is unambiguous given the `\0`
+ *    delimiters), so two different conversations — or the same conversation id
+ *    reused across drives/tenants — never collide onto one shared sandbox.
  *  - **Unguessable**, so an actor who knows (or guesses) a conversation id cannot
  *    reconstruct the sandbox name and probe for another session's warm VM.
  *
@@ -30,7 +31,9 @@ import { createHmac } from 'crypto';
 
 export interface SessionKeyInput {
   tenantId: string;
-  driveId: string;
+  /** Absent for global (non-drive) contexts; '' is used in the payload so the
+   *  '\0'-delimited tuple remains unambiguous. */
+  driveId?: string;
   conversationId: string;
   /** Server-held secret; sourced from validated env by the caller. */
   secret: string;
@@ -53,7 +56,7 @@ export function deriveSessionKey({
   if (secret.length === 0) {
     throw new Error('deriveSessionKey requires a non-empty secret');
   }
-  const payload = [NAMESPACE_VERSION, tenantId, driveId, conversationId].join('\0');
+  const payload = [NAMESPACE_VERSION, tenantId, driveId ?? '', conversationId].join('\0');
   const digest = createHmac('sha3-256', secret).update(payload).digest('hex');
   return `pgs-sbx-${digest}`;
 }

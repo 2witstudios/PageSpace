@@ -64,7 +64,9 @@ export interface CanRunCodeDeps {
 
 export interface CanRunCodeInput {
   userId: string;
-  driveId: string;
+  /** Absent for global (non-drive) contexts; drive-scoped checks are skipped when
+   *  driveId is not provided. */
+  driveId?: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
   deps?: CanRunCodeDeps;
@@ -160,6 +162,21 @@ export async function canRunCode({
 
     const productionAdminResult = await authorizeProductionAdmin(userId, deps);
     if (!productionAdminResult.ok) return productionAdminResult;
+
+    // Drive-scoped checks are intentionally skipped when no driveId is present
+    // (global context): the absence of a drive is a valid, expected state for the
+    // global assistant, not an error. The entry point (resolveSandboxActorContext)
+    // is the only layer that knows whether no-driveId is intentional, and it
+    // enforces this via chatSource.type discrimination before reaching here.
+    //
+    // Agent-origin runs always require a drive context for proper authorization.
+    // A consulted page agent invoked from the global assistant still sets
+    // requestOrigin='agent'; without a driveId we cannot verify the agent's drive
+    // access, so we deny rather than allow an unchecked agent escalation.
+    if (!driveId) {
+      if (requestOrigin === 'agent') return deny('no_agent_access');
+      return { ok: true };
+    }
 
     // The actor user must always clear the owner/admin drive-role gate. For
     // agent-origin runs this is the rung that stops a plain member escalating

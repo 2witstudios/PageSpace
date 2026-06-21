@@ -44,7 +44,8 @@ export const MAX_WRITE_BYTES = 1024 * 1024;
 export interface SandboxActorContext {
   userId: string;
   tenantId: string;
-  driveId: string;
+  /** Absent for global (non-drive) contexts. */
+  driveId?: string;
   conversationId: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
@@ -63,12 +64,12 @@ export interface SandboxQuotaDeps {
   /** Non-incrementing advisory read across user/drive/tenant scopes. */
   preflight: (args: {
     userId: string;
-    driveId: string;
+    driveId?: string;
     tenantId?: string;
     tier: SubscriptionTier;
   }) => Promise<CodeExecutionQuotaDecision>;
   /** The single real budget charge for an allowed run (increments every scope). */
-  charge: (args: { userId: string; driveId: string; tenantId?: string }) => Promise<void>;
+  charge: (args: { userId: string; driveId?: string; tenantId?: string }) => Promise<void>;
 }
 
 export interface SandboxRunDeps {
@@ -170,7 +171,7 @@ async function safeAudit(
       userId: ctx.userId,
       actorEmail: ctx.actorEmail,
       actorDisplayName: ctx.actorDisplayName,
-      driveId: ctx.driveId,
+      driveId: ctx.driveId ?? null,
       conversationId: ctx.conversationId,
       requestOrigin: ctx.requestOrigin,
       agentPageId: ctx.agentPageId,

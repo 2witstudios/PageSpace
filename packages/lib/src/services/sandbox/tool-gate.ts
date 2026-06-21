@@ -79,7 +79,7 @@ export interface SandboxToolGateDeps {
   authorize: (input: CanRunCodeInput) => Promise<CanRunCodeResult>;
   checkQuota: (input: {
     userId: string;
-    driveId: string;
+    driveId?: string;
     tenantId?: string;
     tier: SubscriptionTier;
   }) => Promise<CodeExecutionQuotaDecision>;
@@ -93,7 +93,7 @@ const defaultDeps: SandboxToolGateDeps = {
 
 export interface SandboxToolGateInput {
   userId: string;
-  driveId: string;
+  driveId?: string;
   tenantId?: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;

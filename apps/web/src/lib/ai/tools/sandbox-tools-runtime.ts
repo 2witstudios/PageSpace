@@ -125,42 +125,115 @@ function toTier(value: string | null | undefined): SubscriptionTier {
 }
 
 /**
+ * IO dependencies for resolving the sandbox actor context. Injected so the
+ * function can be unit-tested without a real database connection.
+ */
+export interface ResolveSandboxActorContextDeps {
+  findDrive: (driveId: string) => Promise<{ ownerId: string } | undefined>;
+  findUser: (userId: string) => Promise<{ subscriptionTier: string | null } | undefined>;
+  getActorInfo: (userId: string) => Promise<{ actorEmail: string; actorDisplayName?: string }>;
+}
+
+const defaultResolveDeps: ResolveSandboxActorContextDeps = {
+  findDrive: (driveId) =>
+    db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true } }),
+  findUser: (userId) =>
+    db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
+  getActorInfo,
+};
+
+/**
+ * Factory that creates the actor-context resolver with injected deps. The
+ * default export (`resolveSandboxActorContext`) wires the real DB implementations;
+ * pass fakes in tests.
+ *
+ * Discriminates by chatSource.type BEFORE checking driveId — three cases:
+ *  - driveId present (page or global): look up drive.ownerId for tenantId.
+ *  - page / undefined chatSource, no driveId: fail closed.
+ *  - global, no driveId: tenantId = userId (user is their own isolation boundary).
+ */
+export function createResolveSandboxActorContext(
+  deps: ResolveSandboxActorContextDeps = defaultResolveDeps,
+): ResolveSandboxContext {
+  return async (context) => {
+    const userId = context?.userId;
+    const conversationId = context?.conversationId;
+    if (!userId) return { error: 'Code execution requires an authenticated user.' };
+    if (!conversationId) return { error: 'Code execution requires a conversation.' };
+
+    const chatSourceType = context?.chatSource?.type;
+    const driveId = context?.locationContext?.currentDrive?.id;
+
+    // Page AI (or undefined chatSource) with no driveId — fail closed. Don't
+    // assume global intent when the source type is absent.
+    if (chatSourceType !== 'global' && !driveId) {
+      return { error: 'Code execution requires an active drive.' };
+    }
+
+    // driveId present for both page AI and global AI: resolve tenantId from the
+    // drive's owning account. Both surfaces share identical resolution logic here.
+    if (driveId) {
+      const [drive, actorRow, actorInfo] = await Promise.all([
+        deps.findDrive(driveId),
+        deps.findUser(userId),
+        deps.getActorInfo(userId),
+      ]);
+      if (!drive) return { error: 'Code execution requires an active drive.' };
+
+      return {
+        userId,
+        tenantId: drive.ownerId,
+        driveId,
+        conversationId,
+        requestOrigin: context?.requestOrigin,
+        agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
+        actorEmail: actorInfo.actorEmail,
+        actorDisplayName: actorInfo.actorDisplayName,
+        aiProvider: context?.aiProvider,
+        aiModel: context?.aiModel,
+        tier: toTier(actorRow?.subscriptionTier),
+        profile: 'default',
+      };
+    }
+
+    // Global AI without a drive: user is their own isolation boundary.
+    // tenantId = userId keeps the session key and quota scopes user-owned.
+    // Side-effect: the tenant quota bucket becomes code-exec:tenant:<userId>,
+    // a second user-keyed window alongside code-exec:user:<userId>. This
+    // over-counts conservatively (only tightens budget) and is acceptable while
+    // the feature is admin-gated. Revisit if tenant-scope quota semantics matter.
+    const [actorRow, actorInfo] = await Promise.all([
+      deps.findUser(userId),
+      deps.getActorInfo(userId),
+    ]);
+
+    return {
+      userId,
+      tenantId: userId,
+      conversationId,
+      requestOrigin: context?.requestOrigin,
+      agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
+      actorEmail: actorInfo.actorEmail,
+      actorDisplayName: actorInfo.actorDisplayName,
+      aiProvider: context?.aiProvider,
+      aiModel: context?.aiModel,
+      tier: toTier(actorRow?.subscriptionTier),
+      profile: 'default',
+    };
+  };
+}
+
+/**
  * Resolve the actor context from the chat tool context. The drive comes from the
  * active location; the tenant is the drive's owning account (the cloud tenant
- * boundary); the concurrency tier is the acting user's subscription tier. Any
- * missing required field (user, conversation, drive) is surfaced as an error
- * rather than provisioning against an under-specified scope.
+ * boundary); the concurrency tier is the acting user's subscription tier.
+ *
+ * Global assistant context (chatSource.type === 'global') is a first-class path:
+ * driveId may be absent and resolves with tenantId = userId.
+ * Page AI (chatSource.type === 'page' or undefined) requires driveId — fail closed.
  */
-export const resolveSandboxActorContext: ResolveSandboxContext = async (context) => {
-  const userId = context?.userId;
-  const conversationId = context?.conversationId;
-  const driveId = context?.locationContext?.currentDrive?.id;
-  if (!userId) return { error: 'Code execution requires an authenticated user.' };
-  if (!conversationId) return { error: 'Code execution requires a conversation.' };
-  if (!driveId) return { error: 'Code execution requires an active drive.' };
-
-  const [drive, actorRow, actorInfo] = await Promise.all([
-    db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true } }),
-    db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
-    getActorInfo(userId),
-  ]);
-  if (!drive) return { error: 'Code execution requires an active drive.' };
-
-  return {
-    userId,
-    tenantId: drive.ownerId,
-    driveId,
-    conversationId,
-    requestOrigin: context?.requestOrigin,
-    agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
-    actorEmail: actorInfo.actorEmail,
-    actorDisplayName: actorInfo.actorDisplayName,
-    aiProvider: context?.aiProvider,
-    aiModel: context?.aiModel,
-    tier: toTier(actorRow?.subscriptionTier),
-    profile: 'default',
-  };
-};
+export const resolveSandboxActorContext: ResolveSandboxContext =
+  createResolveSandboxActorContext();
 
 /**
  * Production sandbox tools, fully wired. Exported for PR4 to register behind the
