@@ -55,7 +55,9 @@ export interface AcquireSandboxDeps {
 
 export interface AcquireSandboxInput {
   tenantId: string;
-  driveId: string;
+  /** Absent for global (non-drive) contexts. Session key uses '' for the drive
+   *  segment when driveId is not provided. */
+  driveId?: string;
   conversationId: string;
   userId: string;
   requestOrigin?: 'user' | 'agent';
@@ -161,9 +163,10 @@ export async function acquireConversationSandbox(
 ): Promise<AcquireSandboxResult> {
   const { deps, tenantId, driveId, conversationId, userId, requestOrigin, agentPageId, idleTimeoutMs } = input;
 
-  // Fail closed if any namespacing component or the secret is missing — an empty
-  // secret would make the key derivable, and an empty scope would collide.
-  if (!deps.secret || !tenantId || !driveId || !conversationId || !userId) {
+  // Fail closed if any required namespacing component or the secret is missing.
+  // driveId is intentionally optional (absent for global context) — its absence is
+  // handled by deriveSessionKey which substitutes '' for the drive segment.
+  if (!deps.secret || !tenantId || !conversationId || !userId) {
     return { ok: false, reason: 'error' };
   }
 

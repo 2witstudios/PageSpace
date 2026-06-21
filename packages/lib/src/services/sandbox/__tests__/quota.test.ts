@@ -142,6 +142,41 @@ describe('checkCodeExecutionQuota', () => {
   });
 });
 
+describe('checkCodeExecutionQuota — no driveId (global context)', () => {
+  beforeEach(() => {
+    resetCodeExecutionConcurrency();
+  });
+
+  it('given no driveId and user not rate limited, should check only user scope and allow', async () => {
+    const checked: string[] = [];
+    const decision = await checkCodeExecutionQuota({
+      userId: 'u1',
+      tier: 'pro',
+      deps: makeDeps({
+        checkRateLimitStatus: async (id: string) => {
+          checked.push(id);
+          return { blocked: false };
+        },
+      }),
+    });
+    expect(decision.allowed).toBe(true);
+    expect(checked).toEqual(['code-exec:user:u1']);
+    expect(checked.some((id) => id.includes('drive:'))).toBe(false);
+  });
+
+  it('given no driveId and user rate limited, should deny with rate_limited', async () => {
+    const decision = await checkCodeExecutionQuota({
+      userId: 'u1',
+      tier: 'pro',
+      deps: makeDeps({
+        checkRateLimitStatus: async (id: string) =>
+          id.includes('user:u1') ? { blocked: true, retryAfter: 3600 } : { blocked: false },
+      }),
+    });
+    expect(decision).toEqual({ allowed: false, reason: 'rate_limited', retryAfter: 3600 });
+  });
+});
+
 describe('chargeCodeExecutionBudget', () => {
   it('given user, drive, and tenant, should charge all three scopes exactly once', async () => {
     const charged: string[] = [];

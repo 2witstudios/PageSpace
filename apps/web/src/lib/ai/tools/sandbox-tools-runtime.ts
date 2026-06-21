@@ -125,42 +125,134 @@ function toTier(value: string | null | undefined): SubscriptionTier {
 }
 
 /**
+ * IO dependencies for resolving the sandbox actor context. Injected so the
+ * function can be unit-tested without a real database connection.
+ */
+export interface ResolveSandboxActorContextDeps {
+  findDrive: (driveId: string) => Promise<{ ownerId: string } | undefined>;
+  findUser: (userId: string) => Promise<{ subscriptionTier: string | null } | undefined>;
+  getActorInfo: (userId: string) => Promise<{ actorEmail: string; actorDisplayName?: string }>;
+}
+
+const defaultResolveDeps: ResolveSandboxActorContextDeps = {
+  findDrive: (driveId) =>
+    db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true } }),
+  findUser: (userId) =>
+    db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
+  getActorInfo,
+};
+
+/**
+ * Factory that creates the actor-context resolver with injected deps. The
+ * default export (`resolveSandboxActorContext`) wires the real DB implementations;
+ * pass fakes in tests.
+ *
+ * Discriminates by chatSource.type BEFORE checking driveId so the global
+ * assistant (no drive) is a first-class path, not a fallback:
+ *  - 'page': driveId REQUIRED — fail closed if absent.
+ *  - 'global': driveId OPTIONAL — intentional absence resolves with
+ *    tenantId = userId (user is their own isolation boundary).
+ *  - undefined: treated as 'page' (fail closed — conservative default).
+ */
+export function createResolveSandboxActorContext(
+  deps: ResolveSandboxActorContextDeps = defaultResolveDeps,
+): ResolveSandboxContext {
+  return async (context) => {
+    const userId = context?.userId;
+    const conversationId = context?.conversationId;
+    if (!userId) return { error: 'Code execution requires an authenticated user.' };
+    if (!conversationId) return { error: 'Code execution requires a conversation.' };
+
+    const chatSourceType = context?.chatSource?.type;
+    const driveId = context?.locationContext?.currentDrive?.id;
+
+    // Page AI: driveId is required. Also the conservative default for undefined
+    // chatSource (fail closed — don't assume global intent).
+    if (chatSourceType !== 'global') {
+      if (!driveId) return { error: 'Code execution requires an active drive.' };
+
+      const [drive, actorRow, actorInfo] = await Promise.all([
+        deps.findDrive(driveId),
+        deps.findUser(userId),
+        deps.getActorInfo(userId),
+      ]);
+      if (!drive) return { error: 'Code execution requires an active drive.' };
+
+      return {
+        userId,
+        tenantId: drive.ownerId,
+        driveId,
+        conversationId,
+        requestOrigin: context?.requestOrigin,
+        agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
+        actorEmail: actorInfo.actorEmail,
+        actorDisplayName: actorInfo.actorDisplayName,
+        aiProvider: context?.aiProvider,
+        aiModel: context?.aiModel,
+        tier: toTier(actorRow?.subscriptionTier),
+        profile: 'default',
+      };
+    }
+
+    // Global AI: driveId is intentionally optional.
+    if (driveId) {
+      const [drive, actorRow, actorInfo] = await Promise.all([
+        deps.findDrive(driveId),
+        deps.findUser(userId),
+        deps.getActorInfo(userId),
+      ]);
+      if (!drive) return { error: 'Code execution requires an active drive.' };
+
+      return {
+        userId,
+        tenantId: drive.ownerId,
+        driveId,
+        conversationId,
+        requestOrigin: context?.requestOrigin,
+        agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
+        actorEmail: actorInfo.actorEmail,
+        actorDisplayName: actorInfo.actorDisplayName,
+        aiProvider: context?.aiProvider,
+        aiModel: context?.aiModel,
+        tier: toTier(actorRow?.subscriptionTier),
+        profile: 'default',
+      };
+    }
+
+    // Global AI without a drive: user is their own isolation boundary.
+    const [actorRow, actorInfo] = await Promise.all([
+      deps.findUser(userId),
+      deps.getActorInfo(userId),
+    ]);
+
+    return {
+      userId,
+      tenantId: userId,
+      driveId: undefined,
+      conversationId,
+      requestOrigin: context?.requestOrigin,
+      agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
+      actorEmail: actorInfo.actorEmail,
+      actorDisplayName: actorInfo.actorDisplayName,
+      aiProvider: context?.aiProvider,
+      aiModel: context?.aiModel,
+      tier: toTier(actorRow?.subscriptionTier),
+      profile: 'default',
+    };
+  };
+}
+
+/**
  * Resolve the actor context from the chat tool context. The drive comes from the
  * active location; the tenant is the drive's owning account (the cloud tenant
- * boundary); the concurrency tier is the acting user's subscription tier. Any
- * missing required field (user, conversation, drive) is surfaced as an error
- * rather than provisioning against an under-specified scope.
+ * boundary); the concurrency tier is the acting user's subscription tier.
+ *
+ * Global assistant context (chatSource.type === 'global') is a first-class path:
+ * driveId may be absent and resolves with tenantId = userId.
+ * Page AI (chatSource.type === 'page' or undefined) requires driveId — fail closed.
  */
-export const resolveSandboxActorContext: ResolveSandboxContext = async (context) => {
-  const userId = context?.userId;
-  const conversationId = context?.conversationId;
-  const driveId = context?.locationContext?.currentDrive?.id;
-  if (!userId) return { error: 'Code execution requires an authenticated user.' };
-  if (!conversationId) return { error: 'Code execution requires a conversation.' };
-  if (!driveId) return { error: 'Code execution requires an active drive.' };
-
-  const [drive, actorRow, actorInfo] = await Promise.all([
-    db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true } }),
-    db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
-    getActorInfo(userId),
-  ]);
-  if (!drive) return { error: 'Code execution requires an active drive.' };
-
-  return {
-    userId,
-    tenantId: drive.ownerId,
-    driveId,
-    conversationId,
-    requestOrigin: context?.requestOrigin,
-    agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
-    actorEmail: actorInfo.actorEmail,
-    actorDisplayName: actorInfo.actorDisplayName,
-    aiProvider: context?.aiProvider,
-    aiModel: context?.aiModel,
-    tier: toTier(actorRow?.subscriptionTier),
-    profile: 'default',
-  };
-};
+export const resolveSandboxActorContext: ResolveSandboxContext =
+  createResolveSandboxActorContext();
 
 /**
  * Production sandbox tools, fully wired. Exported for PR4 to register behind the

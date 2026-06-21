@@ -95,6 +95,24 @@ describe('gateSandboxToolCall', () => {
     expect(result).toMatchObject({ ok: false, reason: 'error' });
   });
 
+  it('given no driveId and kill switch on, authorized, not rate limited, should allow', async () => {
+    const result = await gateSandboxToolCall({
+      userId: 'u1',
+      tier: 'pro',
+      deps: allowDeps(),
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('given no driveId and kill switch off, should deny with kill_switch_off', async () => {
+    const result = await gateSandboxToolCall({
+      userId: 'u1',
+      tier: 'pro',
+      deps: allowDeps({ isEnabled: () => false }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'kill_switch_off', error: expect.any(String) });
+  });
+
   it('given an agent-origin run, should pass requestOrigin and agentPageId through to authorize', async () => {
     let seen: { requestOrigin?: string; agentPageId?: string } = {};
     await gateSandboxToolCall({

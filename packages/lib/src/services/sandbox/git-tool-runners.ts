@@ -165,7 +165,7 @@ async function safeAudit(
       userId: ctx.userId,
       actorEmail: ctx.actorEmail,
       actorDisplayName: ctx.actorDisplayName,
-      driveId: ctx.driveId,
+      driveId: ctx.driveId ?? null,
       conversationId: ctx.conversationId,
       requestOrigin: ctx.requestOrigin,
       agentPageId: ctx.agentPageId,

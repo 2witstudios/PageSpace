@@ -186,6 +186,30 @@ describe('canRunCode', () => {
     expect(result).toEqual({ ok: false, reason: 'no_agent_access' });
   });
 
+  it('given no driveId and kill switch off, should deny with kill_switch_off', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      deps: makeDeps({ isCodeExecutionEnabled: () => false }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'kill_switch_off' });
+  });
+
+  it('given no driveId, production env, and admin user, should allow', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      deps: makeDeps({ getNodeEnv: () => 'production', getUserRole: async () => 'admin' }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given no driveId, production env, and non-admin user, should deny with app_admin_required', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      deps: makeDeps({ getNodeEnv: () => 'production', getUserRole: async () => 'user' }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'app_admin_required' });
+  });
+
   it('given a permission lookup that throws, should fail closed without throwing', async () => {
     const result = await canRunCode({
       userId: 'u1',
