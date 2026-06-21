@@ -62,8 +62,8 @@ vi.mock('@pagespace/lib/services/sandbox/session-manager', () => ({
   getSandboxSessionSecret: vi.fn().mockReturnValue('test-secret'),
 }));
 
-vi.mock('@pagespace/lib/services/sandbox/sandbox-client/sprites', () => ({
-  createSpritesSandboxClient: vi.fn(),
+vi.mock('@/lib/sandbox/sprites-client', () => ({
+  createProductionSpritesSandboxClient: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/services/sandbox/output-limit', () => ({
@@ -86,7 +86,7 @@ import { authenticateRequestWithOptions, canPrincipalEditPage } from '@/lib/auth
 import { db } from '@pagespace/db/db';
 import { checkCodeExecutionQuota, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
-import { createSpritesSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { createProductionSpritesSandboxClient } from '@/lib/sandbox/sprites-client';
 
 // ─── Type helpers ──────────────────────────────────────────────────────────
 
@@ -164,7 +164,7 @@ function setupHappyPath() {
     get: vi.fn().mockResolvedValue(sprite),
     stop: vi.fn(),
   };
-  asMock(createSpritesSandboxClient).mockReturnValue(mockClient);
+  asMock(createProductionSpritesSandboxClient).mockResolvedValue(mockClient);
   asMock(acquireTerminalSandbox).mockResolvedValue({ ok: true, sandboxId: 'sprite-123', resumed: false });
   return { sprite, mockClient };
 }
@@ -289,7 +289,7 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
     it('returns 500 when sandbox acquisition fails', async () => {
       setupDbMocks();
       const mockClient = { getOrCreate: vi.fn(), get: vi.fn(), stop: vi.fn() };
-      asMock(createSpritesSandboxClient).mockReturnValue(mockClient);
+      asMock(createProductionSpritesSandboxClient).mockResolvedValue(mockClient);
       asMock(acquireTerminalSandbox).mockResolvedValue({ ok: false, reason: 'provision_failed' });
       const res = await POST(makeRequest(), makeParams());
       expect(res.status).toBe(500);
@@ -298,7 +298,7 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
     it('returns 403 when sandbox acquisition is denied', async () => {
       setupDbMocks();
       const mockClient = { getOrCreate: vi.fn(), get: vi.fn(), stop: vi.fn() };
-      asMock(createSpritesSandboxClient).mockReturnValue(mockClient);
+      asMock(createProductionSpritesSandboxClient).mockResolvedValue(mockClient);
       asMock(acquireTerminalSandbox).mockResolvedValue({ ok: false, reason: 'deny' });
       const res = await POST(makeRequest(), makeParams());
       expect(res.status).toBe(403);
@@ -307,7 +307,7 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
     it('returns 500 when sprite is gone after acquire succeeds', async () => {
       setupDbMocks();
       const mockClient = { getOrCreate: vi.fn(), get: vi.fn().mockResolvedValue(null), stop: vi.fn() };
-      asMock(createSpritesSandboxClient).mockReturnValue(mockClient);
+      asMock(createProductionSpritesSandboxClient).mockResolvedValue(mockClient);
       asMock(acquireTerminalSandbox).mockResolvedValue({ ok: true, sandboxId: 'sprite-123', resumed: false });
       const res = await POST(makeRequest(), makeParams());
       expect(res.status).toBe(500);
@@ -352,7 +352,7 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
     it('calls releaseCodeExecutionSlot in finally even when sandbox acquire fails', async () => {
       setupDbMocks();
       const mockClient = { getOrCreate: vi.fn(), get: vi.fn(), stop: vi.fn() };
-      asMock(createSpritesSandboxClient).mockReturnValue(mockClient);
+      asMock(createProductionSpritesSandboxClient).mockResolvedValue(mockClient);
       asMock(acquireTerminalSandbox).mockResolvedValue({ ok: false, reason: 'provision_failed' });
 
       await POST(makeRequest(), makeParams());

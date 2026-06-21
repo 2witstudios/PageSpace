@@ -118,13 +118,14 @@ export async function POST(
   const startMs = Date.now();
   try {
     // 8. Acquire (or resume) the page's terminal sandbox.
-    // @fly/sprites is ESM-only — import dynamically so webpack does not attempt
-    // to bundle it at build time (same pattern as sandbox-tools-runtime.ts).
-    const [store, { createSpritesSandboxClient }] = await Promise.all([
+    // createProductionSpritesSandboxClient lives in apps/web (not @pagespace/lib)
+    // so Next.js handles the ESM import of @fly/sprites correctly. See
+    // apps/web/src/lib/sandbox/sprites-client.ts for the full explanation.
+    const [store, { createProductionSpritesSandboxClient }] = await Promise.all([
       createDbTerminalSessionStore(),
-      import('@pagespace/lib/services/sandbox/sandbox-client/sprites'),
+      import('@/lib/sandbox/sprites-client'),
     ]);
-    const client = createSpritesSandboxClient();
+    const client = await createProductionSpritesSandboxClient();
 
     const sandboxResult = await acquireTerminalSandbox({
       pageId,
