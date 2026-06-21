@@ -46,8 +46,10 @@ const agentViewOnlyPerms: PermissionLevel = {
 function makeDeps(overrides: Partial<CanRunCodeDeps> = {}): CanRunCodeDeps {
   return {
     getUserDrivePermissions: async () => adminPerms,
+    getUserRole: async () => 'admin',
     getAgentAccessLevel: async () => agentEditPerms,
     isCodeExecutionEnabled: () => true,
+    getNodeEnv: () => 'test',
     ...overrides,
   };
 }
@@ -92,6 +94,42 @@ describe('canRunCode', () => {
       deps: makeDeps({ getUserDrivePermissions: async () => memberPerms }),
     });
     expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
+  });
+
+  it('given production and a non-admin app user, should deny even with drive admin access', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      driveId: 'd1',
+      deps: makeDeps({
+        getUserRole: async () => 'user',
+        getNodeEnv: () => 'production',
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'app_admin_required' });
+  });
+
+  it('given production and an admin app user, should allow when drive authorization passes', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      driveId: 'd1',
+      deps: makeDeps({
+        getUserRole: async () => 'admin',
+        getNodeEnv: () => 'production',
+      }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given development and a non-admin app user, should preserve the drive-role gate', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      driveId: 'd1',
+      deps: makeDeps({
+        getUserRole: async () => 'user',
+        getNodeEnv: () => 'development',
+      }),
+    });
+    expect(result.ok).toBe(true);
   });
 
   it('given an agent actor with edit access, should allow', async () => {

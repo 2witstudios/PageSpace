@@ -36,6 +36,7 @@ import { checkCodeExecutionQuota, type CodeExecutionQuotaDecision } from './quot
 
 export type SandboxToolGateDenialReason =
   | 'kill_switch_off'
+  | 'app_admin_required'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -50,6 +51,7 @@ export type SandboxToolGateResult =
 /** Safe, model-facing messages. Mirrors the runner's denial copy for consistency. */
 const DENIAL_MESSAGES: Record<SandboxToolGateDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
+  app_admin_required: 'Code execution is currently limited to administrators.',
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',

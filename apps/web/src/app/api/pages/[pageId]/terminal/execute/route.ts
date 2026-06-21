@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/session-manager';
 import {
   acquireTerminalSandbox,
@@ -54,6 +54,10 @@ export async function POST(
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
+  if (auth.role !== 'admin') {
+    auditRequest(req, { eventType: 'authz.access.denied', userId, resourceType: 'terminal_session', resourceId: pageId, details: { reason: 'app_admin_required', method: 'POST' }, riskScore: 0.5 });
+    return NextResponse.json({ error: 'Terminal access requires administrator privileges' }, { status: 403 });
+  }
 
   // 3. Page permission: editor+ required to run code.
   const canEdit = await canPrincipalEditPage(auth, pageId);
@@ -85,6 +89,12 @@ export async function POST(
     return NextResponse.json({ error: 'Page not found' }, { status: 404 });
   }
   const { driveId } = pageRow;
+
+  const codeAuth = await canRunCode({ userId, driveId, requestOrigin: 'user' });
+  if (!codeAuth.ok) {
+    auditRequest(req, { eventType: 'authz.access.denied', userId, resourceType: 'terminal_session', resourceId: pageId, details: { reason: codeAuth.reason, method: 'POST' }, riskScore: 0.5 });
+    return NextResponse.json({ error: 'Code execution is not available for this user' }, { status: 403 });
+  }
 
   const [driveRow, actorRow] = await Promise.all([
     db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1),

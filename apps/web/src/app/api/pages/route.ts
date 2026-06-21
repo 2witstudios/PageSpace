@@ -3,17 +3,22 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { getCreatablePageTypes } from '@pagespace/lib/content/page-types.config'
+import { PageType } from '@pagespace/lib/utils/enums'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult, canPrincipalEditPage } from '@/lib/auth';
 import { pageService, type CreatePageParams } from '@/services/api';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const creatablePageTypes = [
+  ...getCreatablePageTypes(),
+  PageType.TERMINAL,
+] as unknown as [string, ...string[]];
 
 // Zod schema for page creation request
 const createPageSchema = z.object({
   title: z.string().min(1, 'Title is required'),
-  type: z.enum(getCreatablePageTypes() as [string, ...string[]]),
+  type: z.enum(creatablePageTypes),
   driveId: z.string().min(1, 'Drive ID is required'),
   parentId: z.string().nullable().optional(),
   content: z.string().optional(),
@@ -45,6 +50,10 @@ export async function POST(request: Request) {
     }
 
     const validatedData = parseResult.data;
+    if (validatedData.type === PageType.TERMINAL && auth.role !== 'admin') {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page', resourceId: validatedData.driveId, details: { reason: 'app_admin_required', type: validatedData.type, method: 'POST' }, riskScore: 0.5 });
+      return NextResponse.json({ error: 'Terminal pages require administrator privileges' }, { status: 403 });
+    }
 
     // Check MCP token scope - scoped tokens can only create pages in allowed drives
     const scopeError = checkMCPCreateScope(auth, validatedData.driveId);

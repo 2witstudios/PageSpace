@@ -26,6 +26,7 @@ import { uploadFileToS3 } from '@/lib/upload/orchestrator';
 import { useUIStore } from '@/stores/useUIStore';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { useBreadcrumbs } from '@/hooks/useBreadcrumbs';
+import { useAuth } from '@/hooks/useAuth';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { matchesKeyEvent, getEffectiveBinding } from '@/stores/useHotkeyStore';
 import { isEditingActive } from '@/stores/useEditingStore';
@@ -131,6 +132,7 @@ export default function QuickCreatePalette() {
   const closeQuickCreate = useUIStore((s) => s.closeQuickCreate);
 
   const { navigateToPage } = usePageNavigation();
+  const { user } = useAuth();
   const { preferences } = useDisplayPreferences();
   const { data: tree } = useCachedPageTree(driveId);
 
@@ -251,7 +253,7 @@ export default function QuickCreatePalette() {
     } finally {
       setIsCreating(false);
     }
-  }, [driveId, selectedType, isCreating, selectedFile, name, effectiveParentId, preferences, closeQuickCreate, navigateToPage]);
+  }, [driveId, selectedType, isCreating, selectedFile, name, effectiveParentId, preferences, closeQuickCreate, swrMutate, navigateToPage]);
 
   const handleKeyDownNameEntry = useCallback(
     (e: React.KeyboardEvent) => {
@@ -266,7 +268,10 @@ export default function QuickCreatePalette() {
     [handleCreate]
   );
 
-  const creatableTypes = getCreatablePageTypes();
+  const creatableTypes = useMemo(() => {
+    const types = getCreatablePageTypes();
+    return user?.role === 'admin' ? [...types, PageType.TERMINAL] : types;
+  }, [user?.role]);
 
   if (!quickCreateOpen) return null;
 
