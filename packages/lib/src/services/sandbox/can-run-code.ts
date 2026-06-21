@@ -15,6 +15,11 @@
  * do not serve on-prem (a local execution path is future work, not wired here),
  * so gating on DEPLOYMENT_MODE / isOnPrem would only add a dead branch.
  *
+ * Production rollout gate: while Fly Sprites code execution is being tested in
+ * prod, the global kill-switch may be on, but only app admins may pass this
+ * chokepoint. Non-production keeps the drive owner/admin gate so local and
+ * staging workflows remain useful.
+ *
  * The actor user always clears the owner/admin drive-role gate, regardless of
  * origin. Agent-origin runs additionally require the agent page to hold drive
  * edit access (defence in depth): both the human who triggered the run and the
@@ -29,6 +34,7 @@ import type { DrivePermissionLevel, PermissionLevel } from '../../permissions/pe
 
 export type CodeExecutionDenialReason =
   | 'kill_switch_off'
+  | 'app_admin_required'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -47,11 +53,13 @@ export interface CanRunCodeDeps {
     userId: string,
     driveId: string,
   ) => Promise<DrivePermissionLevel | null>;
+  getUserRole: (userId: string) => Promise<'user' | 'admin' | null>;
   getAgentAccessLevel: (
     agentPageId: string,
     targetPageId: string,
   ) => Promise<PermissionLevel | null>;
   isCodeExecutionEnabled: () => boolean;
+  getNodeEnv: () => string | undefined;
 }
 
 export interface CanRunCodeInput {
@@ -81,11 +89,24 @@ const defaultDeps: CanRunCodeDeps = {
     import('../../permissions/permissions').then((m) =>
       m.getUserDrivePermissions(userId, driveId),
     ),
+  getUserRole: async (userId) => {
+    const [{ db }, { eq }, { users }] = await Promise.all([
+      import('@pagespace/db/db'),
+      import('@pagespace/db/operators'),
+      import('@pagespace/db/schema/auth'),
+    ]);
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { role: true },
+    });
+    return user?.role ?? null;
+  },
   getAgentAccessLevel: (agentPageId, targetPageId) =>
     import('../../permissions/agent-permissions').then((m) =>
       m.getAgentAccessLevel(agentPageId, targetPageId),
     ),
   isCodeExecutionEnabled,
+  getNodeEnv: () => process.env.NODE_ENV,
 };
 
 const deny = (reason: CodeExecutionDenialReason): CanRunCodeResult => ({
@@ -118,6 +139,15 @@ async function authorizeUser(
   return { ok: true };
 }
 
+async function authorizeProductionAdmin(
+  userId: string,
+  deps: CanRunCodeDeps,
+): Promise<CanRunCodeResult> {
+  if (deps.getNodeEnv() !== 'production') return { ok: true };
+  const role = await deps.getUserRole(userId);
+  return role === 'admin' ? { ok: true } : deny('app_admin_required');
+}
+
 export async function canRunCode({
   userId,
   driveId,
@@ -127,6 +157,9 @@ export async function canRunCode({
 }: CanRunCodeInput): Promise<CanRunCodeResult> {
   try {
     if (!deps.isCodeExecutionEnabled()) return deny('kill_switch_off');
+
+    const productionAdminResult = await authorizeProductionAdmin(userId, deps);
+    if (!productionAdminResult.ok) return productionAdminResult;
 
     // The actor user must always clear the owner/admin drive-role gate. For
     // agent-origin runs this is the rung that stops a plain member escalating

@@ -181,7 +181,6 @@ describe('POST /api/pages', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toContain('Invalid option');
-      expect(body.error).not.toContain('TERMINAL');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -309,6 +308,45 @@ describe('POST /api/pages', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toMatch(/not found/i);
+    });
+
+    it('returns 403 when a non-admin creates a TERMINAL page', async () => {
+      const response = await POST(createRequest({
+        title: 'Prod Shell',
+        type: 'TERMINAL',
+        driveId: mockDriveId,
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/administrator/i);
+      expect(pageService.createPage).not.toHaveBeenCalled();
+    });
+
+    it('allows an admin to create a TERMINAL page', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        ...mockWebAuth(mockUserId),
+        role: 'admin',
+      });
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        ...successResult,
+        page: { ...mockPage, type: 'TERMINAL' },
+      });
+
+      const response = await POST(createRequest({
+        title: 'Prod Shell',
+        type: 'TERMINAL',
+        driveId: mockDriveId,
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(201);
+      expect(body.type).toBe('TERMINAL');
+      expect(pageService.createPage).toHaveBeenCalledWith(
+        mockUserId,
+        expect.objectContaining({ type: 'TERMINAL' }),
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
+      );
     });
   });
 

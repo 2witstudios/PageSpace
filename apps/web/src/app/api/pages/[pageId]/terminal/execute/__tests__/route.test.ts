@@ -20,6 +20,7 @@ import { NextResponse } from 'next/server';
 
 vi.mock('@pagespace/lib/services/sandbox/can-run-code', () => ({
   isCodeExecutionEnabled: vi.fn().mockReturnValue(true),
+  canRunCode: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -80,7 +81,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 // ─── Import SUT and mocked modules ────────────────────────────────────────
 
 import { POST } from '../route';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { authenticateRequestWithOptions, canPrincipalEditPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { checkCodeExecutionQuota, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
@@ -89,7 +90,6 @@ import { createSpritesSandboxClient } from '@pagespace/lib/services/sandbox/sand
 
 // ─── Type helpers ──────────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function asMock<T>(fn: T): ReturnType<typeof vi.fn> {
   return fn as unknown as ReturnType<typeof vi.fn>;
 }
@@ -105,7 +105,7 @@ const mockSessionAuth = {
   userId: mockUserId,
   tokenType: 'session' as const,
   sessionId: 'sess_1',
-  role: 'user' as const,
+  role: 'admin' as const,
   tokenVersion: 1,
   adminRoleVersion: 1,
 };
@@ -175,6 +175,7 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     asMock(isCodeExecutionEnabled).mockReturnValue(true);
+    asMock(canRunCode).mockResolvedValue({ ok: true });
     asMock(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth);
     asMock(canPrincipalEditPage).mockResolvedValue(true);
     asMock(checkCodeExecutionQuota).mockResolvedValue({ allowed: true });
@@ -203,10 +204,32 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
   });
 
   describe('authorization', () => {
+    it('returns 403 when a non-admin tries to execute a terminal command', async () => {
+      asMock(authenticateRequestWithOptions).mockResolvedValue({
+        ...mockSessionAuth,
+        role: 'user',
+      });
+
+      const res = await POST(makeRequest(), makeParams());
+
+      expect(res.status).toBe(403);
+      expect(vi.mocked(canPrincipalEditPage)).not.toHaveBeenCalled();
+    });
+
     it('returns 403 when user cannot edit page', async () => {
       asMock(canPrincipalEditPage).mockResolvedValue(false);
       const res = await POST(makeRequest(), makeParams());
       expect(res.status).toBe(403);
+    });
+
+    it('returns 403 when shared code-execution authorization denies the user', async () => {
+      setupDbMocks();
+      asMock(canRunCode).mockResolvedValue({ ok: false, reason: 'app_admin_required' });
+
+      const res = await POST(makeRequest(), makeParams());
+
+      expect(res.status).toBe(403);
+      expect(vi.mocked(acquireCodeExecutionSlot)).not.toHaveBeenCalled();
     });
   });
 

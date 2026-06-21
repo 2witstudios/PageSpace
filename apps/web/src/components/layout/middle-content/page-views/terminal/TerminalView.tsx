@@ -43,6 +43,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
   const socket = useSocket();
   const { user } = useAuth();
   const { resolvedTheme } = useTheme();
+  const isAdmin = user?.role === 'admin';
 
   const {
     document: documentState,
@@ -139,6 +140,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
   // Handle command submission — gated on document initialization
   const handleCommand = useCallback(async (command: string) => {
     if (!documentState) { toast.error('Terminal is still loading'); return; }
+    if (!isAdmin) { toast.error('Terminal access requires administrator privileges'); return; }
     if (isReadOnly) { toast.error('You do not have permission to edit this page'); return; }
 
     setIsExecuting(true);
@@ -177,7 +179,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
       saveWithDebounce(serialized);
       return updated;
     });
-  }, [isReadOnly, documentState, pageId, updateContent, saveWithDebounce]);
+  }, [isAdmin, isReadOnly, documentState, pageId, updateContent, saveWithDebounce]);
 
   // Handle clearing the terminal
   const handleClear = useCallback(() => {
@@ -238,7 +240,15 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
       transition={{ duration: 0.2 }}
       className="h-full flex flex-col relative"
     >
-      {isReadOnly && (
+      {!isAdmin && (
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2">
+          <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
+            Terminal access requires administrator privileges
+          </p>
+        </div>
+      )}
+
+      {isAdmin && isReadOnly && (
         <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2">
           <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
             You don&apos;t have permission to edit this page
@@ -252,7 +262,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
           onCommand={handleCommand}
           onClear={handleClear}
           isDark={isDark}
-          isReadOnly={isReadOnly || isLoading || !documentState || isExecuting}
+          isReadOnly={!isAdmin || isReadOnly || isLoading || !documentState || isExecuting}
         />
       </div>
 
