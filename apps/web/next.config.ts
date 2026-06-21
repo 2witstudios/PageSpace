@@ -22,7 +22,10 @@ const nextConfig: NextConfig = {
   // contains no "node_modules" segment, so Next.js's path-based heuristic
   // fails to auto-externalize it. List it explicitly here as a backstop; the
   // webpack function below handles @pagespace/db and @pagespace/lib the same way.
-  serverExternalPackages: ["pg"],
+  // @fly/sprites is ESM-only; marking it external ensures Next.js's standalone
+  // file tracer copies it into the output node_modules instead of attempting to
+  // bundle an ESM package (which would be excluded and missing at runtime).
+  serverExternalPackages: ["pg", "@fly/sprites"],
   webpack: (config, { isServer }) => {
     if (isServer) {
       // Externalize pg unconditionally (bun cache path bypasses Next's heuristic).
