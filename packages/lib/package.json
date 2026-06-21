@@ -357,6 +357,16 @@
       "import": "./dist/services/sandbox/tool-runners.js",
       "require": "./dist/services/sandbox/tool-runners.js"
     },
+    "./services/sandbox/git-tool-runners": {
+      "types": "./dist/services/sandbox/git-tool-runners.d.ts",
+      "import": "./dist/services/sandbox/git-tool-runners.js",
+      "require": "./dist/services/sandbox/git-tool-runners.js"
+    },
+    "./services/sandbox/github-token": {
+      "types": "./dist/services/sandbox/github-token.d.ts",
+      "import": "./dist/services/sandbox/github-token.js",
+      "require": "./dist/services/sandbox/github-token.js"
+    },
     "./services/sandbox/tool-gate": {
       "types": "./dist/services/sandbox/tool-gate.d.ts",
       "import": "./dist/services/sandbox/tool-gate.js",
@@ -1140,6 +1150,12 @@
       ],
       "services/sandbox/tool-runners": [
         "./dist/services/sandbox/tool-runners.d.ts"
+      ],
+      "services/sandbox/git-tool-runners": [
+        "./dist/services/sandbox/git-tool-runners.d.ts"
+      ],
+      "services/sandbox/github-token": [
+        "./dist/services/sandbox/github-token.d.ts"
       ],
       "services/sandbox/sandbox-client/types": [
         "./dist/services/sandbox/sandbox-client/types.d.ts"
