@@ -153,6 +153,56 @@ describe('planTerminalLifecycle', () => {
     const result = planTerminalLifecycle({ canRun: true, now: NOW, intent: 'end' });
     expect(result).toEqual({ action: 'noop' });
   });
+
+  it('given persistent=true and an idle session, returns { action: noop } (let Sprites hibernate)', () => {
+    const result = planTerminalLifecycle({
+      canRun: true,
+      persistent: true,
+      existingSession: { sandboxId: 'sbx-idle', lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) },
+      now: NOW,
+    });
+    expect(result).toEqual({ action: 'noop' });
+  });
+
+  it('given persistent=false and an idle session, returns teardown (unchanged ephemeral behaviour)', () => {
+    const result = planTerminalLifecycle({
+      canRun: true,
+      persistent: false,
+      existingSession: { sandboxId: 'sbx-idle', lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) },
+      now: NOW,
+    });
+    expect(result).toEqual({ action: 'teardown', sandboxId: 'sbx-idle', reason: 'idle' });
+  });
+
+  it('given persistent=undefined and an idle session, returns teardown (default is ephemeral)', () => {
+    const result = planTerminalLifecycle({
+      canRun: true,
+      existingSession: { sandboxId: 'sbx-idle', lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) },
+      now: NOW,
+    });
+    expect(result).toEqual({ action: 'teardown', sandboxId: 'sbx-idle', reason: 'idle' });
+  });
+
+  it('given persistent=true and intent=end, still tears down (explicit destroy always works)', () => {
+    const result = planTerminalLifecycle({
+      canRun: true,
+      persistent: true,
+      existingSession: { sandboxId: 'sbx-end', lastActiveAt: NOW },
+      now: NOW,
+      intent: 'end',
+    });
+    expect(result).toEqual({ action: 'teardown', sandboxId: 'sbx-end', reason: 'session_end' });
+  });
+
+  it('given persistent=true and a fresh session, still resumes normally', () => {
+    const result = planTerminalLifecycle({
+      canRun: true,
+      persistent: true,
+      existingSession: { sandboxId: 'sbx-warm', lastActiveAt: new Date(NOW.getTime() - 1000) },
+      now: NOW,
+    });
+    expect(result).toEqual({ action: 'resume', sandboxId: 'sbx-warm' });
+  });
 });
 
 describe('acquireTerminalSandbox', () => {

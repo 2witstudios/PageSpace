@@ -102,7 +102,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
   return {
     bash: tool({
       description:
-        'Run a shell command in this conversation\'s isolated sandbox. Returns stdout, stderr, and the exit code. No network access; the filesystem is ephemeral and scoped to the sandbox.',
+        'Run a shell command in this conversation\'s isolated sandbox. Returns stdout, stderr, and the exit code. The filesystem is scoped to the sandbox.',
       inputSchema: bashInputSchema,
       execute: async ({ command, cwd }, options) => {
         const opened = await open(options);

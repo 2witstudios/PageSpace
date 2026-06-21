@@ -19,6 +19,7 @@ import { triggerTools } from '../tools/trigger-tools';
 import { modelTools } from '../tools/model-tools';
 import { commandTools } from '../tools/command-tools';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
+import { buildGitSandboxTools } from '../tools/sandbox-git-tools-runtime';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
 const baseTools = {
@@ -59,12 +60,14 @@ const baseTools = {
 export function buildPageSpaceTools({
   codeExecutionEnabled = isCodeExecutionEnabled(),
   sandboxToolsFactory = buildSandboxTools,
+  sandboxGitToolsFactory = buildGitSandboxTools,
 }: {
   codeExecutionEnabled?: boolean;
   sandboxToolsFactory?: () => Record<string, Tool>;
+  sandboxGitToolsFactory?: () => Record<string, Tool>;
 } = {}) {
   if (!codeExecutionEnabled) return { ...baseTools };
-  return { ...baseTools, ...sandboxToolsFactory() };
+  return { ...baseTools, ...sandboxToolsFactory(), ...sandboxGitToolsFactory() };
 }
 
 export const pageSpaceTools = buildPageSpaceTools();

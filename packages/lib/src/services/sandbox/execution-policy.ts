@@ -11,7 +11,7 @@
  * policy — so a typo or an unknown caller can never widen the blast radius.
  */
 
-export type ExecutionProfile = 'default' | 'minimal';
+export type ExecutionProfile = 'default' | 'minimal' | 'dev';
 
 export interface ExecutionPolicy {
   /** Profile this policy represents (echoed back for audit/logging). */
@@ -33,6 +33,26 @@ export interface ExecutionPolicy {
   /** Explicit deployment region. */
   region: string;
 }
+
+// Literal egress hostname lists for the 'dev' profile. Frozen so a caller
+// cannot push to them and widen egress globally across runs.
+const GITHUB_EGRESS_HOSTS = Object.freeze([
+  'github.com',
+  'api.github.com',
+  'raw.githubusercontent.com',
+  'objects.githubusercontent.com',
+  'uploads.github.com',
+  'codeload.github.com',
+] as const);
+
+const REGISTRY_EGRESS_HOSTS = Object.freeze([
+  'registry.npmjs.org',
+  'pypi.org',
+  'files.pythonhosted.org',
+  'crates.io',
+  'static.crates.io',
+  'index.crates.io',
+] as const);
 
 // Policies are returned by reference from module constants. Freeze them (and
 // their egress arrays) so a downstream caller can never mutate the shared
@@ -66,9 +86,25 @@ const DEFAULT_PROFILE: ExecutionPolicy = Object.freeze({
   region: 'iad',
 });
 
+const DEV_PROFILE: ExecutionPolicy = Object.freeze({
+  profile: 'dev',
+  timeoutMs: 120_000,
+  vcpus: 2,
+  memoryMb: 4096,
+  storageGb: 20,
+  maxOutputBytes: 64 * 1024,
+  egressAllowlist: Object.freeze([
+    ...GITHUB_EGRESS_HOSTS,
+    ...REGISTRY_EGRESS_HOSTS,
+  ]) as readonly string[],
+  persistent: true,
+  region: 'iad',
+});
+
 const PROFILES: Record<ExecutionProfile, ExecutionPolicy> = {
   default: DEFAULT_PROFILE,
   minimal: SAFE_MINIMUM_PROFILE,
+  dev: DEV_PROFILE,
 };
 
 export function resolveExecutionPolicy({
