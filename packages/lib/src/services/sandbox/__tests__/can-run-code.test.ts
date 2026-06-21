@@ -210,6 +210,16 @@ describe('canRunCode', () => {
     expect(result).toEqual({ ok: false, reason: 'app_admin_required' });
   });
 
+  it('given no driveId and agent requestOrigin, should deny — agent-origin always requires a drive context', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      requestOrigin: 'agent',
+      agentPageId: 'agent1',
+      deps: makeDeps(),
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_agent_access' });
+  });
+
   it('given a permission lookup that throws, should fail closed without throwing', async () => {
     const result = await canRunCode({
       userId: 'u1',
