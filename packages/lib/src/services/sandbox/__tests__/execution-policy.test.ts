@@ -1,6 +1,56 @@
 import { describe, it, expect } from 'vitest';
 import { resolveExecutionPolicy, SAFE_MINIMUM_PROFILE } from '../execution-policy';
 
+describe('resolveExecutionPolicy — dev profile', () => {
+  it('given the dev profile, should be persistent', () => {
+    expect(resolveExecutionPolicy({ profile: 'dev' }).persistent).toBe(true);
+  });
+
+  it('given the dev profile, should have extended resource bounds', () => {
+    const policy = resolveExecutionPolicy({ profile: 'dev' });
+    expect(policy.timeoutMs).toBe(120_000);
+    expect(policy.memoryMb).toBe(4096);
+    expect(policy.storageGb).toBe(20);
+    expect(policy.vcpus).toBe(2);
+  });
+
+  it('given the dev profile, should allow GitHub CDN egress', () => {
+    const { egressAllowlist } = resolveExecutionPolicy({ profile: 'dev' });
+    expect(egressAllowlist).toContain('github.com');
+    expect(egressAllowlist).toContain('api.github.com');
+    expect(egressAllowlist).toContain('raw.githubusercontent.com');
+  });
+
+  it('given the dev profile, should allow package registry egress', () => {
+    const { egressAllowlist } = resolveExecutionPolicy({ profile: 'dev' });
+    expect(egressAllowlist).toContain('registry.npmjs.org');
+    expect(egressAllowlist).toContain('pypi.org');
+    expect(egressAllowlist).toContain('crates.io');
+  });
+
+  it('given the dev profile, should have no wildcard entries in egress allowlist', () => {
+    const { egressAllowlist } = resolveExecutionPolicy({ profile: 'dev' });
+    for (const host of egressAllowlist) {
+      expect(host).not.toContain('*');
+    }
+  });
+
+  it('given the dev profile, should tag the policy with the dev profile name', () => {
+    expect(resolveExecutionPolicy({ profile: 'dev' }).profile).toBe('dev');
+  });
+
+  it('given the dev profile, should return an immutable policy (frozen egress array)', () => {
+    const policy = resolveExecutionPolicy({ profile: 'dev' });
+    expect(() => {
+      (policy.egressAllowlist as string[]).push('evil.example.com');
+    }).toThrow();
+  });
+
+  it('given the default profile, should still be non-persistent (dev profile should not affect others)', () => {
+    expect(resolveExecutionPolicy({ profile: 'default' }).persistent).toBe(false);
+  });
+});
+
 describe('resolveExecutionPolicy', () => {
   it('given no profile, should resolve the default profile with explicit caps', () => {
     const policy = resolveExecutionPolicy();

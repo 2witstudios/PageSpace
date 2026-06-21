@@ -46,6 +46,8 @@ export interface PlanTerminalLifecycleInput {
   now: Date;
   idleTimeoutMs?: number;
   intent?: TerminalLifecycleIntent;
+  /** When true, idle sessions return noop instead of teardown — Sprites hibernates the VM. */
+  persistent?: boolean;
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
@@ -56,6 +58,7 @@ export function planTerminalLifecycle({
   now,
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
   intent = 'run',
+  persistent = false,
 }: PlanTerminalLifecycleInput): TerminalLifecyclePlan {
   // Cleanup is unconditional on 'end' intent — authorization never gates cleanup.
   if (intent === 'end') {
@@ -76,6 +79,8 @@ export function planTerminalLifecycle({
 
   const idleFor = now.getTime() - existingSession.lastActiveAt.getTime();
   if (idleFor >= idleTimeoutMs) {
+    // Persistent sandboxes hibernate on their own — keep the session store record alive.
+    if (persistent) return { action: 'noop' };
     return { action: 'teardown', sandboxId: existingSession.sandboxId, reason: 'idle' };
   }
 
