@@ -14,7 +14,6 @@
 
 import type { ActivityLogInput } from '../../monitoring/activity-logger';
 import type { AuditEvent } from '../../audit/security-audit';
-import type { ExecutionProfile } from './execution-policy';
 
 export type CodeExecutionAnomaly =
   | 'timeout'
@@ -30,7 +29,7 @@ export interface CodeExecutionAuditInput {
   conversationId?: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
-  profile: ExecutionProfile;
+  profile?: string;
   code: string;
   exitCode: number | null;
   durationMs: number;
@@ -49,7 +48,7 @@ export interface CodeExecutionAuditRecord {
   conversationId?: string;
   requestOrigin: 'user' | 'agent';
   agentPageId?: string;
-  profile: ExecutionProfile;
+  profile?: string;
   /** Redacted and length-capped copy of the submitted code. */
   code: string;
   codeTruncated: boolean;
@@ -105,7 +104,7 @@ export function buildAuditRecord({
   conversationId,
   requestOrigin = 'user',
   agentPageId,
-  profile,
+  profile = 'sandbox',
   code,
   exitCode,
   durationMs,

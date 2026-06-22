@@ -201,7 +201,6 @@ export async function POST(
         actorDisplayName: actorRow[0]?.name ?? undefined,
         driveId,
         requestOrigin: 'user',
-        profile: 'default',
         code: command,
         exitCode: result.exitCode,
         durationMs,

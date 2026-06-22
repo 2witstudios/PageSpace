@@ -1,4 +1,4 @@
-import { resolveExecutionPolicy } from './execution-policy';
+import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy';
 import { truncateToBytes } from './output-limit';
 import { SANDBOX_ROOT } from './sandbox-paths';
 import type { SandboxActorContext, SandboxRunDeps, BashToolResult } from './tool-runners';
@@ -14,7 +14,7 @@ const GITHUB_CREDENTIAL_HELPER =
   '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f';
 
 /**
- * Runs a git or gh command inside a 'dev' profile sandbox.
+ * Runs a git or gh command inside a sandbox.
  *
  * Security invariants:
  * - cmd is a literal ('git' or 'gh'), never built by string concatenation.
@@ -46,8 +46,6 @@ export async function runGitInSandbox({
   if (!deps.isEnabled()) {
     return { success: false, error: 'Code execution is disabled.', reason: 'kill_switch_off' };
   }
-
-  const policy = resolveExecutionPolicy({ profile: 'dev' });
 
   // Pre-fetch token BEFORE acquiring a sandbox slot — a missing token on a
   // network-requiring command must not consume quota.
@@ -87,7 +85,6 @@ export async function runGitInSandbox({
       userId: ctx.userId,
       requestOrigin: ctx.requestOrigin,
       agentPageId: ctx.agentPageId,
-      policy,
     });
     if (!acquired.ok) {
       return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };
@@ -124,8 +121,8 @@ export async function runGitInSandbox({
               }
             : {}),
         },
-        timeoutMs: policy.timeoutMs,
-        maxBytes: policy.maxOutputBytes,
+        timeoutMs: SANDBOX_TIMEOUT_MS,
+        maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
       });
     } catch {
       const durationMs = deps.now().getTime() - startedAt.getTime();
@@ -134,8 +131,8 @@ export async function runGitInSandbox({
     }
 
     const durationMs = deps.now().getTime() - startedAt.getTime();
-    const stdout = truncateToBytes({ text: run.stdout, maxBytes: policy.maxOutputBytes });
-    const stderr = truncateToBytes({ text: run.stderr, maxBytes: policy.maxOutputBytes });
+    const stdout = truncateToBytes({ text: run.stdout, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
+    const stderr = truncateToBytes({ text: run.stderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
 
     await safeAudit(deps, ctx, {
       cmd: `${cmd} ${args.join(' ')}`,
@@ -172,7 +169,6 @@ async function safeAudit(
       aiProvider: ctx.aiProvider,
       aiModel: ctx.aiModel,
       timestamp: deps.now(),
-      profile: 'dev',
       code: fields.cmd,
       exitCode: fields.exitCode,
       durationMs: fields.durationMs,

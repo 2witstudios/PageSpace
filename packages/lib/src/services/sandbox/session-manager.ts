@@ -21,8 +21,8 @@
 import { getValidatedEnv } from '../../config/env-validation';
 import { loggers } from '../../logging/logger-config';
 import type { CanRunCodeResult, CanRunCodeInput, CodeExecutionDenialReason } from './can-run-code';
-import type { ExecutionPolicy } from './execution-policy';
-import { mapPolicyToSandboxOptions, type SandboxCreateOptions } from './sandbox-options';
+import { SANDBOX_EGRESS_ALLOWLIST } from './execution-policy';
+import type { SandboxCreateOptions } from './sandbox-options';
 import { deriveSessionKey } from './session-key';
 import { planSandboxLifecycle, type TeardownReason } from './lifecycle';
 import type { SandboxSessionStore, SandboxSessionRecord } from './session-store';
@@ -63,7 +63,6 @@ export interface AcquireSandboxInput {
   userId: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
-  policy?: ExecutionPolicy;
   idleTimeoutMs?: number;
   deps: AcquireSandboxDeps;
 }
@@ -129,8 +128,8 @@ async function provisionFresh({
   key: string;
   input: AcquireSandboxInput;
 }): Promise<AcquireSandboxResult> {
-  const { deps, policy, tenantId, driveId, conversationId, userId } = input;
-  const options = mapPolicyToSandboxOptions({ policy });
+  const { deps, tenantId, driveId, conversationId, userId } = input;
+  const options: SandboxCreateOptions = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
   let handle: SandboxHandle;
   try {

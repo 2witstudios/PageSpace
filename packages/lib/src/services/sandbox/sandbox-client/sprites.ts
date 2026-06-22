@@ -78,17 +78,6 @@ export class SandboxOutputLimitError extends Error {
 // never exhaust the host process memory even on the (unreachable) no-cap path.
 const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
-/**
- * Sprite config the driver sets explicitly from the resolved policy. A subset of
- * the SDK's `SpriteConfig` (`ramMB` / `cpus` / `region` / `storageGB`).
- */
-export interface SpriteConfigParams {
-  ramMB: number;
-  cpus: number;
-  region: string;
-  storageGB: number;
-}
-
 /** The Sprite filesystem subset the driver consumes. */
 export interface SpriteFsLike {
   readFile(path: string, encoding: null): Promise<Buffer>;
@@ -147,16 +136,6 @@ export function resolveSpritesToken(): string {
   } catch {
     return '';
   }
-}
-
-/** Map the resolved policy options to the Sprite create config (explicit caps). */
-export function buildSpriteConfig({ options }: { options: SandboxCreateOptions }): SpriteConfigParams {
-  return {
-    ramMB: options.memoryMb,
-    cpus: options.vcpus,
-    region: options.region,
-    storageGB: options.storageGb,
-  };
 }
 
 function toBuffer(chunk: Buffer | string): Buffer {

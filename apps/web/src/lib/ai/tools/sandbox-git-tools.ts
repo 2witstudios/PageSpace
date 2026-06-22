@@ -1,5 +1,5 @@
 /**
- * Agent git/GitHub tools: all 26 tools over the 'dev' profile sandbox.
+ * Agent git/GitHub tools: all 26 tools running inside a sandbox.
  *
  * Pure factory — no DB imports, no Sprites SDK. Production wiring lives in
  * `sandbox-git-tools-runtime.ts`. Each tool's execute handler:

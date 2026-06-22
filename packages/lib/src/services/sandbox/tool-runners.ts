@@ -21,12 +21,12 @@
  * All IO — the sandbox acquire/reconnect, the quota ops, the audit writer, the
  * clock, the kill-switch read, the env builder — is injected, so the whole
  * orchestration is unit-tested with fakes and never touches the real Vercel API
- * or the database. Pure policy (`resolveExecutionPolicy`, `evaluateCommandPolicy`,
- * `resolveSandboxPath`, `truncateToBytes`) is called directly.
+ * or the database. Pure policy (`evaluateCommandPolicy`, `resolveSandboxPath`,
+ * `truncateToBytes`) is called directly.
  */
 
 import type { SubscriptionTier } from '../subscription-utils';
-import { resolveExecutionPolicy, type ExecutionPolicy } from './execution-policy';
+import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy';
 import { evaluateCommandPolicy } from './command-policy';
 import { truncateToBytes } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
@@ -54,7 +54,6 @@ export interface SandboxActorContext {
   aiProvider?: string;
   aiModel?: string;
   tier: SubscriptionTier;
-  profile?: 'default' | 'minimal';
 }
 
 export interface SandboxQuotaDeps {
@@ -174,7 +173,6 @@ function fail(
 
 function acquireRequest(
   ctx: SandboxActorContext,
-  policy: ExecutionPolicy,
 ): Omit<AcquireSandboxInput, 'deps'> {
   return {
     tenantId: ctx.tenantId,
@@ -183,7 +181,6 @@ function acquireRequest(
     userId: ctx.userId,
     requestOrigin: ctx.requestOrigin,
     agentPageId: ctx.agentPageId,
-    policy,
   };
 }
 
@@ -193,7 +190,7 @@ async function safeAudit(
   deps: SandboxRunDeps,
   ctx: SandboxActorContext,
   fields: {
-    profile: ExecutionPolicy['profile'];
+    profile?: string;
     code: string;
     exitCode: number | null;
     durationMs: number;
@@ -250,7 +247,6 @@ const anomalyForExit = (exitCode: number): CodeExecutionAnomaly | undefined => {
  */
 async function openSession(
   ctx: SandboxActorContext,
-  policy: ExecutionPolicy,
   deps: SandboxRunDeps,
 ): Promise<
   | { ok: true; sandbox: ExecutableSandbox; release: () => void }
@@ -271,7 +267,7 @@ async function openSession(
 
   // Slot is held from here: every failure path must release it before returning.
   try {
-    const acquired = await deps.acquireSandbox(acquireRequest(ctx, policy));
+    const acquired = await deps.acquireSandbox(acquireRequest(ctx));
     if (!acquired.ok) {
       deps.quota.releaseSlot({ userId: ctx.userId });
       const context = { reason: acquired.reason, userId: ctx.userId, driveId: ctx.driveId, conversationId: ctx.conversationId, requestOrigin: ctx.requestOrigin };
@@ -326,12 +322,10 @@ export async function runBashInSandbox({
   deps: SandboxRunDeps;
 }): Promise<BashToolResult> {
   if (!deps.isEnabled()) return fail('kill_switch_off');
-  const policy = resolveExecutionPolicy({ profile: ctx.profile });
 
   const commandPolicy = evaluateCommandPolicy({ command });
   if (!commandPolicy.ok) {
     await safeAudit(deps, ctx, {
-      profile: policy.profile,
       code: command,
       exitCode: null,
       durationMs: 0,
@@ -348,7 +342,6 @@ export async function runBashInSandbox({
     const candidate = resolveSandboxPath(cwd);
     if (!candidate) {
       await safeAudit(deps, ctx, {
-        profile: policy.profile,
         code: `bash cwd ${cwd}`,
         exitCode: null,
         durationMs: 0,
@@ -359,7 +352,7 @@ export async function runBashInSandbox({
     resolvedCwd = candidate;
   }
 
-  const session = await openSession(ctx, policy, deps);
+  const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason, session.retryAfter);
 
   try {
@@ -371,8 +364,8 @@ export async function runBashInSandbox({
         args: ['-c', command],
         cwd: resolvedCwd,
         env: deps.buildEnv(),
-        timeoutMs: policy.timeoutMs,
-        maxBytes: policy.maxOutputBytes,
+        timeoutMs: SANDBOX_TIMEOUT_MS,
+        maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
       });
     } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
@@ -388,7 +381,6 @@ export async function runBashInSandbox({
         },
       );
       await safeAudit(deps, ctx, {
-        profile: policy.profile,
         code: command,
         exitCode: null,
         durationMs,
@@ -398,10 +390,9 @@ export async function runBashInSandbox({
     }
 
     const durationMs = deps.now().getTime() - startedAt.getTime();
-    const stdout = truncateToBytes({ text: run.stdout, maxBytes: policy.maxOutputBytes });
-    const stderr = truncateToBytes({ text: run.stderr, maxBytes: policy.maxOutputBytes });
+    const stdout = truncateToBytes({ text: run.stdout, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
+    const stderr = truncateToBytes({ text: run.stderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
     await safeAudit(deps, ctx, {
-      profile: policy.profile,
       code: command,
       exitCode: run.exitCode,
       durationMs,
@@ -431,12 +422,10 @@ export async function writeSandboxFile({
   deps: SandboxRunDeps;
 }): Promise<WriteFileToolResult> {
   if (!deps.isEnabled()) return fail('kill_switch_off');
-  const policy = resolveExecutionPolicy({ profile: ctx.profile });
 
   const resolved = resolveSandboxPath(path);
   if (!resolved) {
     await safeAudit(deps, ctx, {
-      profile: policy.profile,
       code: `writeFile ${path}`,
       exitCode: null,
       durationMs: 0,
@@ -447,7 +436,7 @@ export async function writeSandboxFile({
   const bytes = Buffer.byteLength(content, 'utf8');
   if (bytes > MAX_WRITE_BYTES) return fail('content_too_large');
 
-  const session = await openSession(ctx, policy, deps);
+  const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason, session.retryAfter);
 
   try {
@@ -457,7 +446,6 @@ export async function writeSandboxFile({
     } catch {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, {
-        profile: policy.profile,
         code: `writeFile ${path}`,
         exitCode: null,
         durationMs,
@@ -467,7 +455,6 @@ export async function writeSandboxFile({
     }
     const durationMs = deps.now().getTime() - startedAt.getTime();
     await safeAudit(deps, ctx, {
-      profile: policy.profile,
       code: `writeFile ${path} (${bytes} bytes)`,
       exitCode: 0,
       durationMs,
@@ -488,12 +475,10 @@ export async function readSandboxFile({
   deps: SandboxRunDeps;
 }): Promise<ReadFileToolResult> {
   if (!deps.isEnabled()) return fail('kill_switch_off');
-  const policy = resolveExecutionPolicy({ profile: ctx.profile });
 
   const resolved = resolveSandboxPath(path);
   if (!resolved) {
     await safeAudit(deps, ctx, {
-      profile: policy.profile,
       code: `readFile ${path}`,
       exitCode: null,
       durationMs: 0,
@@ -502,7 +487,7 @@ export async function readSandboxFile({
     return fail('path_escape');
   }
 
-  const session = await openSession(ctx, policy, deps);
+  const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason, session.retryAfter);
 
   try {
@@ -520,7 +505,6 @@ export async function readSandboxFile({
     } catch {
       const durationMs = deps.now().getTime() - startedAt.getTime();
       await safeAudit(deps, ctx, {
-        profile: policy.profile,
         code: `readFile ${path}`,
         exitCode: null,
         durationMs,
@@ -531,7 +515,6 @@ export async function readSandboxFile({
     const durationMs = deps.now().getTime() - startedAt.getTime();
     if (buffer === null) {
       await safeAudit(deps, ctx, {
-        profile: policy.profile,
         code: `readFile ${path}`,
         exitCode: 1,
         durationMs,
@@ -541,10 +524,9 @@ export async function readSandboxFile({
     }
     const { text, truncated } = truncateToBytes({
       text: buffer.toString('utf8'),
-      maxBytes: policy.maxOutputBytes,
+      maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
     });
     await safeAudit(deps, ctx, {
-      profile: policy.profile,
       code: `readFile ${path}`,
       exitCode: 0,
       durationMs,
