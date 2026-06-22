@@ -31,8 +31,6 @@ function fakeRunDeps(): SandboxRunDeps {
     quota: {
       acquireSlot: () => true,
       releaseSlot: () => {},
-      preflight: async () => ({ allowed: true }),
-      charge: async () => {},
     },
     buildEnv: () => ({}),
     audit: async () => {},
@@ -79,10 +77,10 @@ describe('createSandboxTools', () => {
     const tools = createSandboxTools({
       runDeps,
       resolveContext: okResolve,
-      gate: async () => ({ ok: false, reason: 'rate_limited', error: 'over budget', retryAfter: 30 }),
+      gate: async () => ({ ok: false, reason: 'concurrency_limit', error: 'too many runs', retryAfter: 30 }),
     });
     const result = await exec(tools.bash, { command: 'echo hi' }, {});
-    expect(result).toEqual({ success: false, error: 'over budget', retryAfter: 30 });
+    expect(result).toEqual({ success: false, error: 'too many runs', retryAfter: 30 });
     expect(acquired).toBe(false);
   });
 

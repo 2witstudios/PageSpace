@@ -58,16 +58,6 @@ describe('gateSandboxToolCall', () => {
     expect(quotaChecked).toBe(false);
   });
 
-  it('given an authorized actor over the daily budget, should deny with rate_limited and retryAfter', async () => {
-    const result = await gateSandboxToolCall({
-      ...input,
-      deps: allowDeps({
-        checkQuota: async () => ({ allowed: false, reason: 'rate_limited', retryAfter: 42 }),
-      }),
-    });
-    expect(result).toMatchObject({ ok: false, reason: 'rate_limited', retryAfter: 42 });
-  });
-
   it('given an authorized actor at the concurrency ceiling, should deny with concurrency_limit', async () => {
     const result = await gateSandboxToolCall({
       ...input,

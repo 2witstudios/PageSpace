@@ -6,19 +6,13 @@ import {
   getCodeExecutionConcurrencyLimit,
   resetCodeExecutionConcurrency,
   checkCodeExecutionQuota,
-  chargeCodeExecutionBudget,
   type CodeExecutionQuotaDeps,
 } from '../quota';
-
-const allowAll: CodeExecutionQuotaDeps['checkRateLimitStatus'] = async () => ({
-  blocked: false,
-});
 
 function makeDeps(
   overrides: Partial<CodeExecutionQuotaDeps> = {},
 ): CodeExecutionQuotaDeps {
   return {
-    checkRateLimitStatus: allowAll,
     canAcquireSlot: () => true,
     ...overrides,
   };
@@ -58,14 +52,14 @@ describe('checkCodeExecutionQuota', () => {
     resetCodeExecutionConcurrency();
   });
 
-  it('given capacity and budget, should allow', async () => {
+  it('given concurrency capacity, should allow', async () => {
     const decision = await checkCodeExecutionQuota({
       userId: 'u1',
       driveId: 'd1',
       tier: 'pro',
       deps: makeDeps(),
     });
-    expect(decision.allowed).toBe(true);
+    expect(decision).toEqual({ allowed: true });
   });
 
   it('given no concurrency capacity, should deny with concurrency_limit', async () => {
@@ -78,126 +72,12 @@ describe('checkCodeExecutionQuota', () => {
     expect(decision).toEqual({ allowed: false, reason: 'concurrency_limit' });
   });
 
-  it('given the per-user daily budget is exhausted, should deny with rate_limited', async () => {
-    const decision = await checkCodeExecutionQuota({
-      userId: 'u1',
-      driveId: 'd1',
-      tier: 'pro',
-      deps: makeDeps({
-        checkRateLimitStatus: async (id: string) =>
-          id.includes('user:u1')
-            ? { blocked: true, retryAfter: 3600 }
-            : { blocked: false },
-      }),
-    });
-    expect(decision).toEqual({ allowed: false, reason: 'rate_limited', retryAfter: 3600 });
-  });
-
-  it('given the drive-scoped budget is exhausted, should deny with rate_limited', async () => {
-    const decision = await checkCodeExecutionQuota({
-      userId: 'u1',
-      driveId: 'd1',
-      tier: 'pro',
-      deps: makeDeps({
-        checkRateLimitStatus: async (id: string) =>
-          id.includes('drive:d1')
-            ? { blocked: true, retryAfter: 60 }
-            : { blocked: false },
-      }),
-    });
-    expect(decision).toEqual({ allowed: false, reason: 'rate_limited', retryAfter: 60 });
-  });
-
-  it('given a tenant-scoped budget exhaustion, should deny with rate_limited', async () => {
-    const decision = await checkCodeExecutionQuota({
-      userId: 'u1',
-      driveId: 'd1',
-      tenantId: 't1',
-      tier: 'pro',
-      deps: makeDeps({
-        checkRateLimitStatus: async (id: string) =>
-          id.includes('tenant:t1')
-            ? { blocked: true, retryAfter: 120 }
-            : { blocked: false },
-      }),
-    });
-    expect(decision).toEqual({ allowed: false, reason: 'rate_limited', retryAfter: 120 });
-  });
-
-  it('should check concurrency before reading budget so a full system never queries quota', async () => {
-    let statusCalls = 0;
-    await checkCodeExecutionQuota({
-      userId: 'u1',
-      driveId: 'd1',
-      tier: 'pro',
-      deps: makeDeps({
-        canAcquireSlot: () => false,
-        checkRateLimitStatus: async () => {
-          statusCalls += 1;
-          return { blocked: false };
-        },
-      }),
-    });
-    expect(statusCalls).toBe(0);
-  });
-});
-
-describe('checkCodeExecutionQuota — no driveId (global context)', () => {
-  beforeEach(() => {
-    resetCodeExecutionConcurrency();
-  });
-
-  it('given no driveId and user not rate limited, should check only user scope and allow', async () => {
-    const checked: string[] = [];
+  it('given no driveId (global context) and concurrency capacity, should allow', async () => {
     const decision = await checkCodeExecutionQuota({
       userId: 'u1',
       tier: 'pro',
-      deps: makeDeps({
-        checkRateLimitStatus: async (id: string) => {
-          checked.push(id);
-          return { blocked: false };
-        },
-      }),
+      deps: makeDeps(),
     });
-    expect(decision.allowed).toBe(true);
-    expect(checked).toEqual(['code-exec:user:u1']);
-    expect(checked.some((id) => id.includes('drive:'))).toBe(false);
-  });
-
-  it('given no driveId and user rate limited, should deny with rate_limited', async () => {
-    const decision = await checkCodeExecutionQuota({
-      userId: 'u1',
-      tier: 'pro',
-      deps: makeDeps({
-        checkRateLimitStatus: async (id: string) =>
-          id.includes('user:u1') ? { blocked: true, retryAfter: 3600 } : { blocked: false },
-      }),
-    });
-    expect(decision).toEqual({ allowed: false, reason: 'rate_limited', retryAfter: 3600 });
-  });
-});
-
-describe('chargeCodeExecutionBudget', () => {
-  it('given user, drive, and tenant, should charge all three scopes exactly once', async () => {
-    const charged: string[] = [];
-    await chargeCodeExecutionBudget({
-      userId: 'u1',
-      driveId: 'd1',
-      tenantId: 't1',
-      deps: { charge: async (id) => { charged.push(id); } },
-    });
-    expect(charged.sort()).toEqual(
-      ['code-exec:drive:d1', 'code-exec:tenant:t1', 'code-exec:user:u1'].sort(),
-    );
-  });
-
-  it('given no tenant, should charge only the user and drive scopes', async () => {
-    const charged: string[] = [];
-    await chargeCodeExecutionBudget({
-      userId: 'u1',
-      driveId: 'd1',
-      deps: { charge: async (id) => { charged.push(id); } },
-    });
-    expect(charged.sort()).toEqual(['code-exec:drive:d1', 'code-exec:user:u1']);
+    expect(decision).toEqual({ allowed: true });
   });
 });

@@ -15,7 +15,7 @@ import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/session-manager';
 import { acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
-import { acquireCodeExecutionSlot, releaseCodeExecutionSlot, chargeCodeExecutionBudget } from '@pagespace/lib/services/sandbox/quota';
+import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { buildTerminalHandlers, type CheckAuthResult, type SocketLike } from './terminal/terminal-handler';
@@ -144,9 +144,6 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
       timestamp: new Date(),
     },
   }).catch(() => {});
-
-  // Charge the sliding-window budget fire-and-forget after successful sandbox acquire.
-  chargeCodeExecutionBudget({ userId, driveId, tenantId }).catch(() => {});
 
   return { ok: true, sandboxId, sprite, releaseSlot };
 }

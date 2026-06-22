@@ -48,8 +48,6 @@ function makeDeps(over: Partial<GitSandboxRunDeps> = {}, token: string | null = 
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
       releaseSlot: () => { slots.released += 1; },
-      preflight: async () => ({ allowed: true }),
-      charge: async () => {},
     },
     buildEnv: () => ({ NODE_ENV: 'test' }),
     audit: async () => {},
@@ -80,8 +78,6 @@ function makeDepsWithSpy(token: string | null = 'ghp_test_token') {
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
       releaseSlot: () => { slots.released += 1; },
-      preflight: async () => ({ allowed: true }),
-      charge: async () => {},
     },
     buildEnv: () => ({ NODE_ENV: 'test' }),
     audit: async () => {},
