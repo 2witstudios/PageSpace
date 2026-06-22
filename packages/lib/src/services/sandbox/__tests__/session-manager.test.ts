@@ -54,6 +54,7 @@ function makeClient(overrides: Partial<SandboxClient> = {}) {
   const calls = {
     getOrCreate: [] as Array<{ name: string }>,
     get: [] as string[],
+    getRelock: [] as boolean[],
     stop: [] as string[],
   };
   const client: SandboxClient = {
@@ -61,8 +62,9 @@ function makeClient(overrides: Partial<SandboxClient> = {}) {
       calls.getOrCreate.push({ name });
       return { sandboxId: 'sbx-new' };
     },
-    get: async ({ sandboxId }) => {
+    get: async ({ sandboxId, options }) => {
       calls.get.push(sandboxId);
+      calls.getRelock.push(options !== undefined);
       return { sandboxId };
     },
     stop: async ({ sandboxId }) => {
@@ -108,8 +110,25 @@ describe('acquireConversationSandbox', () => {
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
     expect(calls.get).toEqual(['sbx-existing']);
+    expect(calls.getRelock).toEqual([false]); // within the warm window → cheap reconnect, no relock
     expect(calls.getOrCreate).toEqual([]);
     expect(storeCalls.touch).toBe(1);
+  });
+
+  it('given a resume past the warm window, should reconnect WITH a relock (reapply egress)', async () => {
+    // Idle ~1 h: past the 5-min warm window, so the resume reapplies the egress
+    // lockdown (relock) instead of a bare reconnect.
+    const stale = seedRecord({ lastActiveAt: new Date('2026-06-01T11:00:00.000Z') });
+    const { store } = makeStore(stale);
+    const { client, calls } = makeClient();
+    const result = await acquireConversationSandbox({
+      ...actor,
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
+    expect(calls.get).toEqual(['sbx-existing']);
+    expect(calls.getRelock).toEqual([true]);
+    expect(calls.getOrCreate).toEqual([]);
   });
 
   it('given an UNAUTHORIZED actor with an existing warm session, should deny and never reconnect (resume re-authz)', async () => {
@@ -134,13 +153,13 @@ describe('acquireConversationSandbox', () => {
     expect(storeCalls.remove).toBe(0);
   });
 
-  it('given an authorized actor whose session is idle-expired, should tear down the stale VM then create fresh', async () => {
+  it('given an authorized actor whose session is abandoned past the hard-expiry ceiling, should tear down the stale VM then create fresh', async () => {
     const stale = seedRecord({ lastActiveAt: new Date('2026-06-01T11:00:00.000Z') });
     const { store, calls: storeCalls } = makeStore(stale);
     const { client, calls } = makeClient();
     const result = await acquireConversationSandbox({
       ...actor,
-      idleTimeoutMs: 5 * 60 * 1000,
+      hardExpiryMs: 5 * 60 * 1000,
       deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });

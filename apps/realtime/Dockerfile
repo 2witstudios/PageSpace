@@ -2,7 +2,9 @@
 # Multi-stage build for the realtime Socket.IO service
 
 # Stage 1: Install dependencies and build
-FROM node:22.17.0-alpine AS builder
+# Node 24: the @fly/sprites SDK (terminal PTY relay) requires Node >= 24.0.0.
+# Keep this in lockstep with apps/web/Dockerfile.
+FROM node:24.16.0-alpine AS builder
 WORKDIR /app
 
 COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
@@ -36,7 +38,8 @@ RUN bun run --filter '@pagespace/db' build && \
     bun run --filter 'realtime' build
 
 # Stage 2: Production runner
-FROM node:22.17.0-alpine AS runner
+# Node 24: required by @fly/sprites (see builder stage).
+FROM node:24.16.0-alpine AS runner
 WORKDIR /app
 
 COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun

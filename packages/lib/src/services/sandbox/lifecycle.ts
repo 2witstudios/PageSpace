@@ -34,7 +34,10 @@ export interface SandboxSessionRef {
 
 export type SandboxLifecyclePlan =
   | { action: 'create' }
-  | { action: 'resume'; sandboxId: string }
+  /** `relock`: reapply the egress lockdown on hand-back. Set once the session has
+   *  been idle past the warm window (the VM has likely hibernated, so its policy
+   *  may be stale); a rapid in-window resume leaves it false to reconnect cheaply. */
+  | { action: 'resume'; sandboxId: string; relock: boolean }
   | { action: 'teardown'; sandboxId: string; reason: TeardownReason }
   | { action: 'noop' }
   | { action: 'deny'; reason: CodeExecutionDenialReason };
@@ -44,20 +47,38 @@ export interface PlanLifecycleInput {
   authorization: CanRunCodeResult;
   existingSession?: SandboxSessionRef | null;
   now: Date;
-  /** A session older than this since last activity is torn down. */
-  idleTimeoutMs?: number;
+  /**
+   * Hard reclaim ceiling. A session untouched for longer than this is torn down
+   * and re-provisioned — the only idle teardown. It is deliberately LONG: Sprites
+   * hibernate when idle and wake on demand, so a normal multi-hour gap must
+   * resume the hibernated VM (preserving its filesystem/process state), NOT
+   * destroy it. This ceiling only reclaims genuinely abandoned sessions.
+   */
+  hardExpiryMs?: number;
+  /**
+   * Resumes idle longer than this reapply the egress lockdown (the VM has likely
+   * hibernated, so its policy may be stale). Resumes WITHIN it reconnect cheaply
+   * without a relock round-trip — so a burst of sequential commands isn't taxed.
+   */
+  warmWindowMs?: number;
   intent?: LifecycleIntent;
 }
 
-// 15 minutes: long enough to keep a multi-turn conversation's shell warm, short
-// enough that an abandoned conversation's VM is reclaimed promptly.
-const DEFAULT_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+// 24 hours: well beyond any plausible conversation gap. Within this window an
+// idle session RESUMES (the platform hibernated the VM and wakes it on the next
+// command); only a session abandoned for a full day is reclaimed.
+const DEFAULT_HARD_EXPIRY_MS = 24 * 60 * 60 * 1000;
+
+// 5 minutes: a resume after a longer gap reapplies egress; rapid back-to-back
+// commands stay cheap.
+const DEFAULT_WARM_WINDOW_MS = 5 * 60 * 1000;
 
 export function planSandboxLifecycle({
   authorization,
   existingSession = null,
   now,
-  idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
+  hardExpiryMs = DEFAULT_HARD_EXPIRY_MS,
+  warmWindowMs = DEFAULT_WARM_WINDOW_MS,
   intent = 'run',
 }: PlanLifecycleInput): SandboxLifecyclePlan {
   // Cleanup first, and unconditionally: an ending session is reclaimed whether
@@ -85,9 +106,14 @@ export function planSandboxLifecycle({
   }
 
   const idleFor = now.getTime() - existingSession.lastActiveAt.getTime();
-  if (idleFor >= idleTimeoutMs) {
+  if (idleFor >= hardExpiryMs) {
+    // Abandoned past the hard ceiling — reclaim and re-provision.
     return { action: 'teardown', sandboxId: existingSession.sandboxId, reason: 'idle' };
   }
 
-  return { action: 'resume', sandboxId: existingSession.sandboxId };
+  // Within the hard-expiry window: resume. A hibernated VM wakes on the next exec,
+  // so we keep the session and its state rather than destroying a sleeping (near-
+  // free) VM. Relock once the session has been idle past the warm window, so a
+  // stale egress policy on a long-hibernated VM is refreshed before hand-back.
+  return { action: 'resume', sandboxId: existingSession.sandboxId, relock: idleFor >= warmWindowMs };
 }
