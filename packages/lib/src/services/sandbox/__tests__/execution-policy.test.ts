@@ -1,116 +1,69 @@
 import { describe, it, expect } from 'vitest';
-import { resolveExecutionPolicy, SAFE_MINIMUM_PROFILE } from '../execution-policy';
+import {
+  SANDBOX_EGRESS_ALLOWLIST,
+  SANDBOX_TIMEOUT_MS,
+  SANDBOX_MAX_OUTPUT_BYTES,
+} from '../execution-policy';
 
-describe('resolveExecutionPolicy — dev profile', () => {
-  it('given the dev profile, should be persistent', () => {
-    expect(resolveExecutionPolicy({ profile: 'dev' }).persistent).toBe(true);
+describe('SANDBOX_EGRESS_ALLOWLIST', () => {
+  it('should include GitHub hosts for git clone, API, and releases', () => {
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('github.com');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('api.github.com');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('raw.githubusercontent.com');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('objects.githubusercontent.com');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('uploads.github.com');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('codeload.github.com');
   });
 
-  it('given the dev profile, should have extended resource bounds', () => {
-    const policy = resolveExecutionPolicy({ profile: 'dev' });
-    expect(policy.timeoutMs).toBe(120_000);
-    expect(policy.memoryMb).toBe(4096);
-    expect(policy.storageGb).toBe(20);
-    expect(policy.vcpus).toBe(2);
+  it('should include npm/bun registry', () => {
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('registry.npmjs.org');
   });
 
-  it('given the dev profile, should allow GitHub CDN egress', () => {
-    const { egressAllowlist } = resolveExecutionPolicy({ profile: 'dev' });
-    expect(egressAllowlist).toContain('github.com');
-    expect(egressAllowlist).toContain('api.github.com');
-    expect(egressAllowlist).toContain('raw.githubusercontent.com');
+  it('should include PyPI hosts', () => {
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('pypi.org');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('files.pythonhosted.org');
   });
 
-  it('given the dev profile, should allow package registry egress', () => {
-    const { egressAllowlist } = resolveExecutionPolicy({ profile: 'dev' });
-    expect(egressAllowlist).toContain('registry.npmjs.org');
-    expect(egressAllowlist).toContain('pypi.org');
-    expect(egressAllowlist).toContain('crates.io');
+  it('should include Cargo/crates.io hosts', () => {
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('crates.io');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('static.crates.io');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('index.crates.io');
   });
 
-  it('given the dev profile, should have no wildcard entries in egress allowlist', () => {
-    const { egressAllowlist } = resolveExecutionPolicy({ profile: 'dev' });
-    for (const host of egressAllowlist) {
+  it('should include Go module proxy hosts', () => {
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('proxy.golang.org');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('sum.golang.org');
+  });
+
+  it('should contain no wildcard entries', () => {
+    for (const host of SANDBOX_EGRESS_ALLOWLIST) {
       expect(host).not.toContain('*');
     }
   });
 
-  it('given the dev profile, should tag the policy with the dev profile name', () => {
-    expect(resolveExecutionPolicy({ profile: 'dev' }).profile).toBe('dev');
-  });
-
-  it('given the dev profile, should return an immutable policy (frozen egress array)', () => {
-    const policy = resolveExecutionPolicy({ profile: 'dev' });
+  it('should be frozen so a caller cannot mutate it', () => {
     expect(() => {
-      (policy.egressAllowlist as string[]).push('evil.example.com');
+      (SANDBOX_EGRESS_ALLOWLIST as unknown as string[]).push('evil.example.com');
     }).toThrow();
-  });
-
-  it('given the default profile, should still be non-persistent (dev profile should not affect others)', () => {
-    expect(resolveExecutionPolicy({ profile: 'default' }).persistent).toBe(false);
   });
 });
 
-describe('resolveExecutionPolicy', () => {
-  it('given no profile, should resolve the default profile with explicit caps', () => {
-    const policy = resolveExecutionPolicy();
-    expect(policy.timeoutMs).toBeGreaterThan(0);
-    expect(policy.vcpus).toBeGreaterThan(0);
-    expect(policy.memoryMb).toBeGreaterThan(0);
-    expect(policy.storageGb).toBeGreaterThan(0);
-    expect(policy.maxOutputBytes).toBeGreaterThan(0);
+describe('SANDBOX_TIMEOUT_MS', () => {
+  it('should be a positive number', () => {
+    expect(SANDBOX_TIMEOUT_MS).toBeGreaterThan(0);
   });
 
-  it('given any profile, should default-deny egress with an empty allowlist', () => {
-    expect(resolveExecutionPolicy({ profile: 'default' }).egressAllowlist).toEqual([]);
-    expect(resolveExecutionPolicy({ profile: 'minimal' }).egressAllowlist).toEqual([]);
+  it('should be 120 seconds', () => {
+    expect(SANDBOX_TIMEOUT_MS).toBe(120_000);
+  });
+});
+
+describe('SANDBOX_MAX_OUTPUT_BYTES', () => {
+  it('should be a positive number', () => {
+    expect(SANDBOX_MAX_OUTPUT_BYTES).toBeGreaterThan(0);
   });
 
-  it('given any profile, should never request a persistent sandbox', () => {
-    expect(resolveExecutionPolicy({ profile: 'default' }).persistent).toBe(false);
-    expect(resolveExecutionPolicy({ profile: 'minimal' }).persistent).toBe(false);
-  });
-
-  it('given an unknown profile, should fall back to the safe minimum', () => {
-    const policy = resolveExecutionPolicy({ profile: 'totally-made-up' });
-    expect(policy).toEqual(SAFE_MINIMUM_PROFILE);
-  });
-
-  it('given a prototype key as the profile, should fall back to the safe minimum (no inherited lookup)', () => {
-    // A bracket lookup would resolve these to truthy Object.prototype members and
-    // skip the fallback, yielding a policy with no bounds. The own-key guard must
-    // treat them as unknown profiles.
-    for (const profile of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
-      const policy = resolveExecutionPolicy({ profile });
-      expect(policy).toEqual(SAFE_MINIMUM_PROFILE);
-      expect(policy.timeoutMs).toBeGreaterThan(0);
-      expect(policy.egressAllowlist).toEqual([]);
-    }
-  });
-
-  it('given the minimal profile, should be no more permissive than the default profile', () => {
-    const minimal = resolveExecutionPolicy({ profile: 'minimal' });
-    const def = resolveExecutionPolicy({ profile: 'default' });
-    expect(minimal.timeoutMs).toBeLessThanOrEqual(def.timeoutMs);
-    expect(minimal.memoryMb).toBeLessThanOrEqual(def.memoryMb);
-    expect(minimal.storageGb).toBeLessThanOrEqual(def.storageGb);
-    expect(minimal.maxOutputBytes).toBeLessThanOrEqual(def.maxOutputBytes);
-  });
-
-  it('should set an explicit region rather than relying on a platform default', () => {
-    expect(resolveExecutionPolicy().region).toBe('iad');
-  });
-
-  it('should tag the resolved policy with the profile name it represents', () => {
-    expect(resolveExecutionPolicy({ profile: 'default' }).profile).toBe('default');
-    expect(resolveExecutionPolicy({ profile: 'minimal' }).profile).toBe('minimal');
-  });
-
-  it('should return an immutable policy so the default-deny egress baseline cannot be mutated', () => {
-    const policy = resolveExecutionPolicy();
-    expect(() => {
-      (policy.egressAllowlist as string[]).push('evil.example.com');
-    }).toThrow();
-    expect(policy.egressAllowlist).toEqual([]);
+  it('should be 256 KB', () => {
+    expect(SANDBOX_MAX_OUTPUT_BYTES).toBe(256 * 1024);
   });
 });

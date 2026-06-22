@@ -14,7 +14,6 @@ const baseInput: CodeExecutionAuditInput = {
   actorDisplayName: 'Dev',
   driveId: 'd1',
   conversationId: 'c1',
-  profile: 'default',
   code: 'console.log("hello")',
   exitCode: 0,
   durationMs: 1234,
@@ -28,7 +27,7 @@ describe('buildAuditRecord', () => {
     expect(record).toMatchObject({
       userId: 'u1',
       actorEmail: 'dev@example.com',
-      profile: 'default',
+      profile: 'sandbox',
       exitCode: 0,
       durationMs: 1234,
       costUsd: 0.0021,

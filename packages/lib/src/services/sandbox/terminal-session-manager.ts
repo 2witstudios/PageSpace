@@ -1,5 +1,5 @@
 import { createHmac } from 'crypto';
-import { mapPolicyToSandboxOptions } from './sandbox-options';
+import { SANDBOX_EGRESS_ALLOWLIST } from './execution-policy';
 import type { SandboxClient } from './session-manager';
 import { loggers } from '../../logging/logger-config';
 
@@ -155,7 +155,7 @@ async function provisionFreshTerminal({
   input: AcquireTerminalSandboxInput;
 }): Promise<AcquireTerminalSandboxResult> {
   const { deps, pageId, userId, driveId } = input;
-  const options = mapPolicyToSandboxOptions({});
+  const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
   let sandboxId: string;
   try {

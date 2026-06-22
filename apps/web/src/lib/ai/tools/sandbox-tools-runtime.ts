@@ -208,7 +208,6 @@ export function createResolveSandboxActorContext(
         aiProvider: context?.aiProvider,
         aiModel: context?.aiModel,
         tier: toTier(actorRow?.subscriptionTier),
-        profile: 'default',
       };
     }
 
@@ -234,7 +233,6 @@ export function createResolveSandboxActorContext(
       aiProvider: context?.aiProvider,
       aiModel: context?.aiModel,
       tier: toTier(actorRow?.subscriptionTier),
-      profile: 'default',
     };
   };
 }

@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
   createSpritesSandboxClient,
-  buildSpriteConfig,
   isSpriteNotFoundError,
   SandboxCommandTimeoutError,
   SandboxOutputLimitError,
@@ -11,10 +10,9 @@ import {
   type SpriteCommandLike,
   type SpriteFsLike,
 } from '../sprites';
-import { mapPolicyToSandboxOptions } from '../../sandbox-options';
-import { resolveExecutionPolicy } from '../../execution-policy';
+import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 
-const options = mapPolicyToSandboxOptions({ policy: resolveExecutionPolicy() });
+const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
 /**
  * A fake `SpriteCommand` mirroring the SDK shape the driver consumes: stdout /
@@ -99,26 +97,6 @@ function makeSdk(over: Partial<SpritesSdk> = {}) {
   };
   return { sdk, calls, sprite };
 }
-
-describe('buildSpriteConfig', () => {
-  it('given policy options, should map RAM, CPUs, storage, and region from the policy', () => {
-    expect(buildSpriteConfig({ options })).toEqual({
-      ramMB: options.memoryMb,
-      cpus: options.vcpus,
-      region: options.region,
-      storageGB: options.storageGb,
-    });
-  });
-
-  it('should set an explicit storage cap (not the platform/quota default)', () => {
-    expect(buildSpriteConfig({ options }).storageGB).toBe(options.storageGb);
-    expect(buildSpriteConfig({ options }).storageGB).toBeGreaterThan(0);
-  });
-
-  it('should map the Fly region (iad, not iad1)', () => {
-    expect(buildSpriteConfig({ options }).region).toBe('iad');
-  });
-});
 
 describe('isSpriteNotFoundError', () => {
   it('treats 404 / 410 statuses and not-found codes/messages as a vanished Sprite', () => {

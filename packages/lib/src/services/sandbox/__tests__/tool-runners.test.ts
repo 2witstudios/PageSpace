@@ -191,18 +191,17 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
-  it('given output over the policy cap, should truncate and flag it', async () => {
-    const big = 'x'.repeat(100 * 1024);
+  it('given output over the cap, should truncate and flag it', async () => {
+    const big = 'x'.repeat(300 * 1024);
     const { deps } = makeDeps({
       reconnect: async () =>
         makeSandbox({ runCommand: async () => ({ exitCode: 0, stdout: big, stderr: '' }) }),
     });
-    const result = await runBashInSandbox({ command: 'cat big', ctx: makeCtx({ profile: 'minimal' }), deps });
+    const result = await runBashInSandbox({ command: 'cat big', ctx: makeCtx(), deps });
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.truncated).toBe(true);
-    // SAFE_MINIMUM cap is 32KB.
-    expect(Buffer.byteLength(result.stdout, 'utf8')).toBeLessThanOrEqual(32 * 1024);
+    expect(Buffer.byteLength(result.stdout, 'utf8')).toBeLessThanOrEqual(256 * 1024);
   });
 
   it('given a SIGKILL exit (137), should audit a timeout anomaly', async () => {
@@ -310,7 +309,7 @@ describe('runBashInSandbox', () => {
     expect(seen).toEqual({ cmd: 'sh', args: ['-c', 'echo $(whoami)'] });
   });
 
-  it('should forward the policy wall-clock timeout and output-byte cap to the driver', async () => {
+  it('should forward the flat timeout and output-byte cap to the driver', async () => {
     let seen: { timeoutMs?: number; maxBytes?: number } | null = null;
     const { deps } = makeDeps({
       reconnect: async () =>
@@ -321,25 +320,8 @@ describe('runBashInSandbox', () => {
           },
         }),
     });
-    // default profile: 30s wall-clock, 64KB output cap.
-    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ profile: 'default' }), deps });
-    expect(seen).toEqual({ timeoutMs: 30_000, maxBytes: 64 * 1024 });
-  });
-
-  it('given the minimal profile, should forward its tighter timeout and output cap', async () => {
-    let seen: { timeoutMs?: number; maxBytes?: number } | null = null;
-    const { deps } = makeDeps({
-      reconnect: async () =>
-        makeSandbox({
-          runCommand: async (a) => {
-            seen = { timeoutMs: a.timeoutMs, maxBytes: a.maxBytes };
-            return { exitCode: 0, stdout: '', stderr: '' };
-          },
-        }),
-    });
-    // minimal profile: 10s wall-clock, 32KB output cap.
-    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ profile: 'minimal' }), deps });
-    expect(seen).toEqual({ timeoutMs: 10_000, maxBytes: 32 * 1024 });
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(seen).toEqual({ timeoutMs: 120_000, maxBytes: 256 * 1024 });
   });
 });
 
@@ -399,11 +381,11 @@ describe('readSandboxFile', () => {
   });
 
   it('given a file larger than the cap, should truncate', async () => {
-    const big = Buffer.from('y'.repeat(100 * 1024));
+    const big = Buffer.from('y'.repeat(300 * 1024));
     const { deps } = makeDeps({
       reconnect: async () => makeSandbox({ readFileToBuffer: async () => big }),
     });
-    const result = await readSandboxFile({ path: 'big.txt', ctx: makeCtx({ profile: 'minimal' }), deps });
+    const result = await readSandboxFile({ path: 'big.txt', ctx: makeCtx(), deps });
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.truncated).toBe(true);
