@@ -340,7 +340,14 @@ async function applyEgressLockdown({
 }): Promise<void> {
   try {
     await sprite.updateNetworkPolicy(buildSpriteNetworkPolicy({ egressAllowlist: options.egressAllowlist }));
-    await sprite.filesystem('/').mkdir(SANDBOX_ROOT, { recursive: true });
+    // Use spawn + runSpawned (30 s wall-clock) to create the workspace dir instead
+    // of filesystem().mkdir(). The filesystem API uses a bare fetch() with no
+    // AbortSignal — it hangs for 52–90 s when the Sprite VM is cold-booting and
+    // Fly's proxy eventually closes the connection. spawn() connects via WebSocket
+    // which is the designated wake-up path; runSpawned enforces the timeout and
+    // SIGKILLs if the Sprite never becomes ready.
+    const cmd = sprite.spawn('mkdir', ['-p', SANDBOX_ROOT]);
+    await runSpawned(cmd, DEFAULT_MAX_OUTPUT_BYTES, 30_000);
   } catch (error) {
     if (destroyOnFailure) {
       try {

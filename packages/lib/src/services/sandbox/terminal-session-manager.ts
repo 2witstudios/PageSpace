@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto';
 import { mapPolicyToSandboxOptions } from './sandbox-options';
 import type { SandboxClient } from './session-manager';
+import { loggers } from '../../logging/logger-config';
 
 export interface TerminalSessionKeyInput {
   tenantId: string;
@@ -119,7 +120,7 @@ export interface AcquireTerminalSandboxInput {
 
 export type AcquireTerminalSandboxResult =
   | { ok: true; sandboxId: string; resumed: boolean }
-  | { ok: false; reason: 'deny' | 'provision_failed' | 'error' };
+  | { ok: false; reason: 'deny' | 'provision_failed' | 'error'; cause?: unknown };
 
 async function safeStop(client: SandboxClient, sandboxId: string): Promise<boolean> {
   try {
@@ -153,24 +154,30 @@ async function provisionFreshTerminal({
   key: string;
   input: AcquireTerminalSandboxInput;
 }): Promise<AcquireTerminalSandboxResult> {
-  const { deps, pageId, userId } = input;
+  const { deps, pageId, userId, driveId } = input;
   const options = mapPolicyToSandboxOptions({});
 
   let sandboxId: string;
   try {
     const handle = await deps.client.getOrCreate({ name: key, options });
     sandboxId = handle.sandboxId;
-  } catch {
-    return { ok: false, reason: 'provision_failed' };
+  } catch (error) {
+    const meta = { reason: 'provision_failed', userId, pageId, driveId };
+    if (error instanceof Error) {
+      loggers.api.error('Terminal sandbox acquisition failed', error, meta);
+    } else {
+      loggers.api.error('Terminal sandbox acquisition failed', meta);
+    }
+    return { ok: false, reason: 'provision_failed', cause: error };
   }
 
   try {
     await deps.store.save({ sessionKey: key, pageId, userId, sandboxId, now: deps.now() });
-  } catch {
+  } catch (error) {
     // The sandbox exists but we could not record the link — tear it down to
     // prevent an unreachable, unaudited orphan.
     await safeStop(deps.client, sandboxId);
-    return { ok: false, reason: 'provision_failed' };
+    return { ok: false, reason: 'provision_failed', cause: error };
   }
 
   return { ok: true, sandboxId, resumed: false };
@@ -231,8 +238,8 @@ export async function acquireTerminalSandbox(
       default:
         return { ok: false, reason: 'error' };
     }
-  } catch {
-    return { ok: false, reason: 'error' };
+  } catch (error) {
+    return { ok: false, reason: 'error', cause: error };
   }
 }
 

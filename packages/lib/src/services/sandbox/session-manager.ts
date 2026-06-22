@@ -19,6 +19,7 @@
  */
 
 import { getValidatedEnv } from '../../config/env-validation';
+import { loggers } from '../../logging/logger-config';
 import type { CanRunCodeResult, CanRunCodeInput, CodeExecutionDenialReason } from './can-run-code';
 import type { ExecutionPolicy } from './execution-policy';
 import { mapPolicyToSandboxOptions, type SandboxCreateOptions } from './sandbox-options';
@@ -69,7 +70,7 @@ export interface AcquireSandboxInput {
 
 export type AcquireSandboxResult =
   | { ok: true; sandboxId: string; resumed: boolean }
-  | { ok: false; reason: CodeExecutionDenialReason | 'provision_failed' };
+  | { ok: false; reason: CodeExecutionDenialReason | 'provision_failed'; cause?: unknown };
 
 /**
  * Read the session-key secret from validated env. Returns '' (→ fail-closed deny
@@ -134,8 +135,14 @@ async function provisionFresh({
   let handle: SandboxHandle;
   try {
     handle = await deps.client.getOrCreate({ name: key, options });
-  } catch {
-    return { ok: false, reason: 'provision_failed' };
+  } catch (error) {
+    const meta = { reason: 'provision_failed', userId, conversationId, driveId };
+    if (error instanceof Error) {
+      loggers.ai.error('Sandbox acquisition failed', error, meta);
+    } else {
+      loggers.ai.error('Sandbox acquisition failed', meta);
+    }
+    return { ok: false, reason: 'provision_failed', cause: error };
   }
 
   try {
@@ -148,11 +155,11 @@ async function provisionFresh({
       sandboxId: handle.sandboxId,
       now: deps.now(),
     });
-  } catch {
+  } catch (error) {
     // The sandbox exists but we could not record the link — tear it down so it
     // can never linger as an unreachable, unaudited orphan.
     await safeStop(deps.client, handle.sandboxId);
-    return { ok: false, reason: 'provision_failed' };
+    return { ok: false, reason: 'provision_failed', cause: error };
   }
 
   return { ok: true, sandboxId: handle.sandboxId, resumed: false };
@@ -219,8 +226,8 @@ export async function acquireConversationSandbox(
       default:
         return { ok: false, reason: 'error' };
     }
-  } catch {
-    return { ok: false, reason: 'error' };
+  } catch (error) {
+    return { ok: false, reason: 'error', cause: error };
   }
 }
 

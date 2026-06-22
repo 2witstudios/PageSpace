@@ -164,16 +164,17 @@ describe('acquireConversationSandbox', () => {
 
   it('given provisioning that throws, should report failure without persisting a link', async () => {
     const { store, calls: storeCalls } = makeStore();
+    const cause = new Error('platform down');
     const { client } = makeClient({
       getOrCreate: async () => {
-        throw new Error('platform down');
+        throw cause;
       },
     });
     const result = await acquireConversationSandbox({
       ...actor,
       deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: false, reason: 'provision_failed' });
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause });
     expect(storeCalls.save).toBe(0);
   });
 
@@ -193,7 +194,9 @@ describe('acquireConversationSandbox', () => {
         secret: SECRET,
       },
     });
-    expect(result).toEqual({ ok: false, reason: 'provision_failed' });
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.cause).toBeInstanceOf(Error);
     expect(calls.stop).toEqual(['sbx-new']);
   });
 
@@ -207,7 +210,9 @@ describe('acquireConversationSandbox', () => {
       ...actor,
       deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(result).toMatchObject({ ok: false, reason: 'error' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.cause).toBeInstanceOf(Error);
     expect(calls.getOrCreate).toEqual([]);
     expect(calls.get).toEqual([]);
   });

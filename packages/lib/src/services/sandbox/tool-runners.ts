@@ -98,6 +98,12 @@ function safeLogError(
   }
 }
 
+function asError(value: unknown): Error | undefined {
+  if (value instanceof Error) return value;
+  if (value === undefined || value === null) return undefined;
+  return new Error(String(value));
+}
+
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
   | 'no_drive_access'

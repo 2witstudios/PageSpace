@@ -280,7 +280,9 @@ describe('acquireTerminalSandbox', () => {
       canRun: true,
       deps: { store: failingStore.store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: false, reason: 'provision_failed' });
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.cause).toBeInstanceOf(Error);
     expect(calls.stop).toEqual(['sbx-new']);
   });
 
