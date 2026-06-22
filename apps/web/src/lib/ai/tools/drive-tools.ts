@@ -10,7 +10,9 @@ import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activi
 import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
+import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service'
+import { publishHomePageAtRoot } from '@/lib/canvas/publish-page'
+import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import type { ToolExecutionContext } from '../core/types';
 import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
 
@@ -564,6 +566,13 @@ This context persists across conversations and helps provide better assistance. 
           });
         } catch (sideEffectError) {
           console.error('Home page updated, but activity logging failed:', sideEffectError);
+        }
+
+        // Auto-publish home page at subdomain root (fire-and-forget).
+        if (pageId && isPublishConfigured()) {
+          publishHomePageAtRoot(driveId, userId).catch((err) => {
+            console.warn('Failed to auto-publish home page at root:', err instanceof Error ? err.message : String(err));
+          });
         }
 
         const message = pageId

@@ -9,7 +9,9 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker'
+import { publishHomePageAtRoot } from '@/lib/canvas/publish-page'
+import { isPublishConfigured } from '@/lib/canvas/published-storage';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -210,6 +212,12 @@ export async function PATCH(
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'update' } });
 
+    // Auto-publish home page at subdomain root when homePageId changes (fire-and-forget).
+    if (typeof validatedBody.homePageId === "string" && validatedBody.homePageId && isPublishConfigured()) {
+      publishHomePageAtRoot(driveId, userId).catch((err) => {
+        loggers.api.warn("Failed to auto-publish home page at root", { driveId, error: err instanceof Error ? err.message : String(err) });
+      });
+    }
     return NextResponse.json(updatedDrive);
   } catch (error) {
     if (error instanceof z.ZodError) {
