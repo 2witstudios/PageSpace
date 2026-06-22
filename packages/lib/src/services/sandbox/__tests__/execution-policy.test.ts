@@ -13,6 +13,8 @@ describe('SANDBOX_EGRESS_ALLOWLIST', () => {
     expect(SANDBOX_EGRESS_ALLOWLIST).toContain('objects.githubusercontent.com');
     expect(SANDBOX_EGRESS_ALLOWLIST).toContain('uploads.github.com');
     expect(SANDBOX_EGRESS_ALLOWLIST).toContain('codeload.github.com');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('github-releases.githubusercontent.com');
+    expect(SANDBOX_EGRESS_ALLOWLIST).toContain('release-assets.githubusercontent.com');
   });
 
   it('should include npm/bun registry', () => {

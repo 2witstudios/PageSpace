@@ -1,7 +1,8 @@
 export const SANDBOX_EGRESS_ALLOWLIST = Object.freeze([
-  // GitHub — git clone, API, releases, LFS
+  // GitHub — git clone, API, releases, LFS, release asset CDN
   'github.com', 'api.github.com', 'raw.githubusercontent.com',
   'objects.githubusercontent.com', 'uploads.github.com', 'codeload.github.com',
+  'github-releases.githubusercontent.com', 'release-assets.githubusercontent.com',
   // npm / bun
   'registry.npmjs.org',
   // PyPI
