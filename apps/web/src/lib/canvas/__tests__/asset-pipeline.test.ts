@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractFileIds, rewriteCanvasAssets } from '../asset-pipeline';
+import { extractFileIds, extractFirstPublishedImageUrl, rewriteCanvasAssets } from '../asset-pipeline';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -295,5 +295,42 @@ describe('rewriteCanvasAssets', () => {
     const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
 
     expect(result.html).toContain('/api/files/fileId1/view');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractFirstPublishedImageUrl — pure, no I/O
+// ---------------------------------------------------------------------------
+
+describe('extractFirstPublishedImageUrl', () => {
+  it('given an img with an https src, should return that URL', () => {
+    const url = 'https://cdn.example.com/assets/files/abc/original';
+    expect(extractFirstPublishedImageUrl(`<img src="${url}">`)).toBe(url);
+  });
+
+  it('given multiple images, should return only the first one', () => {
+    const first = 'https://cdn.example.com/assets/first.png';
+    const second = 'https://cdn.example.com/assets/second.png';
+    expect(extractFirstPublishedImageUrl(`<img src="${first}"><img src="${second}">`)).toBe(first);
+  });
+
+  it('given an img with a relative src, should return undefined', () => {
+    expect(extractFirstPublishedImageUrl('<img src="/api/files/abc/view">')).toBeUndefined();
+  });
+
+  it('given an img with an http src, should return undefined', () => {
+    expect(extractFirstPublishedImageUrl('<img src="http://insecure.example.com/img.png">')).toBeUndefined();
+  });
+
+  it('given a data:image URI, should return undefined', () => {
+    expect(extractFirstPublishedImageUrl('<img src="data:image/png;base64,abc">')).toBeUndefined();
+  });
+
+  it('given no img tag, should return undefined', () => {
+    expect(extractFirstPublishedImageUrl('<p>hello world</p>')).toBeUndefined();
+  });
+
+  it('given an empty string, should return undefined', () => {
+    expect(extractFirstPublishedImageUrl('')).toBeUndefined();
   });
 });

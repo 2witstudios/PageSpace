@@ -32,6 +32,21 @@ const referenceKey = ({ id, kind, driveId }: FileReference): string =>
   driveId ? `dashboard:${driveId}:${id}:${kind}` : `api:${id}:${kind}`;
 
 /**
+ * Return the first `<img src="…">` URL in already-rewritten canvas HTML whose
+ * src is an absolute HTTPS URL — i.e. a public CDN asset placed there by
+ * rewriteCanvasAssets. Returns undefined when the canvas has no such image.
+ *
+ * Used to populate og:image with the first image the author placed on the
+ * canvas, without requiring any extra schema column or settings UI.
+ *
+ * Pure function: no I/O, no env reads.
+ */
+export function extractFirstPublishedImageUrl(html: string): string | undefined {
+  const match = html.match(/<img\b[^>]+\bsrc="(https:\/\/[^"]+)"/i);
+  return match?.[1];
+}
+
+/**
  * Extract all unique PageSpace file IDs referenced in canvas HTML.
  *
  * Scans `src`, `href`, CSS `url()` values — any occurrence of the pattern
