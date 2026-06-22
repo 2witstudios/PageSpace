@@ -229,6 +229,62 @@ describe('renderCanvasDocument — OG meta tags', () => {
   });
 });
 
+describe('renderCanvasDocument — OG meta injection safety', () => {
+  it('given pageUrl containing a double-quote, should HTML-escape it in og:url', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://evil.com?a="<b>' });
+    expect(out).not.toContain('"<b>');
+    expect(out).toContain('content="https://evil.com?a=&quot;&lt;b&gt;"');
+  });
+
+  it('given ogImageUrl containing a double-quote, should HTML-escape it in og:image', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+      ogImageUrl: 'https://pagespace.ai/img.png?a="bad',
+    });
+    expect(out).not.toContain('"bad');
+    expect(out).toContain('content="https://pagespace.ai/img.png?a=&quot;bad"');
+  });
+
+  it('given faviconBaseUrl containing a double-quote, should HTML-escape it in href', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', faviconBaseUrl: 'https://evil.com"onload="x' });
+    expect(out).not.toContain('"onload=');
+    expect(out).toContain('href="https://evil.com&quot;onload=&quot;x/favicon.ico"');
+  });
+});
+
+describe('renderCanvasDocument — og:description', () => {
+  it('given pageUrl and ogDescription, should emit og:description in <head>', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+      ogDescription: 'Published on PageSpace',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta property="og:description" content="Published on PageSpace"');
+  });
+
+  it('given pageUrl but no ogDescription, should omit og:description', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://acme.pagespace.site/p' });
+    expect(out).not.toContain('og:description');
+  });
+
+  it('given ogDescription with HTML special chars, should escape them', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+      ogDescription: 'A & B <draft>',
+    });
+    expect(out).toContain('content="A &amp; B &lt;draft&gt;"');
+    expect(out).not.toContain('content="A & B');
+  });
+
+  it('given no pageUrl, should not emit og:description even if ogDescription is set', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', ogDescription: 'Published on PageSpace' });
+    expect(out).not.toContain('og:description');
+  });
+});
+
 describe('renderCanvasDocument — allowedAssetHosts', () => {
   it('given allowedAssetHosts containing the CDN host, should preserve that host in CSS url()', () => {
     const out = renderCanvasDocument({

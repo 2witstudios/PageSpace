@@ -209,6 +209,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       faviconBaseUrl: FAVICON_BASE_URL,
       pageUrl: publishedUrl,
       ogImageUrl: DEFAULT_OG_IMAGE_URL,
+      ogDescription: 'Published on PageSpace',
     });
     const key = buildPublishedKey(subdomain, path);
 

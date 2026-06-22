@@ -83,6 +83,7 @@ export interface SandboxRunDeps {
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
   now: () => Date;
   logger?: {
+    warn?: (message: string, metadata?: Record<string, unknown>) => void;
     error: (message: string, error?: Error | Record<string, unknown>, metadata?: Record<string, unknown>) => void;
   };
 }
@@ -91,11 +92,7 @@ function safeLogError(
   logger: SandboxRunDeps['logger'],
   ...args: Parameters<NonNullable<SandboxRunDeps['logger']>['error']>
 ): void {
-  try {
-    logger?.error(...args);
-  } catch {
-    // Logging is observability only; it must not alter quota or tool control flow.
-  }
+  try { logger?.error(...args); } catch { /* Logging must not alter tool control flow. */ }
 }
 
 function asError(value: unknown): Error | undefined {
@@ -103,6 +100,21 @@ function asError(value: unknown): Error | undefined {
   if (value === undefined || value === null) return undefined;
   return new Error(String(value));
 }
+
+function safeLogWarn(
+  logger: SandboxRunDeps['logger'],
+  message: string,
+  metadata?: Record<string, unknown>,
+): void {
+  try { logger?.warn?.(message, metadata); } catch { /* Logging must not alter tool control flow. */ }
+}
+
+// Acquisition reasons that represent expected policy/authz outcomes (warn-level)
+// vs infra failures that are genuinely unexpected (error-level).
+const AUTHZ_DENY_REASONS = new Set([
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off',
+]);
+
 
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
@@ -259,13 +271,12 @@ async function openSession(
     const acquired = await deps.acquireSandbox(acquireRequest(ctx, policy));
     if (!acquired.ok) {
       deps.quota.releaseSlot({ userId: ctx.userId });
-      safeLogError(deps.logger, 'Sandbox acquisition denied or failed', {
-        reason: acquired.reason,
-        userId: ctx.userId,
-        driveId: ctx.driveId,
-        conversationId: ctx.conversationId,
-        requestOrigin: ctx.requestOrigin,
-      });
+      const context = { reason: acquired.reason, userId: ctx.userId, driveId: ctx.driveId, conversationId: ctx.conversationId, requestOrigin: ctx.requestOrigin };
+      if (AUTHZ_DENY_REASONS.has(acquired.reason)) {
+        safeLogWarn(deps.logger, 'Sandbox access denied', context);
+      } else {
+        safeLogError(deps.logger, 'Sandbox acquisition failed', context);
+      }
       return { ok: false, reason: reasonFromAcquire(acquired) };
     }
     const sandbox = await deps.reconnect(acquired.sandboxId);

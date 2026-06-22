@@ -39,9 +39,13 @@ function toTier(value: string | null | undefined): SubscriptionTier {
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const COMMAND_TIMEOUT_MS = 30_000;
 
-function safeLogApiError(...args: Parameters<(typeof loggers.api)['error']>): void {
+function safeLogApi(level: 'error' | 'warn', message: string, context: Record<string, unknown>): void {
   try {
-    loggers.api.error(...args);
+    if (level === 'error') {
+      loggers.api.error(message, context);
+    } else {
+      loggers.api.warn(message, context);
+    }
   } catch {
     // Logging must never change terminal API response semantics.
   }
@@ -152,19 +156,18 @@ export async function POST(
 
     if (!sandboxResult.ok) {
       const status = sandboxResult.reason === 'deny' ? 403 : 500;
-      safeLogApiError('Terminal sandbox acquisition failed', {
-        reason: sandboxResult.reason,
-        userId,
-        pageId,
-        driveId,
-      });
+      safeLogApi(
+        status === 403 ? 'warn' : 'error',
+        status === 403 ? 'Terminal sandbox acquisition denied' : 'Terminal sandbox acquisition failed',
+        { reason: sandboxResult.reason, userId, pageId, driveId },
+      );
       return NextResponse.json({ error: 'Could not acquire sandbox' }, { status });
     }
 
     // 9. Reconnect to the executable Sprite to get the runCommand surface.
     const sprite = await client.get({ sandboxId: sandboxResult.sandboxId });
     if (!sprite) {
-      safeLogApiError('Terminal sandbox reconnect returned no handle', {
+      safeLogApi('error', 'Terminal sandbox reconnect returned no handle', {
         sandboxId: sandboxResult.sandboxId,
         userId,
         pageId,
@@ -208,7 +211,7 @@ export async function POST(
 
     return NextResponse.json({ output, exitCode: result.exitCode, durationMs });
   } catch (error) {
-    safeLogApiError('Terminal command execution failed', error instanceof Error ? error : new Error(String(error)), {
+    safeLogApi('error', 'Terminal command execution failed', {
       reason: 'command_execution_failed',
       userId,
       pageId,

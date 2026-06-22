@@ -30,13 +30,15 @@ export interface RenderPublishedPageInput {
   pageUrl?: string;
   /** Absolute URL of the OG social preview image — see RenderCanvasDocumentInput.ogImageUrl. */
   ogImageUrl?: string;
+  /** Short description for og:description — see RenderCanvasDocumentInput.ogDescription. */
+  ogDescription?: string;
 }
 
 /**
  * Render a complete, standalone HTML document for a published canvas page.
  */
 export function renderPublishedPage(input: RenderPublishedPageInput): string {
-  const { assetBaseUrl, faviconBaseUrl, pageUrl, ogImageUrl, ...rest } = input;
+  const { assetBaseUrl, faviconBaseUrl, pageUrl, ogImageUrl, ogDescription, ...rest } = input;
   const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
-  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, pageUrl, ogImageUrl });
+  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, pageUrl, ogImageUrl, ogDescription });
 }

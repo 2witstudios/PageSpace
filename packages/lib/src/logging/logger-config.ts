@@ -314,5 +314,13 @@ export function initializeLogging(): void {
   });
 }
 
+/**
+ * Execute fn(); swallow any exception so a broken logger never propagates into
+ * call-site error handling.
+ */
+export function trySilently(fn: () => void): void {
+  try { fn(); } catch { /* */ }
+}
+
 // Export everything
 export * from './logger';

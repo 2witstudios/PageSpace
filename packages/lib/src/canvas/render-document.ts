@@ -51,6 +51,11 @@ export interface RenderCanvasDocumentInput {
    * (caller decides whether to use a default or skip).
    */
   ogImageUrl?: string;
+  /**
+   * Short description for `og:description`. Only emitted when `pageUrl` is also
+   * set. Falls back to no description tag when omitted.
+   */
+  ogDescription?: string;
 }
 
 /**
@@ -123,7 +128,7 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, pageUrl, ogImageUrl } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, pageUrl, ogImageUrl, ogDescription } = input;
 
   const { css, body } = extractAndSanitizeStyles(html ?? '', allowedAssetHosts);
   const safeTitle = escapeHtml(title && title.trim() ? title : 'Untitled');
@@ -134,7 +139,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     : '';
 
   const ogTags = pageUrl
-    ? buildOgTags({ title: safeTitle, pageUrl, ogImageUrl })
+    ? buildOgTags({ title: safeTitle, pageUrl, ogImageUrl, ogDescription })
     : '';
 
   return (
@@ -154,26 +159,31 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
 }
 
 function buildFaviconTags(baseUrl: string): string {
-  const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+  const safeBase = escapeHtml(baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl);
   return (
-    `<link rel="icon" type="image/x-icon" href="${base}/favicon.ico">` +
-    `<link rel="icon" type="image/png" sizes="32x32" href="${base}/favicon-32x32.png">` +
-    `<link rel="apple-touch-icon" sizes="180x180" href="${base}/apple-touch-icon.png">`
+    `<link rel="icon" type="image/x-icon" href="${safeBase}/favicon.ico">` +
+    `<link rel="icon" type="image/png" sizes="32x32" href="${safeBase}/favicon-32x32.png">` +
+    `<link rel="apple-touch-icon" sizes="180x180" href="${safeBase}/apple-touch-icon.png">`
   );
 }
 
-function buildOgTags(params: { title: string; pageUrl: string; ogImageUrl?: string }): string {
-  const { title, pageUrl, ogImageUrl } = params;
+function buildOgTags(params: { title: string; pageUrl: string; ogImageUrl?: string; ogDescription?: string }): string {
+  const { title, pageUrl, ogImageUrl, ogDescription } = params;
+  const safeUrl = escapeHtml(pageUrl);
+  const descriptionTag = ogDescription
+    ? `<meta property="og:description" content="${escapeHtml(ogDescription)}">`
+    : '';
   const imageTags = ogImageUrl
-    ? `<meta property="og:image" content="${ogImageUrl}">` +
+    ? `<meta property="og:image" content="${escapeHtml(ogImageUrl)}">` +
       `<meta property="og:image:width" content="1200">` +
       `<meta property="og:image:height" content="630">`
     : '';
   return (
     `<meta property="og:title" content="${title}">` +
     `<meta property="og:type" content="website">` +
-    `<meta property="og:url" content="${pageUrl}">` +
+    `<meta property="og:url" content="${safeUrl}">` +
     `<meta property="og:site_name" content="PageSpace">` +
+    descriptionTag +
     imageTags
   );
 }
