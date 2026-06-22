@@ -53,10 +53,10 @@ vi.mock('@/lib/canvas/published-storage', () => ({
 }));
 
 const rewriteCanvasAssets = vi.fn();
-const extractFirstPublishedImageUrl = vi.fn();
+const extractAndStripOgMeta = vi.fn();
 vi.mock('@/lib/canvas/asset-pipeline', () => ({
   rewriteCanvasAssets: (...args: unknown[]) => rewriteCanvasAssets(...args),
-  extractFirstPublishedImageUrl: (...args: unknown[]) => extractFirstPublishedImageUrl(...args),
+  extractAndStripOgMeta: (...args: unknown[]) => extractAndStripOgMeta(...args),
 }));
 
 const renderPublishedPage = vi.fn();
@@ -121,7 +121,7 @@ beforeEach(() => {
   isPublishConfigured.mockReturnValue(true);
   getPublishAssetBaseUrl.mockReturnValue('https://test-publish.t3.tigrisfiles.io');
   rewriteCanvasAssets.mockImplementation(async ({ html }: { html: string }) => ({ html }));
-  extractFirstPublishedImageUrl.mockReturnValue(undefined);
+  extractAndStripOgMeta.mockImplementation((html: string) => ({ meta: {}, html }));
   buildPublishedKey.mockImplementation((subdomain: string, path: string) => `published/${subdomain}/${path}/index.html`);
   putPublishedArtifact.mockResolvedValue({ key: 'published/acme/welcome/index.html' });
   renderPublishedPage.mockReturnValue('<html>rendered</html>');
@@ -210,27 +210,39 @@ describe('POST /api/pages/[pageId]/publish', () => {
     });
   });
 
-  it('passes the first published image as ogImageUrl when the canvas contains an image', async () => {
-    const cdnImgUrl = 'https://pagespace-published.t3.tigrisfiles.io/assets/files/aabbcc/original';
-    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Gallery', content: `<img src="${cdnImgUrl}">`, driveId: 'drive-1' });
+  it('uses og:image and og:description from canvas meta tags when present', async () => {
+    const ogImg = 'https://cdn.pagespace.site/assets/files/abc/original';
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Gallery', content: '<p>hi</p>', driveId: 'drive-1' });
     findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'PERSONAL' });
     findFirstPublished.mockResolvedValue(null);
-    extractFirstPublishedImageUrl.mockReturnValue(cdnImgUrl);
+    extractAndStripOgMeta.mockReturnValue({ meta: { ogImageUrl: ogImg, ogDescription: 'My gallery' }, html: '<p>hi</p>' });
 
     const res = await POST(makeReq({}), { params });
     expect(res.status).toBe(200);
-    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ ogImageUrl: cdnImgUrl }));
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ ogImageUrl: ogImg, ogDescription: 'My gallery' }));
   });
 
-  it('omits ogImageUrl when the canvas has no images', async () => {
-    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Text only', content: '<p>hello</p>', driveId: 'drive-1' });
+  it('uses favicon from canvas link rel=icon when present and skips faviconBaseUrl', async () => {
+    const faviconHref = 'https://cdn.pagespace.site/assets/files/icon/original';
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Branded', content: '<p>hi</p>', driveId: 'drive-1' });
     findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'PERSONAL' });
     findFirstPublished.mockResolvedValue(null);
-    extractFirstPublishedImageUrl.mockReturnValue(undefined);
+    extractAndStripOgMeta.mockReturnValue({ meta: { faviconHref }, html: '<p>hi</p>' });
 
     const res = await POST(makeReq({}), { params });
     expect(res.status).toBe(200);
-    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ ogImageUrl: undefined }));
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ faviconHref, faviconBaseUrl: undefined }));
+  });
+
+  it('falls back to faviconBaseUrl when canvas has no link rel=icon', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Plain', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'PERSONAL' });
+    findFirstPublished.mockResolvedValue(null);
+    extractAndStripOgMeta.mockReturnValue({ meta: {}, html: '<p>hi</p>' });
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(200);
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ faviconBaseUrl: 'https://pagespace.ai', faviconHref: undefined }));
   });
 
   it('returns 400 when the requested subdomain is invalid/reserved', async () => {

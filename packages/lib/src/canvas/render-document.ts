@@ -36,8 +36,16 @@ export interface RenderCanvasDocumentInput {
    * Base URL for favicon assets (e.g. `https://pagespace.ai`). When provided,
    * standard favicon `<link>` tags are injected into `<head>`. Omit for in-app
    * iframe rendering where favicons are irrelevant.
+   *
+   * Takes lower priority than `faviconHref` — if both are set, `faviconHref` wins.
    */
   faviconBaseUrl?: string;
+  /**
+   * Explicit favicon href from a `<link rel="icon" href="…">` the author placed
+   * in their canvas. When set, emitted as a single `<link rel="icon">` tag
+   * instead of the three-tag set generated from `faviconBaseUrl`.
+   */
+  faviconHref?: string;
   /**
    * Canonical public URL of this published page (e.g. `https://acme.pagespace.site/my-page`).
    * When provided, Open Graph `<meta>` tags are injected into `<head>` so link
@@ -128,15 +136,17 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, pageUrl, ogImageUrl, ogDescription } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription } = input;
 
   const { css, body } = extractAndSanitizeStyles(html ?? '', allowedAssetHosts);
   const safeTitle = escapeHtml(title && title.trim() ? title : 'Untitled');
   const baseTag = baseTarget ? `<base target="${baseTarget}">` : '';
 
-  const faviconTags = faviconBaseUrl
-    ? buildFaviconTags(faviconBaseUrl)
-    : '';
+  const faviconTags = faviconHref
+    ? `<link rel="icon" href="${escapeHtml(faviconHref)}">`
+    : faviconBaseUrl
+      ? buildFaviconTags(faviconBaseUrl)
+      : '';
 
   const ogTags = pageUrl
     ? buildOgTags({ title: safeTitle, pageUrl, ogImageUrl, ogDescription })

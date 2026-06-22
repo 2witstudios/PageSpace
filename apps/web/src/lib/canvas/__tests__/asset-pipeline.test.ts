@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractFileIds, extractFirstPublishedImageUrl, rewriteCanvasAssets } from '../asset-pipeline';
+import { extractFileIds, extractAndStripOgMeta, rewriteCanvasAssets } from '../asset-pipeline';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -299,38 +299,61 @@ describe('rewriteCanvasAssets', () => {
 });
 
 // ---------------------------------------------------------------------------
-// extractFirstPublishedImageUrl — pure, no I/O
+// extractAndStripOgMeta — pure, no I/O
 // ---------------------------------------------------------------------------
 
-describe('extractFirstPublishedImageUrl', () => {
-  it('given an img with an https src, should return that URL', () => {
-    const url = 'https://cdn.example.com/assets/files/abc/original';
-    expect(extractFirstPublishedImageUrl(`<img src="${url}">`)).toBe(url);
+describe('extractAndStripOgMeta', () => {
+  const IMG = 'https://cdn.example.com/assets/og.png';
+  const ICON = 'https://cdn.example.com/assets/icon.ico';
+
+  it('extracts og:image and removes the tag from html', () => {
+    const { meta, html } = extractAndStripOgMeta(`<p>hi</p><meta property="og:image" content="${IMG}">`);
+    expect(meta.ogImageUrl).toBe(IMG);
+    expect(html).not.toContain('og:image');
+    expect(html).toContain('<p>hi</p>');
   });
 
-  it('given multiple images, should return only the first one', () => {
-    const first = 'https://cdn.example.com/assets/first.png';
-    const second = 'https://cdn.example.com/assets/second.png';
-    expect(extractFirstPublishedImageUrl(`<img src="${first}"><img src="${second}">`)).toBe(first);
+  it('extracts og:image when content attribute comes before property', () => {
+    const { meta } = extractAndStripOgMeta(`<meta content="${IMG}" property="og:image">`);
+    expect(meta.ogImageUrl).toBe(IMG);
   });
 
-  it('given an img with a relative src, should return undefined', () => {
-    expect(extractFirstPublishedImageUrl('<img src="/api/files/abc/view">')).toBeUndefined();
+  it('extracts og:description and removes the tag', () => {
+    const { meta, html } = extractAndStripOgMeta('<meta property="og:description" content="My page">');
+    expect(meta.ogDescription).toBe('My page');
+    expect(html).not.toContain('og:description');
   });
 
-  it('given an img with an http src, should return undefined', () => {
-    expect(extractFirstPublishedImageUrl('<img src="http://insecure.example.com/img.png">')).toBeUndefined();
+  it('extracts link rel=icon href and removes the tag', () => {
+    const { meta, html } = extractAndStripOgMeta(`<link rel="icon" href="${ICON}">`);
+    expect(meta.faviconHref).toBe(ICON);
+    expect(html).not.toContain('rel="icon"');
   });
 
-  it('given a data:image URI, should return undefined', () => {
-    expect(extractFirstPublishedImageUrl('<img src="data:image/png;base64,abc">')).toBeUndefined();
+  it('extracts link rel=icon when href comes before rel', () => {
+    const { meta } = extractAndStripOgMeta(`<link href="${ICON}" rel="icon">`);
+    expect(meta.faviconHref).toBe(ICON);
   });
 
-  it('given no img tag, should return undefined', () => {
-    expect(extractFirstPublishedImageUrl('<p>hello world</p>')).toBeUndefined();
+  it('keeps only the first og:image when multiple are present', () => {
+    const first = 'https://cdn.example.com/first.png';
+    const second = 'https://cdn.example.com/second.png';
+    const { meta } = extractAndStripOgMeta(
+      `<meta property="og:image" content="${first}"><meta property="og:image" content="${second}">`
+    );
+    expect(meta.ogImageUrl).toBe(first);
   });
 
-  it('given an empty string, should return undefined', () => {
-    expect(extractFirstPublishedImageUrl('')).toBeUndefined();
+  it('returns empty meta and unchanged html when no OG tags present', () => {
+    const input = '<p>hello world</p>';
+    const { meta, html } = extractAndStripOgMeta(input);
+    expect(meta).toEqual({});
+    expect(html).toBe(input);
+  });
+
+  it('returns empty meta for an empty string', () => {
+    const { meta, html } = extractAndStripOgMeta('');
+    expect(meta).toEqual({});
+    expect(html).toBe('');
   });
 });

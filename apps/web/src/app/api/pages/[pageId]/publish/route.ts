@@ -12,7 +12,7 @@ import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { renderPublishedPage } from '@/lib/canvas/render-published';
 import { buildPublishedKey, putPublishedArtifact, deletePublishedArtifact, isPublishConfigured, getPublishAssetBaseUrl } from '@/lib/canvas/published-storage';
-import { rewriteCanvasAssets, extractFirstPublishedImageUrl } from '@/lib/canvas/asset-pipeline';
+import { rewriteCanvasAssets, extractAndStripOgMeta } from '@/lib/canvas/asset-pipeline';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -199,16 +199,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const path = slugify(rawPath) || pageId;
 
     const { html: rewrittenHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId, db });
+    const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
     const assetBaseUrl = getPublishAssetBaseUrl();
     const publishedUrl = `https://${subdomain}.${PUBLISH_HOST}/${path}`;
-    const ogImageUrl = extractFirstPublishedImageUrl(rewrittenHtml);
     const html = renderPublishedPage({
-      html: rewrittenHtml,
+      html: bodyHtml,
       title: page.title ?? undefined,
       assetBaseUrl,
-      faviconBaseUrl: FAVICON_BASE_URL,
+      faviconHref: meta.faviconHref,
+      faviconBaseUrl: meta.faviconHref ? undefined : FAVICON_BASE_URL,
       pageUrl: publishedUrl,
-      ogImageUrl,
+      ogImageUrl: meta.ogImageUrl,
+      ogDescription: meta.ogDescription,
     });
     const key = buildPublishedKey(subdomain, path);
 

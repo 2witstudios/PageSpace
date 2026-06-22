@@ -163,6 +163,31 @@ describe('renderCanvasDocument — favicon', () => {
     expect(faviconIdx).toBeGreaterThanOrEqual(0);
     expect(faviconIdx).toBeLessThan(bodyStart);
   });
+
+  it('given faviconHref, should emit a single link rel=icon with that href', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', faviconHref: 'https://cdn.example.com/icon.ico' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<link rel="icon" href="https://cdn.example.com/icon.ico">');
+    expect(head).not.toContain('favicon.ico');
+    expect(head).not.toContain('favicon-32x32');
+    expect(head).not.toContain('apple-touch-icon');
+  });
+
+  it('given faviconHref, should prefer it over faviconBaseUrl', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      faviconHref: 'https://cdn.example.com/icon.ico',
+      faviconBaseUrl: 'https://pagespace.ai',
+    });
+    expect(out).toContain('href="https://cdn.example.com/icon.ico"');
+    expect(out).not.toContain('favicon.ico');
+  });
+
+  it('given faviconHref containing a double-quote, should HTML-escape it', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', faviconHref: 'https://cdn.example.com/"evil".ico' });
+    expect(out).not.toContain('"evil"');
+    expect(out).toContain('&quot;evil&quot;');
+  });
 });
 
 describe('renderCanvasDocument — OG meta tags', () => {

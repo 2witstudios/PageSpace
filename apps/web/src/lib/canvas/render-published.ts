@@ -26,6 +26,8 @@ export interface RenderPublishedPageInput {
   assetBaseUrl?: string;
   /** Base URL for favicon assets — see RenderCanvasDocumentInput.faviconBaseUrl. */
   faviconBaseUrl?: string;
+  /** Explicit favicon href from the canvas — see RenderCanvasDocumentInput.faviconHref. */
+  faviconHref?: string;
   /** Canonical public URL for OG meta tags — see RenderCanvasDocumentInput.pageUrl. */
   pageUrl?: string;
   /** Absolute URL of the OG social preview image — see RenderCanvasDocumentInput.ogImageUrl. */
@@ -38,7 +40,7 @@ export interface RenderPublishedPageInput {
  * Render a complete, standalone HTML document for a published canvas page.
  */
 export function renderPublishedPage(input: RenderPublishedPageInput): string {
-  const { assetBaseUrl, faviconBaseUrl, pageUrl, ogImageUrl, ogDescription, ...rest } = input;
+  const { assetBaseUrl, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, ...rest } = input;
   const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
-  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, pageUrl, ogImageUrl, ogDescription });
+  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription });
 }
