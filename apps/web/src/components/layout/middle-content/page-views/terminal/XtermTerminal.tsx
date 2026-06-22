@@ -82,6 +82,8 @@ export default function XtermTerminal({ socket, pageId, onReady, onError }: Xter
       cancelled = true;
       teardown?.();
     };
+  // onReady/onError are intentionally omitted — callers must stabilise them with
+  // useCallback. Including them would re-mount the terminal on every parent render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, pageId]);
 

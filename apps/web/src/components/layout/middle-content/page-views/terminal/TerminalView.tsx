@@ -1,5 +1,6 @@
 "use client";
 
+import '@xterm/xterm/css/xterm.css';
 import React, { useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { motion } from 'motion/react';
