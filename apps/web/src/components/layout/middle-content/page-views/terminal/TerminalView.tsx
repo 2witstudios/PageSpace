@@ -53,7 +53,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
           />
         )}
 
-        {!connected && (
+        {isAdmin && !connected && (
           <div className="absolute inset-0 bg-black flex items-center justify-center">
             {error ? (
               <span className="text-sm text-red-400">{error}</span>
