@@ -370,6 +370,58 @@ describe('createSpritesSandboxClient.get / stop', () => {
     await client.stop({ sandboxId: 'k' });
     expect(calls.deleted).toEqual(['k']);
   });
+
+  it('get WITH options (resume relock) reapplies the egress policy and warms the VM', async () => {
+    let policies = 0;
+    let spawned = 0;
+    const sprite = fakeSprite({
+      updateNetworkPolicy: async () => {
+        policies += 1;
+      },
+      spawn: () => {
+        spawned += 1;
+        return fakeCommand({ exitCode: 0 });
+      },
+    });
+    const { sdk } = makeSdk({ getSprite: async () => sprite });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k', options });
+    expect(handle).not.toBeNull();
+    expect(policies).toBe(1); // egress reapplied on resume
+    expect(spawned).toBe(1); // VM warmed via the retrying mkdir
+  });
+
+  it('get WITHOUT options is a cheap reconnect — no egress reapplication', async () => {
+    let policies = 0;
+    const sprite = fakeSprite({
+      updateNetworkPolicy: async () => {
+        policies += 1;
+      },
+    });
+    const { sdk } = makeSdk({ getSprite: async () => sprite });
+    const client = createSpritesSandboxClient({ sdk });
+    await client.get({ sandboxId: 'k' });
+    expect(policies).toBe(0);
+  });
+
+  it('get WITH options whose relock fails rejects WITHOUT destroying the warm session', async () => {
+    let destroyed = false;
+    const sprite = fakeSprite({
+      updateNetworkPolicy: async () => {
+        throw new Error('policy api down');
+      },
+    });
+    const sdk: SpritesSdk = {
+      getSprite: async () => sprite,
+      createSprite: async () => sprite,
+      deleteSprite: async () => {
+        destroyed = true;
+      },
+    };
+    const client = createSpritesSandboxClient({ sdk });
+    await expect(client.get({ sandboxId: 'k', options })).rejects.toThrow('policy api down');
+    expect(destroyed).toBe(false);
+  });
 });
 
 describe('ExecutableSandbox.runCommand', () => {

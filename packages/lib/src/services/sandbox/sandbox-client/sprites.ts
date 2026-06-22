@@ -535,12 +535,21 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
       }
     },
 
-    async get({ sandboxId }) {
+    async get({ sandboxId, options }) {
       // Reconnect by name; a genuinely vanished Sprite (not-found) → null so the
       // lifecycle re-provisions under the same key. Other errors (auth, rate
       // limit, outage) surface rather than masquerading as a vanished session.
       try {
-        return wrap(await sdk.getSprite(sandboxId));
+        const sprite = await sdk.getSprite(sandboxId);
+        if (options) {
+          // Resume relock: reapply the deny-default egress policy (and warm the VM
+          // via the retrying mkdir) before hand-back, so a tightened allowlist or a
+          // recovered older VM is enforced rather than left stale. Never destroy a
+          // warm session on failure — but DO surface it (the call rejects) so no
+          // command runs without a confirmed policy.
+          await applyEgressLockdown({ sdk, sprite, options, destroyOnFailure: false });
+        }
+        return wrap(sprite);
       } catch (error) {
         if (isSpriteNotFoundError(error)) return null;
         throw error;
