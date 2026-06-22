@@ -1,6 +1,6 @@
 # Sprites Hibernation-Model Alignment Epic
 
-**Status**: 📋 PLANNED
+**Status**: ✅ COMPLETED (2026-06-22) — PR #1674
 **Goal**: Make the Fly Sprites sandbox + terminal implementation match the Sprites hibernate-and-wake model and the `@fly/sprites` SDK's documented usage, so agent sandboxes and terminals stay reachable instead of being destroyed or hung.
 
 ## Overview
