@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>aidd skill diffs — PageSpace integration</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    min-height: 100vh;
+  }
+
+  header {
+    padding: 20px 32px 16px;
+    border-bottom: 1px solid #21262d;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+  }
+
+  header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #e6edf3;
+  }
+
+  header span {
+    font-size: 12px;
+    color: #6e7681;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 0;
+    padding: 0 32px;
+    border-bottom: 1px solid #21262d;
+    overflow-x: auto;
+  }
+
+  .tab {
+    padding: 10px 16px;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    color: #6e7681;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    user-select: none;
+    transition: color 0.1s;
+  }
+
+  .tab:hover { color: #c9d1d9; }
+
+  .tab.active {
+    color: #e6edf3;
+    border-bottom-color: #f78166;
+  }
+
+  .tab .badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 11px;
+    background: #21262d;
+  }
+
+  .tab .added { background: #1a4a2e; color: #3fb950; }
+  .tab .removed { background: #3d1f1f; color: #f85149; }
+
+  .panel { display: none; padding: 24px 32px; }
+  .panel.active { display: block; }
+
+  .panel-header {
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .panel-header h2 {
+    font-size: 14px;
+    font-weight: 600;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    color: #e6edf3;
+  }
+
+  .stat {
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  .stat.add { background: #1a4a2e; color: #3fb950; }
+  .stat.del { background: #3d1f1f; color: #f85149; }
+
+  .diff-file {
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+
+  .diff-file-header {
+    background: #161b22;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    color: #8b949e;
+    border-bottom: 1px solid #21262d;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .diff-table tr { vertical-align: top; }
+
+  .ln {
+    width: 44px;
+    min-width: 44px;
+    text-align: right;
+    padding: 1px 10px 1px 6px;
+    color: #4b5563;
+    user-select: none;
+    border-right: 1px solid #21262d;
+  }
+
+  .sign {
+    width: 18px;
+    min-width: 18px;
+    text-align: center;
+    padding: 1px 2px;
+    user-select: none;
+    font-weight: 700;
+  }
+
+  .code {
+    padding: 1px 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    width: 100%;
+  }
+
+  tr.ctx td { background: #0d1117; color: #8b949e; }
+  tr.ctx .ln { color: #3d444d; }
+
+  tr.add td { background: #0f2a1a; }
+  tr.add .sign { color: #3fb950; }
+  tr.add .ln { background: #0e2a19; color: #2ea043; }
+  tr.add .code { color: #aff5b4; }
+
+  tr.del td { background: #2a0f0f; }
+  tr.del .sign { color: #f85149; }
+  tr.del .ln { background: #2a0e0e; color: #da3633; }
+  tr.del .code { color: #ffa198; }
+
+  tr.hunk td {
+    background: #0d2a4a;
+    color: #79c0ff;
+    padding: 3px 12px;
+    font-size: 11px;
+  }
+
+  tr.hunk .ln, tr.hunk .sign { background: #0a1f38; }
+
+  .scroll-hint {
+    text-align: center;
+    padding: 8px;
+    font-size: 11px;
+    color: #3d444d;
+    border-top: 1px solid #21262d;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>aidd — PageSpace integration diffs</h1>
+  <span>5 skills modified · local vs upstream (paralleldrive/aidd)</span>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="show('task-creator')">
+    aidd-task-creator
+    <span class="badge added">+47</span>
+    <span class="badge removed">-3</span>
+  </div>
+  <div class="tab" onclick="show('fix')">
+    aidd-fix
+    <span class="badge added">+9</span>
+    <span class="badge removed">-5</span>
+  </div>
+  <div class="tab" onclick="show('review')">
+    aidd-review
+    <span class="badge added">+1</span>
+    <span class="badge removed">-1</span>
+  </div>
+  <div class="tab" onclick="show('product-manager')">
+    aidd-product-manager
+    <span class="badge added">+6</span>
+    <span class="badge removed">-4</span>
+  </div>
+  <div class="tab" onclick="show('user-testing')">
+    aidd-user-testing
+    <span class="badge added">+3</span>
+    <span class="badge removed">-1</span>
+  </div>
+</div>
+
+<!-- ===== aidd-task-creator ===== -->
+<div class="panel active" id="panel-task-creator">
+  <div class="panel-header">
+    <h2>aidd-task-creator</h2>
+    <span class="stat add">+47 lines</span>
+    <span class="stat del">−3 lines</span>
+  </div>
+  <div class="diff-file">
+    <div class="diff-file-header">
+      <span>ai/skills/aidd-task-creator/SKILL.md</span>
+      <span>upstream (Jun 9) → local (Jun 1)</span>
+    </div>
+    <table class="diff-table" id="diff-task-creator"></table>
+  </div>
+</div>
+
+<!-- ===== aidd-fix ===== -->
+<div class="panel" id="panel-fix">
+  <div class="panel-header">
+    <h2>aidd-fix</h2>
+    <span class="stat add">+9 lines</span>
+    <span class="stat del">−5 lines</span>
+  </div>
+  <div class="diff-file">
+    <div class="diff-file-header">
+      <span>ai/skills/aidd-fix/SKILL.md</span>
+      <span>upstream (Mar 27) → local (Jun 1)</span>
+    </div>
+    <table class="diff-table" id="diff-fix"></table>
+  </div>
+</div>
+
+<!-- ===== aidd-review ===== -->
+<div class="panel" id="panel-review">
+  <div class="panel-header">
+    <h2>aidd-review</h2>
+    <span class="stat add">+1 line</span>
+    <span class="stat del">−1 line</span>
+  </div>
+  <div class="diff-file">
+    <div class="diff-file-header">
+      <span>ai/skills/aidd-review/SKILL.md</span>
+      <span>upstream (Jun 9) → local (May 23)</span>
+    </div>
+    <table class="diff-table" id="diff-review"></table>
+  </div>
+</div>
+
+<!-- ===== aidd-product-manager ===== -->
+<div class="panel" id="panel-product-manager">
+  <div class="panel-header">
+    <h2>aidd-product-manager</h2>
+    <span class="stat add">+6 lines</span>
+    <span class="stat del">−4 lines</span>
+  </div>
+  <div class="diff-file">
+    <div class="diff-file-header">
+      <span>ai/skills/aidd-product-manager/SKILL.md</span>
+      <span>upstream (Mar 27) → local (May 23)</span>
+    </div>
+    <table class="diff-table" id="diff-product-manager"></table>
+  </div>
+</div>
+
+<!-- ===== aidd-user-testing ===== -->
+<div class="panel" id="panel-user-testing">
+  <div class="panel-header">
+    <h2>aidd-user-testing</h2>
+    <span class="stat add">+3 lines</span>
+    <span class="stat del">−1 line</span>
+  </div>
+  <div class="diff-file">
+    <div class="diff-file-header">
+      <span>ai/skills/aidd-user-testing/SKILL.md</span>
+      <span>upstream (Mar 27) → local (May 23)</span>
+    </div>
+    <table class="diff-table" id="diff-user-testing"></table>
+  </div>
+</div>
+
+<script>
+function show(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('panel-' + id).classList.add('active');
+  event.currentTarget.classList.add('active');
+}
+
+// Unified diff parser → table rows
+function parseDiff(unified) {
+  const lines = unified.split('\n');
+  const rows = [];
+  let oldLn = 0, newLn = 0;
+
+  for (const line of lines) {
+    if (line.startsWith('---') || line.startsWith('+++')) continue;
+
+    if (line.startsWith('@@')) {
+      const m = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (m) { oldLn = parseInt(m[1]); newLn = parseInt(m[2]); }
+      rows.push({ type: 'hunk', text: line });
+      continue;
+    }
+
+    if (line.startsWith('-')) {
+      rows.push({ type: 'del', oldLn: oldLn++, text: line.slice(1) });
+    } else if (line.startsWith('+')) {
+      rows.push({ type: 'add', newLn: newLn++, text: line.slice(1) });
+    } else {
+      rows.push({ type: 'ctx', oldLn: oldLn++, newLn: newLn++, text: line.slice(1) });
+    }
+  }
+  return rows;
+}
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderDiff(tableId, unified) {
+  const table = document.getElementById(tableId);
+  const rows = parseDiff(unified);
+  const html = rows.map(r => {
+    if (r.type === 'hunk') {
+      return `<tr class="hunk"><td class="ln" colspan="2"></td><td class="sign"></td><td class="code">${esc(r.text)}</td></tr>`;
+    }
+    const oldLn = r.oldLn != null ? r.oldLn : '';
+    const newLn = r.newLn != null ? r.newLn : '';
+    const sign = r.type === 'add' ? '+' : r.type === 'del' ? '−' : '';
+    return `<tr class="${r.type}"><td class="ln">${oldLn}</td><td class="ln">${newLn}</td><td class="sign">${sign}</td><td class="code">${esc(r.text)}</td></tr>`;
+  }).join('');
+  table.innerHTML = html;
+}
+
+// ── Diff data ────────────────────────────────────────────────────────────────
+
+const DIFFS = {};
+
+DIFFS['task-creator'] = `\
+@@ -7,8 +7,28 @@
+
+ Act as a top-tier software project manager and systematic task planner and execution coordinator. Your job is to break down complex requests into manageable, sequential tasks that can be executed one at a time with user approval.
+
+-A task can be broken down into smaller tasks. The larger task is stored in a task file in the $projectRoot/tasks folder. Subtasks live in that file.
++A task can be broken down into smaller tasks at any depth.
+
++**Storage.** If the PageSpace MCP tools (\`mcp__pagespace__*\`) are connected, tasks live in PageSpace as nested TASK_LIST pages — this is primary. Otherwise (e.g. a non-PageSpace repo, or a worktree subagent without the MCP server) they live in \`$projectRoot/tasks\` as markdown files. A project may pin the PageSpace conventions in its own rules; defer to those when present.
++
++## Nesting Model
++
++Build a **semantic tree**, not a flat checklist. In PageSpace every task is itself a task list (adding a sub-task to a task creates a child TASK_LIST), so you can nest to any depth:
++
++\`\`\`
++Epic            (container)
++  └── Phase     (container)
++        └── Task        (container)
++              └── Step  ← LEAF — atomic, 1–3 files, single handoff
++\`\`\`
++
++**Container vs leaf.** A node with children is a container: never worked or assigned directly, and it cannot be marked done until all its children are — completion bubbles up. A node with no children is a leaf: the unit you assign, work, and complete. Decompose until every leaf is unambiguous; assign and complete only leaves.
++
++Nest as deep as needed. Stop nesting when every leaf is completable in one focused session without ambiguity about scope. A well-sized leaf: 1–3 files, single clear output, independently reviewable.
++
++**Too large — nest it:** touches more than 2–3 files, crosses module boundaries, contains "and also" more than twice, or has parts that could run in parallel.
++**Too small — merge it:** under ~20 lines of real logic, no meaningful test surface, could be done inside an adjacent task.
++
+ ## Context Gathering
+
+ Before beginning any task, gather/infer context. When in doubt, ask clarifying questions:
+@@ -61,9 +81,21 @@
+   1. Think = "🎯 restate |> 💡 ideate |> 🪞 reflectCritically |> 🔭 expandOrthogonally |> ⚖️ scoreRankEvaluate |> 💬 respond"
+   1. Gather any additional context or clarification needed
+   1. Present the task/epic plan to the user for approval
+-  1. Add the plan to the project root plan.md file, with a reference to the epic plan file
++  1. Store the plan:
++     - PageSpace MCP available → see "PageSpace Storage" below: bootstrap the drive, create_page an epic TASK_LIST, create_task per task with requirements in the note
++     - No PageSpace MCP → add to plan.md with reference to a tasks/ epic markdown file
+ }
+
++## PageSpace Storage
++
++When \`mcp__pagespace__*\` tools are connected, the task board IS PageSpace. The orchestrator (the session that holds the MCP connection) owns all task writes; brief worktree subagents through their prompt and flip their task status on their behalf.
++
++1. **Bootstrap once per session.** \`list_drives\`; pick the project's dev drive (persist the chosen \`driveId\` in a project-local note so you don't re-ask), or \`create_drive\` if none. Ensure an "Epics" FOLDER page exists (\`create_page\` \`type: FOLDER\`).
++2. **Epic → TASK_LIST.** \`create_page({driveId, parentId: epicsFolderId, title: "\${EpicName} Epic", type: "TASK_LIST"})\`. Overview/goal goes in the page body.
++3. **Tasks → create_task (tree).** \`create_task({pageId: <taskListId>, title, priority, note: <"Given X, should Y" requirements>})\` returns the new task and its linked \`pageId\`. To decompose, call \`create_task\` again with \`pageId\` = that task's linked page — recurse to build the tree. Leaf requirements go in the \`note\`.
++4. **Status lifecycle (leaves only).** \`update_task({taskId, status})\` — \`pending → in_progress\` on start, \`→ completed\` on done (auto-sets completedAt), \`blocked\` when stuck. Don't complete a container task; it rolls up automatically when its last child finishes. Add a \`note\` on each transition.
++5. **Progress & navigation.** \`read_page({pageId})\` returns \`progress\` (total/percentage/byGroup) and per-task \`subTaskCount\`/\`subTaskCompletedCount\` + linked \`pageId\`. Read into a task's page to walk the tree; use for checkpoints instead of re-reading files.
++
+ executePlan() {
+   If $approvalRequired is undefined, $approvalRequired = askUser("Would you like to manually approve each step, or allow the agent to approve with /review?")
+
+@@ -139,11 +171,26 @@
+ ## Completed Epic Documentation
+
+ onComplete() {
++  PageSpace MCP available:
++  1. Confirm every task on the epic TASK_LIST is completed (read_page progress)
++  1. Capture what shipped and why into PageSpace memory (see "Memory" below)
++
++  No PageSpace MCP:
+   1. Update epic status to ✅ COMPLETED (\${completionDate})
+   1. Move to tasks/archive/YYYY-MM-DD-\${epicName}.md
+   1. Remove the epic entirely from plan.md
+ }
+
++## Memory
++
++When the PageSpace MCP tools are connected, capture durable learnings in PageSpace rather than loose files:
++
++- **DOCUMENT note pages** — detailed notes with rationale, titled by category (\`decision:\` / \`feedback:\` / \`project:\` / \`reference:\`). This is where detail lives.
++- **A Memory Index DOCUMENT** — one line per note (the MEMORY.md analogue), read on demand. The index grows here.
++- **\`update_drive_context\`** is loaded into every AI call in the drive, so its length is a recurring token cost. Keep it short and stable — only core conventions that must guide every agent action. Curate in place; never use it as a growing log.
++
++Capture at commit checkpoints, on epic completion, and after review feedback. Check the Memory Index for an existing note to update before creating a new one. Don't record what the repo already captures (code, git history) — record what was non-obvious. When the MCP tools are absent, follow whatever memory convention the host environment provides.
++
+ Constraints {
+   Never attempt multiple tasks simultaneously
+   Avoid breaking changes unless explicitly requested (open/closed principle)`;
+
+DIFFS['fix'] = `\
+@@ -32,15 +32,16 @@
+ ## Step 1 — Gain Context and Validate
+ gainContext(bugReport | reviewFeedback) => confirmedIssue | stop {
+   1. Read the relevant source file(s) and colocated test file(s)
+-  2. Read the task epic in \`$projectRoot/tasks/\` that covers this area
+-  3. Reproduce or reason through the issue to confirm it exists
+-  4. no change needed => summarize findings; stop — do not modify any files
++  2. Read the task that covers this area — from the PageSpace epic TASK_LIST if the \`mcp__pagespace__*\` tools are connected (read_page), otherwise the epic in \`$projectRoot/tasks/\`
++  3. PageSpace available => set the task to in_progress (update_task) once the issue is confirmed
++  4. Reproduce or reason through the issue to confirm it exists
++  5. no change needed => summarize findings; stop — do not modify any files
+ }
+
+ ## Step 2 — Document the Requirement in the Epic
+ documentRequirement(confirmedIssue) => requirement {
+-  1. Locate the existing epic; no matching epic => create one at \`$projectRoot/tasks/<name>-epic.md\` using /task
+-  2. Add a requirement in **"Given X, should Y"** format describing the correct observable behavior
++  1. Locate the existing epic/task; none => create one with /task (a PageSpace TASK_LIST when the MCP tools are connected, else \`$projectRoot/tasks/<name>-epic.md\`)
++  2. Add a requirement in **"Given X, should Y"** format describing the correct observable behavior — in the task's note (PageSpace) or the epic file
+   3. Epic update is a discrete step — commit it separately or include it in the fix commit
+
+   epicConstraints {
+@@ -83,6 +84,7 @@
+   1. Stage only the files changed by this fix
+   2. Write a conventional commit message (e.g. \`type(optional-scope): description\`)
+   3. Run \`git push -u origin <branch-name>\`
++  4. PageSpace available => set the task to completed (update_task) and capture the root cause + the rule that prevents recurrence into PageSpace memory (a note page + a Memory Index line; do not grow the drive context for this)
+ }
+
+ fix = gainContext |> documentRequirement |> writeFailingTest |> implementFix |> selfReviewAndTest |> commitAndPush`;
+
+DIFFS['review'] = `\
+@@ -22,7 +22,7 @@
+   Use /aidd-jwt-security when reviewing authentication code. Recommend opaque tokens over JWT.
+   Carefully inspect for OWASP top 10 violations and other security mistakes. Use search. Explicitly list each of the current OWASP top 10, review all changes and inspect for violations.
+   Compare the completed work to the functional requirements to ensure adherence and that all requirements are met.
+-  Compare the task plan in $projectRoot/tasks/ to the completed work to ensure that all tasks were completed and that the completed work adheres to the plan.
++  Compare the task plan (check Pagespace task board if available, otherwise $projectRoot/tasks/) to the completed work to ensure that all tasks were completed and that the completed work adheres to the plan.
+   Ensure that code comments comply with the relevant style guides.
+   Use docblocks for public APIs - but keep them minimal.
+   Ensure there are no unused stray files or dead code.`;
+
+DIFFS['product-manager'] = `\
+@@ -100,10 +100,13 @@
+ }
+
+ FileLocations {
+-  Story maps and user journeys are saved to $projectRoot/plan/story-map/ as YAML files
+-  Story map file: $projectRoot/plan/story-map/story-map.yaml
+-  User journey files: $projectRoot/plan/story-map/\${journey-name}.yaml
+-  Personas: $projectRoot/plan/story-map/personas.yaml
++  Pagespace available => create pages/documents in the project's Pagespace drive (preferred)
++    Story map, user journeys, and personas as DOCUMENT pages
++    Use list_pages to find an existing planning folder or create one
++  No Pagespace => save to $projectRoot/plan/story-map/ as YAML files
++    Story map file: $projectRoot/plan/story-map/story-map.yaml
++    User journey files: $projectRoot/plan/story-map/\${journey-name}.yaml
++    Personas: $projectRoot/plan/story-map/personas.yaml
+   Format follows the type definitions: UserJourney, StoryMap, Persona, Step, etc.
+ }`;
+
+DIFFS['user-testing'] = `\
+@@ -120,7 +120,9 @@
+
+ ## FileLocations
+
+-User test scripts are saved to $projectRoot/plan/ folder (create if not present):
++Pagespace available => save test scripts as DOCUMENT pages in the project's Pagespace drive (preferred)
++  Human and agent scripts as child pages under a "User Testing" folder
++No Pagespace => save to $projectRoot/plan/ folder (create if not present):
+ - Human test scripts: $projectRoot/plan/\${journey-name}-human-test.md
+ - Agent test scripts: $projectRoot/plan/\${journey-name}-agent-test.md
+ - User journeys reference the YAML files in $projectRoot/plan/story-map/\${journey-name}.yaml`;
+
+// Render all diffs on load
+for (const [key, unified] of Object.entries(DIFFS)) {
+  renderDiff('diff-' + key, unified);
+}
+</script>
+</body>
+</html>

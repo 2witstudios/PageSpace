@@ -131,7 +131,7 @@ export interface SpriteInstanceLike {
 /** The injectable Sprites SDK statics. Defaults to the real `@fly/sprites`. */
 export interface SpritesSdk {
   getSprite(name: string): Promise<SpriteInstanceLike>;
-  createSprite(name: string, config?: SpriteConfigParams): Promise<SpriteInstanceLike>;
+  createSprite(name: string): Promise<SpriteInstanceLike>;
   deleteSprite(name: string): Promise<void>;
 }
 
@@ -372,7 +372,7 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
         sprite = await sdk.getSprite(name);
       } catch (error) {
         if (!isSpriteNotFoundError(error)) throw error;
-        sprite = await sdk.createSprite(name, buildSpriteConfig({ options }));
+        sprite = await sdk.createSprite(name);
         fresh = true;
       }
       // Re-apply the deny-default egress lockdown on BOTH paths — see file header.

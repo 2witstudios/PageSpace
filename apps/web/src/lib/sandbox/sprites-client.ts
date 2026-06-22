@@ -26,8 +26,8 @@ async function getSpritesSDK(): Promise<SpritesSdk> {
   const client = new SpritesClient(resolveSpritesToken());
   cachedSdk = {
     getSprite: (name) => client.getSprite(name) as unknown as Promise<SpriteInstanceLike>,
-    createSprite: (name, config) =>
-      client.createSprite(name, config) as unknown as Promise<SpriteInstanceLike>,
+    createSprite: (name) =>
+      client.createSprite(name) as unknown as Promise<SpriteInstanceLike>,
     deleteSprite: (name) => client.deleteSprite(name),
   };
   return cachedSdk;

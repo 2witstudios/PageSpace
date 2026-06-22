@@ -102,6 +102,16 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
           Sign in to join
         </Button>
 
+        <p className="text-center text-sm text-muted-foreground">
+          New to PageSpace?{' '}
+          <Link
+            href={`/auth/signup?next=${encodeURIComponent(`/s/${token}`)}`}
+            className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
+          >
+            Create an account
+          </Link>
+        </p>
+
         <div className="text-center">
           <Link
             href="/dashboard"
