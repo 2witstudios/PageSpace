@@ -42,6 +42,15 @@ vi.mock('@/lib/logging/mask', () => ({
 vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
   listAgentDrives: vi.fn(),
 }));
+// Stub drive-service so the create-drive tool's allocatePublishSubdomain call
+// doesn't pull drive-service's transitive DB-schema imports into this test.
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccessWithDrive: vi.fn(),
+  getDriveById: vi.fn(),
+  isValidDriveHomePage: vi.fn(),
+  updateDrive: vi.fn(),
+  allocatePublishSubdomain: vi.fn().mockResolvedValue('test-drive'),
+}));
 
 import { driveTools } from '../drive-tools';
 import { db } from '@pagespace/db/db';

@@ -45,6 +45,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   listAccessibleDrives: vi.fn().mockResolvedValue([]),
+  allocatePublishSubdomain: vi.fn().mockResolvedValue('test-drive'),
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
