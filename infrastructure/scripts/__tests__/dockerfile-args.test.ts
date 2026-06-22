@@ -11,6 +11,10 @@ const dockerfile = readFileSync(
   join(__dirname, '../../../apps/web/Dockerfile'),
   'utf-8'
 );
+const nextConfig = readFileSync(
+  join(__dirname, '../../../apps/web/next.config.ts'),
+  'utf-8'
+);
 
 describe('Dockerfile build args', () => {
   it('given the Dockerfile, should have NEXT_PUBLIC_REALTIME_URL ARG with empty default', () => {
@@ -43,5 +47,18 @@ describe('Dockerfile build args', () => {
 
   it('given the Dockerfile, should still have NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB as a build ARG', () => {
     expect(dockerfile).toMatch(/^ARG NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB$/m);
+  });
+
+  it('given the Dockerfile, should materialize @fly/sprites at the app node_modules path for standalone tracing', () => {
+    expect(dockerfile).toContain(
+      'cp -a node_modules/.bun/@fly+sprites@*/node_modules/@fly/sprites apps/web/node_modules/@fly/sprites'
+    );
+    expect(dockerfile).not.toContain('node_modules/.bun/node_modules/@fly/sprites');
+  });
+
+  it('given the Next config, should include @fly/sprites in standalone output tracing', () => {
+    expect(nextConfig).toMatch(
+      /['"]\/\*['"]\s*:\s*\[\s*['"]\.\/node_modules\/@fly\/sprites\/\*\*\/\*['"]\s*\]/
+    );
   });
 });

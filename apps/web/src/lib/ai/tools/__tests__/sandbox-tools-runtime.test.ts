@@ -8,6 +8,7 @@ import type { ToolExecutionContext } from '../../core/types';
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {
     findDrive: async () => ({ ownerId: 'tenant-1' }),
+    findPageDriveId: async () => undefined,
     findUser: async () => ({ subscriptionTier: 'pro' }),
     getActorInfo: async () => ({ actorEmail: 'u1@example.com', actorDisplayName: 'User One' }),
     ...overrides,
@@ -102,6 +103,29 @@ describe('resolveSandboxActorContext', () => {
       expect('error' in result).toBe(true);
       if (!('error' in result)) return;
       expect(result.error).toContain('Code execution requires an active drive.');
+    });
+  });
+
+  describe('given chatSource type "page", no currentDrive, and agent page has a drive', () => {
+    it('should resolve driveId from the agent page before applying the drive tenant lookup', async () => {
+      const seenDriveIds: string[] = [];
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findPageDriveId: async (pageId) => pageId === 'page-agent-1' ? 'drive-from-page' : undefined,
+          findDrive: async (driveId) => {
+            seenDriveIds.push(driveId);
+            return { ownerId: 'tenant-from-page-drive' };
+          },
+        }),
+      );
+
+      const result = await resolve(basePageContext);
+
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.driveId).toBe('drive-from-page');
+      expect(result.tenantId).toBe('tenant-from-page-drive');
+      expect(seenDriveIds).toEqual(['drive-from-page']);
     });
   });
 

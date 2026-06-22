@@ -15,7 +15,7 @@
 import type { Tool } from 'ai';
 import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
-import { drives } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { defaultBuildEnv, type SandboxRunDeps } from '@pagespace/lib/services/sandbox/tool-runners';
 import { isCodeExecutionEnabled, canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
@@ -34,6 +34,7 @@ import {
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { createSandboxTools, type ResolveSandboxContext } from './sandbox-tools';
 
@@ -115,6 +116,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
     now: () => new Date(),
+    logger: loggers.ai,
   };
 }
 
@@ -130,6 +132,7 @@ function toTier(value: string | null | undefined): SubscriptionTier {
  */
 export interface ResolveSandboxActorContextDeps {
   findDrive: (driveId: string) => Promise<{ ownerId: string } | undefined>;
+  findPageDriveId: (pageId: string) => Promise<string | undefined>;
   findUser: (userId: string) => Promise<{ subscriptionTier: string | null } | undefined>;
   getActorInfo: (userId: string) => Promise<{ actorEmail: string; actorDisplayName?: string }>;
 }
@@ -137,6 +140,13 @@ export interface ResolveSandboxActorContextDeps {
 const defaultResolveDeps: ResolveSandboxActorContextDeps = {
   findDrive: (driveId) =>
     db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true } }),
+  findPageDriveId: async (pageId) => {
+    const row = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true },
+    });
+    return row?.driveId ?? undefined;
+  },
   findUser: (userId) =>
     db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
   getActorInfo,
@@ -162,7 +172,13 @@ export function createResolveSandboxActorContext(
     if (!conversationId) return { error: 'Code execution requires a conversation.' };
 
     const chatSourceType = context?.chatSource?.type;
-    const driveId = context?.locationContext?.currentDrive?.id;
+    const driveId =
+      context?.locationContext?.currentDrive?.id ??
+      (
+        chatSourceType === 'page' && context?.chatSource?.agentPageId
+          ? await deps.findPageDriveId(context.chatSource.agentPageId)
+          : undefined
+      );
 
     // Page AI (or undefined chatSource) with no driveId — fail closed. Don't
     // assume global intent when the source type is absent.

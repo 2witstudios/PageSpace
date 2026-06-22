@@ -82,6 +82,20 @@ export interface SandboxRunDeps {
   buildEnv: () => Record<string, string>;
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
   now: () => Date;
+  logger?: {
+    error: (message: string, error?: Error | Record<string, unknown>, metadata?: Record<string, unknown>) => void;
+  };
+}
+
+function safeLogError(
+  logger: SandboxRunDeps['logger'],
+  ...args: Parameters<NonNullable<SandboxRunDeps['logger']>['error']>
+): void {
+  try {
+    logger?.error(...args);
+  } catch {
+    // Logging is observability only; it must not alter quota or tool control flow.
+  }
 }
 
 export type SandboxToolDenialReason =
@@ -239,18 +253,42 @@ async function openSession(
     const acquired = await deps.acquireSandbox(acquireRequest(ctx, policy));
     if (!acquired.ok) {
       deps.quota.releaseSlot({ userId: ctx.userId });
+      safeLogError(deps.logger, 'Sandbox acquisition denied or failed', {
+        reason: acquired.reason,
+        userId: ctx.userId,
+        driveId: ctx.driveId,
+        conversationId: ctx.conversationId,
+        requestOrigin: ctx.requestOrigin,
+      });
       return { ok: false, reason: reasonFromAcquire(acquired) };
     }
     const sandbox = await deps.reconnect(acquired.sandboxId);
     if (!sandbox) {
       deps.quota.releaseSlot({ userId: ctx.userId });
+      safeLogError(deps.logger, 'Sandbox reconnect returned no handle', {
+        sandboxId: acquired.sandboxId,
+        userId: ctx.userId,
+        driveId: ctx.driveId,
+        conversationId: ctx.conversationId,
+      });
       return { ok: false, reason: 'provision_failed' };
     }
     // Charge only once a live, authorized sandbox is in hand — a denied authz or
     // a failed provision never consumes the daily budget.
     await deps.quota.charge({ userId: ctx.userId, driveId: ctx.driveId, tenantId: ctx.tenantId });
     return { ok: true, sandbox, release: () => deps.quota.releaseSlot({ userId: ctx.userId }) };
-  } catch {
+  } catch (error) {
+    safeLogError(
+      deps.logger,
+      'Sandbox session open failed',
+      error instanceof Error ? error : new Error(String(error)),
+      {
+        userId: ctx.userId,
+        driveId: ctx.driveId,
+        conversationId: ctx.conversationId,
+        requestOrigin: ctx.requestOrigin,
+      },
+    );
     deps.quota.releaseSlot({ userId: ctx.userId });
     return { ok: false, reason: 'error' };
   }
@@ -316,8 +354,19 @@ export async function runBashInSandbox({
         timeoutMs: policy.timeoutMs,
         maxBytes: policy.maxOutputBytes,
       });
-    } catch {
+    } catch (error) {
       const durationMs = deps.now().getTime() - startedAt.getTime();
+      safeLogError(
+        deps.logger,
+        'Sandbox command execution threw',
+        error instanceof Error ? error : new Error(String(error)),
+        {
+          userId: ctx.userId,
+          driveId: ctx.driveId,
+          conversationId: ctx.conversationId,
+          durationMs,
+        },
+      );
       await safeAudit(deps, ctx, {
         profile: policy.profile,
         code: command,

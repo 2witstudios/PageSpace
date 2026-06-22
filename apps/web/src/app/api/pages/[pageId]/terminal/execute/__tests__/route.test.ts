@@ -78,6 +78,12 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+  },
+}));
+
 // ─── Import SUT and mocked modules ────────────────────────────────────────
 
 import { POST } from '../route';
@@ -87,6 +93,7 @@ import { db } from '@pagespace/db/db';
 import { checkCodeExecutionQuota, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { createProductionSpritesSandboxClient } from '@/lib/sandbox/sprites-client';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // ─── Type helpers ──────────────────────────────────────────────────────────
 
@@ -293,6 +300,25 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
       asMock(acquireTerminalSandbox).mockResolvedValue({ ok: false, reason: 'provision_failed' });
       const res = await POST(makeRequest(), makeParams());
       expect(res.status).toBe(500);
+      expect(vi.mocked(loggers.api.error)).toHaveBeenCalledWith(
+        'Terminal sandbox acquisition failed',
+        expect.objectContaining({ reason: 'provision_failed', pageId: mockPageId, driveId: mockDriveId }),
+      );
+    });
+
+    it('returns 500 when sandbox acquisition fails even if logging throws', async () => {
+      setupDbMocks();
+      const mockClient = { getOrCreate: vi.fn(), get: vi.fn(), stop: vi.fn() };
+      asMock(createProductionSpritesSandboxClient).mockResolvedValue(mockClient);
+      asMock(acquireTerminalSandbox).mockResolvedValue({ ok: false, reason: 'provision_failed' });
+      vi.mocked(loggers.api.error).mockImplementationOnce(() => {
+        throw new Error('logger failed');
+      });
+
+      const res = await POST(makeRequest(), makeParams());
+
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: 'Could not acquire sandbox' });
     });
 
     it('returns 403 when sandbox acquisition is denied', async () => {
@@ -311,6 +337,25 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
       asMock(acquireTerminalSandbox).mockResolvedValue({ ok: true, sandboxId: 'sprite-123', resumed: false });
       const res = await POST(makeRequest(), makeParams());
       expect(res.status).toBe(500);
+      expect(vi.mocked(loggers.api.error)).toHaveBeenCalledWith(
+        'Terminal sandbox reconnect returned no handle',
+        expect.objectContaining({ sandboxId: 'sprite-123', pageId: mockPageId, driveId: mockDriveId }),
+      );
+    });
+
+    it('returns 500 when sprite is gone after acquire succeeds even if logging throws', async () => {
+      setupDbMocks();
+      const mockClient = { getOrCreate: vi.fn(), get: vi.fn().mockResolvedValue(null), stop: vi.fn() };
+      asMock(createProductionSpritesSandboxClient).mockResolvedValue(mockClient);
+      asMock(acquireTerminalSandbox).mockResolvedValue({ ok: true, sandboxId: 'sprite-123', resumed: false });
+      vi.mocked(loggers.api.error).mockImplementationOnce(() => {
+        throw new Error('logger failed');
+      });
+
+      const res = await POST(makeRequest(), makeParams());
+
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: 'Sandbox not available' });
     });
   });
 
@@ -363,7 +408,27 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
       const { sprite } = setupHappyPath();
       asMock(sprite.runCommand).mockRejectedValue(new Error('command error'));
 
-      await POST(makeRequest(), makeParams());
+      const res = await POST(makeRequest(), makeParams());
+      expect(res.status).toBe(500);
+      expect(vi.mocked(loggers.api.error)).toHaveBeenCalledWith(
+        'Terminal command execution failed',
+        expect.any(Error),
+        expect.objectContaining({ reason: 'command_execution_failed', pageId: mockPageId, driveId: mockDriveId }),
+      );
+      expect(vi.mocked(releaseCodeExecutionSlot)).toHaveBeenCalledWith({ userId: mockUserId });
+    });
+
+    it('returns 500 and releases the slot when runCommand and logging both throw', async () => {
+      const { sprite } = setupHappyPath();
+      asMock(sprite.runCommand).mockRejectedValue(new Error('command error'));
+      vi.mocked(loggers.api.error).mockImplementationOnce(() => {
+        throw new Error('logger failed');
+      });
+
+      const res = await POST(makeRequest(), makeParams());
+
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: 'Execution failed' });
       expect(vi.mocked(releaseCodeExecutionSlot)).toHaveBeenCalledWith({ userId: mockUserId });
     });
 
