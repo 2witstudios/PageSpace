@@ -39,13 +39,6 @@ COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 # Copy the installed dependencies and the entire source code
 COPY --from=deps /app .
 
-# Bun's isolated linker stores scoped packages under
-# node_modules/.bun/@scope+package@version/node_modules/@scope/package.
-# Materialize @fly/sprites at the app dependency path so Next standalone tracing
-# can include the ESM SDK for runtime dynamic imports.
-RUN mkdir -p apps/web/node_modules/@fly \
-  && cp -a node_modules/.bun/@fly+sprites@*/node_modules/@fly/sprites apps/web/node_modules/@fly/sprites
-
 # Accept build arguments for Next.js environment variables
 # NEXT_PUBLIC_* vars must be available at build time for Next.js to inline them
 # Note: Stripe keys are hardcoded in stripe-config.ts to simplify Docker builds

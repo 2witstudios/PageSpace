@@ -17,9 +17,6 @@ const workspaceDistReady =
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
-  outputFileTracingIncludes: {
-    "/*": ["./node_modules/@fly/sprites/**/*"],
-  },
   transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
   // pg resolves via bun's cache path (~/.bun/install/cache/pg@.../), which
   // contains no "node_modules" segment, so Next.js's path-based heuristic
