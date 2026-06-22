@@ -366,18 +366,23 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
       // Resume by name when the Sprite already exists; create fresh ONLY on a
       // genuine not-found. Auth/rate-limit/outage errors from getSprite surface
       // rather than spawning a duplicate Sprite under a name that may still be live.
+      //
+      // The Sprites API enforces a 63-char name limit (DNS label). Our session
+      // keys are 72-char HMAC hex strings; truncate to 63 before hitting the API.
+      // The full key stays as the DB session key — only the Sprites name is short.
+      const spriteName = name.slice(0, 63);
       let sprite: SpriteInstanceLike;
       let fresh = false;
       try {
-        sprite = await sdk.getSprite(name);
+        sprite = await sdk.getSprite(spriteName);
       } catch (error) {
         if (!isSpriteNotFoundError(error)) throw error;
-        sprite = await sdk.createSprite(name);
+        sprite = await sdk.createSprite(spriteName);
         fresh = true;
       }
       // Re-apply the deny-default egress lockdown on BOTH paths — see file header.
       await applyEgressLockdown({ sdk, sprite, options, destroyOnFailure: fresh });
-      return wrap(sprite);
+      return wrap(sprite);  // wrap sets sandboxId = sprite.name = spriteName (truncated)
     },
 
     async get({ sandboxId }) {
