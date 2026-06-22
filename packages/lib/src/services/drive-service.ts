@@ -6,7 +6,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, ne, and, not, inArray, isNotNull, sql } from '@pagespace/db/operators';
+import { eq, ne, and, not, inArray, isNotNull, isNull, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
@@ -498,6 +498,18 @@ export async function allocatePublishSubdomain(
   tx?: DbOrTx
 ): Promise<string> {
   const queryable = tx ?? db;
+
+  // Idempotent: if the drive already has a subdomain, return it unchanged rather
+  // than overwrite it (re-calling for an already-provisioned drive is a no-op).
+  const existing = await queryable
+    .select({ subdomain: drives.publishSubdomain })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  if (existing[0]?.subdomain) {
+    return existing[0].subdomain;
+  }
+
   return allocateUniqueSubdomainWithRetry({
     base,
     fetchTaken: async () => {
@@ -510,10 +522,26 @@ export async function allocatePublishSubdomain(
         .filter((s): s is string => typeof s === 'string');
     },
     attempt: async (candidate) => {
-      await queryable
+      // Conditional update: only set when still null, so a concurrent allocation
+      // for this drive can't be overwritten. If zero rows update, the race winner
+      // already set it — re-read and return that value.
+      const updated = await queryable
         .update(drives)
         .set({ publishSubdomain: candidate })
-        .where(eq(drives.id, driveId));
+        .where(and(eq(drives.id, driveId), isNull(drives.publishSubdomain)))
+        .returning({ subdomain: drives.publishSubdomain });
+      if (updated.length === 0) {
+        // Lost the race: another writer set it between our read and write.
+        const reread = await queryable
+          .select({ subdomain: drives.publishSubdomain })
+          .from(drives)
+          .where(eq(drives.id, driveId))
+          .limit(1);
+        if (!reread[0]?.subdomain) {
+          throw new Error(`Race-recovery failed: publishSubdomain still null for drive ${driveId}`);
+        }
+        return reread[0].subdomain;
+      }
     },
   });
 }

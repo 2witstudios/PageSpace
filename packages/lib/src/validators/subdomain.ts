@@ -129,14 +129,16 @@ export const validatePublishSubdomain = (input: string): SubdomainValidationResu
 const DEFAULT_SUBDOMAIN_BASE = 'drive'
 
 /**
- * Clamp a base so that `base` (bare) fits within MAX_SUBDOMAIN_LENGTH, leaving
- * headroom for a numeric suffix (`-NN`) should de-dup be needed. Preserves a
- * trailing alphanumeric (never ends on a hyphen). Applied to the BASE only;
- * suffixes are appended to the stable clamped base, never re-clamped.
+ * Clamp a base so that `base-SUFFIX` always fits within MAX_SUBDOMAIN_LENGTH
+ * for the given suffix number. Per-suffix headroom (not a static -NN budget) means
+ * the loop is provably bounded: for any suffix value, the candidate is ≤ 63 chars,
+ * so it can always validate and the allocator always terminates.
+ * Preserves a trailing alphanumeric (never ends on a hyphen).
  */
-function clampBase(base: string): string {
-  // Reserve room for '-' + 2 digits (covers 99 collisions — plenty).
-  const maxBase = MAX_SUBDOMAIN_LENGTH - 3 // '-NN'
+function clampBaseForSuffix(base: string, suffix: number | null): string {
+  // Bare base (suffix null): cap at the full label length. Suffixed: leave room
+  // for '-<suffix>' so the candidate always fits 63 chars and can validate.
+  const maxBase = suffix === null ? MAX_SUBDOMAIN_LENGTH : MAX_SUBDOMAIN_LENGTH - `-${suffix}`.length
   if (base.length <= maxBase) return base
   let truncated = base.slice(0, maxBase)
   while (truncated.length > 0 && truncated.endsWith('-')) {
@@ -160,20 +162,19 @@ export function resolveUniquePublishSubdomain(rawBase: string, taken: string[]):
   const takenSet = new Set(taken)
   const normalized = normalizeSubdomain(rawBase)
   const fallback = normalized.length > 0 ? normalized : DEFAULT_SUBDOMAIN_BASE
-  const base = clampBase(fallback)
 
-  // Try the base, then base-2, base-3, … until a free, valid candidate is found.
-  // Suffixes are appended to the (already clamped) base; a suffixed candidate
-  // is always shorter than the base so it never needs re-clamping.
-  let candidate = base
-  let suffix = 1
+  // Try the bare base, then base-2, base-3, … until a free, valid candidate is found.
+  // The base is clamped per-suffix so every candidate is ≤ 63 chars and can validate —
+  // the loop is provably bounded and never produces an invalid (too-long) candidate.
+  let suffix = 1 // 1 = bare base; 2+ = suffixed
+  let candidate = clampBaseForSuffix(fallback, null)
   while (
     takenSet.has(candidate) ||
     RESERVED_SUBDOMAINS.has(candidate) ||
     validatePublishSubdomain(candidate).valid === false
   ) {
     suffix += 1
-    candidate = `${base}-${suffix}`
+    candidate = `${clampBaseForSuffix(fallback, suffix)}-${suffix}`
   }
   return candidate
 }

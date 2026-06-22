@@ -26,7 +26,7 @@
 
 import { db as defaultDb } from '@pagespace/db/db';
 import { drives } from '@pagespace/db/schema/core';
-import { eq, and, isNull, gt, asc } from '@pagespace/db/operators';
+import { eq, and, isNull, isNotNull, gt, asc } from '@pagespace/db/operators';
 import { computePublishSubdomainBackfill } from './lib/publish-subdomain-backfill';
 
 const BATCH_SIZE = 500;
@@ -42,6 +42,18 @@ export async function backfill(dryRun: boolean, dbInstance: DbLike = defaultDb):
   let skipped = 0;
   let cursor = '';
 
+  // Fetch the full taken set ONCE (all non-null subdomains), then keep it current as
+  // we allocate. Refreshing it per batch would be O(batches × total drives) — avoid that.
+  const takenRows = await (dbInstance as typeof defaultDb)
+    .select({ subdomain: drives.publishSubdomain })
+    .from(drives)
+    .where(isNotNull(drives.publishSubdomain));
+  const taken = new Set(
+    takenRows
+      .map((r) => r.subdomain)
+      .filter((s): s is string => typeof s === 'string'),
+  );
+
   for (;;) {
     // Drives still missing a publishSubdomain, paginated by id.
     const missing = await (dbInstance as typeof defaultDb)
@@ -53,16 +65,7 @@ export async function backfill(dryRun: boolean, dbInstance: DbLike = defaultDb):
 
     if (missing.length === 0) break;
 
-    // The full set of already-taken subdomains across the whole DB — de-dupe against
-    // these, not just the missing batch, so a missing drive never reuses a taken name.
-    const allTakenRows = await (dbInstance as typeof defaultDb)
-      .select({ subdomain: drives.publishSubdomain })
-      .from(drives);
-    const taken = allTakenRows
-      .map((r) => r.subdomain)
-      .filter((s): s is string => typeof s === 'string');
-
-    const assignments = computePublishSubdomainBackfill(missing, taken);
+    const assignments = computePublishSubdomainBackfill(missing, [...taken]);
 
     if (dryRun) {
       allocated += assignments.length;
@@ -75,6 +78,7 @@ export async function backfill(dryRun: boolean, dbInstance: DbLike = defaultDb):
             .set({ publishSubdomain: a.subdomain })
             .where(eq(drives.id, a.driveId));
           allocated += 1;
+          taken.add(a.subdomain); // keep within-run set current so later batches de-dupe
         } catch (err) {
           // Race: another writer claimed this exact subdomain between our read and write.
           // Skip it — a re-run will assign it the next free suffix. Never relax uniqueness.

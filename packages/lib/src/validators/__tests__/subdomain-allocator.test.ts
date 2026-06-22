@@ -42,12 +42,11 @@ describe('resolveUniquePublishSubdomain', () => {
     expect(validateShape(result)).toBe(true)
   })
 
-  it('given a base whose suffix candidate exceeds 63 chars, should truncate the base to fit', () => {
-    // A 63-char base is valid; once taken, the allocator clamps to leave suffix
-    // headroom and de-dups against the clamped form.
+  it('given a 63-char base that is itself taken, should truncate + suffix to fit', () => {
+    // A 63-char base is a valid label. When the base itself is taken, the allocator
+    // must truncate to leave suffix headroom so the next candidate stays ≤ 63.
     const longBase = 'a'.repeat(MAX_SUBDOMAIN_LENGTH) // exactly 63
-    const clamped = 'a'.repeat(MAX_SUBDOMAIN_LENGTH - 3) // 60, the clamped form
-    const result = resolveUniquePublishSubdomain(longBase, [clamped])
+    const result = resolveUniquePublishSubdomain(longBase, [longBase])
     expect(result.length).toBeLessThanOrEqual(MAX_SUBDOMAIN_LENGTH)
     expect(result.endsWith('-2')).toBe(true)
     expect(validateShape(result)).toBe(true)
@@ -70,6 +69,32 @@ describe('resolveUniquePublishSubdomain', () => {
       expect(taken).not.toContain(result)
       expect(result.length).toBeLessThanOrEqual(MAX_SUBDOMAIN_LENGTH)
     }
+  })
+
+  it('given more than 99 collisions, should not infinite-loop and should return a valid <=63 candidate', () => {
+    // Regression: a static -NN clamp headroom caused an infinite loop once the
+    // suffix hit 3 digits (candidate exceeded 63 chars and never validated).
+    const base = 'acme'
+    const taken: string[] = []
+    for (let i = 2; i <= 150; i++) taken.push(`acme-${i}`)
+    const result = resolveUniquePublishSubdomain(base, taken)
+    expect(result.length).toBeLessThanOrEqual(MAX_SUBDOMAIN_LENGTH)
+    expect(validateShape(result)).toBe(true)
+    expect(taken).not.toContain(result)
+  })
+
+  it('given a long base with many collisions, should truncate the base per suffix to stay within 63 chars', () => {
+    // Worst case that previously infinite-looped: a 63-char base clamps to 60,
+    // the bare 60-char form is taken, AND 60-char-2..-120 are all taken. The
+    // per-suffix clamp must keep truncating so candidates stay ≤ 63 and validate.
+    const longBase = 'b'.repeat(63)
+    const clamped60 = 'b'.repeat(60)
+    const taken: string[] = [longBase, clamped60]
+    for (let i = 2; i <= 120; i++) taken.push(`${clamped60}-${i}`)
+    const result = resolveUniquePublishSubdomain(longBase, taken)
+    expect(result.length).toBeLessThanOrEqual(MAX_SUBDOMAIN_LENGTH)
+    expect(validateShape(result)).toBe(true)
+    expect(taken).not.toContain(result)
   })
 })
 

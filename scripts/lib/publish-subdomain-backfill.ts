@@ -1,4 +1,4 @@
-import { resolveUniquePublishSubdomain } from '@pagespace/lib/services/subdomain-allocation';
+import { resolveUniquePublishSubdomain } from '@pagespace/lib/validators/subdomain';
 
 export type DriveBackfillRow = {
   id: string;
