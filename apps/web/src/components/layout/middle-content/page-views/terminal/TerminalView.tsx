@@ -15,12 +15,14 @@ const XtermTerminal = dynamic(() => import('./XtermTerminal'), { ssr: false });
 
 const TerminalView = ({ pageId }: TerminalViewProps) => {
   const [connected, setConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const socket = useSocket();
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
   const handleReady = useCallback(() => setConnected(true), []);
   const handleError = useCallback((message: string) => {
+    setError(message);
     toast.error(`Terminal error: ${message}`);
   }, []);
 
@@ -41,7 +43,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
       )}
 
       <div className="flex-1 min-h-0 relative">
-        {socket && (
+        {socket && isAdmin && (
           <XtermTerminal
             socket={socket}
             pageId={pageId}
@@ -52,10 +54,14 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
 
         {!connected && (
           <div className="absolute inset-0 bg-black flex items-center justify-center">
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm text-green-400">Connecting to shell...</span>
-            </div>
+            {error ? (
+              <span className="text-sm text-red-400">{error}</span>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-green-400">Connecting to shell...</span>
+              </div>
+            )}
           </div>
         )}
       </div>
