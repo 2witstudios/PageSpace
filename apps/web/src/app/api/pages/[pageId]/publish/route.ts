@@ -18,7 +18,6 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
-const DEFAULT_OG_IMAGE_URL = 'https://pagespace.ai/og-image.png';
 
 const publishSchema = z.object({
   subdomain: z.string().optional(),
@@ -208,8 +207,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       assetBaseUrl,
       faviconBaseUrl: FAVICON_BASE_URL,
       pageUrl: publishedUrl,
-      ogImageUrl: DEFAULT_OG_IMAGE_URL,
-      ogDescription: 'Published on PageSpace',
     });
     const key = buildPublishedKey(subdomain, path);
 

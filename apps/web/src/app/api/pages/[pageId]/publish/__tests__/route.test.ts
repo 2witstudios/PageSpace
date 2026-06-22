@@ -195,7 +195,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(updateWhere).toHaveBeenCalledTimes(2);
 
     expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
-    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome', ogImageUrl: 'https://pagespace.ai/og-image.png', ogDescription: 'Published on PageSpace' }));
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome' }));
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
     expect(onConflictDoUpdate).toHaveBeenCalledTimes(1);
 
