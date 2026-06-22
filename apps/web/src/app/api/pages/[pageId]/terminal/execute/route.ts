@@ -16,6 +16,7 @@ import {
 import { truncateToBytes } from '@pagespace/lib/services/sandbox/output-limit';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -37,6 +38,14 @@ function toTier(value: string | null | undefined): SubscriptionTier {
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const COMMAND_TIMEOUT_MS = 30_000;
+
+function safeLogApiError(...args: Parameters<(typeof loggers.api)['error']>): void {
+  try {
+    loggers.api.error(...args);
+  } catch {
+    // Logging must never change terminal API response semantics.
+  }
+}
 
 export async function POST(
   req: Request,
@@ -143,12 +152,24 @@ export async function POST(
 
     if (!sandboxResult.ok) {
       const status = sandboxResult.reason === 'deny' ? 403 : 500;
+      safeLogApiError('Terminal sandbox acquisition failed', {
+        reason: sandboxResult.reason,
+        userId,
+        pageId,
+        driveId,
+      });
       return NextResponse.json({ error: 'Could not acquire sandbox' }, { status });
     }
 
     // 9. Reconnect to the executable Sprite to get the runCommand surface.
     const sprite = await client.get({ sandboxId: sandboxResult.sandboxId });
     if (!sprite) {
+      safeLogApiError('Terminal sandbox reconnect returned no handle', {
+        sandboxId: sandboxResult.sandboxId,
+        userId,
+        pageId,
+        driveId,
+      });
       return NextResponse.json({ error: 'Sandbox not available' }, { status: 500 });
     }
 
@@ -186,7 +207,13 @@ export async function POST(
     }).catch(() => {});
 
     return NextResponse.json({ output, exitCode: result.exitCode, durationMs });
-  } catch {
+  } catch (error) {
+    safeLogApiError('Terminal command execution failed', error instanceof Error ? error : new Error(String(error)), {
+      reason: 'command_execution_failed',
+      userId,
+      pageId,
+      driveId,
+    });
     return NextResponse.json({ error: 'Execution failed' }, { status: 500 });
   } finally {
     // 11. Always release the concurrency slot — even on errors — so a failed
