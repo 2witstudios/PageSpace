@@ -12,10 +12,10 @@ export function validateTerminalConnectPayload(payload: unknown): Result {
   if (typeof p.pageId !== 'string' || p.pageId.length === 0) {
     return { ok: false, error: 'invalid pageId' };
   }
-  if (typeof p.cols !== 'number' || p.cols <= 0) {
+  if (typeof p.cols !== 'number' || !Number.isFinite(p.cols) || p.cols <= 0) {
     return { ok: false, error: 'invalid cols' };
   }
-  if (typeof p.rows !== 'number' || p.rows <= 0) {
+  if (typeof p.rows !== 'number' || !Number.isFinite(p.rows) || p.rows <= 0) {
     return { ok: false, error: 'invalid rows' };
   }
   return { ok: true, value: { pageId: p.pageId, cols: p.cols, rows: p.rows } };

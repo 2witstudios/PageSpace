@@ -75,6 +75,19 @@ describe('buildTerminalHandlers', () => {
       expect(socket.emit).toHaveBeenCalledWith('terminal:error', expect.objectContaining({ message: expect.any(String) }));
       expect(sessionMap.has('sock1')).toBe(false);
     });
+
+    it('given terminal:connect called twice, should kill the existing session before opening a new one', async () => {
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+      const firstShell = shell;
+
+      const secondShell = makeShell();
+      openShell.mockReturnValue(secondShell);
+      await onConnect(validPayload);
+
+      expect(firstShell.kill).toHaveBeenCalled();
+      expect(sessionMap.has('sock1')).toBe(true);
+    });
   });
 
   describe('onInput', () => {
@@ -106,6 +119,24 @@ describe('buildTerminalHandlers', () => {
     it('given no active session, should be a silent no-op', () => {
       const { onResize } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       expect(() => onResize({ cols: 120, rows: 40 })).not.toThrow();
+    });
+
+    it('given NaN cols, should be a no-op', async () => {
+      const { onConnect, onResize } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      onResize({ cols: NaN, rows: 40 });
+
+      expect(shell.resize).not.toHaveBeenCalled();
+    });
+
+    it('given oversized cols, should clamp to MAX_COLS', async () => {
+      const { onConnect, onResize } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      onResize({ cols: 9999, rows: 40 });
+
+      expect(shell.resize).toHaveBeenCalledWith(500, 40);
     });
   });
 

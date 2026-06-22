@@ -61,6 +61,30 @@ describe('validateTerminalConnectPayload', () => {
     if (!result.ok) expect(result.error).toBe('invalid cols');
   });
 
+  it('given cols is NaN, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: NaN, rows: 24 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid cols');
+  });
+
+  it('given cols is Infinity, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: Infinity, rows: 24 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid cols');
+  });
+
+  it('given rows is NaN, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: 80, rows: NaN });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid rows');
+  });
+
+  it('given rows is Infinity, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: 80, rows: Infinity });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid rows');
+  });
+
   it('given rows is missing, should return ok:false with invalid rows', () => {
     const result = validateTerminalConnectPayload({ pageId: 'abc', cols: 80 });
     expect(result.ok).toBe(false);

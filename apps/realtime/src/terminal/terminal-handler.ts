@@ -49,6 +49,13 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
         return;
       }
 
+      // Kill any existing session for this socket (reconnect scenario)
+      const existing = sessionMap.get(socket.id);
+      if (existing) {
+        existing.command.kill('SIGKILL');
+        sessionMap.delete(socket.id);
+      }
+
       let shell: PtyShell;
       try {
         shell = openShell({
@@ -81,8 +88,10 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
       const session = sessionMap.get(socket.id);
       if (!session) return;
       const p = payload as { cols?: number; rows?: number };
-      if (typeof p?.cols === 'number' && typeof p?.rows === 'number') {
-        session.command.resize(p.cols, p.rows);
+      if (typeof p?.cols === 'number' && typeof p?.rows === 'number' &&
+          Number.isFinite(p.cols) && Number.isFinite(p.rows)) {
+        const { cols, rows } = clampTerminalDimensions({ cols: p.cols, rows: p.rows });
+        session.command.resize(cols, rows);
       }
     },
 

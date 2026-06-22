@@ -117,4 +117,37 @@ describe('openPtyShell', () => {
 
     expect(cmd.kill).toHaveBeenCalledWith('SIGKILL');
   });
+
+  it('given sprite emits an error event, should call onOutput with error text and onExit with -1', () => {
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+    const onOutput = vi.fn();
+    const onExit = vi.fn();
+
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+    cmd._emitter.emit('error', new Error('connection lost'));
+
+    expect(onOutput).toHaveBeenCalledWith(expect.stringContaining('connection lost'));
+    expect(onExit).toHaveBeenCalledWith(-1);
+  });
+
+  it('given stdin is null, shell.write should be a no-op', () => {
+    const cmd = buildFakeCommand();
+    (cmd as Record<string, unknown>).stdin = null;
+    const sprite = buildFakeSprite(cmd);
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    expect(() => shell.write('ls\n')).not.toThrow();
+  });
+
+  it('given exit emits null code, should call onExit with -1', () => {
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+    const onExit = vi.fn();
+
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+    cmd._emitter.emit('exit', null);
+
+    expect(onExit).toHaveBeenCalledWith(-1);
+  });
 });

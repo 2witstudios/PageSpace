@@ -17,12 +17,18 @@ export type OpenPtyShellArgs = {
 export function openPtyShell({ sprite, cols, rows, onOutput, onExit }: OpenPtyShellArgs): PtyShell {
   const cmd = sprite.spawn('bash', [], { tty: true, cols, rows });
 
-  cmd.stdout.on('data', (chunk) => onOutput(typeof chunk === 'string' ? chunk : chunk.toString('utf8')));
-  cmd.stderr.on('data', (chunk) => onOutput(typeof chunk === 'string' ? chunk : chunk.toString('utf8')));
-  cmd.on('exit', (code) => onExit(code));
+  const toStr = (chunk: unknown) => (typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8'));
+  cmd.stdout.on('data', (chunk) => onOutput(toStr(chunk)));
+  cmd.stderr.on('data', (chunk) => onOutput(toStr(chunk)));
+  cmd.on('error', (err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    onOutput(`\r\n\x1b[31mShell error: ${msg}\x1b[0m\r\n`);
+    onExit(-1);
+  });
+  cmd.on('exit', (code) => onExit(code ?? -1));
 
   return {
-    write: (data) => cmd.stdin!.write(data),
+    write: (data) => { cmd.stdin?.write(data); },
     resize: (c, r) => cmd.resize?.(c, r),
     kill: () => cmd.kill('SIGKILL'),
   };

@@ -10,6 +10,7 @@ let cachedSdk: SpritesSdk | null = null;
 
 export async function getRealtimeSpritesSdk(): Promise<SpritesSdk> {
   if (cachedSdk) return cachedSdk;
+  // @fly/sprites is ESM-only; production runs Node 24 which supports require(esm) natively.
   const { SpritesClient } = await import('@fly/sprites');
   const client = new SpritesClient(resolveSpritesToken());
   cachedSdk = {

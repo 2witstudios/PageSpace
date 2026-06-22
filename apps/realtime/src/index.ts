@@ -951,7 +951,12 @@ io.on('connection', (socket: AuthSocket) => {
     socket: socket as unknown as SocketLike,
   });
 
-  socket.on('terminal:connect', (payload) => { void terminalHandlers.onConnect(payload); });
+  socket.on('terminal:connect', (payload) => {
+    terminalHandlers.onConnect(payload).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'Internal error';
+      socket.emit('terminal:error', { message: msg });
+    });
+  });
   socket.on('terminal:input', (payload) => terminalHandlers.onInput(payload));
   socket.on('terminal:resize', (payload) => terminalHandlers.onResize(payload));
   socket.on('terminal:disconnect', () => terminalHandlers.onDisconnect());
