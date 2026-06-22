@@ -14,7 +14,7 @@ const GITHUB_CREDENTIAL_HELPER =
   '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f';
 
 /**
- * Runs a git or gh command inside a 'dev' profile sandbox.
+ * Runs a git or gh command inside a sandbox.
  *
  * Security invariants:
  * - cmd is a literal ('git' or 'gh'), never built by string concatenation.
