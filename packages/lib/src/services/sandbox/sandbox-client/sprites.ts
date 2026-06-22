@@ -357,7 +357,24 @@ function wrap(sprite: SpriteInstanceLike): ExecutableSandbox {
       // spawn (arg array), never a host-side shell string. The untrusted command
       // runs under the Sprite's own `sh -c`, contained by the VM. Re-spawned per
       // attempt so a cold-start wake drop reconnects on a fresh WebSocket.
-      return runSpawnedWithWakeRetry(() => sprite.spawn(cmd, args, { cwd, env }), maxBytes ?? 0, timeoutMs);
+      //
+      // Self-healing cwd: when a cwd is given, don't hand it to spawn as an
+      // immutable precondition (a deleted cwd makes spawn fail outright — an agent
+      // that `rm -rf`s `/workspace` would otherwise brick the sandbox for the rest
+      // of the conversation). Instead route through a tiny `sh` wrapper that
+      // recreates + enters the cwd first, so it self-heals on the next command.
+      // cwd/cmd/args are passed as positional DATA args (`$1`=cwd; `shift` drops it
+      // so `"$@"` = cmd args…; `exec` preserves the real exit code) — never
+      // interpolated into the script, preserving the arg-array no-injection
+      // invariant. With no cwd, spawn directly as before.
+      const spawnFn = cwd === undefined
+        ? () => sprite.spawn(cmd, args, { env })
+        : () => sprite.spawn(
+            'sh',
+            ['-c', 'mkdir -p "$1" 2>/dev/null; cd "$1" || exit 1; shift; exec "$@"', 'sh', cwd, cmd, ...args],
+            { env },
+          );
+      return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs);
     },
 
     async writeFiles(files: WriteFileEntry[]): Promise<void> {
