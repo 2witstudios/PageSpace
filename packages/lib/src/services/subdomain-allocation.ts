@@ -18,7 +18,10 @@ export function isUniqueViolation(err: unknown): boolean {
 export async function allocateUniqueSubdomainWithRetry(args: {
   base: string;
   fetchTaken: () => Promise<string[]>;
-  attempt: (candidate: string) => Promise<void>;
+  /** Attempt the allocation. May return the value actually persisted (e.g. the
+   * race-winner's value after a conditional-update no-op) — that return wins over
+   * the locally-computed candidate, so a race never reports an unwritten subdomain. */
+  attempt: (candidate: string) => Promise<string | void>;
   maxAttempts?: number;
 }): Promise<string> {
   const maxAttempts = args.maxAttempts ?? 5;
@@ -34,8 +37,10 @@ export async function allocateUniqueSubdomainWithRetry(args: {
     const taken = await args.fetchTaken();
     const candidate = resolveUniquePublishSubdomain(args.base, taken);
     try {
-      await args.attempt(candidate);
-      return candidate;
+      const persisted = await args.attempt(candidate);
+      // Honor the actual persisted value when attempt returns one (race recovery);
+      // otherwise the candidate we just wrote is what's on disk.
+      return persisted ?? candidate;
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
       // race: another create claimed our candidate — loop, re-read taken, try the next.

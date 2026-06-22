@@ -4,7 +4,7 @@ import { allocateUniqueSubdomainWithRetry } from '../subdomain-allocation'
 describe('allocateUniqueSubdomainWithRetry', () => {
   it('given a free candidate on the first attempt, should return it without retrying', async () => {
     const fetchTaken = vi.fn().mockResolvedValue([])
-    const attempt = vi.fn().mockResolvedValue('ok')
+    const attempt = vi.fn().mockResolvedValue(undefined)
     const result = await allocateUniqueSubdomainWithRetry({
       base: 'acme',
       fetchTaken,
@@ -27,7 +27,7 @@ describe('allocateUniqueSubdomainWithRetry', () => {
     const attempt = vi
       .fn()
       .mockRejectedValueOnce(uniqueViolation)
-      .mockResolvedValueOnce('ok')
+      .mockResolvedValueOnce(undefined)
     const result = await allocateUniqueSubdomainWithRetry({
       base: 'acme',
       fetchTaken,
@@ -63,5 +63,16 @@ describe('allocateUniqueSubdomainWithRetry', () => {
     ).rejects.toThrow('connection refused')
     expect(fetchTaken).toHaveBeenCalledTimes(1)
     expect(attempt).toHaveBeenCalledTimes(1)
+  })
+
+  it('given attempt returns a different value (e.g. a race-winner actual), should return that value, not the computed candidate', async () => {
+    // Race: we computed 'acme-2', but a concurrent writer set 'acme' and the
+    // conditional update affected 0 rows; attempt re-reads and returns the ACTUAL
+    // persisted value. The wrapper must honor attempt's return over its own candidate.
+    const fetchTaken = vi.fn().mockResolvedValue(['acme'])
+    const attempt = vi.fn().mockResolvedValue('acme') // the real persisted value
+    const result = await allocateUniqueSubdomainWithRetry({ base: 'acme', fetchTaken, attempt })
+    expect(result).toBe('acme') // NOT 'acme-2'
+    expect(attempt).toHaveBeenCalledWith('acme-2')
   })
 })
