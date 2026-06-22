@@ -43,6 +43,13 @@ vi.mock('@/lib/websocket', () => ({
   createDriveEventPayload: vi.fn((driveId, event, data) => ({ driveId, event, data })),
 }));
 
+vi.mock('@/lib/canvas/publish-page', () => ({
+  publishHomePageAtRoot: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/canvas/published-storage', () => ({
+  isPublishConfigured: vi.fn().mockReturnValue(false),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),

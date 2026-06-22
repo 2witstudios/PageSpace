@@ -9,8 +9,8 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPAuthResult, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker'
-import { publishHomePageAtRoot } from '@/lib/canvas/publish-page'
+import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { publishHomePageAtRoot } from '@/lib/canvas/publish-page';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };

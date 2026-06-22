@@ -10,8 +10,8 @@ import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activi
 import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service'
-import { publishHomePageAtRoot } from '@/lib/canvas/publish-page'
+import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
+import { publishHomePageAtRoot } from '@/lib/canvas/publish-page';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import type { ToolExecutionContext } from '../core/types';
 import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';

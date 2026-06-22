@@ -20,6 +20,39 @@ import {
 import { rewriteCanvasAssets, extractAndStripOgMeta } from './asset-pipeline';
 
 const PUBLISH_HOST = 'pagespace.site';
+const FAVICON_BASE_URL = 'https://pagespace.ai';
+
+/**
+ * Error carrying an HTTP status so route handlers can map publish failures
+ * (invalid/taken subdomain, path collision, non-canvas page, …) back to the
+ * actionable 4xx response they had before this logic was extracted, instead of
+ * collapsing every expected failure into a 500.
+ */
+export class PublishError extends Error {
+  statusCode: number;
+  constructor(message: string, statusCode: number = 500) {
+    super(message);
+    this.name = 'PublishError';
+    this.statusCode = statusCode;
+  }
+}
+
+/**
+ * Canonicalize a caller-supplied publish path so the value stored in
+ * `published_pages.path` is exactly the value that `buildPublishedKey` derives
+ * the storage key from. Each segment is slugified (lowercased, special chars
+ * dropped) and empty/dot segments are removed, making the result a fixed point
+ * of the storage-layer `sanitizePath`. Without this, inputs like `Foo`/`foo` or
+ * `a/../b`/`b` reserve distinct `(driveId, path)` rows while targeting the same
+ * artifact key, letting a later publish overwrite an earlier page's public site.
+ */
+function normalizePublishPath(raw: string): string {
+  return raw
+    .split('/')
+    .map((segment) => slugify(segment))
+    .filter(Boolean)
+    .join('/');
+}
 
 export interface PublishCanvasPageInput {
   /** Page ID to publish. Must be a CANVAS page. */
@@ -62,11 +95,11 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   });
 
   if (!page) {
-    throw new Error('Page not found');
+    throw new PublishError('Page not found', 404);
   }
 
   if (page.type !== 'CANVAS') {
-    throw new Error('Only canvas pages can be published');
+    throw new PublishError('Only canvas pages can be published', 400);
   }
 
   // ------------------------------------------------------------------
@@ -78,27 +111,32 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   });
 
   if (!drive) {
-    throw new Error('Drive not found');
+    throw new PublishError('Drive not found', 404);
   }
 
   if (isHomeDrive(drive)) {
-    throw new Error('Cannot publish from a Home drive');
+    throw new PublishError('Cannot publish from a Home drive', 403);
   }
 
-  // Resolve subdomain: explicit > existing > allocate from slug
-  let subdomain = input.subdomain ?? drive.publishSubdomain;
+  // Resolve the drive's publish subdomain. The subdomain is a property of the
+  // DRIVE, never of an individual publish request: once allocated it is always
+  // reused. A caller-supplied `subdomain` is only a *candidate* for the drive's
+  // first allocation — it must pass validation and win the unique constraint.
+  // Using `input.subdomain` directly would let a caller publish under another
+  // drive's subdomain (or a reserved/invalid one), overwriting that public site.
+  let subdomain = drive.publishSubdomain;
   if (!subdomain) {
     const candidate = normalizeSubdomain(input.subdomain ?? drive.slug);
     const validation = validatePublishSubdomain(candidate);
     if (!validation.valid) {
-      throw new Error(`Invalid subdomain: ${validation.reason}`);
+      throw new PublishError(`Invalid subdomain: ${validation.reason}`, 400);
     }
 
     try {
       await db.update(drives).set({ publishSubdomain: candidate }).where(eq(drives.id, drive.id));
     } catch (err) {
       if (isUniqueViolation(err)) {
-        throw new Error('Subdomain taken, choose another');
+        throw new PublishError('Subdomain taken, choose another', 409);
       }
       throw err;
     }
@@ -108,7 +146,18 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   // 3. Resolve path
   // ------------------------------------------------------------------
-  const path = input.path ?? slugify(page.title ?? '') || pageId;
+  // An explicit '' means "publish at the subdomain root" (home-page-at-root).
+  // Any other explicit path is canonicalized so the DB row and storage key
+  // agree; a non-empty path that canonicalizes to empty falls back to the page
+  // id rather than silently landing at the root.
+  let path: string;
+  if (input.path === undefined) {
+    path = slugify(page.title ?? '') || pageId;
+  } else if (input.path === '') {
+    path = '';
+  } else {
+    path = normalizePublishPath(input.path) || pageId;
+  }
 
   // ------------------------------------------------------------------
   // 4. Rewrite assets + extract OG meta
@@ -122,7 +171,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     title: page.title ?? undefined,
     assetBaseUrl,
     faviconHref: meta.faviconHref,
-    faviconBaseUrl: meta.faviconHref ? undefined : undefined,
+    faviconBaseUrl: meta.faviconHref ? undefined : FAVICON_BASE_URL,
     pageUrl: publishedUrl,
     ogImageUrl: meta.ogImageUrl,
     ogDescription: meta.ogDescription,
@@ -161,7 +210,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
       });
   } catch (err) {
     if (isUniqueViolation(err)) {
-      throw new Error('Another page is already published at that path; choose a different path');
+      throw new PublishError('Another page is already published at that path; choose a different path', 409);
     }
     throw err;
   }

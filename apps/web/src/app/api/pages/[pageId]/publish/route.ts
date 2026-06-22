@@ -4,7 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
-import { publishCanvasPage } from '@/lib/canvas/publish-page';
+import { publishCanvasPage, PublishError } from '@/lib/canvas/publish-page';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
@@ -163,7 +163,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }
     const message = error instanceof Error ? error.message : 'Failed to publish page';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const statusCode = error instanceof PublishError ? error.statusCode : 500;
+    return NextResponse.json({ error: message }, { status: statusCode });
   }
 }
 

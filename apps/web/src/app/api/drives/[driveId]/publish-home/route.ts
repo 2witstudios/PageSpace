@@ -8,6 +8,7 @@ import {
 import { publishHomePageAtRoot } from '@/lib/canvas/publish-page';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -55,6 +56,14 @@ export async function POST(
         { status: 400 },
       );
     }
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { operation: 'publish-home' },
+    });
 
     return NextResponse.json(result);
   } catch (error) {

@@ -64,11 +64,28 @@ vi.mock('@pagespace/lib/services/subdomain-allocation', () => ({
 }));
 
 vi.mock('@pagespace/lib/utils/utils', () => ({
-  slugify: vi.fn((s: string) => s.toLowerCase().replace(/\s+/g, '-')),
+  // Mirror the real slugify so path-normalization assertions are faithful.
+  slugify: vi.fn((s: string) =>
+    s
+      .toLowerCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^\w-]+/g, '')
+      .replace(/--+/g, '-')
+      .replace(/^-+/, '')
+      .replace(/-+$/, ''),
+  ),
 }));
 
 import { db } from '@pagespace/db/db';
-import { publishCanvasPage, publishHomePageAtRoot } from '../publish-page';
+import { publishCanvasPage, publishHomePageAtRoot, PublishError } from '../publish-page';
+
+// The mocked `db` keeps the real relational-query return types, so partial test
+// fixtures are cast through `unknown` to the row shape (never `any`).
+type PageRow = NonNullable<Awaited<ReturnType<typeof db.query.pages.findFirst>>>;
+type DriveRow = NonNullable<Awaited<ReturnType<typeof db.query.drives.findFirst>>>;
+
+const pageRow = (row: Record<string, unknown>) => row as unknown as PageRow;
+const driveRow = (row: Record<string, unknown>) => row as unknown as DriveRow;
 
 describe('publishCanvasPage', () => {
   beforeEach(() => {
@@ -76,13 +93,13 @@ describe('publishCanvasPage', () => {
   });
 
   it('given a valid canvas page with an existing subdomain, should publish successfully', async () => {
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1',
-    } as any);
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD',
-    } as any);
-    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(null);
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     const result = await publishCanvasPage({
       pageId: 'page-1',
@@ -95,9 +112,9 @@ describe('publishCanvasPage', () => {
   });
 
   it('given a non-canvas page, should throw an error', async () => {
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'DOCUMENT', title: 'Doc', content: '', driveId: 'drive-1',
-    } as any);
+    }));
 
     await expect(publishCanvasPage({
       pageId: 'page-1', driveId: 'drive-1', userId: 'user-1',
@@ -105,7 +122,7 @@ describe('publishCanvasPage', () => {
   });
 
   it('given a page that does not exist, should throw', async () => {
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue(null);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined);
 
     await expect(publishCanvasPage({
       pageId: 'missing', driveId: 'drive-1', userId: 'user-1',
@@ -113,13 +130,13 @@ describe('publishCanvasPage', () => {
   });
 
   it('given an explicit empty path, should publish at root (path = "")', async () => {
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'CANVAS', title: 'Home', content: '<div>home</div>', driveId: 'drive-1',
-    } as any);
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD',
-    } as any);
-    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(null);
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     const result = await publishCanvasPage({
       pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', path: '',
@@ -127,6 +144,100 @@ describe('publishCanvasPage', () => {
 
     expect(result.path).toBe('');
     expect(result.url).toBe('https://my-drive.pagespace.site/');
+  });
+
+  it('given a caller-supplied subdomain, should NOT override the drive\'s existing subdomain', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    const result = await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', subdomain: 'someone-elses-site',
+    });
+
+    // The drive already owns 'my-drive'; the caller cannot publish under another subdomain.
+    expect(result.subdomain).toBe('my-drive');
+    expect(result.url).toContain('my-drive.pagespace.site');
+  });
+
+  it('given no existing subdomain, should use the caller subdomain only as an allocation candidate', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'my-drive', publishSubdomain: null, kind: 'STANDARD',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    const result = await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', subdomain: 'Chosen-Sub',
+    });
+
+    // normalizeSubdomain lowercases the candidate before allocation.
+    expect(result.subdomain).toBe('chosen-sub');
+  });
+
+  it('given an explicit non-empty path, should normalize it (Foo -> foo)', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    const result = await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', path: 'Foo',
+    });
+
+    expect(result.path).toBe('foo');
+  });
+
+  it('given a traversal-style path, should canonicalize it (a/../b -> a/b)', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    const result = await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', path: 'a/../b',
+    });
+
+    expect(result.path).toBe('a/b');
+  });
+
+  it('given a non-empty path that canonicalizes to empty, should fall back to the page id (not root)', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    const result = await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', path: '!!!',
+    });
+
+    expect(result.path).toBe('page-1');
+  });
+
+  it('PublishError carries an HTTP status code for non-canvas pages', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'DOCUMENT', title: 'Doc', content: '', driveId: 'drive-1',
+    }));
+
+    await expect(publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1',
+    })).rejects.toMatchObject({ statusCode: 400 });
+    expect(PublishError).toBeDefined();
   });
 });
 
@@ -136,30 +247,30 @@ describe('publishHomePageAtRoot', () => {
   });
 
   it('given a drive with no homePageId, should return null', async () => {
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       id: 'drive-1', homePageId: null, publishSubdomain: 'sub', kind: 'STANDARD',
-    } as any);
+    }));
 
     const result = await publishHomePageAtRoot('drive-1', 'user-1');
     expect(result).toBeNull();
   });
 
   it('given a drive with no publishSubdomain, should return null', async () => {
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       id: 'drive-1', homePageId: 'page-1', publishSubdomain: null, kind: 'STANDARD',
-    } as any);
+    }));
 
     const result = await publishHomePageAtRoot('drive-1', 'user-1');
     expect(result).toBeNull();
   });
 
   it('given a home page that is not a canvas, should return null', async () => {
-    vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       id: 'drive-1', homePageId: 'page-1', publishSubdomain: 'sub', kind: 'STANDARD',
-    } as any);
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue({
+    }));
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'DOCUMENT',
-    } as any);
+    }));
 
     const result = await publishHomePageAtRoot('drive-1', 'user-1');
     expect(result).toBeNull();
@@ -168,23 +279,23 @@ describe('publishHomePageAtRoot', () => {
   it('given a valid canvas home page, should publish at root path', async () => {
     vi.mocked(db.query.drives.findFirst)
       // First call: drive lookup for home-publish checks
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(driveRow({
         id: 'drive-1', homePageId: 'page-1', publishSubdomain: 'sub', kind: 'STANDARD',
-      } as any)
+      }))
       // Second call: drive lookup inside publishCanvasPage
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(driveRow({
         id: 'drive-1', slug: 'my-drive', publishSubdomain: 'sub', kind: 'STANDARD',
-      } as any);
+      }));
     vi.mocked(db.query.pages.findFirst)
       // First call: home page type check
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(pageRow({
         id: 'page-1', type: 'CANVAS',
-      } as any)
+      }))
       // Second call: inside publishCanvasPage
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(pageRow({
         id: 'page-1', type: 'CANVAS', title: 'Home', content: '<div>home</div>', driveId: 'drive-1',
-      } as any);
-    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(null);
+      }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
 
     const result = await publishHomePageAtRoot('drive-1', 'user-1');
 
