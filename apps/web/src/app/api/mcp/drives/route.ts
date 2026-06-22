@@ -46,16 +46,18 @@ export async function POST(req: NextRequest) {
 
     const slug = slugify(name);
 
-    // Create the new drive
-    const [newDrive] = await db.insert(drives).values({
-      name,
-      slug,
-      ownerId: userId,
-      updatedAt: new Date(),
-    }).returning();
-
-    // Auto-allocate a globally-unique publish subdomain (idempotent with drive-service).
-    await allocatePublishSubdomain(newDrive.id, slug);
+    // Create drive + allocate subdomain atomically — allocation failure after insert
+    // would leave a drive without a subdomain identity.
+    const newDrive = await db.transaction(async (tx) => {
+      const [created] = await tx.insert(drives).values({
+        name,
+        slug,
+        ownerId: userId,
+        updatedAt: new Date(),
+      }).returning();
+      await allocatePublishSubdomain(created.id, slug, tx);
+      return created;
+    });
 
     // Broadcast drive creation event (only creator receives for new drives)
     await broadcastDriveEvent(

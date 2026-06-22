@@ -93,6 +93,7 @@ export async function backfill(dryRun: boolean, dbInstance: DbLike = defaultDb):
           // Skip it — a re-run will assign it the next free suffix. Never relax uniqueness.
           if (isUniqueViolation(err)) {
             skipped += 1;
+            taken.add(a.subdomain); // another writer claimed it — mark taken to avoid reselecting
             console.warn(`  ⚠️  collision on "${a.subdomain}" for drive ${a.driveId} — skipped`);
           } else {
             throw err;

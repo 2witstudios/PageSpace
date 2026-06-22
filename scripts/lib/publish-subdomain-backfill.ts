@@ -31,11 +31,15 @@ export function computePublishSubdomainBackfill(
   takenSubdomains: string[],
 ): DriveSubdomainBackfillResult[] {
   const taken = new Set(takenSubdomains);
+  // Keep a parallel array so resolveUniquePublishSubdomain gets an array without
+  // spreading the Set on every iteration (O(n) per drive → O(n) total).
+  const takenList = [...takenSubdomains];
   const results: DriveSubdomainBackfillResult[] = [];
   for (const drive of missing) {
     if (drive.publishSubdomain) continue; // defensive: skip drives that already have one
-    const subdomain = resolveUniquePublishSubdomain(drive.slug, [...taken]);
+    const subdomain = resolveUniquePublishSubdomain(drive.slug, takenList);
     taken.add(subdomain); // reserve within-run so the next missing drive can't take it
+    takenList.push(subdomain);
     results.push({ driveId: drive.id, subdomain });
   }
   return results;

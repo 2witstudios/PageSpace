@@ -209,22 +209,24 @@ export const driveTools = {
           .replace(/\s+/g, '-')
           .replace(/-+/g, '-');
 
-        // Create the new drive with optional context
-        const [newDrive] = await db.insert(drives).values({
-          name: name.trim(),
-          slug,
-          ownerId: userId,
-          drivePrompt: driveContext || null,
-          updatedAt: new Date(),
-        }).returning({
-          id: drives.id,
-          name: drives.name,
-          slug: drives.slug,
-          drivePrompt: drives.drivePrompt,
+        // Create drive + allocate subdomain atomically — allocation failure after insert
+        // would leave a drive without a subdomain identity.
+        const newDrive = await db.transaction(async (tx) => {
+          const [created] = await tx.insert(drives).values({
+            name: name.trim(),
+            slug,
+            ownerId: userId,
+            drivePrompt: driveContext || null,
+            updatedAt: new Date(),
+          }).returning({
+            id: drives.id,
+            name: drives.name,
+            slug: drives.slug,
+            drivePrompt: drives.drivePrompt,
+          });
+          await allocatePublishSubdomain(created.id, slug, tx);
+          return created;
         });
-
-        // Auto-allocate a globally-unique publish subdomain (idempotent with drive-service).
-        await allocatePublishSubdomain(newDrive.id, slug);
 
         // Broadcast drive creation event (only creator receives for new drives)
         await broadcastDriveEvent(

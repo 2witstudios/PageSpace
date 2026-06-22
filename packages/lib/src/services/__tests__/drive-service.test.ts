@@ -25,6 +25,7 @@ vi.mock('@pagespace/db/db', () => ({
     select: vi.fn(),
     insert: vi.fn(),
     update: vi.fn(),
+    transaction: vi.fn(),
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -43,6 +44,7 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
   isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
   isNull: vi.fn((a) => ({ op: 'isNull', a })),
+  like: vi.fn((a, b) => ({ op: 'like', a, b })),
   gt: vi.fn((a, b) => ({ op: 'gt', a, b })),
   asc: vi.fn(() => ({ op: 'asc' })),
 }));
@@ -225,6 +227,8 @@ describe('createDrive', () => {
     const limitMock = vi.fn().mockResolvedValue([{ subdomain: 'new-project' }]);
     const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
     vi.mocked(db.select).mockReturnValue({ from: vi.fn().mockReturnValue({ where: whereMock }) } as unknown as ReturnType<typeof db.select>);
+    // createDrive wraps insert + allocation in a transaction; proxy tx → db so existing mocks apply.
+    vi.mocked(db.transaction).mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(db));
 
     const result = await createDrive('user_123', { name: 'New Project' });
 
@@ -241,6 +245,7 @@ describe('createDrive', () => {
     const limitMock = vi.fn().mockResolvedValue([{ subdomain: 'test' }]);
     const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
     vi.mocked(db.select).mockReturnValue({ from: vi.fn().mockReturnValue({ where: whereMock }) } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(db.transaction).mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(db));
 
     const result = await createDrive('user_123', { name: 'Test' });
 

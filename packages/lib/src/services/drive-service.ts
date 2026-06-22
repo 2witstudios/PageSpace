@@ -6,7 +6,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, ne, and, not, inArray, isNotNull, isNull, sql } from '@pagespace/db/operators';
+import { eq, ne, and, not, inArray, isNotNull, isNull, like, sql } from '@pagespace/db/operators';
+import { normalizeSubdomain } from '../validators/subdomain';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
@@ -166,21 +167,22 @@ export async function createDrive(
 
   const slug = slugify(name);
 
-  const [newDrive] = await db
-    .insert(drives)
-    .values({
-      name,
-      slug,
-      ownerId: userId,
-      isTrashed: false,
-      trashedAt: null,
-      updatedAt: new Date(),
-    })
-    .returning();
-
-  // Auto-allocate a globally-unique publish subdomain so the drive is addressable
-  // at <sub>.pagespace.site from creation (not lazily, on first publish).
-  await allocatePublishSubdomain(newDrive.id, slug);
+  const newDrive = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(drives)
+      .values({
+        name,
+        slug,
+        ownerId: userId,
+        isTrashed: false,
+        trashedAt: null,
+        updatedAt: new Date(),
+      })
+      .returning();
+    // Auto-allocate subdomain in the same transaction so insert + allocation are atomic.
+    await allocatePublishSubdomain(created.id, slug, tx);
+    return created;
+  });
 
   return {
     ...newDrive,
@@ -510,13 +512,17 @@ export async function allocatePublishSubdomain(
     return existing[0].subdomain;
   }
 
+  const normalizedBase = normalizeSubdomain(base) || 'drive';
+
   return allocateUniqueSubdomainWithRetry({
     base,
     fetchTaken: async () => {
+      // Narrow to the base-family only (e.g. 'acme', 'acme-2', 'acme-3') so this
+      // is O(family size) not O(total drives).
       const rows: Array<{ subdomain: string | null }> = await queryable
         .select({ subdomain: drives.publishSubdomain })
         .from(drives)
-        .where(isNotNull(drives.publishSubdomain));
+        .where(and(isNotNull(drives.publishSubdomain), like(drives.publishSubdomain, `${normalizedBase}%`)));
       return rows
         .map((r) => r.subdomain)
         .filter((s): s is string => typeof s === 'string');
