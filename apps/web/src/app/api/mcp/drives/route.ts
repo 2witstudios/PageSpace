@@ -4,6 +4,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { z } from 'zod/v4';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
+import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -45,13 +46,18 @@ export async function POST(req: NextRequest) {
 
     const slug = slugify(name);
 
-    // Create the new drive
-    const [newDrive] = await db.insert(drives).values({
-      name,
-      slug,
-      ownerId: userId,
-      updatedAt: new Date(),
-    }).returning();
+    // Create drive + allocate subdomain atomically — allocation failure after insert
+    // would leave a drive without a subdomain identity.
+    const newDrive = await db.transaction(async (tx) => {
+      const [created] = await tx.insert(drives).values({
+        name,
+        slug,
+        ownerId: userId,
+        updatedAt: new Date(),
+      }).returning();
+      await allocatePublishSubdomain(created.id, slug, tx);
+      return created;
+    });
 
     // Broadcast drive creation event (only creator receives for new drives)
     await broadcastDriveEvent(

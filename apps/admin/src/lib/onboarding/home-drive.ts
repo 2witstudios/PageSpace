@@ -4,6 +4,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { createId } from '@paralleldrive/cuid2'
 import { HOME_DRIVE_NAME, resolveUniqueSlug } from '@pagespace/lib/services/drive-guards'
+import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service'
 import { populateUserDrive } from '@/lib/onboarding/drive-setup'
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -58,6 +59,10 @@ export async function provisionHomeDriveIfNeeded(
         updatedAt: new Date(),
       })
       .returning();
+
+    // Auto-allocate a globally-unique publish subdomain for the Home drive so it is
+    // addressable at <sub>.pagespace.site from creation (participates in this tx).
+    await allocatePublishSubdomain(newDrive.id, slug, tx);
 
     if (isExistingUser) {
       return { driveId: newDrive.id, created: false };

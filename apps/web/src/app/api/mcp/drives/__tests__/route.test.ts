@@ -1,15 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
-    insert: vi.fn(() => ({
-      values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'drv-1', name: 'New', slug: 'new', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: new Date(), updatedAt: new Date() }]) })),
-    })),
-    query: {
-      drives: { findFirst: vi.fn() },
+vi.mock('@pagespace/db/db', () => {
+  const driveRow = { id: 'drv-1', name: 'New', slug: 'new', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: new Date(), updatedAt: new Date() };
+  const makeInsert = () => vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([driveRow]) })) }));
+  return {
+    db: {
+      insert: makeInsert(),
+      query: { drives: { findFirst: vi.fn() } },
+      // POST /api/mcp/drives wraps insert + allocatePublishSubdomain in a transaction.
+      transaction: vi.fn(async (cb: (tx: { insert: ReturnType<typeof makeInsert> }) => Promise<unknown>) => cb({ insert: makeInsert() })),
     },
-  },
-}));
+  };
+});
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   listAccessibleDrives: vi.fn().mockResolvedValue([]),
+  allocatePublishSubdomain: vi.fn().mockResolvedValue('test-drive'),
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({

@@ -387,6 +387,11 @@
       "import": "./dist/services/drive-service.js",
       "require": "./dist/services/drive-service.js"
     },
+    "./services/subdomain-allocation": {
+      "types": "./dist/services/subdomain-allocation.d.ts",
+      "import": "./dist/services/subdomain-allocation.js",
+      "require": "./dist/services/subdomain-allocation.js"
+    },
     "./services/drive-guards": {
       "types": "./dist/services/drive-guards.d.ts",
       "import": "./dist/services/drive-guards.js",
@@ -1168,6 +1173,9 @@
       ],
       "services/drive-service": [
         "./dist/services/drive-service.d.ts"
+      ],
+      "services/subdomain-allocation": [
+        "./dist/services/subdomain-allocation.d.ts"
       ],
       "services/drive-member-service": [
         "./dist/services/drive-member-service.d.ts"

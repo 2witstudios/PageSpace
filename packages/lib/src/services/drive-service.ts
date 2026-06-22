@@ -6,8 +6,10 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, ne, and, not, inArray, isNotNull, sql } from '@pagespace/db/operators';
+import { eq, ne, and, not, inArray, isNotNull, isNull, like, sql } from '@pagespace/db/operators';
+import { normalizeSubdomain } from '../validators/subdomain';
 import { drives, pages } from '@pagespace/db/schema/core';
+import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 
@@ -165,17 +167,22 @@ export async function createDrive(
 
   const slug = slugify(name);
 
-  const [newDrive] = await db
-    .insert(drives)
-    .values({
-      name,
-      slug,
-      ownerId: userId,
-      isTrashed: false,
-      trashedAt: null,
-      updatedAt: new Date(),
-    })
-    .returning();
+  const newDrive = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(drives)
+      .values({
+        name,
+        slug,
+        ownerId: userId,
+        isTrashed: false,
+        trashedAt: null,
+        updatedAt: new Date(),
+      })
+      .returning();
+    // Auto-allocate subdomain in the same transaction so insert + allocation are atomic.
+    await allocatePublishSubdomain(created.id, slug, tx);
+    return created;
+  });
 
   return {
     ...newDrive,
@@ -471,4 +478,76 @@ export async function updateDriveLastAccessed(userId: string, driveId: string): 
       eq(driveMembers.userId, userId),
       eq(driveMembers.driveId, driveId)
     ));
+}
+
+// ============================================================================
+// Publish subdomain allocation
+// ============================================================================
+
+/** Reused Drizzle transaction type (works inside `db.transaction` or with the root `db`). */
+type DbOrTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Allocate a globally-unique `publishSubdomain` for a drive and write it to the DB.
+ *
+ * Returns the allocated subdomain. Race-safe: re-reads taken subdomains and
+ * retries with an advanced suffix on a unique-constraint conflict. Works inside a
+ * transaction (pass `tx`) or against the root `db`.
+ */
+export async function allocatePublishSubdomain(
+  driveId: string,
+  base: string,
+  tx?: DbOrTx
+): Promise<string> {
+  const queryable = tx ?? db;
+
+  // Idempotent: if the drive already has a subdomain, return it unchanged rather
+  // than overwrite it (re-calling for an already-provisioned drive is a no-op).
+  const existing = await queryable
+    .select({ subdomain: drives.publishSubdomain })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  if (existing[0]?.subdomain) {
+    return existing[0].subdomain;
+  }
+
+  const normalizedBase = normalizeSubdomain(base) || 'drive';
+
+  return allocateUniqueSubdomainWithRetry({
+    base,
+    fetchTaken: async () => {
+      // Narrow to the base-family only (e.g. 'acme', 'acme-2', 'acme-3') so this
+      // is O(family size) not O(total drives).
+      const rows: Array<{ subdomain: string | null }> = await queryable
+        .select({ subdomain: drives.publishSubdomain })
+        .from(drives)
+        .where(and(isNotNull(drives.publishSubdomain), like(drives.publishSubdomain, `${normalizedBase}%`)));
+      return rows
+        .map((r) => r.subdomain)
+        .filter((s): s is string => typeof s === 'string');
+    },
+    attempt: async (candidate) => {
+      // Conditional update: only set when still null, so a concurrent allocation
+      // for this drive can't be overwritten. If zero rows update, the race winner
+      // already set it — re-read and return that value.
+      const updated = await queryable
+        .update(drives)
+        .set({ publishSubdomain: candidate })
+        .where(and(eq(drives.id, driveId), isNull(drives.publishSubdomain)))
+        .returning({ subdomain: drives.publishSubdomain });
+      if (updated.length === 0) {
+        // Lost the race: another writer set it between our read and write.
+        const reread = await queryable
+          .select({ subdomain: drives.publishSubdomain })
+          .from(drives)
+          .where(eq(drives.id, driveId))
+          .limit(1);
+        if (!reread[0]?.subdomain) {
+          throw new Error(`Race-recovery failed: publishSubdomain still null for drive ${driveId}`);
+        }
+        return reread[0].subdomain;
+      }
+    },
+  });
 }

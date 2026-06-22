@@ -7,7 +7,7 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive } from '@pagespace/lib/services/drive-service';
+import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -209,18 +209,23 @@ export const driveTools = {
           .replace(/\s+/g, '-')
           .replace(/-+/g, '-');
 
-        // Create the new drive with optional context
-        const [newDrive] = await db.insert(drives).values({
-          name: name.trim(),
-          slug,
-          ownerId: userId,
-          drivePrompt: driveContext || null,
-          updatedAt: new Date(),
-        }).returning({
-          id: drives.id,
-          name: drives.name,
-          slug: drives.slug,
-          drivePrompt: drives.drivePrompt,
+        // Create drive + allocate subdomain atomically — allocation failure after insert
+        // would leave a drive without a subdomain identity.
+        const newDrive = await db.transaction(async (tx) => {
+          const [created] = await tx.insert(drives).values({
+            name: name.trim(),
+            slug,
+            ownerId: userId,
+            drivePrompt: driveContext || null,
+            updatedAt: new Date(),
+          }).returning({
+            id: drives.id,
+            name: drives.name,
+            slug: drives.slug,
+            drivePrompt: drives.drivePrompt,
+          });
+          await allocatePublishSubdomain(created.id, slug, tx);
+          return created;
         });
 
         // Broadcast drive creation event (only creator receives for new drives)

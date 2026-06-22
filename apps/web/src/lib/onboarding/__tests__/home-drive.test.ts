@@ -23,6 +23,11 @@ vi.mock('@pagespace/lib/services/drive-guards', () => ({
   HOME_DRIVE_NAME: 'Home',
   resolveUniqueSlug: vi.fn(),
 }));
+// Stub the subdomain allocator so the test doesn't pull drive-service's transitive
+// DB-schema imports (mcpTokens, driveMembers, …) into this unit test's mock surface.
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  allocatePublishSubdomain: vi.fn().mockResolvedValue('home'),
+}));
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('cuid-folder-1'),
 }));
