@@ -31,6 +31,58 @@ const createFileRefRegex = (): RegExp =>
 const referenceKey = ({ id, kind, driveId }: FileReference): string =>
   driveId ? `dashboard:${driveId}:${id}:${kind}` : `api:${id}:${kind}`;
 
+export interface OgMeta {
+  ogImageUrl?: string;
+  ogDescription?: string;
+  faviconHref?: string;
+}
+
+/**
+ * Extract OG/favicon meta from already-rewritten canvas HTML and strip those
+ * tags from the body so they can be hoisted into <head> by renderCanvasDocument.
+ *
+ * Reads standard HTML semantics the author placed directly in the canvas:
+ *   <meta property="og:image"       content="…">  → ogImageUrl
+ *   <meta property="og:description" content="…">  → ogDescription
+ *   <link rel="icon" href="…">                    → faviconHref
+ *
+ * After rewriteCanvasAssets has run, any file URLs in those attributes are
+ * already public CDN URLs, so no further rewriting is needed here.
+ *
+ * Pure function: no I/O, no env reads.
+ */
+export function extractAndStripOgMeta(html: string): { meta: OgMeta; html: string } {
+  const meta: OgMeta = {};
+
+  const result = html
+    .replace(/<meta\b[^>]+property="og:image"[^>]+content="([^"]*)"[^>]*\/?>/gi, (_, content: string) => {
+      meta.ogImageUrl ??= content || undefined;
+      return '';
+    })
+    .replace(/<meta\b[^>]+content="([^"]*)"[^>]+property="og:image"[^>]*\/?>/gi, (_, content: string) => {
+      meta.ogImageUrl ??= content || undefined;
+      return '';
+    })
+    .replace(/<meta\b[^>]+property="og:description"[^>]+content="([^"]*)"[^>]*\/?>/gi, (_, content: string) => {
+      meta.ogDescription ??= content || undefined;
+      return '';
+    })
+    .replace(/<meta\b[^>]+content="([^"]*)"[^>]+property="og:description"[^>]*\/?>/gi, (_, content: string) => {
+      meta.ogDescription ??= content || undefined;
+      return '';
+    })
+    .replace(/<link\b[^>]+rel="icon"[^>]+href="([^"]*)"[^>]*\/?>/gi, (_, href: string) => {
+      meta.faviconHref ??= href || undefined;
+      return '';
+    })
+    .replace(/<link\b[^>]+href="([^"]*)"[^>]+rel="icon"[^>]*\/?>/gi, (_, href: string) => {
+      meta.faviconHref ??= href || undefined;
+      return '';
+    });
+
+  return { meta, html: result };
+}
+
 /**
  * Extract all unique PageSpace file IDs referenced in canvas HTML.
  *

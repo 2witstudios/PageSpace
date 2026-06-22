@@ -12,11 +12,12 @@ import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { renderPublishedPage } from '@/lib/canvas/render-published';
 import { buildPublishedKey, putPublishedArtifact, deletePublishedArtifact, isPublishConfigured, getPublishAssetBaseUrl } from '@/lib/canvas/published-storage';
-import { rewriteCanvasAssets } from '@/lib/canvas/asset-pipeline';
+import { rewriteCanvasAssets, extractAndStripOgMeta } from '@/lib/canvas/asset-pipeline';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 const PUBLISH_HOST = 'pagespace.site';
+const FAVICON_BASE_URL = 'https://pagespace.ai';
 
 const publishSchema = z.object({
   subdomain: z.string().optional(),
@@ -198,8 +199,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const path = slugify(rawPath) || pageId;
 
     const { html: rewrittenHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId, db });
+    const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
     const assetBaseUrl = getPublishAssetBaseUrl();
-    const html = renderPublishedPage({ html: rewrittenHtml, title: page.title ?? undefined, assetBaseUrl });
+    const publishedUrl = `https://${subdomain}.${PUBLISH_HOST}/${path}`;
+    const html = renderPublishedPage({
+      html: bodyHtml,
+      title: page.title ?? undefined,
+      assetBaseUrl,
+      faviconHref: meta.faviconHref,
+      faviconBaseUrl: meta.faviconHref ? undefined : FAVICON_BASE_URL,
+      pageUrl: publishedUrl,
+      ogImageUrl: meta.ogImageUrl,
+      ogDescription: meta.ogDescription,
+    });
     const key = buildPublishedKey(subdomain, path);
 
     // Capture the artifact this page currently points at, so we can clean it up

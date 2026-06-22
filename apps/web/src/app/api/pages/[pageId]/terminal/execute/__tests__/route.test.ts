@@ -321,13 +321,33 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
       expect(await res.json()).toEqual({ error: 'Could not acquire sandbox' });
     });
 
-    it('returns 403 when sandbox acquisition is denied', async () => {
+    it('returns 403 when sandbox acquisition is denied and logs at warn level', async () => {
       setupDbMocks();
       const mockClient = { getOrCreate: vi.fn(), get: vi.fn(), stop: vi.fn() };
       asMock(createProductionSpritesSandboxClient).mockResolvedValue(mockClient);
       asMock(acquireTerminalSandbox).mockResolvedValue({ ok: false, reason: 'deny' });
       const res = await POST(makeRequest(), makeParams());
       expect(res.status).toBe(403);
+      expect(vi.mocked(loggers.api.warn)).toHaveBeenCalledWith(
+        'Terminal sandbox acquisition denied',
+        expect.objectContaining({ reason: 'deny', pageId: mockPageId, driveId: mockDriveId }),
+      );
+      expect(vi.mocked(loggers.api.error)).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when sandbox acquisition is denied even if warn logging throws', async () => {
+      setupDbMocks();
+      const mockClient = { getOrCreate: vi.fn(), get: vi.fn(), stop: vi.fn() };
+      asMock(createProductionSpritesSandboxClient).mockResolvedValue(mockClient);
+      asMock(acquireTerminalSandbox).mockResolvedValue({ ok: false, reason: 'deny' });
+      vi.mocked(loggers.api.warn).mockImplementationOnce(() => {
+        throw new Error('logger failed');
+      });
+
+      const res = await POST(makeRequest(), makeParams());
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'Could not acquire sandbox' });
     });
 
     it('returns 500 when sprite is gone after acquire succeeds', async () => {
@@ -412,7 +432,6 @@ describe('POST /api/pages/[pageId]/terminal/execute', () => {
       expect(res.status).toBe(500);
       expect(vi.mocked(loggers.api.error)).toHaveBeenCalledWith(
         'Terminal command execution failed',
-        expect.any(Error),
         expect.objectContaining({ reason: 'command_execution_failed', pageId: mockPageId, driveId: mockDriveId }),
       );
       expect(vi.mocked(releaseCodeExecutionSlot)).toHaveBeenCalledWith({ userId: mockUserId });

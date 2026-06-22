@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractFileIds, rewriteCanvasAssets } from '../asset-pipeline';
+import { extractFileIds, extractAndStripOgMeta, rewriteCanvasAssets } from '../asset-pipeline';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -295,5 +295,65 @@ describe('rewriteCanvasAssets', () => {
     const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
 
     expect(result.html).toContain('/api/files/fileId1/view');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractAndStripOgMeta — pure, no I/O
+// ---------------------------------------------------------------------------
+
+describe('extractAndStripOgMeta', () => {
+  const IMG = 'https://cdn.example.com/assets/og.png';
+  const ICON = 'https://cdn.example.com/assets/icon.ico';
+
+  it('extracts og:image and removes the tag from html', () => {
+    const { meta, html } = extractAndStripOgMeta(`<p>hi</p><meta property="og:image" content="${IMG}">`);
+    expect(meta.ogImageUrl).toBe(IMG);
+    expect(html).not.toContain('og:image');
+    expect(html).toContain('<p>hi</p>');
+  });
+
+  it('extracts og:image when content attribute comes before property', () => {
+    const { meta } = extractAndStripOgMeta(`<meta content="${IMG}" property="og:image">`);
+    expect(meta.ogImageUrl).toBe(IMG);
+  });
+
+  it('extracts og:description and removes the tag', () => {
+    const { meta, html } = extractAndStripOgMeta('<meta property="og:description" content="My page">');
+    expect(meta.ogDescription).toBe('My page');
+    expect(html).not.toContain('og:description');
+  });
+
+  it('extracts link rel=icon href and removes the tag', () => {
+    const { meta, html } = extractAndStripOgMeta(`<link rel="icon" href="${ICON}">`);
+    expect(meta.faviconHref).toBe(ICON);
+    expect(html).not.toContain('rel="icon"');
+  });
+
+  it('extracts link rel=icon when href comes before rel', () => {
+    const { meta } = extractAndStripOgMeta(`<link href="${ICON}" rel="icon">`);
+    expect(meta.faviconHref).toBe(ICON);
+  });
+
+  it('keeps only the first og:image when multiple are present', () => {
+    const first = 'https://cdn.example.com/first.png';
+    const second = 'https://cdn.example.com/second.png';
+    const { meta } = extractAndStripOgMeta(
+      `<meta property="og:image" content="${first}"><meta property="og:image" content="${second}">`
+    );
+    expect(meta.ogImageUrl).toBe(first);
+  });
+
+  it('returns empty meta and unchanged html when no OG tags present', () => {
+    const input = '<p>hello world</p>';
+    const { meta, html } = extractAndStripOgMeta(input);
+    expect(meta).toEqual({});
+    expect(html).toBe(input);
+  });
+
+  it('returns empty meta for an empty string', () => {
+    const { meta, html } = extractAndStripOgMeta('');
+    expect(meta).toEqual({});
+    expect(html).toBe('');
   });
 });

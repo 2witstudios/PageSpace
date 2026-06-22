@@ -53,8 +53,10 @@ vi.mock('@/lib/canvas/published-storage', () => ({
 }));
 
 const rewriteCanvasAssets = vi.fn();
+const extractAndStripOgMeta = vi.fn();
 vi.mock('@/lib/canvas/asset-pipeline', () => ({
   rewriteCanvasAssets: (...args: unknown[]) => rewriteCanvasAssets(...args),
+  extractAndStripOgMeta: (...args: unknown[]) => extractAndStripOgMeta(...args),
 }));
 
 const renderPublishedPage = vi.fn();
@@ -119,6 +121,7 @@ beforeEach(() => {
   isPublishConfigured.mockReturnValue(true);
   getPublishAssetBaseUrl.mockReturnValue('https://test-publish.t3.tigrisfiles.io');
   rewriteCanvasAssets.mockImplementation(async ({ html }: { html: string }) => ({ html }));
+  extractAndStripOgMeta.mockImplementation((html: string) => ({ meta: {}, html }));
   buildPublishedKey.mockImplementation((subdomain: string, path: string) => `published/${subdomain}/${path}/index.html`);
   putPublishedArtifact.mockResolvedValue({ key: 'published/acme/welcome/index.html' });
   renderPublishedPage.mockReturnValue('<html>rendered</html>');
@@ -195,7 +198,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(updateWhere).toHaveBeenCalledTimes(2);
 
     expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
-    expect(renderPublishedPage).toHaveBeenCalledWith({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io' });
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome' }));
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
     expect(onConflictDoUpdate).toHaveBeenCalledTimes(1);
 
@@ -205,6 +208,41 @@ describe('POST /api/pages/[pageId]/publish', () => {
       subdomain: 'acme',
       path: 'welcome',
     });
+  });
+
+  it('uses og:image and og:description from canvas meta tags when present', async () => {
+    const ogImg = 'https://cdn.pagespace.site/assets/files/abc/original';
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Gallery', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'PERSONAL' });
+    findFirstPublished.mockResolvedValue(null);
+    extractAndStripOgMeta.mockReturnValue({ meta: { ogImageUrl: ogImg, ogDescription: 'My gallery' }, html: '<p>hi</p>' });
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(200);
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ ogImageUrl: ogImg, ogDescription: 'My gallery' }));
+  });
+
+  it('uses favicon from canvas link rel=icon when present and skips faviconBaseUrl', async () => {
+    const faviconHref = 'https://cdn.pagespace.site/assets/files/icon/original';
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Branded', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'PERSONAL' });
+    findFirstPublished.mockResolvedValue(null);
+    extractAndStripOgMeta.mockReturnValue({ meta: { faviconHref }, html: '<p>hi</p>' });
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(200);
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ faviconHref, faviconBaseUrl: undefined }));
+  });
+
+  it('falls back to faviconBaseUrl when canvas has no link rel=icon', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Plain', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'PERSONAL' });
+    findFirstPublished.mockResolvedValue(null);
+    extractAndStripOgMeta.mockReturnValue({ meta: {}, html: '<p>hi</p>' });
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(200);
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ faviconBaseUrl: 'https://pagespace.ai', faviconHref: undefined }));
   });
 
   it('returns 400 when the requested subdomain is invalid/reserved', async () => {

@@ -83,6 +83,7 @@ export interface SandboxRunDeps {
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
   now: () => Date;
   logger?: {
+    warn?: (message: string, metadata?: Record<string, unknown>) => void;
     error: (message: string, error?: Error | Record<string, unknown>, metadata?: Record<string, unknown>) => void;
   };
 }
@@ -91,11 +92,7 @@ function safeLogError(
   logger: SandboxRunDeps['logger'],
   ...args: Parameters<NonNullable<SandboxRunDeps['logger']>['error']>
 ): void {
-  try {
-    logger?.error(...args);
-  } catch {
-    // Logging is observability only; it must not alter quota or tool control flow.
-  }
+  try { logger?.error(...args); } catch { /* Logging must not alter tool control flow. */ }
 }
 
 function asError(value: unknown): Error | undefined {
@@ -104,8 +101,24 @@ function asError(value: unknown): Error | undefined {
   return new Error(String(value));
 }
 
+function safeLogWarn(
+  logger: SandboxRunDeps['logger'],
+  message: string,
+  metadata?: Record<string, unknown>,
+): void {
+  try { logger?.warn?.(message, metadata); } catch { /* Logging must not alter tool control flow. */ }
+}
+
+// Acquisition reasons that represent expected policy/authz outcomes (warn-level)
+// vs infra failures that are genuinely unexpected (error-level).
+const AUTHZ_DENY_REASONS = new Set([
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off',
+]);
+
+
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
+  | 'app_admin_required'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -135,6 +148,7 @@ export type ReadFileToolResult =
 
 const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
+  app_admin_required: 'Code execution is currently restricted to application administrators.',
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
@@ -208,6 +222,7 @@ async function safeAudit(
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
 function reasonFromAcquire(result: Extract<AcquireSandboxResult, { ok: false }>): SandboxToolDenialReason {
   switch (result.reason) {
+    case 'app_admin_required':
     case 'no_drive_access':
     case 'insufficient_role':
     case 'no_agent_access':
@@ -259,13 +274,12 @@ async function openSession(
     const acquired = await deps.acquireSandbox(acquireRequest(ctx, policy));
     if (!acquired.ok) {
       deps.quota.releaseSlot({ userId: ctx.userId });
-      safeLogError(deps.logger, 'Sandbox acquisition denied or failed', {
-        reason: acquired.reason,
-        userId: ctx.userId,
-        driveId: ctx.driveId,
-        conversationId: ctx.conversationId,
-        requestOrigin: ctx.requestOrigin,
-      });
+      const context = { reason: acquired.reason, userId: ctx.userId, driveId: ctx.driveId, conversationId: ctx.conversationId, requestOrigin: ctx.requestOrigin };
+      if (AUTHZ_DENY_REASONS.has(acquired.reason)) {
+        safeLogWarn(deps.logger, 'Sandbox access denied', context);
+      } else {
+        safeLogError(deps.logger, 'Sandbox acquisition failed', context);
+      }
       return { ok: false, reason: reasonFromAcquire(acquired) };
     }
     const sandbox = await deps.reconnect(acquired.sandboxId);
