@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
   createSpritesSandboxClient,
+  ensureSpriteAwake,
   isSpriteNotFoundError,
   classifyProvisionError,
   SandboxCommandTimeoutError,
@@ -371,27 +372,7 @@ describe('createSpritesSandboxClient.get / stop', () => {
     expect(calls.deleted).toEqual(['k']);
   });
 
-  it('get WITH options (resume relock) reapplies the egress policy and warms the VM', async () => {
-    let policies = 0;
-    let spawned = 0;
-    const sprite = fakeSprite({
-      updateNetworkPolicy: async () => {
-        policies += 1;
-      },
-      spawn: () => {
-        spawned += 1;
-        return fakeCommand({ exitCode: 0 });
-      },
-    });
-    const { sdk } = makeSdk({ getSprite: async () => sprite });
-    const client = createSpritesSandboxClient({ sdk });
-    const handle = await client.get({ sandboxId: 'k', options });
-    expect(handle).not.toBeNull();
-    expect(policies).toBe(1); // egress reapplied on resume
-    expect(spawned).toBe(1); // VM warmed via the retrying mkdir
-  });
-
-  it('get WITHOUT options is a cheap reconnect — no egress reapplication', async () => {
+  it('get is a cheap reconnect — does NOT reapply egress (policy persists across hibernation)', async () => {
     let policies = 0;
     const sprite = fakeSprite({
       updateNetworkPolicy: async () => {
@@ -403,24 +384,21 @@ describe('createSpritesSandboxClient.get / stop', () => {
     await client.get({ sandboxId: 'k' });
     expect(policies).toBe(0);
   });
+});
 
-  it('get WITH options whose relock fails rejects WITHOUT destroying the warm session', async () => {
-    let destroyed = false;
+describe('ensureSpriteAwake', () => {
+  it('warms the VM via a no-op exec, retrying the cold-start wake drop', async () => {
+    let attempts = 0;
     const sprite = fakeSprite({
-      updateNetworkPolicy: async () => {
-        throw new Error('policy api down');
+      spawn: () => {
+        attempts += 1;
+        return attempts === 1
+          ? fakeCommand({ error: new Error('WebSocket closed before open: code=1006') })
+          : fakeCommand({ exitCode: 0 });
       },
     });
-    const sdk: SpritesSdk = {
-      getSprite: async () => sprite,
-      createSprite: async () => sprite,
-      deleteSprite: async () => {
-        destroyed = true;
-      },
-    };
-    const client = createSpritesSandboxClient({ sdk });
-    await expect(client.get({ sandboxId: 'k', options })).rejects.toThrow('policy api down');
-    expect(destroyed).toBe(false);
+    await ensureSpriteAwake(sprite);
+    expect(attempts).toBe(2); // first wake dropped, retried, then awake
   });
 });
 

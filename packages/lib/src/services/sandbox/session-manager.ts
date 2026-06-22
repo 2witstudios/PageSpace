@@ -18,7 +18,6 @@
  *    reclaimable (by retry / the idle reaper) instead of orphaned.
  */
 
-import { getValidatedEnv } from '../../config/env-validation';
 import { loggers } from '../../logging/logger-config';
 import type { CanRunCodeResult, CanRunCodeInput, CodeExecutionDenialReason } from './can-run-code';
 import { SANDBOX_EGRESS_ALLOWLIST, SANDBOX_RESOURCE_CAPS } from './execution-policy';
@@ -40,9 +39,7 @@ export interface SandboxHandle {
  */
 export interface SandboxClient {
   getOrCreate(args: { name: string; options: SandboxCreateOptions }): Promise<SandboxHandle>;
-  /** `options` (resume relock) reapplies the egress lockdown before hand-back;
-   *  omit it for a cheap reconnect on an already-locked, still-warm VM. */
-  get(args: { sandboxId: string; options?: SandboxCreateOptions }): Promise<SandboxHandle | null>;
+  get(args: { sandboxId: string }): Promise<SandboxHandle | null>;
   stop(args: { sandboxId: string }): Promise<void>;
 }
 
@@ -81,16 +78,21 @@ export type AcquireSandboxResult =
     };
 
 /**
- * Read the session-key secret from validated env. Returns '' (→ fail-closed deny
- * in the lifecycle effects) when unset or when validation fails, so a missing
- * secret disables sandbox acquisition rather than throwing at the call site.
+ * Read the session-key secret. Returns '' (→ fail-closed deny in the lifecycle
+ * effects) when unset, so a missing secret disables sandbox acquisition rather
+ * than throwing at the call site.
+ *
+ * Read directly from `process.env`, NOT via `getValidatedEnv()`: this runs in the
+ * realtime service too (terminal session keys), whose lean env does not satisfy
+ * the full web schema — `getValidatedEnv()` would throw there, blanking the
+ * secret and denying every terminal.
  */
 export function getSandboxSessionSecret(): string {
-  try {
-    return getValidatedEnv().SANDBOX_SESSION_SECRET ?? '';
-  } catch {
-    return '';
-  }
+  const secret = process.env.SANDBOX_SESSION_SECRET ?? '';
+  // The web schema enforces >=32 chars; realtime bypasses full validation, so guard
+  // here — a too-short secret weakens the session-key HMAC. Treat it as unset
+  // (fail-closed) rather than deriving keys from a weak secret.
+  return secret.length >= 32 ? secret : '';
 }
 
 // Stop a sandbox best-effort, reporting whether the stop was CONFIRMED. Never
@@ -218,14 +220,11 @@ export async function acquireConversationSandbox(
         return await provisionFresh({ key, input });
 
       case 'resume': {
-        // Past the warm window the VM has likely hibernated, so relock: reapply
-        // the egress policy (a tightened allowlist / recovered VM must be enforced,
-        // not left stale until hard-expiry) and warm the VM. A rapid follow-up
-        // command (within the warm window) skips the relock and reconnects cheaply.
-        const options = plan.relock
-          ? { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST, caps: SANDBOX_RESOURCE_CAPS }
-          : undefined;
-        const handle = await deps.client.get({ sandboxId: plan.sandboxId, options });
+        // Reconnect to the (possibly hibernating) VM. The egress policy persists
+        // across hibernation, so we do NOT reapply it here — the platform's
+        // "configure once" model — and a dropped first wake is recovered by the
+        // driver's per-command cold-start retry (runCommand) and fs wake-retry.
+        const handle = await deps.client.get({ sandboxId: plan.sandboxId });
         if (!handle) {
           // The recorded sandbox is gone (platform-expired/crashed). Drop the stale
           // link and provision a fresh one under the same conversation key.

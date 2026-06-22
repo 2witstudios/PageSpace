@@ -58,7 +58,5 @@ export interface ExecutableSandbox extends SandboxHandle {
 /** Extends the PR2 lifecycle seam so one client serves both layers. */
 export interface ExecSandboxClient extends SandboxClient {
   getOrCreate(args: { name: string; options: SandboxCreateOptions }): Promise<ExecutableSandbox>;
-  /** `options` (resume relock) reapplies the egress lockdown + warms the VM
-   *  before hand-back; omit it for a cheap reconnect on an already-locked VM. */
-  get(args: { sandboxId: string; options?: SandboxCreateOptions }): Promise<ExecutableSandbox | null>;
+  get(args: { sandboxId: string }): Promise<ExecutableSandbox | null>;
 }
