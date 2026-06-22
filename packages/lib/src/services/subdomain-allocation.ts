@@ -1,8 +1,16 @@
 import { resolveUniquePublishSubdomain } from '../validators/subdomain';
 
-/** PostgreSQL unique_violation SQLSTATE. */
+/**
+ * Detect a PostgreSQL unique_violation (SQLSTATE 23505), including when the
+ * driver error is wrapped in a `.cause` chain (Drizzle's DrizzleQueryError wraps
+ * the underlying PostgresError this way). Mirrors the pattern in
+ * apps/web/src/app/api/commands/command-route-helpers.ts.
+ */
 export function isUniqueViolation(err: unknown): boolean {
-  return err instanceof Error && 'code' in err && (err as { code: string }).code === '23505';
+  if (!err || typeof err !== 'object') return false;
+  const candidate = err as { code?: unknown; cause?: unknown };
+  if (candidate.code === '23505') return true;
+  return isUniqueViolation(candidate.cause);
 }
 
 /**

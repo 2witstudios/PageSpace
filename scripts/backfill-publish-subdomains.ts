@@ -28,6 +28,7 @@ import { db as defaultDb } from '@pagespace/db/db';
 import { drives } from '@pagespace/db/schema/core';
 import { eq, and, isNull, isNotNull, gt, asc } from '@pagespace/db/operators';
 import { computePublishSubdomainBackfill } from './lib/publish-subdomain-backfill';
+import { isUniqueViolation } from '@pagespace/lib/services/subdomain-allocation';
 
 const BATCH_SIZE = 500;
 
@@ -73,17 +74,24 @@ export async function backfill(dryRun: boolean, dbInstance: DbLike = defaultDb):
     } else {
       for (const a of assignments) {
         try {
-          await (dbInstance as typeof defaultDb)
+          // Guard with IS NULL so a concurrent writer that set publishSubdomain
+          // between our read and write can't be clobbered. If zero rows update,
+          // another writer won the race for this drive — skip (a re-run is a no-op).
+          const updated = await (dbInstance as typeof defaultDb)
             .update(drives)
             .set({ publishSubdomain: a.subdomain })
-            .where(eq(drives.id, a.driveId));
+            .where(and(eq(drives.id, a.driveId), isNull(drives.publishSubdomain)))
+            .returning({ id: drives.id });
+          if (updated.length === 0) {
+            skipped += 1;
+            continue;
+          }
           allocated += 1;
           taken.add(a.subdomain); // keep within-run set current so later batches de-dupe
         } catch (err) {
           // Race: another writer claimed this exact subdomain between our read and write.
           // Skip it — a re-run will assign it the next free suffix. Never relax uniqueness.
-          const code = (err as { code?: string })?.code;
-          if (code === '23505') {
+          if (isUniqueViolation(err)) {
             skipped += 1;
             console.warn(`  ⚠️  collision on "${a.subdomain}" for drive ${a.driveId} — skipped`);
           } else {

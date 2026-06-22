@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { normalizeSubdomain, validatePublishSubdomain } from '@pagespace/lib/validators/subdomain';
+import { isUniqueViolation } from '@pagespace/lib/services/subdomain-allocation';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -24,9 +25,6 @@ const publishSchema = z.object({
 }).nullable();
 
 /** PostgreSQL unique_violation SQLSTATE. */
-const isUniqueViolation = (err: unknown): boolean =>
-  err instanceof Error && 'code' in err && (err as { code: string }).code === '23505';
-
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);

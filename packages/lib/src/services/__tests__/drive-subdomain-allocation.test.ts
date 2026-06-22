@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { allocateUniqueSubdomainWithRetry } from '../subdomain-allocation'
+import { allocateUniqueSubdomainWithRetry, isUniqueViolation } from '../subdomain-allocation'
 
 describe('allocateUniqueSubdomainWithRetry', () => {
   it('given a free candidate on the first attempt, should return it without retrying', async () => {
@@ -74,5 +74,38 @@ describe('allocateUniqueSubdomainWithRetry', () => {
     const result = await allocateUniqueSubdomainWithRetry({ base: 'acme', fetchTaken, attempt })
     expect(result).toBe('acme') // NOT 'acme-2'
     expect(attempt).toHaveBeenCalledWith('acme-2')
+  })
+})
+
+describe('isUniqueViolation', () => {
+  it('given a raw PG error with code 23505, should return true', () => {
+    const err = Object.assign(new Error('unique'), { code: '23505' })
+    expect(isUniqueViolation(err)).toBe(true)
+  })
+
+  it('given a non-23505 error, should return false', () => {
+    const err = Object.assign(new Error('fk'), { code: '23503' })
+    expect(isUniqueViolation(err)).toBe(false)
+  })
+
+  it('given a Drizzle-wrapped error whose .cause has code 23505, should return true', () => {
+    // Drizzle wraps the underlying driver error in .cause — a top-level-only check
+    // would miss this and wrongly rethrow instead of retrying.
+    const cause = Object.assign(new Error('unique'), { code: '23505' })
+    const wrapped = Object.assign(new Error('drizzle'), { cause })
+    expect(isUniqueViolation(wrapped)).toBe(true)
+  })
+
+  it('given a deeply-wrapped error, should find the 23505 in the cause chain', () => {
+    const inner = Object.assign(new Error('unique'), { code: '23505' })
+    const mid = Object.assign(new Error('mid'), { cause: inner })
+    const outer = Object.assign(new Error('outer'), { cause: mid })
+    expect(isUniqueViolation(outer)).toBe(true)
+  })
+
+  it('given a wrapped error whose cause is NOT 23505, should return false', () => {
+    const cause = Object.assign(new Error('fk'), { code: '23503' })
+    const wrapped = Object.assign(new Error('drizzle'), { cause })
+    expect(isUniqueViolation(wrapped)).toBe(false)
   })
 })
