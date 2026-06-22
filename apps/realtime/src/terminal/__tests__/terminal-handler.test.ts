@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { buildTerminalHandlers, MAX_INPUT_BYTES } from '../terminal-handler';
 import { createTerminalSessionMap } from '../terminal-session-map';
 import type { CheckAuthFn, OpenShellFn, SocketLike } from '../terminal-handler';
@@ -16,6 +16,10 @@ function makeSprite() {
   return { name: 'sbx1', spawn: vi.fn(), filesystem: vi.fn(), updateNetworkPolicy: vi.fn(), destroy: vi.fn() };
 }
 
+function makeAuthSuccess() {
+  return { ok: true as const, sandboxId: 'sbx1', sprite: makeSprite(), releaseSlot: vi.fn() };
+}
+
 const validPayload = { pageId: 'page1', cols: 80, rows: 24 };
 
 describe('buildTerminalHandlers', () => {
@@ -30,8 +34,12 @@ describe('buildTerminalHandlers', () => {
     sessionMap = createTerminalSessionMap();
     shell = makeShell();
     openShell = vi.fn().mockReturnValue(shell) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
-    checkAuth = vi.fn().mockResolvedValue({ ok: true, sandboxId: 'sbx1', sprite: makeSprite() }) as unknown as ReturnType<typeof vi.fn> & CheckAuthFn;
+    checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess()) as unknown as ReturnType<typeof vi.fn> & CheckAuthFn;
     socket = makeSocket();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('onConnect', () => {
@@ -78,6 +86,8 @@ describe('buildTerminalHandlers', () => {
     });
 
     it('given terminal:connect called twice, should kill the existing session before opening a new one', async () => {
+      const firstAuth = makeAuthSuccess();
+      checkAuth.mockResolvedValueOnce(firstAuth);
       const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       await onConnect(validPayload);
       const firstShell = shell;
@@ -87,7 +97,18 @@ describe('buildTerminalHandlers', () => {
       await onConnect(validPayload);
 
       expect(firstShell.kill).toHaveBeenCalled();
+      expect(firstAuth.releaseSlot).toHaveBeenCalled();
       expect(sessionMap.has('sock1')).toBe(true);
+    });
+
+    it('given openShell throws, should release the concurrency slot', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth.mockResolvedValue(auth);
+      openShell = vi.fn().mockImplementation(() => { throw new Error('sprite unreachable'); }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      expect(auth.releaseSlot).toHaveBeenCalled();
     });
 
     it('given a successful connect, should set up a re-auth interval on the session', async () => {
@@ -196,13 +217,16 @@ describe('buildTerminalHandlers', () => {
   });
 
   describe('onDisconnect', () => {
-    it('given a connected session, should kill the shell and remove from sessionMap', async () => {
+    it('given a connected session, should kill the shell, release the slot, and remove from sessionMap', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth.mockResolvedValue(auth);
       const { onConnect, onDisconnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       await onConnect(validPayload);
 
       onDisconnect();
 
       expect(shell.kill).toHaveBeenCalled();
+      expect(auth.releaseSlot).toHaveBeenCalled();
       expect(sessionMap.has('sock1')).toBe(false);
     });
 
