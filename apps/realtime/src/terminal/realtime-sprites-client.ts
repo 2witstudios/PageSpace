@@ -1,16 +1,15 @@
 import {
-  createSpritesSandboxClient,
   resolveSpritesToken,
   type SpritesSdk,
   type SpriteInstanceLike,
 } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
-import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 
 let cachedSdk: SpritesSdk | null = null;
 
 export async function getRealtimeSpritesSdk(): Promise<SpritesSdk> {
   if (cachedSdk) return cachedSdk;
-  // @fly/sprites is ESM-only; production runs Node 24 which supports require(esm) natively.
+  // @fly/sprites is ESM-only. TS 5.8 with module:commonjs preserves dynamic import()
+  // as-is (does not lower to require()), so Node 22.17.0 in production handles it natively.
   const { SpritesClient } = await import('@fly/sprites');
   const client = new SpritesClient(resolveSpritesToken());
   cachedSdk = {
@@ -19,9 +18,4 @@ export async function getRealtimeSpritesSdk(): Promise<SpritesSdk> {
     deleteSprite: (name) => client.deleteSprite(name),
   };
   return cachedSdk;
-}
-
-export async function getRealtimeSandboxClient(): Promise<ExecSandboxClient> {
-  const sdk = await getRealtimeSpritesSdk();
-  return createSpritesSandboxClient({ sdk });
 }
