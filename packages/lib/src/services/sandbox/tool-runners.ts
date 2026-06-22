@@ -118,6 +118,7 @@ const AUTHZ_DENY_REASONS = new Set([
 
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
+  | 'app_admin_required'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -147,6 +148,7 @@ export type ReadFileToolResult =
 
 const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
+  app_admin_required: 'Code execution is currently restricted to application administrators.',
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
@@ -220,6 +222,7 @@ async function safeAudit(
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
 function reasonFromAcquire(result: Extract<AcquireSandboxResult, { ok: false }>): SandboxToolDenialReason {
   switch (result.reason) {
+    case 'app_admin_required':
     case 'no_drive_access':
     case 'insufficient_role':
     case 'no_agent_access':
