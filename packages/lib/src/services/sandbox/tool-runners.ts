@@ -34,7 +34,6 @@ import { buildSandboxEnv } from './sandbox-env';
 import { getValidatedEnv } from '../../config/env-validation';
 import type { AcquireSandboxInput, AcquireSandboxResult } from './session-manager';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
-import type { CodeExecutionQuotaDecision } from './quota';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
@@ -60,15 +59,6 @@ export interface SandboxQuotaDeps {
   /** Reserve an in-process concurrency slot; false when the tier ceiling is hit. */
   acquireSlot: (args: { userId: string; tier: SubscriptionTier }) => boolean;
   releaseSlot: (args: { userId: string }) => void;
-  /** Non-incrementing advisory read across user/drive/tenant scopes. */
-  preflight: (args: {
-    userId: string;
-    driveId?: string;
-    tenantId?: string;
-    tier: SubscriptionTier;
-  }) => Promise<CodeExecutionQuotaDecision>;
-  /** The single real budget charge for an allowed run (increments every scope). */
-  charge: (args: { userId: string; driveId?: string; tenantId?: string }) => Promise<void>;
 }
 
 export interface SandboxRunDeps {
@@ -122,7 +112,6 @@ export type SandboxToolDenialReason =
   | 'insufficient_role'
   | 'no_agent_access'
   | 'concurrency_limit'
-  | 'rate_limited'
   | 'empty_command'
   | 'command_too_large'
   | 'blocked_metadata_access'
@@ -153,7 +142,6 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
-  rate_limited: 'Daily code-execution budget reached. Try again later.',
   empty_command: 'No command was provided.',
   command_too_large: 'The command is too large.',
   blocked_metadata_access: 'This command is blocked by policy.',
@@ -256,15 +244,6 @@ async function openSession(
   | { ok: true; sandbox: ExecutableSandbox; release: () => void }
   | { ok: false; reason: SandboxToolDenialReason; retryAfter?: number }
 > {
-  const pre = await deps.quota.preflight({
-    userId: ctx.userId,
-    driveId: ctx.driveId,
-    tenantId: ctx.tenantId,
-    tier: ctx.tier,
-  });
-  if (!pre.allowed) {
-    return { ok: false, reason: pre.reason, retryAfter: pre.retryAfter };
-  }
   if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
     return { ok: false, reason: 'concurrency_limit' };
   }
@@ -293,9 +272,6 @@ async function openSession(
       });
       return { ok: false, reason: 'provision_failed' };
     }
-    // Charge only once a live, authorized sandbox is in hand — a denied authz or
-    // a failed provision never consumes the daily budget.
-    await deps.quota.charge({ userId: ctx.userId, driveId: ctx.driveId, tenantId: ctx.tenantId });
     return { ok: true, sandbox, release: () => deps.quota.releaseSlot({ userId: ctx.userId }) };
   } catch (error) {
     safeLogError(

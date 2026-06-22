@@ -51,8 +51,6 @@ function makeDeps(over: Partial<SandboxRunDeps> = {}) {
       releaseSlot: () => {
         slots.released += 1;
       },
-      preflight: async () => ({ allowed: true }),
-      charge: async () => {},
     },
     buildEnv: () => ({ NODE_ENV: 'test' }),
     audit: async (input) => {
@@ -97,41 +95,19 @@ describe('runBashInSandbox', () => {
       quota: {
         acquireSlot: () => false,
         releaseSlot: () => {},
-        preflight: async () => ({ allowed: true }),
-        charge: async () => {},
       },
     });
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false, reason: 'concurrency_limit' });
   });
 
-  it('given a rate-limited preflight, should deny with rate_limited and a retryAfter', async () => {
-    const { deps, slots } = makeDeps({
-      quota: {
-        acquireSlot: () => true,
-        releaseSlot: () => {},
-        preflight: async () => ({ allowed: false, reason: 'rate_limited', retryAfter: 60 }),
-        charge: async () => {},
-      },
-    });
-    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
-    expect(result).toMatchObject({ success: false, reason: 'rate_limited', retryAfter: 60 });
-    // Preflight denies before reserving a slot.
-    expect(slots.acquired).toBe(0);
-  });
-
-  it('given an authz denial from acquire, should map the reason, release the slot, and never charge budget', async () => {
-    let charges = 0;
+  it('given an authz denial from acquire, should map the reason and release the slot', async () => {
     const { deps, slots } = makeDeps({
       acquireSandbox: async () => ({ ok: false, reason: 'insufficient_role' }),
     });
-    deps.quota.charge = async () => {
-      charges += 1;
-    };
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false, reason: 'insufficient_role' });
     expect(slots.released).toBe(1);
-    expect(charges).toBe(0);
   });
 
   it('given an authz denial from acquire and a throwing logger, should still release the slot and map the reason', async () => {
@@ -148,16 +124,6 @@ describe('runBashInSandbox', () => {
 
     expect(result).toMatchObject({ success: false, reason: 'insufficient_role' });
     expect(slots.released).toBe(1);
-  });
-
-  it('given a successful run, should charge the budget exactly once', async () => {
-    let charges = 0;
-    const { deps } = makeDeps();
-    deps.quota.charge = async () => {
-      charges += 1;
-    };
-    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
-    expect(charges).toBe(1);
   });
 
   it('given a vanished sandbox on reconnect, should deny provision_failed and release the slot', async () => {

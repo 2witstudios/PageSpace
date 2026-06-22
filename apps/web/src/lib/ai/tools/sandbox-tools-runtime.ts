@@ -28,8 +28,6 @@ import { createDbSandboxSessionStore } from '@pagespace/lib/services/sandbox/ses
 import {
   acquireCodeExecutionSlot,
   releaseCodeExecutionSlot,
-  checkCodeExecutionQuota,
-  chargeCodeExecutionBudget,
 } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
@@ -110,8 +108,6 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     quota: {
       acquireSlot: acquireCodeExecutionSlot,
       releaseSlot: releaseCodeExecutionSlot,
-      preflight: (args) => checkCodeExecutionQuota(args),
-      charge: (args) => chargeCodeExecutionBudget(args),
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),

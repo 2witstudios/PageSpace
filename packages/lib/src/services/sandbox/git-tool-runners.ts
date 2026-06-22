@@ -54,20 +54,6 @@ export async function runGitInSandbox({
       ? preResolvedToken
       : await deps.resolveGitHubToken(ctx.userId);
 
-  const pre = await deps.quota.preflight({
-    userId: ctx.userId,
-    driveId: ctx.driveId,
-    tenantId: ctx.tenantId,
-    tier: ctx.tier,
-  });
-  if (!pre.allowed) {
-    return {
-      success: false,
-      error: 'Daily code-execution budget reached. Try again later.',
-      reason: pre.reason,
-      retryAfter: pre.retryAfter,
-    };
-  }
   if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
     return {
       success: false,
@@ -94,8 +80,6 @@ export async function runGitInSandbox({
     if (!sandbox) {
       return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };
     }
-
-    await deps.quota.charge({ userId: ctx.userId, driveId: ctx.driveId, tenantId: ctx.tenantId });
 
     const resolvedCwd = cwd ?? SANDBOX_ROOT;
     const startedAt = deps.now();

@@ -3,23 +3,21 @@
  *
  * This is the single authorization chokepoint the `bash` / `writeFile` /
  * `readFile` tools run BEFORE they touch the runner — kill-switch, then
- * `canRunCode` authz, then the advisory quota preflight — so a denied call
+ * `canRunCode` authz, then the advisory concurrency preflight — so a denied call
  * returns a safe tool error and never reaches provisioning. It composes the PR1
  * primitives unchanged:
  *
  *   - `isCodeExecutionEnabled` — the global env kill-switch (default OFF);
  *   - `canRunCode` — drive membership + role (and the agent's own drive access
  *     for agent-origin runs), fail-closed;
- *   - `checkCodeExecutionQuota` — the NON-incrementing read of concurrency +
- *     daily budget.
+ *   - `checkCodeExecutionQuota` — the NON-reserving read of per-tier concurrency.
  *
  * It is defence in depth, not a replacement: the runner (`tool-runners.ts`)
- * still re-checks the kill-switch, reserves the concurrency slot, re-authorizes
- * on sandbox resume (via the lifecycle), and issues the single real budget
- * charge. The gate's quota call is advisory and non-incrementing, so running it
- * here never double-charges — it only short-circuits an obviously-denied call at
- * the tool boundary, where the result is a clean `{ ok: false }` instead of a
- * half-provisioned run.
+ * still re-checks the kill-switch, reserves the concurrency slot, and
+ * re-authorizes on sandbox resume (via the lifecycle). The gate's quota call is
+ * advisory and non-reserving, so running it here never holds a slot — it only
+ * short-circuits an obviously-denied call at the tool boundary, where the result
+ * is a clean `{ ok: false }` instead of a half-provisioned run.
  *
  * Fail-closed by construction: every dependency is injected (defaults wire the
  * real implementations) and any thrown error resolves to a denial.
@@ -41,7 +39,6 @@ export type SandboxToolGateDenialReason =
   | 'insufficient_role'
   | 'no_agent_access'
   | 'concurrency_limit'
-  | 'rate_limited'
   | 'error';
 
 export type SandboxToolGateResult =
@@ -56,7 +53,6 @@ const DENIAL_MESSAGES: Record<SandboxToolGateDenialReason, string> = {
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
-  rate_limited: 'Daily code-execution budget reached. Try again later.',
   error: 'Code execution could not be authorized.',
 };
 
@@ -123,7 +119,7 @@ export async function gateSandboxToolCall({
     }
 
     const quota = await deps.checkQuota({ userId, driveId, tenantId, tier });
-    if (!quota.allowed) return deny(quota.reason, quota.retryAfter);
+    if (!quota.allowed) return deny(quota.reason);
 
     return { ok: true };
   } catch {

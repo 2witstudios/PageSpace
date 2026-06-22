@@ -23,8 +23,6 @@ function makeDeps(token: string | null = 'ghp_test'): GitSandboxToolsDeps {
       quota: {
         acquireSlot: vi.fn().mockReturnValue(true),
         releaseSlot: vi.fn(),
-        preflight: vi.fn().mockResolvedValue({ allowed: true }),
-        charge: vi.fn().mockResolvedValue(undefined),
       },
       buildEnv: vi.fn().mockReturnValue({ NODE_ENV: 'test' }),
       audit: vi.fn().mockResolvedValue(undefined),
