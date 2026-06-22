@@ -44,20 +44,27 @@ export interface PlanLifecycleInput {
   authorization: CanRunCodeResult;
   existingSession?: SandboxSessionRef | null;
   now: Date;
-  /** A session older than this since last activity is torn down. */
-  idleTimeoutMs?: number;
+  /**
+   * Hard reclaim ceiling. A session untouched for longer than this is torn down
+   * and re-provisioned — the only idle teardown. It is deliberately LONG: Sprites
+   * hibernate when idle and wake on demand, so a normal multi-hour gap must
+   * resume the hibernated VM (preserving its filesystem/process state), NOT
+   * destroy it. This ceiling only reclaims genuinely abandoned sessions.
+   */
+  hardExpiryMs?: number;
   intent?: LifecycleIntent;
 }
 
-// 15 minutes: long enough to keep a multi-turn conversation's shell warm, short
-// enough that an abandoned conversation's VM is reclaimed promptly.
-const DEFAULT_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+// 24 hours: well beyond any plausible conversation gap. Within this window an
+// idle session RESUMES (the platform hibernated the VM and wakes it on the next
+// command); only a session abandoned for a full day is reclaimed.
+const DEFAULT_HARD_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 export function planSandboxLifecycle({
   authorization,
   existingSession = null,
   now,
-  idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
+  hardExpiryMs = DEFAULT_HARD_EXPIRY_MS,
   intent = 'run',
 }: PlanLifecycleInput): SandboxLifecyclePlan {
   // Cleanup first, and unconditionally: an ending session is reclaimed whether
@@ -85,9 +92,12 @@ export function planSandboxLifecycle({
   }
 
   const idleFor = now.getTime() - existingSession.lastActiveAt.getTime();
-  if (idleFor >= idleTimeoutMs) {
+  if (idleFor >= hardExpiryMs) {
+    // Abandoned past the hard ceiling — reclaim and re-provision.
     return { action: 'teardown', sandboxId: existingSession.sandboxId, reason: 'idle' };
   }
 
+  // Within the window: resume. A hibernated VM wakes on the next exec, so we keep
+  // the session and its state rather than destroying a sleeping (near-free) VM.
   return { action: 'resume', sandboxId: existingSession.sandboxId };
 }

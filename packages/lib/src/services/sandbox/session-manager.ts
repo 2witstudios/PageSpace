@@ -21,8 +21,8 @@
 import { getValidatedEnv } from '../../config/env-validation';
 import { loggers } from '../../logging/logger-config';
 import type { CanRunCodeResult, CanRunCodeInput, CodeExecutionDenialReason } from './can-run-code';
-import { SANDBOX_EGRESS_ALLOWLIST } from './execution-policy';
-import type { SandboxCreateOptions } from './sandbox-options';
+import { SANDBOX_EGRESS_ALLOWLIST, SANDBOX_RESOURCE_CAPS } from './execution-policy';
+import { SandboxProvisionError, type SandboxCreateOptions } from './sandbox-options';
 import { deriveSessionKey } from './session-key';
 import { planSandboxLifecycle, type TeardownReason } from './lifecycle';
 import type { SandboxSessionStore, SandboxSessionRecord } from './session-store';
@@ -63,13 +63,20 @@ export interface AcquireSandboxInput {
   userId: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
-  idleTimeoutMs?: number;
+  /** Hard reclaim ceiling for an abandoned session; see planSandboxLifecycle. */
+  hardExpiryMs?: number;
   deps: AcquireSandboxDeps;
 }
 
 export type AcquireSandboxResult =
   | { ok: true; sandboxId: string; resumed: boolean }
-  | { ok: false; reason: CodeExecutionDenialReason | 'provision_failed'; cause?: unknown };
+  | {
+      ok: false;
+      reason: CodeExecutionDenialReason | 'provision_failed' | 'rate_limited';
+      /** Set when the provider reported a rate limit (seconds to wait). */
+      retryAfterSeconds?: number;
+      cause?: unknown;
+    };
 
 /**
  * Read the session-key secret from validated env. Returns '' (→ fail-closed deny
@@ -129,19 +136,25 @@ async function provisionFresh({
   input: AcquireSandboxInput;
 }): Promise<AcquireSandboxResult> {
   const { deps, tenantId, driveId, conversationId, userId } = input;
-  const options: SandboxCreateOptions = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
+  const options: SandboxCreateOptions = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST, caps: SANDBOX_RESOURCE_CAPS };
 
   let handle: SandboxHandle;
   try {
     handle = await deps.client.getOrCreate({ name: key, options });
   } catch (error) {
-    const meta = { reason: 'provision_failed', userId, conversationId, driveId };
+    // Distinguish a provider rate limit (transient, retryable with a hint) from a
+    // genuine infrastructure failure, and log the classified kind so a churn-driven
+    // rate limit is no longer indistinguishable from an outage in the logs.
+    const kind = error instanceof SandboxProvisionError ? error.kind : 'unavailable';
+    const retryAfterSeconds = error instanceof SandboxProvisionError ? error.retryAfterSeconds : undefined;
+    const reason = kind === 'rate_limited' ? 'rate_limited' : 'provision_failed';
+    const meta = { reason, kind, retryAfterSeconds, userId, conversationId, driveId };
     if (error instanceof Error) {
       loggers.ai.error('Sandbox acquisition failed', error, meta);
     } else {
       loggers.ai.error('Sandbox acquisition failed', meta);
     }
-    return { ok: false, reason: 'provision_failed', cause: error };
+    return { ok: false, reason, retryAfterSeconds, cause: error };
   }
 
   try {
@@ -167,7 +180,7 @@ async function provisionFresh({
 export async function acquireConversationSandbox(
   input: AcquireSandboxInput,
 ): Promise<AcquireSandboxResult> {
-  const { deps, tenantId, driveId, conversationId, userId, requestOrigin, agentPageId, idleTimeoutMs } = input;
+  const { deps, tenantId, driveId, conversationId, userId, requestOrigin, agentPageId, hardExpiryMs } = input;
 
   // Fail closed if any required namespacing component or the secret is missing.
   // driveId is intentionally optional (absent for global context) — its absence is
@@ -191,7 +204,7 @@ export async function acquireConversationSandbox(
         ? { sandboxId: existing.sandboxId, lastActiveAt: existing.lastActiveAt }
         : null,
       now: deps.now(),
-      idleTimeoutMs,
+      hardExpiryMs,
       intent: 'run',
     });
 

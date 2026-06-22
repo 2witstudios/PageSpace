@@ -1,5 +1,5 @@
 import { createHmac } from 'crypto';
-import { SANDBOX_EGRESS_ALLOWLIST } from './execution-policy';
+import { SANDBOX_EGRESS_ALLOWLIST, SANDBOX_RESOURCE_CAPS } from './execution-policy';
 import type { SandboxClient } from './session-manager';
 import { loggers } from '../../logging/logger-config';
 
@@ -155,7 +155,7 @@ async function provisionFreshTerminal({
   input: AcquireTerminalSandboxInput;
 }): Promise<AcquireTerminalSandboxResult> {
   const { deps, pageId, userId, driveId } = input;
-  const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
+  const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST, caps: SANDBOX_RESOURCE_CAPS };
 
   let sandboxId: string;
   try {
@@ -205,7 +205,25 @@ export async function acquireTerminalSandbox(
         : null,
       now: deps.now(),
       intent: 'run',
+      // Sprites hibernate when idle and wake on demand, so an idle terminal VM
+      // must be resumed, not destroyed — `persistent` makes the planner return
+      // `noop` on idle (handled below as a reconnect) instead of `teardown`.
+      persistent: true,
     });
+
+    // Reconnect to a known-live (possibly hibernating) sandbox, re-provisioning
+    // under the same key only if it has genuinely vanished. Shared by `resume`
+    // (within the warm window) and `noop` (persistent-idle: the VM is sleeping,
+    // not gone — wake it).
+    const reconnectExisting = async (sandboxId: string): Promise<AcquireTerminalSandboxResult> => {
+      const handle = await deps.client.get({ sandboxId });
+      if (!handle) {
+        await deps.store.remove(key);
+        return await provisionFreshTerminal({ key, input });
+      }
+      await safeTouch(deps.store, key, deps.now());
+      return { ok: true, sandboxId: handle.sandboxId, resumed: true };
+    };
 
     switch (plan.action) {
       case 'deny':
@@ -214,16 +232,14 @@ export async function acquireTerminalSandbox(
       case 'create':
         return await provisionFreshTerminal({ key, input });
 
-      case 'resume': {
-        const handle = await deps.client.get({ sandboxId: plan.sandboxId });
-        if (!handle) {
-          // Recorded sandbox is gone — drop the stale link and provision fresh.
-          await deps.store.remove(key);
-          return await provisionFreshTerminal({ key, input });
-        }
-        await safeTouch(deps.store, key, deps.now());
-        return { ok: true, sandboxId: handle.sandboxId, resumed: true };
-      }
+      case 'resume':
+        return await reconnectExisting(plan.sandboxId);
+
+      case 'noop':
+        // Persistent-idle: existing is guaranteed (noop only arises with a session).
+        return existing
+          ? await reconnectExisting(existing.sandboxId)
+          : { ok: false, reason: 'error' };
 
       case 'teardown': {
         const stopped = await safeStop(deps.client, plan.sandboxId);

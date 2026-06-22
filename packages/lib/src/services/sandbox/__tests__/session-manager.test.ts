@@ -134,13 +134,13 @@ describe('acquireConversationSandbox', () => {
     expect(storeCalls.remove).toBe(0);
   });
 
-  it('given an authorized actor whose session is idle-expired, should tear down the stale VM then create fresh', async () => {
+  it('given an authorized actor whose session is abandoned past the hard-expiry ceiling, should tear down the stale VM then create fresh', async () => {
     const stale = seedRecord({ lastActiveAt: new Date('2026-06-01T11:00:00.000Z') });
     const { store, calls: storeCalls } = makeStore(stale);
     const { client, calls } = makeClient();
     const result = await acquireConversationSandbox({
       ...actor,
-      idleTimeoutMs: 5 * 60 * 1000,
+      hardExpiryMs: 5 * 60 * 1000,
       deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });

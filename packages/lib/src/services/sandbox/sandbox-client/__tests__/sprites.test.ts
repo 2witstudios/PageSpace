@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import {
   createSpritesSandboxClient,
   isSpriteNotFoundError,
+  classifyProvisionError,
   SandboxCommandTimeoutError,
   SandboxOutputLimitError,
   type SpritesSdk,
@@ -10,6 +11,7 @@ import {
   type SpriteCommandLike,
   type SpriteFsLike,
 } from '../sprites';
+import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
@@ -152,7 +154,10 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
       },
     };
     const client = createSpritesSandboxClient({ sdk });
-    await expect(client.getOrCreate({ name: 'k', options })).rejects.toThrow('policy api down');
+    const error = await client.getOrCreate({ name: 'k', options }).then(() => null, (e) => e);
+    expect(error).toBeInstanceOf(SandboxProvisionError);
+    expect((error as SandboxProvisionError).kind).toBe('unavailable');
+    expect(String((error as SandboxProvisionError).providerCause)).toContain('policy api down');
     expect(destroyed).toBeNull();
   });
 
@@ -163,7 +168,10 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
       },
     });
     const client = createSpritesSandboxClient({ sdk });
-    await expect(client.getOrCreate({ name: 'k', options })).rejects.toThrow('unauthorized');
+    const error = await client.getOrCreate({ name: 'k', options }).then(() => null, (e) => e);
+    expect(error).toBeInstanceOf(SandboxProvisionError);
+    expect((error as SandboxProvisionError).kind).toBe('unavailable');
+    expect(String((error as SandboxProvisionError).providerCause)).toContain('unauthorized');
     expect(calls.created).toEqual([]);
   });
 
@@ -197,8 +205,141 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
       },
     };
     const client = createSpritesSandboxClient({ sdk });
-    await expect(client.getOrCreate({ name: 'k', options })).rejects.toThrow('policy api down');
+    const error = await client.getOrCreate({ name: 'k', options }).then(() => null, (e) => e);
+    expect(error).toBeInstanceOf(SandboxProvisionError);
+    expect(String((error as SandboxProvisionError).providerCause)).toContain('policy api down');
     expect(destroyed).toBe('k');
+  });
+});
+
+describe('classifyProvisionError', () => {
+  it('maps a 429 / creation-rate-limit to rate_limited with a retry hint', () => {
+    const err = classifyProvisionError(
+      Object.assign(new Error('slow down'), {
+        statusCode: 429,
+        errorCode: 'sprite_creation_rate_limited',
+        retryAfterSeconds: 12,
+      }),
+    );
+    expect(err).toBeInstanceOf(SandboxProvisionError);
+    expect(err.kind).toBe('rate_limited');
+    expect(err.retryAfterSeconds).toBe(12);
+  });
+
+  it('maps a concurrent-sprite-limit code to rate_limited', () => {
+    const err = classifyProvisionError(
+      Object.assign(new Error('too many'), { errorCode: 'concurrent_sprite_limit_exceeded' }),
+    );
+    expect(err.kind).toBe('rate_limited');
+  });
+
+  it('maps a 409 / "already exists" to conflict (delete-recreate race)', () => {
+    expect(classifyProvisionError(Object.assign(new Error('x'), { status: 409 })).kind).toBe('conflict');
+    expect(classifyProvisionError(new Error('sprite already exists')).kind).toBe('conflict');
+  });
+
+  it('maps anything else to unavailable and preserves the cause', () => {
+    const cause = new Error('boom');
+    const err = classifyProvisionError(cause);
+    expect(err.kind).toBe('unavailable');
+    expect(err.providerCause).toBe(cause);
+  });
+
+  it('returns an existing SandboxProvisionError unchanged', () => {
+    const original = new SandboxProvisionError('rate_limited', 5, new Error('orig'));
+    expect(classifyProvisionError(original)).toBe(original);
+  });
+});
+
+describe('cold-start exec wake retry', () => {
+  it('retries a pre-open "closed before open" failure on a fresh spawn, then succeeds', async () => {
+    let attempts = 0;
+    const sprite = fakeSprite({
+      spawn: () => {
+        attempts += 1;
+        return attempts === 1
+          ? fakeCommand({ error: new Error('WebSocket closed before open: code=1006 reason=none') })
+          : fakeCommand({ stdout: ['ok'], exitCode: 0 });
+      },
+    });
+    const { sdk } = makeSdk({ getSprite: async () => sprite });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    const result = await handle!.runCommand({ cmd: 'sh', args: ['-c', 'echo ok'] });
+    expect(result).toEqual({ exitCode: 0, stdout: 'ok', stderr: '' });
+    expect(attempts).toBe(2);
+  });
+
+  it('does NOT retry a post-open / non-wake error (may have already run)', async () => {
+    let attempts = 0;
+    const sprite = fakeSprite({
+      spawn: () => {
+        attempts += 1;
+        return fakeCommand({ error: new Error('WebSocket keepalive timeout') });
+      },
+    });
+    const { sdk } = makeSdk({ getSprite: async () => sprite });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    await expect(handle!.runCommand({ cmd: 'sh' })).rejects.toThrow('keepalive timeout');
+    expect(attempts).toBe(1);
+  });
+});
+
+describe('filesystem cold-start wake retry', () => {
+  it('wakes the VM and retries a writeFile that fails on a cold VM', async () => {
+    let writes = 0;
+    let spawned = 0;
+    const fs = fakeFs({
+      writeFile: async () => {
+        writes += 1;
+        if (writes === 1) throw new Error('fetch failed');
+      },
+    });
+    const sprite = fakeSprite({
+      fs,
+      spawn: () => {
+        spawned += 1;
+        return fakeCommand({ exitCode: 0 });
+      },
+    });
+    const { sdk } = makeSdk({ getSprite: async () => sprite });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    await handle!.writeFiles([{ path: '/x', content: 'hi' }]);
+    expect(writes).toBe(2); // failed once, retried after wake
+    expect(spawned).toBe(1); // woke the VM via the exec path between attempts
+  });
+
+  it('readFile recovers on the wake retry', async () => {
+    let reads = 0;
+    const fs = fakeFs({
+      readFile: async () => {
+        reads += 1;
+        if (reads === 1) throw new Error('fetch failed');
+        return Buffer.from('recovered');
+      },
+    });
+    const sprite = fakeSprite({ fs, spawn: () => fakeCommand({ exitCode: 0 }) });
+    const { sdk } = makeSdk({ getSprite: async () => sprite });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    const buf = await handle!.readFileToBuffer({ path: '/x' });
+    expect(buf?.toString()).toBe('recovered');
+    expect(reads).toBe(2);
+  });
+
+  it('readFile resolves to null when the op still fails after a wake retry', async () => {
+    const fs = fakeFs({
+      readFile: async () => {
+        throw new Error('fetch failed');
+      },
+    });
+    const sprite = fakeSprite({ fs, spawn: () => fakeCommand({ exitCode: 0 }) });
+    const { sdk } = makeSdk({ getSprite: async () => sprite });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    expect(await handle!.readFileToBuffer({ path: '/missing' })).toBeNull();
   });
 });
 

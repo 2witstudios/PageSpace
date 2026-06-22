@@ -44,7 +44,7 @@
 // SpritesClient is ESM-only. Instantiation lives in apps/web (sprites-client.ts)
 // where Next.js handles the ESM import correctly. This module only holds the
 // pure transformation logic and type-safe wrappers; it never touches the SDK.
-import type { NetworkPolicy } from '@fly/sprites';
+import type { NetworkPolicy, SpriteConfig } from '@fly/sprites';
 import { getValidatedEnv } from '../../../config/env-validation';
 import { buildSpriteNetworkPolicy } from '../egress';
 import { SANDBOX_ROOT } from '../sandbox-paths';
@@ -55,7 +55,7 @@ import type {
   RunCommandArgs,
   WriteFileEntry,
 } from './types';
-import type { SandboxCreateOptions } from '../sandbox-options';
+import { SandboxProvisionError, type SandboxCreateOptions } from '../sandbox-options';
 
 /** Thrown when a command exceeds the policy's per-run wall-clock cap. */
 export class SandboxCommandTimeoutError extends Error {
@@ -134,7 +134,7 @@ export interface SpriteInstanceLike {
 /** The injectable Sprites SDK statics. Defaults to the real `@fly/sprites`. */
 export interface SpritesSdk {
   getSprite(name: string): Promise<SpriteInstanceLike>;
-  createSprite(name: string): Promise<SpriteInstanceLike>;
+  createSprite(name: string, config?: SpriteConfig): Promise<SpriteInstanceLike>;
   deleteSprite(name: string): Promise<void>;
 }
 
@@ -245,31 +245,134 @@ function runSpawned(
   });
 }
 
+// Cold-start exec retry. A hibernated Sprite wakes on the exec WebSocket, and
+// Fly's wake-on-request can drop the FIRST connection while the VM boots — the
+// SDK surfaces that as a "closed before open" error. That failure is provably
+// pre-open (the command never started), so retrying it is safe and is the
+// documented wake handshake. We retry ONLY that signal: a post-open failure
+// (timeout, output overflow, non-zero exit, mid-command socket drop) may have
+// already run the command and must NOT be retried.
+const MAX_EXEC_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 500;
+const FS_OP_TIMEOUT_MS = 30_000;
+
+function isPreOpenWakeError(error: unknown): boolean {
+  if (error instanceof SandboxCommandTimeoutError || error instanceof SandboxOutputLimitError) {
+    return false;
+  }
+  const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  // Emitted by the SDK's WSCommand before the socket ever opens — see
+  // @fly/sprites websocket.js ("WebSocket closed before open: …").
+  return msg.includes('closed before open');
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Spawn + collect with a bounded retry on the cold-start wake handshake. The
+ * command is (re-)spawned per attempt via `spawnFn` so each retry opens a fresh
+ * WebSocket. Only a pre-open wake failure is retried; everything else propagates
+ * on the first occurrence.
+ */
+async function runSpawnedWithWakeRetry(
+  spawnFn: () => SpriteCommandLike,
+  maxBytes: number,
+  timeoutMs: number | undefined,
+): Promise<SandboxRunResult> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_EXEC_ATTEMPTS; attempt += 1) {
+    try {
+      return await runSpawned(spawnFn(), maxBytes, timeoutMs);
+    } catch (error) {
+      lastError = error;
+      if (!isPreOpenWakeError(error) || attempt === MAX_EXEC_ATTEMPTS) throw error;
+      await delay(RETRY_BASE_DELAY_MS * attempt);
+    }
+  }
+  throw lastError;
+}
+
+/** Reject if `p` has not settled within `ms` — the Sprite filesystem API uses a
+ *  bare fetch with no AbortSignal and hangs on a cold/hibernated VM, so every fs
+ *  op must be wall-clock bounded by the caller. */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new SandboxCommandTimeoutError(ms)),
+      ms,
+    );
+    p.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  }).catch((error) => {
+    if (error instanceof SandboxCommandTimeoutError) {
+      throw new Error(`Sandbox filesystem ${label} timed out after ${ms}ms`);
+    }
+    throw error;
+  });
+}
+
+/** Force a hibernated VM awake via the designated exec/WebSocket path (a cheap
+ *  no-op), with the same cold-start retry as a real command. Used to recover a
+ *  filesystem op that hit a cold VM before retrying it. */
+async function wakeSprite(sprite: SpriteInstanceLike): Promise<void> {
+  await runSpawnedWithWakeRetry(
+    () => sprite.spawn('sh', ['-c', ':']),
+    DEFAULT_MAX_OUTPUT_BYTES,
+    FS_OP_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Run a filesystem op bounded by a timeout; on the first failure (cold-start
+ * hang/race) wake the VM via the exec path and retry once. The filesystem API
+ * itself never wakes a cold VM and never times out, so without this a `writeFile`
+ * / `readFile` against a hibernated Sprite hangs indefinitely.
+ */
+async function fsWithWakeRetry<T>(
+  sprite: SpriteInstanceLike,
+  label: string,
+  op: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
+  } catch {
+    await wakeSprite(sprite);
+    return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
+  }
+}
+
 function wrap(sprite: SpriteInstanceLike): ExecutableSandbox {
   return {
     sandboxId: sprite.name,
 
     async runCommand({ cmd, args = [], cwd, env, timeoutMs, maxBytes }: RunCommandArgs): Promise<SandboxRunResult> {
       // spawn (arg array), never a host-side shell string. The untrusted command
-      // runs under the Sprite's own `sh -c`, contained by the VM.
-      const command = sprite.spawn(cmd, args, { cwd, env });
-      return runSpawned(command, maxBytes ?? 0, timeoutMs);
+      // runs under the Sprite's own `sh -c`, contained by the VM. Re-spawned per
+      // attempt so a cold-start wake drop reconnects on a fresh WebSocket.
+      return runSpawnedWithWakeRetry(() => sprite.spawn(cmd, args, { cwd, env }), maxBytes ?? 0, timeoutMs);
     },
 
     async writeFiles(files: WriteFileEntry[]): Promise<void> {
       const fs = sprite.filesystem('/');
       for (const file of files) {
         const data = typeof file.content === 'string' ? file.content : Buffer.from(file.content);
-        await fs.writeFile(file.path, data, file.mode === undefined ? undefined : { mode: file.mode });
+        // Bounded + wake-on-cold: the fs API hangs on a hibernated VM otherwise.
+        await fsWithWakeRetry(sprite, 'write', () =>
+          fs.writeFile(file.path, data, file.mode === undefined ? undefined : { mode: file.mode }),
+        );
       }
     },
 
     async readFileToBuffer({ path }: { path: string }): Promise<Buffer | null> {
       try {
-        return await sprite.filesystem('/').readFile(path, null);
+        return await fsWithWakeRetry(sprite, 'read', () => sprite.filesystem('/').readFile(path, null));
       } catch {
-        // A missing file (or any read failure) resolves to null; the runner maps
-        // null to a handled not-found rather than an exception.
+        // A missing file (or any read failure after a wake retry) resolves to
+        // null; the runner maps null to a handled not-found rather than throwing.
         return null;
       }
     },
@@ -314,6 +417,52 @@ export function isSpriteNotFoundError(error: unknown): boolean {
   return /\bnot found\b|no such|does not exist|\b404\b|\b410\b|\bgone\b|vanished/.test(message);
 }
 
+/**
+ * Map a raw `@fly/sprites` error into a normalized {@link SandboxProvisionError}.
+ * Defensive (duck-typed, like `isSpriteNotFoundError`) because the RC SDK exports
+ * no stable typed errors: a creation/concurrent rate limit (`429` /
+ * `sprite_creation_rate_limited` / `concurrent_sprite_limit_exceeded`) becomes
+ * `rate_limited` with a retry hint; a name/state conflict (`409`) becomes
+ * `conflict` (the delete-then-recreate race); anything else is `unavailable`. So
+ * the lifecycle can surface a distinct, actionable reason instead of one opaque
+ * `provision_failed`.
+ */
+export function classifyProvisionError(error: unknown): SandboxProvisionError {
+  if (error instanceof SandboxProvisionError) return error;
+  const e = (typeof error === 'object' && error !== null ? error : {}) as {
+    status?: unknown;
+    statusCode?: unknown;
+    errorCode?: unknown;
+    code?: unknown;
+    retryAfterSeconds?: unknown;
+    retryAfterHeader?: unknown;
+    message?: unknown;
+  };
+  const status =
+    typeof e.statusCode === 'number' ? e.statusCode : typeof e.status === 'number' ? e.status : undefined;
+  const errorCode = typeof e.errorCode === 'string' ? e.errorCode : typeof e.code === 'string' ? e.code : '';
+  const message = typeof e.message === 'string' ? e.message.toLowerCase() : '';
+  const retryAfterSeconds =
+    typeof e.retryAfterSeconds === 'number'
+      ? e.retryAfterSeconds
+      : typeof e.retryAfterHeader === 'number'
+        ? e.retryAfterHeader
+        : undefined;
+
+  if (
+    status === 429 ||
+    errorCode === 'sprite_creation_rate_limited' ||
+    errorCode === 'concurrent_sprite_limit_exceeded' ||
+    /\brate limit|too many requests\b/.test(message)
+  ) {
+    return new SandboxProvisionError('rate_limited', retryAfterSeconds, error);
+  }
+  if (status === 409 || /already exists|conflict/.test(message)) {
+    return new SandboxProvisionError('conflict', retryAfterSeconds, error);
+  }
+  return new SandboxProvisionError('unavailable', retryAfterSeconds, error);
+}
+
 // Apply the deny-by-default egress policy and ensure the sandbox root exists.
 // Called on every hand-back (fresh or resumed) so a Sprite is never returned
 // with open/unknown egress. When `destroyOnFailure` is set (a FRESH create), a
@@ -339,8 +488,7 @@ async function applyEgressLockdown({
     // Fly's proxy eventually closes the connection. spawn() connects via WebSocket
     // which is the designated wake-up path; runSpawned enforces the timeout and
     // SIGKILLs if the Sprite never becomes ready.
-    const cmd = sprite.spawn('mkdir', ['-p', SANDBOX_ROOT]);
-    await runSpawned(cmd, DEFAULT_MAX_OUTPUT_BYTES, 30_000);
+    await runSpawnedWithWakeRetry(() => sprite.spawn('mkdir', ['-p', SANDBOX_ROOT]), DEFAULT_MAX_OUTPUT_BYTES, 30_000);
   } catch (error) {
     if (destroyOnFailure) {
       try {
@@ -364,18 +512,27 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
       // keys are 72-char HMAC hex strings; truncate to 63 before hitting the API.
       // The full key stays as the DB session key — only the Sprites name is short.
       const spriteName = name.slice(0, 63);
-      let sprite: SpriteInstanceLike;
-      let fresh = false;
       try {
-        sprite = await sdk.getSprite(spriteName);
+        let sprite: SpriteInstanceLike;
+        let fresh = false;
+        try {
+          sprite = await sdk.getSprite(spriteName);
+        } catch (error) {
+          if (!isSpriteNotFoundError(error)) throw error;
+          // Caps (RAM / vCPUs / storage / region) come from the resolved policy and
+          // are set explicitly per Sprite rather than relying on the quota defaults.
+          sprite = await sdk.createSprite(spriteName, options.caps);
+          fresh = true;
+        }
+        // Re-apply the deny-default egress lockdown on BOTH paths — see file header.
+        await applyEgressLockdown({ sdk, sprite, options, destroyOnFailure: fresh });
+        return wrap(sprite);  // wrap sets sandboxId = sprite.name = spriteName (truncated)
       } catch (error) {
-        if (!isSpriteNotFoundError(error)) throw error;
-        sprite = await sdk.createSprite(spriteName);
-        fresh = true;
+        // Normalize every provisioning failure (rate limit / conflict / outage)
+        // so the lifecycle can surface a distinct reason instead of one opaque
+        // `provision_failed`.
+        throw classifyProvisionError(error);
       }
-      // Re-apply the deny-default egress lockdown on BOTH paths — see file header.
-      await applyEgressLockdown({ sdk, sprite, options, destroyOnFailure: fresh });
-      return wrap(sprite);  // wrap sets sandboxId = sprite.name = spriteName (truncated)
     },
 
     async get({ sandboxId }) {

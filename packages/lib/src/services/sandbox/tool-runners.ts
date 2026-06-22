@@ -129,6 +129,7 @@ export type SandboxToolDenialReason =
   | 'path_escape'
   | 'content_too_large'
   | 'provision_failed'
+  | 'provision_rate_limited'
   | 'execution_failed'
   | 'not_found'
   | 'error';
@@ -159,6 +160,7 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   path_escape: 'The path is invalid or escapes the sandbox root.',
   content_too_large: 'The file content is too large.',
   provision_failed: 'Could not provision a sandbox for this run.',
+  provision_rate_limited: 'The sandbox service is busy (rate limited). Retry shortly.',
   execution_failed: 'Command execution failed or timed out.',
   not_found: 'File not found.',
   error: 'Code execution could not be completed.',
@@ -225,6 +227,8 @@ function reasonFromAcquire(result: Extract<AcquireSandboxResult, { ok: false }>)
     case 'no_agent_access':
     case 'provision_failed':
       return result.reason;
+    case 'rate_limited':
+      return 'provision_rate_limited';
     case 'kill_switch_off':
       return 'kill_switch_off';
     default:
@@ -276,7 +280,7 @@ async function openSession(
       } else {
         safeLogError(deps.logger, 'Sandbox acquisition failed', context);
       }
-      return { ok: false, reason: reasonFromAcquire(acquired) };
+      return { ok: false, reason: reasonFromAcquire(acquired), retryAfter: acquired.retryAfterSeconds };
     }
     const sandbox = await deps.reconnect(acquired.sandboxId);
     if (!sandbox) {

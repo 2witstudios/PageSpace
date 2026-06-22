@@ -300,21 +300,35 @@ describe('acquireTerminalSandbox', () => {
     expect(calls.stop).toEqual([]);
   });
 
-  it('given teardown plan and safeStop fails, keeps the session link and returns { ok: false, reason: error }', async () => {
-    // lastActiveAt 20 min ago triggers idle teardown (default timeout = 15 min)
+  it('given an idle (hibernated) session, reconnects + wakes it instead of destroying it (persistent)', async () => {
+    // 20 min idle would have tripped the old 15-min destroy timer. With Sprites
+    // hibernation, acquire now resumes the sleeping VM rather than tearing it down.
     const stale = seedRecord({ lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) });
     const { store, calls: storeCalls } = makeStore(stale);
-    const { client } = makeClient({
-      stop: async () => {
-        throw new Error('stop failed');
-      },
-    });
+    const { client, calls } = makeClient();
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: false, reason: 'error' });
-    expect(storeCalls.remove).toBe(0);
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
+    expect(calls.get).toEqual(['sbx-existing']);
+    expect(calls.getOrCreate).toEqual([]);
+    expect(calls.stop).toEqual([]);
+    expect(storeCalls.touch).toBe(1);
+  });
+
+  it('given an idle session whose VM has vanished, drops the stale link and provisions fresh', async () => {
+    const stale = seedRecord({ lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) });
+    const { store, calls: storeCalls } = makeStore(stale);
+    const { client, calls } = makeClient({ get: async () => null });
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: { store, client, now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
+    expect(storeCalls.remove).toBe(1);
+    expect(calls.getOrCreate).toEqual([{ name: keyFor() }]);
   });
 });
