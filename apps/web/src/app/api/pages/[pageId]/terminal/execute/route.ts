@@ -210,7 +210,7 @@ export async function POST(
     }).catch(() => {});
 
     return NextResponse.json({ output, exitCode: result.exitCode, durationMs });
-  } catch (error) {
+  } catch {
     safeLogApi('error', 'Terminal command execution failed', {
       reason: 'command_execution_failed',
       userId,
