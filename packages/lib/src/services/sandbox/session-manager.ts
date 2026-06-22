@@ -88,7 +88,11 @@ export type AcquireSandboxResult =
  * secret and denying every terminal.
  */
 export function getSandboxSessionSecret(): string {
-  return process.env.SANDBOX_SESSION_SECRET ?? '';
+  const secret = process.env.SANDBOX_SESSION_SECRET ?? '';
+  // The web schema enforces >=32 chars; realtime bypasses full validation, so guard
+  // here — a too-short secret weakens the session-key HMAC. Treat it as unset
+  // (fail-closed) rather than deriving keys from a weak secret.
+  return secret.length >= 32 ? secret : '';
 }
 
 // Stop a sandbox best-effort, reporting whether the stop was CONFIRMED. Never

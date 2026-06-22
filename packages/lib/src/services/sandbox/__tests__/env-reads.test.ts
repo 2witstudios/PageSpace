@@ -44,9 +44,15 @@ describe('cross-service sandbox env reads', () => {
     expect(resolveSpritesToken()).toBe('');
   });
 
-  it('getSandboxSessionSecret returns the secret or "" when unset', () => {
+  it('getSandboxSessionSecret returns a >=32-char secret, or "" when unset or too short', () => {
     process.env.SANDBOX_SESSION_SECRET = 's'.repeat(32);
     expect(getSandboxSessionSecret()).toBe('s'.repeat(32));
+
+    // A non-empty but too-short secret is treated as unset (fail-closed): realtime
+    // bypasses the web schema's >=32-char guard, and a weak secret weakens the HMAC.
+    process.env.SANDBOX_SESSION_SECRET = 'short';
+    expect(getSandboxSessionSecret()).toBe('');
+
     delete process.env.SANDBOX_SESSION_SECRET;
     expect(getSandboxSessionSecret()).toBe('');
   });

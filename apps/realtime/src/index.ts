@@ -106,7 +106,6 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
     return { ok: false, reason: sandboxResult.reason };
   }
 
-  const sprite = await sdk.getSprite(sandboxResult.sandboxId);
   const sandboxId = sandboxResult.sandboxId;
 
   // Wake a resumed (possibly hibernated) Sprite before opening the PTY. The
@@ -114,8 +113,21 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
   // wake retry, so a dropped first wake would leave the terminal stuck
   // connecting. A fresh create was just warmed by the acquire's mkdir, so only
   // resumes need this extra wake.
-  if (sandboxResult.resumed) {
-    await ensureSpriteAwake(sprite);
+  //
+  // Both the getSprite handle lookup and the wake can throw (SDK error, or a
+  // resumed Sprite exhausting its wake retries). The concurrency slot is already
+  // held at this point, so release it on any throw — otherwise the in-process
+  // semaphore leaks a slot and later requests hit avoidable concurrency denials.
+  let sprite: Awaited<ReturnType<typeof sdk.getSprite>>;
+  try {
+    sprite = await sdk.getSprite(sandboxResult.sandboxId);
+    if (sandboxResult.resumed) {
+      await ensureSpriteAwake(sprite);
+    }
+  } catch {
+    releaseSlot();
+    loggers.realtime.warn('Terminal sandbox wake failed', { reason: 'provision_failed', userId, pageId });
+    return { ok: false, reason: 'provision_failed' };
   }
 
   // Write code execution audit record (PTY session open).
