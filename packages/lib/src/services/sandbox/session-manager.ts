@@ -18,7 +18,6 @@
  *    reclaimable (by retry / the idle reaper) instead of orphaned.
  */
 
-import { getValidatedEnv } from '../../config/env-validation';
 import { loggers } from '../../logging/logger-config';
 import type { CanRunCodeResult, CanRunCodeInput, CodeExecutionDenialReason } from './can-run-code';
 import { SANDBOX_EGRESS_ALLOWLIST, SANDBOX_RESOURCE_CAPS } from './execution-policy';
@@ -79,16 +78,17 @@ export type AcquireSandboxResult =
     };
 
 /**
- * Read the session-key secret from validated env. Returns '' (→ fail-closed deny
- * in the lifecycle effects) when unset or when validation fails, so a missing
- * secret disables sandbox acquisition rather than throwing at the call site.
+ * Read the session-key secret. Returns '' (→ fail-closed deny in the lifecycle
+ * effects) when unset, so a missing secret disables sandbox acquisition rather
+ * than throwing at the call site.
+ *
+ * Read directly from `process.env`, NOT via `getValidatedEnv()`: this runs in the
+ * realtime service too (terminal session keys), whose lean env does not satisfy
+ * the full web schema — `getValidatedEnv()` would throw there, blanking the
+ * secret and denying every terminal.
  */
 export function getSandboxSessionSecret(): string {
-  try {
-    return getValidatedEnv().SANDBOX_SESSION_SECRET ?? '';
-  } catch {
-    return '';
-  }
+  return process.env.SANDBOX_SESSION_SECRET ?? '';
 }
 
 // Stop a sandbox best-effort, reporting whether the stop was CONFIRMED. Never

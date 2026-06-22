@@ -45,7 +45,6 @@
 // where Next.js handles the ESM import correctly. This module only holds the
 // pure transformation logic and type-safe wrappers; it never touches the SDK.
 import type { NetworkPolicy, SpriteConfig } from '@fly/sprites';
-import { getValidatedEnv } from '../../../config/env-validation';
 import { buildSpriteNetworkPolicy } from '../egress';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 import type {
@@ -139,17 +138,17 @@ export interface SpritesSdk {
 }
 
 /**
- * Resolve the Sprites API token from validated env. Returns '' (→ the SDK's
- * calls fail-closed with an auth error, surfaced as a provisioning failure)
- * rather than throwing at construction, so a missing token disables execution
- * instead of crashing the app.
+ * Resolve the Sprites API token. Returns '' (→ the SDK's calls fail-closed with
+ * an auth error, surfaced as a provisioning failure) when unset, so a missing
+ * token disables execution instead of crashing the app.
+ *
+ * Read directly from `process.env`, NOT via `getValidatedEnv()`: the token is
+ * resolved in the realtime service too (terminal PTY), whose lean env does not
+ * satisfy the full web schema — `getValidatedEnv()` would throw there, blanking
+ * the token and breaking terminals even when it is set.
  */
 export function resolveSpritesToken(): string {
-  try {
-    return getValidatedEnv().SPRITES_API_TOKEN ?? '';
-  } catch {
-    return '';
-  }
+  return process.env.SPRITES_API_TOKEN ?? '';
 }
 
 function toBuffer(chunk: Buffer | string): Buffer {

@@ -29,7 +29,6 @@
  * `enabledTools` (agent config) is NOT a security boundary — this is.
  */
 
-import { getValidatedEnv } from '../../config/env-validation';
 import type { DrivePermissionLevel, PermissionLevel } from '../../permissions/permissions';
 
 export type CodeExecutionDenialReason =
@@ -74,14 +73,17 @@ export interface CanRunCodeInput {
 
 /**
  * Global kill-switch. Default OFF: only the literal env value 'true' enables
- * execution; an unset/invalid var (or a validation failure) keeps it disabled.
+ * execution; an unset value keeps it disabled.
+ *
+ * Read directly from `process.env`, NOT via `getValidatedEnv()`: this gate runs
+ * in BOTH the web app and the realtime service (the terminal PTY auth path), and
+ * realtime's lean env does not satisfy the full web schema — `getValidatedEnv()`
+ * THROWS there, which previously flipped the switch OFF and denied every terminal
+ * with `kill_switch_off` even when the flag was on. The flag is a non-secret
+ * string, so a direct, service-agnostic read is correct here.
  */
 export function isCodeExecutionEnabled(): boolean {
-  try {
-    return getValidatedEnv().CODE_EXECUTION_ENABLED === 'true';
-  } catch {
-    return false;
-  }
+  return process.env.CODE_EXECUTION_ENABLED === 'true';
 }
 
 // The real authz helpers pull in the database; import them lazily so callers
