@@ -95,13 +95,27 @@ export interface SpriteStreamLike {
  * `SpriteCommand`: buffered output via `stdout`/`stderr` `data` events, an `exit`
  * event carrying the code, an `error` event for transport failures, and
  * `kill(signal)` for the hard-timeout SIGKILL.
+ *
+ * `stdin` and `resize` are only populated when the command was spawned with
+ * `tty: true` (PTY mode). Batch commands leave them undefined.
  */
 export interface SpriteCommandLike {
   readonly stdout: SpriteStreamLike;
   readonly stderr: SpriteStreamLike;
+  readonly stdin?: { write(data: string | Buffer): void };
   on(event: 'exit', listener: (code: number) => void): unknown;
   on(event: 'error', listener: (error: unknown) => void): unknown;
   kill(signal?: string): void;
+  resize?(cols: number, rows: number): void;
+}
+
+/** Options for spawning a command, including PTY support. */
+export interface SpriteSpawnOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+  tty?: boolean;
+  rows?: number;
+  cols?: number;
 }
 
 /** The Sprite instance subset the driver consumes. */
@@ -110,7 +124,7 @@ export interface SpriteInstanceLike {
   spawn(
     file: string,
     args?: string[],
-    options?: { cwd?: string; env?: Record<string, string> },
+    options?: SpriteSpawnOptions,
   ): SpriteCommandLike;
   filesystem(workingDir?: string): SpriteFsLike;
   updateNetworkPolicy(policy: NetworkPolicy): Promise<void>;

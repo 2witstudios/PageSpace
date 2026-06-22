@@ -10,7 +10,15 @@ import { eq, gt, and, or } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
 import { socketTokens, users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
-import { pages } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/session-manager';
+import { acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import { createSpritesSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { buildTerminalHandlers, type CheckAuthResult, type SocketLike } from './terminal/terminal-handler';
+import { createTerminalSessionMap } from './terminal/terminal-session-map';
+import { openPtyShell } from './terminal/sprites-shell';
+import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import {
   validatePageId,
   validateDriveId,
@@ -26,6 +34,48 @@ import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 
 dotenv.config({ path: '../../.env' });
+
+const terminalSessionMap = createTerminalSessionMap();
+
+async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageId: string }): Promise<CheckAuthResult> {
+  const [pageRow] = await db
+    .select({ driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, pageId))
+    .limit(1);
+  if (!pageRow) return { ok: false, reason: 'page_not_found' };
+  const { driveId } = pageRow;
+
+  const access = await getUserAccessLevel(userId, pageId);
+  if (!access?.canEdit) return { ok: false, reason: 'no_edit_access' };
+
+  const codeAuth = await canRunCode({ userId, driveId, requestOrigin: 'user' });
+  if (!codeAuth.ok) return { ok: false, reason: codeAuth.reason };
+
+  const [driveRow] = await db
+    .select({ ownerId: drives.ownerId })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  const tenantId = driveRow?.ownerId ?? '';
+
+  const [store, sdk] = await Promise.all([createDbTerminalSessionStore(), getRealtimeSpritesSdk()]);
+  const client = createSpritesSandboxClient({ sdk });
+
+  const sandboxResult = await acquireTerminalSandbox({
+    pageId,
+    driveId,
+    tenantId,
+    userId,
+    canRun: true,
+    deps: { store, client, now: () => new Date(), secret: getSandboxSessionSecret() },
+  });
+
+  if (!sandboxResult.ok) return { ok: false, reason: sandboxResult.reason };
+
+  const sprite = await sdk.getSprite(sandboxResult.sandboxId);
+  return { ok: true, sandboxId: sandboxResult.sandboxId, sprite };
+}
 
 /**
  * Validate a short-lived socket token (ps_sock_* format).
@@ -893,7 +943,21 @@ io.on('connection', (socket: AuthSocket) => {
     pageIdExtractor: (payload: unknown) => (payload as { pageId?: string })?.pageId,
   }));
 
+  // Terminal PTY handlers
+  const terminalHandlers = buildTerminalHandlers({
+    sessionMap: terminalSessionMap,
+    openShell: openPtyShell,
+    checkAuth: makeTerminalCheckAuth,
+    socket: socket as unknown as SocketLike,
+  });
+
+  socket.on('terminal:connect', (payload) => { void terminalHandlers.onConnect(payload); });
+  socket.on('terminal:input', (payload) => terminalHandlers.onInput(payload));
+  socket.on('terminal:resize', (payload) => terminalHandlers.onResize(payload));
+  socket.on('terminal:disconnect', () => terminalHandlers.onDisconnect());
+
   socket.on('disconnect', (reason) => {
+    terminalHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);
     for (const { pageId, driveId } of affectedPages) {

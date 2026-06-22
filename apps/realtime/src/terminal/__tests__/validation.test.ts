@@ -1,0 +1,110 @@
+import { describe, it, expect } from 'vitest';
+import { validateTerminalConnectPayload, clampTerminalDimensions } from '../validation';
+
+describe('validateTerminalConnectPayload', () => {
+  it('given a valid payload, should return ok:true with typed value', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc123', cols: 80, rows: 24 });
+    expect(result).toEqual({ ok: true, value: { pageId: 'abc123', cols: 80, rows: 24 } });
+  });
+
+  it('given null payload, should return ok:false', () => {
+    const result = validateTerminalConnectPayload(null);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid payload');
+  });
+
+  it('given a non-object payload, should return ok:false', () => {
+    const result = validateTerminalConnectPayload('hello');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid payload');
+  });
+
+  it('given pageId is missing, should return ok:false with invalid pageId', () => {
+    const result = validateTerminalConnectPayload({ cols: 80, rows: 24 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid pageId');
+  });
+
+  it('given pageId is empty string, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: '', cols: 80, rows: 24 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid pageId');
+  });
+
+  it('given pageId is a number, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: 42, cols: 80, rows: 24 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid pageId');
+  });
+
+  it('given cols is missing, should return ok:false with invalid cols', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', rows: 24 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid cols');
+  });
+
+  it('given cols is zero, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: 0, rows: 24 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid cols');
+  });
+
+  it('given cols is negative, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: -1, rows: 24 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid cols');
+  });
+
+  it('given cols is a string, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: '80', rows: 24 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid cols');
+  });
+
+  it('given rows is missing, should return ok:false with invalid rows', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: 80 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid rows');
+  });
+
+  it('given rows is zero, should return ok:false', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: 80, rows: 0 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid rows');
+  });
+
+  it('given extra unknown fields, should ignore them and return ok:true', () => {
+    const result = validateTerminalConnectPayload({ pageId: 'abc', cols: 80, rows: 24, extra: 'ignored' });
+    expect(result).toEqual({ ok: true, value: { pageId: 'abc', cols: 80, rows: 24 } });
+  });
+});
+
+describe('clampTerminalDimensions', () => {
+  it('given normal dimensions, should return unchanged', () => {
+    expect(clampTerminalDimensions({ cols: 80, rows: 24 })).toEqual({ cols: 80, rows: 24 });
+  });
+
+  it('given cols < 10, should clamp to 10', () => {
+    expect(clampTerminalDimensions({ cols: 3, rows: 24 })).toEqual({ cols: 10, rows: 24 });
+  });
+
+  it('given rows < 5, should clamp to 5', () => {
+    expect(clampTerminalDimensions({ cols: 80, rows: 2 })).toEqual({ cols: 80, rows: 5 });
+  });
+
+  it('given cols > 500, should clamp to 500', () => {
+    expect(clampTerminalDimensions({ cols: 9999, rows: 24 })).toEqual({ cols: 500, rows: 24 });
+  });
+
+  it('given rows > 200, should clamp to 200', () => {
+    expect(clampTerminalDimensions({ cols: 80, rows: 999 })).toEqual({ cols: 80, rows: 200 });
+  });
+
+  it('given float cols, should floor to integer', () => {
+    expect(clampTerminalDimensions({ cols: 80.7, rows: 24.9 })).toEqual({ cols: 80, rows: 24 });
+  });
+
+  it('given both at minimums, should return minimums', () => {
+    expect(clampTerminalDimensions({ cols: 0, rows: 0 })).toEqual({ cols: 10, rows: 5 });
+  });
+});
