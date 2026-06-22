@@ -2,6 +2,7 @@ import type { TerminalSessionMap } from './terminal-session-map';
 import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { validateTerminalConnectPayload, clampTerminalDimensions } from './validation';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export const MAX_INPUT_BYTES = 4096;
 
@@ -47,7 +48,7 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
       const userId = socket.data.user?.id ?? '';
       const authResult = await checkAuth({ userId, pageId });
       if (!authResult.ok) {
-        socket.emit('terminal:error', { message:  });
+        socket.emit('terminal:error', { message: `Terminal access denied: ${authResult.reason}` });
         return;
       }
 
@@ -60,6 +61,8 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
         sessionMap.delete(socket.id);
       }
 
+      const { sandboxId } = authResult;
+
       let shell: PtyShell;
       try {
         shell = openShell({
@@ -71,6 +74,7 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
             const session = sessionMap.get(socket.id);
             if (session?.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
             session?.releaseSlot();
+            loggers.realtime.info('Terminal session closed', { exitCode, sandboxId, socketId: socket.id });
             socket.emit('terminal:closed', { exitCode });
             sessionMap.delete(socket.id);
           },
