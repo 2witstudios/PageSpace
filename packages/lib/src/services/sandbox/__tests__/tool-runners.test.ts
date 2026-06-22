@@ -134,6 +134,22 @@ describe('runBashInSandbox', () => {
     expect(charges).toBe(0);
   });
 
+  it('given an authz denial from acquire and a throwing logger, should still release the slot and map the reason', async () => {
+    const { deps, slots } = makeDeps({
+      acquireSandbox: async () => ({ ok: false, reason: 'insufficient_role' }),
+      logger: {
+        error: () => {
+          throw new Error('logger failed');
+        },
+      },
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'insufficient_role' });
+    expect(slots.released).toBe(1);
+  });
+
   it('given a successful run, should charge the budget exactly once', async () => {
     let charges = 0;
     const { deps } = makeDeps();
@@ -147,6 +163,22 @@ describe('runBashInSandbox', () => {
   it('given a vanished sandbox on reconnect, should deny provision_failed and release the slot', async () => {
     const { deps, slots } = makeDeps({ reconnect: async () => null });
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'provision_failed' });
+    expect(slots.released).toBe(1);
+  });
+
+  it('given a vanished sandbox on reconnect and a throwing logger, should still deny provision_failed and release the slot', async () => {
+    const { deps, slots } = makeDeps({
+      reconnect: async () => null,
+      logger: {
+        error: () => {
+          throw new Error('logger failed');
+        },
+      },
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
     expect(result).toMatchObject({ success: false, reason: 'provision_failed' });
     expect(slots.released).toBe(1);
   });
@@ -204,6 +236,46 @@ describe('runBashInSandbox', () => {
     const result = await runBashInSandbox({ command: 'sleep 999', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
     expect(audits[0]?.anomaly).toBe('timeout');
+    expect(slots.released).toBe(1);
+  });
+
+  it('given runCommand and logging both throw, should deny execution_failed, audit timeout, and release the slot', async () => {
+    const { deps, audits, slots } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            throw new Error('killed');
+          },
+        }),
+      logger: {
+        error: () => {
+          throw new Error('logger failed');
+        },
+      },
+    });
+
+    const result = await runBashInSandbox({ command: 'sleep 999', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    expect(audits[0]?.anomaly).toBe('timeout');
+    expect(slots.released).toBe(1);
+  });
+
+  it('given sandbox open throws and logging also throws, should release the slot and return error', async () => {
+    const { deps, slots } = makeDeps({
+      acquireSandbox: async () => {
+        throw new Error('open failed');
+      },
+      logger: {
+        error: () => {
+          throw new Error('logger failed');
+        },
+      },
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'error' });
     expect(slots.released).toBe(1);
   });
 

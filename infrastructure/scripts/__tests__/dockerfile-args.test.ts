@@ -11,6 +11,14 @@ const dockerfile = readFileSync(
   join(__dirname, '../../../apps/web/Dockerfile'),
   'utf-8'
 );
+const nextConfig = readFileSync(
+  join(__dirname, '../../../apps/web/next.config.ts'),
+  'utf-8'
+);
+const spritesClient = readFileSync(
+  join(__dirname, '../../../apps/web/src/lib/sandbox/sprites-client.ts'),
+  'utf-8'
+);
 
 describe('Dockerfile build args', () => {
   it('given the Dockerfile, should have NEXT_PUBLIC_REALTIME_URL ARG with empty default', () => {
@@ -43,5 +51,17 @@ describe('Dockerfile build args', () => {
 
   it('given the Dockerfile, should still have NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB as a build ARG', () => {
     expect(dockerfile).toMatch(/^ARG NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB$/m);
+  });
+
+  it('given the Dockerfile, should not manually copy @fly/sprites from Bun internals', () => {
+    expect(dockerfile).not.toContain('@fly+sprites');
+    expect(dockerfile).not.toContain('node_modules/.bun/node_modules/@fly/sprites');
+    expect(dockerfile).not.toContain('cp -a');
+  });
+
+  it('given the web app boundary, should statically import @fly/sprites and keep it bundled', () => {
+    expect(spritesClient).toMatch(/import\s+\{\s*SpritesClient\s*\}\s+from\s+['"]@fly\/sprites['"]/);
+    expect(nextConfig).toMatch(/serverExternalPackages:\s*\[\s*["']pg["']\s*\]/);
+    expect(nextConfig).not.toMatch(/serverExternalPackages:[\s\S]*@fly\/sprites/);
   });
 });
