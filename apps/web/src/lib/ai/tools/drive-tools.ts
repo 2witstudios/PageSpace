@@ -7,7 +7,7 @@ import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive } from '@pagespace/lib/services/drive-service';
+import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -222,6 +222,9 @@ export const driveTools = {
           slug: drives.slug,
           drivePrompt: drives.drivePrompt,
         });
+
+        // Auto-allocate a globally-unique publish subdomain (idempotent with drive-service).
+        await allocatePublishSubdomain(newDrive.id, slug);
 
         // Broadcast drive creation event (only creator receives for new drives)
         await broadcastDriveEvent(

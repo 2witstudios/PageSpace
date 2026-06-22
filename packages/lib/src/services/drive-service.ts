@@ -8,6 +8,7 @@
 import { db } from '@pagespace/db/db';
 import { eq, ne, and, not, inArray, isNotNull, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
+import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
 
@@ -176,6 +177,10 @@ export async function createDrive(
       updatedAt: new Date(),
     })
     .returning();
+
+  // Auto-allocate a globally-unique publish subdomain so the drive is addressable
+  // at <sub>.pagespace.site from creation (not lazily, on first publish).
+  await allocatePublishSubdomain(newDrive.id, slug);
 
   return {
     ...newDrive,
@@ -471,4 +476,44 @@ export async function updateDriveLastAccessed(userId: string, driveId: string): 
       eq(driveMembers.userId, userId),
       eq(driveMembers.driveId, driveId)
     ));
+}
+
+// ============================================================================
+// Publish subdomain allocation
+// ============================================================================
+
+/** Reused Drizzle transaction type (works inside `db.transaction` or with the root `db`). */
+type DbOrTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Allocate a globally-unique `publishSubdomain` for a drive and write it to the DB.
+ *
+ * Returns the allocated subdomain. Race-safe: re-reads taken subdomains and
+ * retries with an advanced suffix on a unique-constraint conflict. Works inside a
+ * transaction (pass `tx`) or against the root `db`.
+ */
+export async function allocatePublishSubdomain(
+  driveId: string,
+  base: string,
+  tx?: DbOrTx
+): Promise<string> {
+  const queryable = tx ?? db;
+  return allocateUniqueSubdomainWithRetry({
+    base,
+    fetchTaken: async () => {
+      const rows: Array<{ subdomain: string | null }> = await queryable
+        .select({ subdomain: drives.publishSubdomain })
+        .from(drives)
+        .where(isNotNull(drives.publishSubdomain));
+      return rows
+        .map((r) => r.subdomain)
+        .filter((s): s is string => typeof s === 'string');
+    },
+    attempt: async (candidate) => {
+      await queryable
+        .update(drives)
+        .set({ publishSubdomain: candidate })
+        .where(eq(drives.id, driveId));
+    },
+  });
 }

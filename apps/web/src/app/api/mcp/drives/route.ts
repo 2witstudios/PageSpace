@@ -4,6 +4,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { z } from 'zod/v4';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
+import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -52,6 +53,9 @@ export async function POST(req: NextRequest) {
       ownerId: userId,
       updatedAt: new Date(),
     }).returning();
+
+    // Auto-allocate a globally-unique publish subdomain (idempotent with drive-service).
+    await allocatePublishSubdomain(newDrive.id, slug);
 
     // Broadcast drive creation event (only creator receives for new drives)
     await broadcastDriveEvent(
