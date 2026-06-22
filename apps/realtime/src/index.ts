@@ -10,7 +10,18 @@ import { eq, gt, and, or } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
 import { socketTokens, users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
-import { pages } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/session-manager';
+import { acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import { createSpritesSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { acquireCodeExecutionSlot, releaseCodeExecutionSlot, chargeCodeExecutionBudget } from '@pagespace/lib/services/sandbox/quota';
+import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { buildTerminalHandlers, type CheckAuthResult, type SocketLike } from './terminal/terminal-handler';
+import { createTerminalSessionMap } from './terminal/terminal-session-map';
+import { openPtyShell } from './terminal/sprites-shell';
+import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import {
   validatePageId,
   validateDriveId,
@@ -26,6 +37,98 @@ import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 
 dotenv.config({ path: '../../.env' });
+
+const terminalSessionMap = createTerminalSessionMap();
+
+// Cache the DB terminal session store promise at module level (created once, not per-connection).
+const dbTerminalSessionStorePromise = createDbTerminalSessionStore();
+
+async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageId: string }): Promise<CheckAuthResult> {
+  const [pageRow] = await db
+    .select({ driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, pageId))
+    .limit(1);
+  if (!pageRow) {
+    loggers.realtime.warn('Terminal auth denied', { reason: 'page_not_found', userId, pageId });
+    return { ok: false, reason: 'page_not_found' };
+  }
+  const { driveId } = pageRow;
+
+  const access = await getUserAccessLevel(userId, pageId);
+  if (!access?.canEdit) {
+    loggers.realtime.warn('Terminal auth denied', { reason: 'no_edit_access', userId, pageId });
+    return { ok: false, reason: 'no_edit_access' };
+  }
+
+  const codeAuth = await canRunCode({ userId, driveId, requestOrigin: 'user' });
+  if (!codeAuth.ok) {
+    loggers.realtime.warn('Terminal auth denied', { reason: codeAuth.reason, userId, pageId });
+    return { ok: false, reason: codeAuth.reason };
+  }
+
+  const [driveRow, userRow] = await Promise.all([
+    db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1).then((r) => r[0]),
+    db.select({ subscriptionTier: users.subscriptionTier, email: users.email }).from(users).where(eq(users.id, userId)).limit(1).then((r) => r[0]),
+  ]);
+
+  if (!driveRow) {
+    loggers.realtime.warn('Terminal auth denied', { reason: 'drive_not_found', userId, pageId });
+    return { ok: false, reason: 'drive_not_found' };
+  }
+  const tenantId = driveRow.ownerId;
+  const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
+  const actorEmail = userRow?.email ?? '';
+
+  // Acquire a concurrency slot; deny if the user is at their per-tier limit.
+  const slotAcquired = acquireCodeExecutionSlot({ userId, tier });
+  if (!slotAcquired) {
+    loggers.realtime.warn('Terminal auth denied', { reason: 'concurrency_limit', userId, pageId });
+    return { ok: false, reason: 'concurrency_limit' };
+  }
+  const releaseSlot = () => releaseCodeExecutionSlot({ userId });
+
+  const [store, sdk] = await Promise.all([dbTerminalSessionStorePromise, getRealtimeSpritesSdk()]);
+  const client = createSpritesSandboxClient({ sdk });
+
+  const sandboxResult = await acquireTerminalSandbox({
+    pageId,
+    driveId,
+    tenantId,
+    userId,
+    canRun: true,
+    deps: { store, client, now: () => new Date(), secret: getSandboxSessionSecret() },
+  });
+
+  if (!sandboxResult.ok) {
+    releaseSlot();
+    loggers.realtime.warn('Terminal auth denied', { reason: sandboxResult.reason, userId, pageId });
+    return { ok: false, reason: sandboxResult.reason };
+  }
+
+  const sprite = await sdk.getSprite(sandboxResult.sandboxId);
+  const sandboxId = sandboxResult.sandboxId;
+
+  // Write code execution audit record (PTY session open).
+  writeCodeExecutionAudit({
+    input: {
+      userId,
+      actorEmail,
+      driveId,
+      requestOrigin: 'user',
+      profile: 'pty',
+      code: '[PTY session opened]',
+      exitCode: null,
+      durationMs: 0,
+      timestamp: new Date(),
+    },
+  }).catch(() => {});
+
+  // Charge the sliding-window budget fire-and-forget after successful sandbox acquire.
+  chargeCodeExecutionBudget({ userId, driveId, tenantId }).catch(() => {});
+
+  return { ok: true, sandboxId, sprite, releaseSlot };
+}
 
 /**
  * Validate a short-lived socket token (ps_sock_* format).
@@ -893,7 +996,31 @@ io.on('connection', (socket: AuthSocket) => {
     pageIdExtractor: (payload: unknown) => (payload as { pageId?: string })?.pageId,
   }));
 
+  // Terminal PTY handlers
+  const terminalHandlers = buildTerminalHandlers({
+    sessionMap: terminalSessionMap,
+    openShell: openPtyShell,
+    checkAuth: makeTerminalCheckAuth,
+    socket: socket as unknown as SocketLike,
+  });
+
+  socket.on('terminal:connect', (payload) => {
+    terminalHandlers.onConnect(payload).then(() => {
+      const session = terminalSessionMap.get(socket.id);
+      if (session) {
+        loggers.realtime.info('Terminal session opened', { userId: user?.id, socketId: socket.id, sandboxId: session.sandboxId });
+      }
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'Internal error';
+      socket.emit('terminal:error', { message: msg });
+    });
+  });
+  socket.on('terminal:input', (payload) => terminalHandlers.onInput(payload));
+  socket.on('terminal:resize', (payload) => terminalHandlers.onResize(payload));
+  socket.on('terminal:disconnect', () => terminalHandlers.onDisconnect());
+
   socket.on('disconnect', (reason) => {
+    terminalHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);
     for (const { pageId, driveId } of affectedPages) {

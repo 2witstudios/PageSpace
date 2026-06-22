@@ -84,32 +84,6 @@ const nextConfig: NextConfig = {
         })
       );
 
-      // @gridland/web requires bun:ffi at build time — alias to its shipped browser shims.
-      const gridlandShims = path.join(__dirname, "node_modules/@gridland/web/src/shims");
-      const bunFfiShim = path.join(gridlandShims, "bun-ffi.ts");
-      config.resolve.alias = {
-        ...config.resolve.alias,
-        "bun:ffi": bunFfiShim,
-        "bun-ffi-structs": path.join(gridlandShims, "bun-ffi-structs.ts"),
-        bun: bunFfiShim,
-      };
-
-      // @gridland/web's dist ships a module-local `var process = { env: ... }`
-      // that omits `nextTick`, yet its scroll-box calls `process.nextTick(...)`
-      // to defer a render request out of the current pass. In the browser that
-      // throws `TypeError: B.nextTick is not a function`, breaking the whole
-      // app on any page rendering a terminal. Patch the dist at build time to
-      // attach a working `nextTick` (backed by queueMicrotask) to that object.
-      // Targeted to gridland's bundle only; the guard makes it a no-op if the
-      // upstream shape changes.
-      config.module = config.module ?? {};
-      config.module.rules = [
-        ...(config.module.rules ?? []),
-        {
-          test: /node_modules\/@gridland\/web\/dist\/[^/]+\.js$/,
-          loader: path.join(__dirname, "webpack-loaders", "gridland-process-nexttick.cjs"),
-        },
-      ];
     }
 
     return config;

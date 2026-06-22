@@ -1,236 +1,31 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import '@xterm/xterm/css/xterm.css';
+import React, { useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { useDocument } from '@/hooks/useDocument';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { useSocket } from '@/hooks/useSocket';
-import { PageEventPayload } from '@/lib/websocket';
-import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { useEditingStore } from '@/stores/useEditingStore';
-import { useTheme } from 'next-themes';
-import type { TerminalSession } from './types';
+import { toast } from 'sonner';
 
 interface TerminalViewProps {
   pageId: string;
 }
 
-function parseSession(content: string): TerminalSession {
-  try {
-    const parsed = JSON.parse(content);
-    return { history: Array.isArray(parsed.history) ? parsed.history : [] };
-  } catch {
-    return { history: [] };
-  }
-}
-
-function serializeSession(session: TerminalSession): string {
-  return JSON.stringify(session);
-}
-
-const GridlandTerminal = dynamic(
-  () => import('./GridlandTerminal'),
-  { ssr: false }
-);
+const XtermTerminal = dynamic(() => import('./XtermTerminal'), { ssr: false });
 
 const TerminalView = ({ pageId }: TerminalViewProps) => {
-  const [isReadOnly, setIsReadOnly] = useState(false);
-  const [isExecuting, setIsExecuting] = useState(false);
-  const [session, setSession] = useState<TerminalSession>({ history: [] });
-  const isDirtyRef = useRef(false);
+  const [connected, setConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const socket = useSocket();
   const { user } = useAuth();
-  const { resolvedTheme } = useTheme();
   const isAdmin = user?.role === 'admin';
 
-  const {
-    document: documentState,
-    isLoading,
-    initializeAndActivate,
-    updateContent,
-    updateContentFromServer,
-    saveWithDebounce,
-    forceSave,
-  } = useDocument(pageId);
-
-  const forceSaveRef = useRef(forceSave);
-  useEffect(() => {
-    forceSaveRef.current = forceSave;
-  }, [forceSave]);
-
-  // Initialize document when component mounts or pageId changes
-  useEffect(() => {
-    initializeAndActivate();
-  }, [pageId, initializeAndActivate]);
-
-  // Sync document content to local session state (skip when locally dirty)
-  useEffect(() => {
-    if (documentState?.content && !documentState.isDirty) {
-      setSession(parseSession(documentState.content));
-    }
-  }, [documentState?.content, documentState?.isDirty]);
-
-  // Register editing state when document is dirty
-  useEffect(() => {
-    const componentId = `terminal-${pageId}`;
-    if (documentState?.isDirty && !isReadOnly) {
-      useEditingStore.getState().startEditing(componentId, 'document', {
-        pageId,
-        componentName: 'TerminalView',
-      });
-    } else {
-      useEditingStore.getState().endEditing(componentId);
-    }
-    return () => {
-      useEditingStore.getState().endEditing(componentId);
-    };
-  }, [documentState?.isDirty, pageId, isReadOnly]);
-
-  // Check user permissions
-  useEffect(() => {
-    if (!user?.id) return;
-    const controller = new AbortController();
-    fetchWithAuth(`/api/pages/${pageId}/permissions/check`, { signal: controller.signal })
-      .then(async (response) => {
-        if (response.ok) {
-          const permissions = await response.json();
-          setIsReadOnly(!permissions.canEdit);
-        }
-      })
-      .catch((err) => {
-        if (err.name !== 'AbortError') console.error('Failed to check permissions:', err);
-      });
-    return () => controller.abort();
-  }, [user?.id, pageId]);
-
-  // Keep a ref to latest documentState to avoid stale closures in socket handler
-  const documentStateRef = useRef(documentState);
-  useEffect(() => {
-    documentStateRef.current = documentState;
-  }, [documentState]);
-
-  // Listen for content updates from other sources
-  useEffect(() => {
-    if (!socket) return;
-    const handleContentUpdate = async (eventData: PageEventPayload) => {
-      if (eventData.socketId && eventData.socketId === socket.id) return;
-      if (eventData.pageId === pageId) {
-        try {
-          const response = await fetchWithAuth(`/api/pages/${pageId}`);
-          if (response.ok) {
-            const updatedPage = await response.json();
-            const currentDoc = documentStateRef.current;
-            if (updatedPage.content !== currentDoc?.content && !currentDoc?.isDirty) {
-              updateContentFromServer(updatedPage.content, updatedPage.revision);
-            }
-          }
-        } catch (error) {
-          console.error('Failed to fetch updated content:', error);
-        }
-      }
-    };
-    socket.on('page:content-updated', handleContentUpdate);
-    return () => {
-      socket.off('page:content-updated', handleContentUpdate);
-    };
-  }, [socket, pageId, updateContentFromServer]);
-
-  // Handle command submission — gated on document initialization
-  const handleCommand = useCallback(async (command: string) => {
-    if (!documentState) { toast.error('Terminal is still loading'); return; }
-    if (!isAdmin) { toast.error('Terminal access requires administrator privileges'); return; }
-    if (isReadOnly) { toast.error('You do not have permission to edit this page'); return; }
-
-    setIsExecuting(true);
-    let output: string;
-    try {
-      const response = await fetchWithAuth(`/api/pages/${pageId}/terminal/execute`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command }),
-      });
-      if (response.ok) {
-        const data = await response.json() as { output: string };
-        output = data.output ?? '';
-      } else {
-        const data = await response.json().catch(() => ({} as { error?: string }));
-        switch (response.status) {
-          case 401: output = 'Session expired — please reload'; break;
-          case 403: output = 'Permission denied'; break;
-          case 429: output = 'Quota exceeded'; break;
-          case 503: output = 'Code execution disabled'; break;
-          default:  output = `Error ${response.status}: ${data.error ?? (response.statusText || 'Unknown error')}`; break;
-        }
-      }
-    } catch (err) {
-      output = `Error: ${err instanceof Error ? err.message : 'Network error'}`;
-    } finally {
-      setIsExecuting(false);
-    }
-
-    const entry = { command, output, timestamp: Date.now() };
-    // Functional form avoids stale closure on session.history across concurrent renders.
-    setSession(prev => {
-      const updated: TerminalSession = { history: [...prev.history, entry] };
-      const serialized = serializeSession(updated);
-      updateContent(serialized);
-      saveWithDebounce(serialized);
-      return updated;
-    });
-  }, [isAdmin, isReadOnly, documentState, pageId, updateContent, saveWithDebounce]);
-
-  // Handle clearing the terminal
-  const handleClear = useCallback(() => {
-    if (isReadOnly || !documentState) return;
-    const updated: TerminalSession = { history: [] };
-    setSession(updated);
-    const serialized = serializeSession(updated);
-    updateContent(serialized);
-    saveWithDebounce(serialized);
-  }, [isReadOnly, documentState, updateContent, saveWithDebounce]);
-
-  // Track isDirty in ref
-  useEffect(() => {
-    isDirtyRef.current = documentState?.isDirty || false;
-  }, [documentState?.isDirty]);
-
-  // Cleanup on unmount - auto-save
-  useEffect(() => {
-    return () => {
-      if (isDirtyRef.current) {
-        forceSaveRef.current().catch(console.error);
-      }
-    };
+  const handleReady = useCallback(() => setConnected(true), []);
+  const handleError = useCallback((message: string) => {
+    setError(message);
+    toast.error(`Terminal error: ${message}`);
   }, []);
-
-  // Ctrl+S to save
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        forceSaveRef.current().catch(console.error);
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  // Auto-save on window blur
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const handleBlur = () => {
-      if (isDirtyRef.current) {
-        forceSaveRef.current().catch(console.error);
-      }
-    };
-    window.addEventListener('blur', handleBlur);
-    return () => window.removeEventListener('blur', handleBlur);
-  }, []);
-
-  const isDark = resolvedTheme === 'dark';
 
   return (
     <motion.div
@@ -238,7 +33,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.2 }}
-      className="h-full flex flex-col relative"
+      className="h-full flex flex-col relative bg-black"
     >
       {!isAdmin && (
         <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2">
@@ -248,39 +43,29 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
         </div>
       )}
 
-      {isAdmin && isReadOnly && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2">
-          <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
-            You don&apos;t have permission to edit this page
-          </p>
-        </div>
-      )}
-
-      <div className="flex-1 min-h-0">
-        <GridlandTerminal
-          session={session}
-          onCommand={handleCommand}
-          onClear={handleClear}
-          isDark={isDark}
-          isReadOnly={!isAdmin || isReadOnly || isLoading || !documentState || isExecuting}
-        />
-      </div>
-
-      <AnimatePresence>
-        {isLoading && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center"
-          >
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm text-muted-foreground">Loading terminal...</span>
-            </div>
-          </motion.div>
+      <div className="flex-1 min-h-0 relative">
+        {socket && isAdmin && (
+          <XtermTerminal
+            socket={socket}
+            pageId={pageId}
+            onReady={handleReady}
+            onError={handleError}
+          />
         )}
-      </AnimatePresence>
+
+        {isAdmin && !connected && (
+          <div className="absolute inset-0 bg-black flex items-center justify-center">
+            {error ? (
+              <span className="text-sm text-red-400">{error}</span>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-green-400">Connecting to shell...</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </motion.div>
   );
 };
