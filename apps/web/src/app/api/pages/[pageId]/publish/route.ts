@@ -17,6 +17,8 @@ import { rewriteCanvasAssets } from '@/lib/canvas/asset-pipeline';
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 const PUBLISH_HOST = 'pagespace.site';
+const FAVICON_BASE_URL = 'https://pagespace.ai';
+const DEFAULT_OG_IMAGE_URL = 'https://pagespace.ai/og-image.png';
 
 const publishSchema = z.object({
   subdomain: z.string().optional(),
@@ -199,7 +201,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     const { html: rewrittenHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId, db });
     const assetBaseUrl = getPublishAssetBaseUrl();
-    const html = renderPublishedPage({ html: rewrittenHtml, title: page.title ?? undefined, assetBaseUrl });
+    const publishedUrl = `https://${subdomain}.${PUBLISH_HOST}/${path}`;
+    const html = renderPublishedPage({
+      html: rewrittenHtml,
+      title: page.title ?? undefined,
+      assetBaseUrl,
+      faviconBaseUrl: FAVICON_BASE_URL,
+      pageUrl: publishedUrl,
+      ogImageUrl: DEFAULT_OG_IMAGE_URL,
+    });
     const key = buildPublishedKey(subdomain, path);
 
     // Capture the artifact this page currently points at, so we can clean it up

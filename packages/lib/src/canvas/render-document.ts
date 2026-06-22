@@ -32,6 +32,25 @@ export interface RenderCanvasDocumentInput {
    */
   baseTarget?: '_blank' | '_self' | '_parent' | '_top';
   allowedAssetHosts?: string[];
+  /**
+   * Base URL for favicon assets (e.g. `https://pagespace.ai`). When provided,
+   * standard favicon `<link>` tags are injected into `<head>`. Omit for in-app
+   * iframe rendering where favicons are irrelevant.
+   */
+  faviconBaseUrl?: string;
+  /**
+   * Canonical public URL of this published page (e.g. `https://acme.pagespace.site/my-page`).
+   * When provided, Open Graph `<meta>` tags are injected into `<head>` so link
+   * unfurls on Slack, Discord, iMessage etc. render correctly. Omit for in-app
+   * iframe rendering.
+   */
+  pageUrl?: string;
+  /**
+   * Absolute URL of the OG social preview image (min 1200×630). Only emitted
+   * when `pageUrl` is also set. Omit to suppress `og:image` tags entirely
+   * (caller decides whether to use a default or skip).
+   */
+  ogImageUrl?: string;
 }
 
 /**
@@ -104,11 +123,19 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, pageUrl, ogImageUrl } = input;
 
   const { css, body } = extractAndSanitizeStyles(html ?? '', allowedAssetHosts);
   const safeTitle = escapeHtml(title && title.trim() ? title : 'Untitled');
   const baseTag = baseTarget ? `<base target="${baseTarget}">` : '';
+
+  const faviconTags = faviconBaseUrl
+    ? buildFaviconTags(faviconBaseUrl)
+    : '';
+
+  const ogTags = pageUrl
+    ? buildOgTags({ title: safeTitle, pageUrl, ogImageUrl })
+    : '';
 
   return (
     '<!doctype html><html><head>' +
@@ -116,10 +143,37 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
     baseTag +
     `<title>${safeTitle}</title>` +
+    faviconTags +
+    ogTags +
     `<meta http-equiv="Content-Security-Policy" content="${BASELINE_CSP}">` +
     `<style>${BASELINE_RESET}${css}</style>` +
     '</head><body>' +
     body +
     '</body></html>'
+  );
+}
+
+function buildFaviconTags(baseUrl: string): string {
+  const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+  return (
+    `<link rel="icon" type="image/x-icon" href="${base}/favicon.ico">` +
+    `<link rel="icon" type="image/png" sizes="32x32" href="${base}/favicon-32x32.png">` +
+    `<link rel="apple-touch-icon" sizes="180x180" href="${base}/apple-touch-icon.png">`
+  );
+}
+
+function buildOgTags(params: { title: string; pageUrl: string; ogImageUrl?: string }): string {
+  const { title, pageUrl, ogImageUrl } = params;
+  const imageTags = ogImageUrl
+    ? `<meta property="og:image" content="${ogImageUrl}">` +
+      `<meta property="og:image:width" content="1200">` +
+      `<meta property="og:image:height" content="630">`
+    : '';
+  return (
+    `<meta property="og:title" content="${title}">` +
+    `<meta property="og:type" content="website">` +
+    `<meta property="og:url" content="${pageUrl}">` +
+    `<meta property="og:site_name" content="PageSpace">` +
+    imageTags
   );
 }

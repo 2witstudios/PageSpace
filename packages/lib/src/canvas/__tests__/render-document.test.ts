@@ -125,6 +125,110 @@ describe('renderCanvasDocument', () => {
   });
 });
 
+describe('renderCanvasDocument — favicon', () => {
+  it('given faviconBaseUrl, should include favicon.ico link in <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', faviconBaseUrl: 'https://pagespace.ai' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<link rel="icon" type="image/x-icon" href="https://pagespace.ai/favicon.ico"');
+  });
+
+  it('given faviconBaseUrl, should include 32x32 PNG favicon in <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', faviconBaseUrl: 'https://pagespace.ai' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<link rel="icon" type="image/png" sizes="32x32" href="https://pagespace.ai/favicon-32x32.png"');
+  });
+
+  it('given faviconBaseUrl, should include apple-touch-icon in <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', faviconBaseUrl: 'https://pagespace.ai' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<link rel="apple-touch-icon" sizes="180x180" href="https://pagespace.ai/apple-touch-icon.png"');
+  });
+
+  it('given no faviconBaseUrl, should emit no favicon link tags', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>' });
+    expect(out).not.toContain('rel="icon"');
+    expect(out).not.toContain('rel="apple-touch-icon"');
+  });
+
+  it('given faviconBaseUrl with trailing slash, should not produce double slash in href', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', faviconBaseUrl: 'https://pagespace.ai/' });
+    expect(out).not.toContain('//favicon.ico');
+    expect(out).toContain('href="https://pagespace.ai/favicon.ico"');
+  });
+
+  it('given faviconBaseUrl, favicon links must appear inside <head> not <body>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', faviconBaseUrl: 'https://pagespace.ai' });
+    const bodyStart = out.indexOf('<body>');
+    const faviconIdx = out.indexOf('rel="icon"');
+    expect(faviconIdx).toBeGreaterThanOrEqual(0);
+    expect(faviconIdx).toBeLessThan(bodyStart);
+  });
+});
+
+describe('renderCanvasDocument — OG meta tags', () => {
+  it('given pageUrl, should emit og:title in <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', title: 'My Page', pageUrl: 'https://acme.pagespace.site/my-page' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta property="og:title" content="My Page"');
+  });
+
+  it('given pageUrl, should emit og:type="website" in <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://acme.pagespace.site/my-page' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta property="og:type" content="website"');
+  });
+
+  it('given pageUrl, should emit og:url set to the exact pageUrl', () => {
+    const url = 'https://acme.pagespace.site/my-page';
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: url });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain(`<meta property="og:url" content="${url}"`);
+  });
+
+  it('given pageUrl, should emit og:site_name="PageSpace"', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://acme.pagespace.site/my-page' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta property="og:site_name" content="PageSpace"');
+  });
+
+  it('given pageUrl + ogImageUrl, should emit og:image, og:image:width, og:image:height', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      pageUrl: 'https://acme.pagespace.site/my-page',
+      ogImageUrl: 'https://pagespace.ai/og-image.png',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta property="og:image" content="https://pagespace.ai/og-image.png"');
+    expect(head).toContain('<meta property="og:image:width" content="1200"');
+    expect(head).toContain('<meta property="og:image:height" content="630"');
+  });
+
+  it('given pageUrl but no ogImageUrl, should omit og:image tags', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://acme.pagespace.site/my-page' });
+    expect(out).not.toContain('og:image');
+  });
+
+  it('given no pageUrl, should emit no OG tags at all', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', title: 'My Page' });
+    expect(out).not.toContain('og:');
+  });
+
+  it('given a title with HTML special chars, should HTML-escape the og:title content', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', title: '<b>bold & bright</b>', pageUrl: 'https://acme.pagespace.site/p' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('content="&lt;b&gt;bold &amp; bright&lt;/b&gt;"');
+    expect(head).not.toContain('content="<b>');
+  });
+
+  it('given pageUrl, OG meta tags must appear inside <head> not <body>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://acme.pagespace.site/my-page' });
+    const bodyStart = out.indexOf('<body>');
+    const ogIdx = out.indexOf('og:title');
+    expect(ogIdx).toBeGreaterThanOrEqual(0);
+    expect(ogIdx).toBeLessThan(bodyStart);
+  });
+});
+
 describe('renderCanvasDocument — allowedAssetHosts', () => {
   it('given allowedAssetHosts containing the CDN host, should preserve that host in CSS url()', () => {
     const out = renderCanvasDocument({
