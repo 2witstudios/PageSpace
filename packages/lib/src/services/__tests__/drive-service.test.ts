@@ -51,6 +51,9 @@ vi.mock('@pagespace/db/operators', () => ({
 
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
+
+// Drizzle transaction callback receives a tx whose type is the inner parameter of db.transaction.
+type MockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 import {
   listAccessibleDrives,
   createDrive,
@@ -228,7 +231,7 @@ describe('createDrive', () => {
     const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
     vi.mocked(db.select).mockReturnValue({ from: vi.fn().mockReturnValue({ where: whereMock }) } as unknown as ReturnType<typeof db.select>);
     // createDrive wraps insert + allocation in a transaction; proxy tx → db so existing mocks apply.
-    vi.mocked(db.transaction).mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(db));
+    vi.mocked(db.transaction).mockImplementation(async (cb: (tx: MockTx) => Promise<unknown>) => cb(db as unknown as MockTx));
 
     const result = await createDrive('user_123', { name: 'New Project' });
 
@@ -245,7 +248,7 @@ describe('createDrive', () => {
     const limitMock = vi.fn().mockResolvedValue([{ subdomain: 'test' }]);
     const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
     vi.mocked(db.select).mockReturnValue({ from: vi.fn().mockReturnValue({ where: whereMock }) } as unknown as ReturnType<typeof db.select>);
-    vi.mocked(db.transaction).mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(db));
+    vi.mocked(db.transaction).mockImplementation(async (cb: (tx: MockTx) => Promise<unknown>) => cb(db as unknown as MockTx));
 
     const result = await createDrive('user_123', { name: 'Test' });
 
