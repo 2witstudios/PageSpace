@@ -45,7 +45,6 @@
 // where Next.js handles the ESM import correctly. This module only holds the
 // pure transformation logic and type-safe wrappers; it never touches the SDK.
 import type { NetworkPolicy, SpriteConfig } from '@fly/sprites';
-import { getValidatedEnv } from '../../../config/env-validation';
 import { buildSpriteNetworkPolicy } from '../egress';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 import type {
@@ -139,17 +138,17 @@ export interface SpritesSdk {
 }
 
 /**
- * Resolve the Sprites API token from validated env. Returns '' (→ the SDK's
- * calls fail-closed with an auth error, surfaced as a provisioning failure)
- * rather than throwing at construction, so a missing token disables execution
- * instead of crashing the app.
+ * Resolve the Sprites API token. Returns '' (→ the SDK's calls fail-closed with
+ * an auth error, surfaced as a provisioning failure) when unset, so a missing
+ * token disables execution instead of crashing the app.
+ *
+ * Read directly from `process.env`, NOT via `getValidatedEnv()`: the token is
+ * resolved in the realtime service too (terminal PTY), whose lean env does not
+ * satisfy the full web schema — `getValidatedEnv()` would throw there, blanking
+ * the token and breaking terminals even when it is set.
  */
 export function resolveSpritesToken(): string {
-  try {
-    return getValidatedEnv().SPRITES_API_TOKEN ?? '';
-  } catch {
-    return '';
-  }
+  return process.env.SPRITES_API_TOKEN ?? '';
 }
 
 function toBuffer(chunk: Buffer | string): Buffer {
@@ -315,10 +314,15 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
-/** Force a hibernated VM awake via the designated exec/WebSocket path (a cheap
- *  no-op), with the same cold-start retry as a real command. Used to recover a
- *  filesystem op that hit a cold VM before retrying it. */
-async function wakeSprite(sprite: SpriteInstanceLike): Promise<void> {
+/**
+ * Force a hibernated VM awake via the designated exec/WebSocket path (a cheap
+ * no-op), with the same cold-start retry as a real command. Used to recover a
+ * filesystem op that hit a cold VM before retrying it, and by the realtime
+ * terminal path to wake a resumed Sprite BEFORE opening the interactive PTY
+ * (`openPtyShell`'s `bash` spawn isn't wrapped in the cold-start retry, so a
+ * dropped first wake would otherwise leave the terminal stuck connecting).
+ */
+export async function ensureSpriteAwake(sprite: SpriteInstanceLike): Promise<void> {
   await runSpawnedWithWakeRetry(
     () => sprite.spawn('sh', ['-c', ':']),
     DEFAULT_MAX_OUTPUT_BYTES,
@@ -340,7 +344,7 @@ async function fsWithWakeRetry<T>(
   try {
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   } catch {
-    await wakeSprite(sprite);
+    await ensureSpriteAwake(sprite);
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   }
 }
@@ -535,21 +539,15 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
       }
     },
 
-    async get({ sandboxId, options }) {
+    async get({ sandboxId }) {
       // Reconnect by name; a genuinely vanished Sprite (not-found) → null so the
       // lifecycle re-provisions under the same key. Other errors (auth, rate
       // limit, outage) surface rather than masquerading as a vanished session.
+      // We do NOT reapply egress here: the policy persists across hibernation
+      // (the platform's configure-once model), and a dropped first wake is
+      // recovered by runCommand's cold-start retry.
       try {
-        const sprite = await sdk.getSprite(sandboxId);
-        if (options) {
-          // Resume relock: reapply the deny-default egress policy (and warm the VM
-          // via the retrying mkdir) before hand-back, so a tightened allowlist or a
-          // recovered older VM is enforced rather than left stale. Never destroy a
-          // warm session on failure — but DO surface it (the call rejects) so no
-          // command runs without a confirmed policy.
-          await applyEgressLockdown({ sdk, sprite, options, destroyOnFailure: false });
-        }
-        return wrap(sprite);
+        return wrap(await sdk.getSprite(sandboxId));
       } catch (error) {
         if (isSpriteNotFoundError(error)) return null;
         throw error;

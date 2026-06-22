@@ -19,9 +19,9 @@ describe('planSandboxLifecycle', () => {
     expect(plan).toEqual({ action: 'create' });
   });
 
-  it('given an authorized actor with a fresh existing session (within the warm window), should resume WITHOUT a relock', () => {
+  it('given an authorized actor with a fresh existing session, should plan to resume that sandbox', () => {
     const plan = planSandboxLifecycle({ authorization: allowed, existingSession: fresh, now });
-    expect(plan).toEqual({ action: 'resume', sandboxId: 'sbx-1', relock: false });
+    expect(plan).toEqual({ action: 'resume', sandboxId: 'sbx-1' });
   });
 
   it('given an unauthorized actor with no session, should deny with the authorization reason', () => {
@@ -34,11 +34,11 @@ describe('planSandboxLifecycle', () => {
     expect(plan).toEqual({ action: 'deny', reason: 'insufficient_role' });
   });
 
-  it('given an idle (hibernated) session within the hard-expiry window but past the warm window, should resume WITH a relock — not destroy the sleeping VM', () => {
-    // `stale` is idle ~1h: past the 5-min warm window, so the egress policy is
-    // refreshed on hand-back, but well under the 24h hard-expiry, so it resumes.
+  it('given an idle (hibernated) session within the hard-expiry window, should resume — not destroy the sleeping VM', () => {
+    // `stale` is idle ~1h: well under the 24h hard-expiry, so the hibernated VM
+    // resumes (the platform wakes it on the next exec) rather than being torn down.
     const plan = planSandboxLifecycle({ authorization: allowed, existingSession: stale, now });
-    expect(plan).toEqual({ action: 'resume', sandboxId: 'sbx-1', relock: true });
+    expect(plan).toEqual({ action: 'resume', sandboxId: 'sbx-1' });
   });
 
   it('given a session abandoned past the hard-expiry ceiling, should plan to tear it down and reclaim', () => {
@@ -46,23 +46,11 @@ describe('planSandboxLifecycle', () => {
     expect(plan).toEqual({ action: 'teardown', sandboxId: 'sbx-1', reason: 'idle' });
   });
 
-  it('given a custom warm window, should relock a resume at/past it and not within it', () => {
-    const warmWindowMs = 30 * 60 * 1000; // 30 min
-    // `fresh` (1 min idle) is within the window → no relock.
-    expect(
-      planSandboxLifecycle({ authorization: allowed, existingSession: fresh, now, warmWindowMs }),
-    ).toEqual({ action: 'resume', sandboxId: 'sbx-1', relock: false });
-    // `stale` (1 h idle) is past the window → relock.
-    expect(
-      planSandboxLifecycle({ authorization: allowed, existingSession: stale, now, warmWindowMs }),
-    ).toEqual({ action: 'resume', sandboxId: 'sbx-1', relock: true });
-  });
-
   it('given a custom hard-expiry, should resume just under it and tear down at or past it', () => {
     const hardExpiryMs = 5 * 60 * 1000;
     expect(
       planSandboxLifecycle({ authorization: allowed, existingSession: fresh, now, hardExpiryMs }),
-    ).toEqual({ action: 'resume', sandboxId: 'sbx-1', relock: false });
+    ).toEqual({ action: 'resume', sandboxId: 'sbx-1' });
     expect(
       planSandboxLifecycle({ authorization: allowed, existingSession: stale, now, hardExpiryMs }),
     ).toEqual({ action: 'teardown', sandboxId: 'sbx-1', reason: 'idle' });

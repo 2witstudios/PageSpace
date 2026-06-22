@@ -214,13 +214,11 @@ export async function acquireTerminalSandbox(
     // Reconnect to a known-live (possibly hibernating) sandbox, re-provisioning
     // under the same key only if it has genuinely vanished. Shared by `resume`
     // (within the warm window) and `noop` (persistent-idle: the VM is sleeping,
-    // not gone — wake it). A terminal acquire happens once per connection (not per
-    // keystroke), so we always relock: passing `options` reapplies the egress
-    // policy AND warms the VM via the retrying exec path, so the PTY's `bash`
-    // spawn lands on an awake, locked-down VM instead of racing a cold-start drop.
-    const relockOptions = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST, caps: SANDBOX_RESOURCE_CAPS };
+    // not gone). The VM is warmed before the PTY opens by the realtime path
+    // (ensureSpriteAwake), so a hibernated terminal's `bash` spawn lands on an
+    // awake VM instead of racing a cold-start drop.
     const reconnectExisting = async (sandboxId: string): Promise<AcquireTerminalSandboxResult> => {
-      const handle = await deps.client.get({ sandboxId, options: relockOptions });
+      const handle = await deps.client.get({ sandboxId });
       if (!handle) {
         await deps.store.remove(key);
         return await provisionFreshTerminal({ key, input });
