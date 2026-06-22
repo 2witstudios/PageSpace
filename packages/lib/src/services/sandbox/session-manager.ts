@@ -40,9 +40,7 @@ export interface SandboxHandle {
  */
 export interface SandboxClient {
   getOrCreate(args: { name: string; options: SandboxCreateOptions }): Promise<SandboxHandle>;
-  /** `options` (resume relock) reapplies the egress lockdown before hand-back;
-   *  omit it for a cheap reconnect on an already-locked, still-warm VM. */
-  get(args: { sandboxId: string; options?: SandboxCreateOptions }): Promise<SandboxHandle | null>;
+  get(args: { sandboxId: string }): Promise<SandboxHandle | null>;
   stop(args: { sandboxId: string }): Promise<void>;
 }
 
@@ -218,14 +216,11 @@ export async function acquireConversationSandbox(
         return await provisionFresh({ key, input });
 
       case 'resume': {
-        // Past the warm window the VM has likely hibernated, so relock: reapply
-        // the egress policy (a tightened allowlist / recovered VM must be enforced,
-        // not left stale until hard-expiry) and warm the VM. A rapid follow-up
-        // command (within the warm window) skips the relock and reconnects cheaply.
-        const options = plan.relock
-          ? { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST, caps: SANDBOX_RESOURCE_CAPS }
-          : undefined;
-        const handle = await deps.client.get({ sandboxId: plan.sandboxId, options });
+        // Reconnect to the (possibly hibernating) VM. The egress policy persists
+        // across hibernation, so we do NOT reapply it here — the platform's
+        // "configure once" model — and a dropped first wake is recovered by the
+        // driver's per-command cold-start retry (runCommand) and fs wake-retry.
+        const handle = await deps.client.get({ sandboxId: plan.sandboxId });
         if (!handle) {
           // The recorded sandbox is gone (platform-expired/crashed). Drop the stale
           // link and provision a fresh one under the same conversation key.

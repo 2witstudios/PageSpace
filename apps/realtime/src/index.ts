@@ -14,7 +14,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/session-manager';
 import { acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
-import { createSpritesSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot, chargeCodeExecutionBudget } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -108,6 +108,15 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
 
   const sprite = await sdk.getSprite(sandboxResult.sandboxId);
   const sandboxId = sandboxResult.sandboxId;
+
+  // Wake a resumed (possibly hibernated) Sprite before opening the PTY. The
+  // interactive `bash` spawn in openPtyShell is NOT wrapped in the cold-start
+  // wake retry, so a dropped first wake would leave the terminal stuck
+  // connecting. A fresh create was just warmed by the acquire's mkdir, so only
+  // resumes need this extra wake.
+  if (sandboxResult.resumed) {
+    await ensureSpriteAwake(sprite);
+  }
 
   // Write code execution audit record (PTY session open).
   writeCodeExecutionAudit({

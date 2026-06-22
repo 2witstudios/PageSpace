@@ -315,10 +315,15 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
-/** Force a hibernated VM awake via the designated exec/WebSocket path (a cheap
- *  no-op), with the same cold-start retry as a real command. Used to recover a
- *  filesystem op that hit a cold VM before retrying it. */
-async function wakeSprite(sprite: SpriteInstanceLike): Promise<void> {
+/**
+ * Force a hibernated VM awake via the designated exec/WebSocket path (a cheap
+ * no-op), with the same cold-start retry as a real command. Used to recover a
+ * filesystem op that hit a cold VM before retrying it, and by the realtime
+ * terminal path to wake a resumed Sprite BEFORE opening the interactive PTY
+ * (`openPtyShell`'s `bash` spawn isn't wrapped in the cold-start retry, so a
+ * dropped first wake would otherwise leave the terminal stuck connecting).
+ */
+export async function ensureSpriteAwake(sprite: SpriteInstanceLike): Promise<void> {
   await runSpawnedWithWakeRetry(
     () => sprite.spawn('sh', ['-c', ':']),
     DEFAULT_MAX_OUTPUT_BYTES,
@@ -340,7 +345,7 @@ async function fsWithWakeRetry<T>(
   try {
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   } catch {
-    await wakeSprite(sprite);
+    await ensureSpriteAwake(sprite);
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   }
 }
@@ -535,21 +540,15 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
       }
     },
 
-    async get({ sandboxId, options }) {
+    async get({ sandboxId }) {
       // Reconnect by name; a genuinely vanished Sprite (not-found) → null so the
       // lifecycle re-provisions under the same key. Other errors (auth, rate
       // limit, outage) surface rather than masquerading as a vanished session.
+      // We do NOT reapply egress here: the policy persists across hibernation
+      // (the platform's configure-once model), and a dropped first wake is
+      // recovered by runCommand's cold-start retry.
       try {
-        const sprite = await sdk.getSprite(sandboxId);
-        if (options) {
-          // Resume relock: reapply the deny-default egress policy (and warm the VM
-          // via the retrying mkdir) before hand-back, so a tightened allowlist or a
-          // recovered older VM is enforced rather than left stale. Never destroy a
-          // warm session on failure — but DO surface it (the call rejects) so no
-          // command runs without a confirmed policy.
-          await applyEgressLockdown({ sdk, sprite, options, destroyOnFailure: false });
-        }
-        return wrap(sprite);
+        return wrap(await sdk.getSprite(sandboxId));
       } catch (error) {
         if (isSpriteNotFoundError(error)) return null;
         throw error;
