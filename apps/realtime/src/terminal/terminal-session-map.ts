@@ -5,6 +5,8 @@ export type TerminalSession = {
     resize(cols: number, rows: number): void;
   };
   sandboxId: string;
+  reAuthInterval?: ReturnType<typeof setInterval>;
+  releaseSlot(): void;
 };
 
 export type TerminalSessionMap = {

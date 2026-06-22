@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buildTerminalHandlers } from '../terminal-handler';
+import { buildTerminalHandlers, MAX_INPUT_BYTES } from '../terminal-handler';
 import { createTerminalSessionMap } from '../terminal-session-map';
 import type { CheckAuthFn, OpenShellFn, SocketLike } from '../terminal-handler';
 import type { PtyShell } from '../sprites-shell';
@@ -26,6 +26,7 @@ describe('buildTerminalHandlers', () => {
   let socket: ReturnType<typeof makeSocket>;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     sessionMap = createTerminalSessionMap();
     shell = makeShell();
     openShell = vi.fn().mockReturnValue(shell) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
@@ -88,6 +89,40 @@ describe('buildTerminalHandlers', () => {
       expect(firstShell.kill).toHaveBeenCalled();
       expect(sessionMap.has('sock1')).toBe(true);
     });
+
+    it('given a successful connect, should set up a re-auth interval on the session', async () => {
+      const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
+      const session = sessionMap.get('sock1');
+      expect(session?.reAuthInterval).toBeDefined();
+    });
+
+    it('given re-auth fires and checkAuth still succeeds, should not kill the shell', async () => {
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      // Advance time to trigger the re-auth interval
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.has('sock1')).toBe(true);
+    });
+
+    it('given re-auth fires and checkAuth now fails, should kill shell, remove session, and emit terminal:closed with exitCode -2', async () => {
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      // Revoke access
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(sessionMap.has('sock1')).toBe(false);
+      expect(socket.emit).toHaveBeenCalledWith('terminal:closed', { exitCode: -2 });
+    });
   });
 
   describe('onInput', () => {
@@ -103,6 +138,26 @@ describe('buildTerminalHandlers', () => {
     it('given no active session, should be a silent no-op', () => {
       const { onInput } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       expect(() => onInput({ data: 'ls\n' })).not.toThrow();
+    });
+
+    it('given data exactly at MAX_INPUT_BYTES, should call shell.write', async () => {
+      const { onConnect, onInput } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      const atLimit = 'a'.repeat(MAX_INPUT_BYTES);
+      onInput({ data: atLimit });
+
+      expect(shell.write).toHaveBeenCalledWith(atLimit);
+    });
+
+    it('given data exceeding MAX_INPUT_BYTES, should not call shell.write', async () => {
+      const { onConnect, onInput } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      const overLimit = 'a'.repeat(MAX_INPUT_BYTES + 1);
+      onInput({ data: overLimit });
+
+      expect(shell.write).not.toHaveBeenCalled();
     });
   });
 
@@ -154,6 +209,19 @@ describe('buildTerminalHandlers', () => {
     it('given no active session, should be a silent no-op', () => {
       const { onDisconnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       expect(() => onDisconnect()).not.toThrow();
+    });
+
+    it('given a connected session, should clear the re-auth interval on disconnect', async () => {
+      const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+      const { onConnect, onDisconnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      const session = sessionMap.get('sock1');
+      const storedInterval = session?.reAuthInterval;
+
+      onDisconnect();
+
+      expect(clearIntervalSpy).toHaveBeenCalledWith(storedInterval);
     });
   });
 });
