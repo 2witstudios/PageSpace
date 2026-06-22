@@ -8,7 +8,7 @@
  * cost tracks active time, not provisioned count) this bounds active compute.
  *
  * There is intentionally NO per-run daily budget: a run-count window meters tool
- * calls, not compute, and punished long agentic sessions for being productive.
+ * calls, not compute, and punishes long agentic sessions for being productive.
  * Real usage metering (sandbox-hours / active runtime) is tracked as a follow-up.
  *
  * `checkCodeExecutionQuota` is an ADVISORY preflight: it reports whether a run

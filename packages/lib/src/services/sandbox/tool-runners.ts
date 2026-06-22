@@ -9,8 +9,7 @@
  *   1. kill-switch re-check (defence in depth on top of the lifecycle's authz);
  *   2. inline command/path policy BEFORE any VM work — a blocked command never
  *      provisions a sandbox, and a blocked command is audited as an anomaly;
- *   3. quota — advisory non-incrementing preflight, then a real concurrency
- *      reservation, then the single real per-run budget charge;
+ *   3. quota — reserve a per-tier concurrency slot (the only cost ceiling here);
  *   4. `acquireConversationSandbox` (authz + lifecycle, re-authz on resume) and
  *      reconnect to the executable handle;
  *   5. run / write / read against the injected sandbox client;
@@ -20,9 +19,9 @@
  *
  * All IO — the sandbox acquire/reconnect, the quota ops, the audit writer, the
  * clock, the kill-switch read, the env builder — is injected, so the whole
- * orchestration is unit-tested with fakes and never touches the real Vercel API
- * or the database. Pure policy (`evaluateCommandPolicy`, `resolveSandboxPath`,
- * `truncateToBytes`) is called directly.
+ * orchestration is unit-tested with fakes and never touches the real sandbox
+ * driver or the database. Pure policy (`evaluateCommandPolicy`,
+ * `resolveSandboxPath`, `truncateToBytes`) is called directly.
  */
 
 import type { SubscriptionTier } from '../subscription-utils';
