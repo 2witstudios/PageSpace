@@ -494,27 +494,10 @@ const SidebarChatTab: React.FC = () => {
     { conversationId: currentConversationId || undefined, componentName: 'SidebarChatTab' }
   );
 
-  // When remote events fire (reconnect, undo from another tab, cross-tab
-  // edit/delete), GlobalChatContext increments refreshSignal. If
-  // GlobalAssistantView is not mounted (user is on a page, not the dashboard),
-  // this sidebar is responsible for re-fetching global messages.
-  const prevSidebarRefreshSignalRef = useRef(refreshSignal);
-  const globalIsInitializedRef = useRef(globalIsInitialized);
-  globalIsInitializedRef.current = globalIsInitialized;
-  useEffect(() => {
-    if (refreshSignal === prevSidebarRefreshSignalRef.current) return;
-    prevSidebarRefreshSignalRef.current = refreshSignal;
-    if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !displayIsStreaming) {
-      fetchWithAuth(`/api/ai/global/${globalConversationId}/messages`)
-        .then((res) => res.ok ? res.json() : null)
-        .then((data) => { if (data) setGlobalMessages(data.messages); })
-        .catch((err) => console.error('Sidebar refreshSignal fetch failed:', err));
-    }
-  }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, setGlobalMessages]);
-
   // Fetches the latest DB messages for the active global conversation and writes
   // them to the useChat instance via setGlobalMessages. Single writer for the
-  // global-mode server→view path; shared by the load-on-select effect and retry.
+  // global-mode server→view path; shared by the load-on-select effect, the
+  // refreshSignal handler, and the retry button.
   //
   // NOTE: prod runs multiple web instances — live tokens from a stream on another
   // instance won't be in the pending store; the persisted message still shows up
@@ -551,6 +534,23 @@ const SidebarChatTab: React.FC = () => {
         }
       });
   }, [setGlobalMessages]);
+
+  // When remote events fire (reconnect, undo from another tab, cross-tab
+  // edit/delete), GlobalChatContext increments refreshSignal. If
+  // GlobalAssistantView is not mounted (user is on a page, not the dashboard),
+  // this sidebar is responsible for re-fetching global messages.
+  // Routed through loadGlobalMessages so the stale-request guard prevents a
+  // race where a slow refreshSignal fetch overwrites a newer conversation's messages.
+  const prevSidebarRefreshSignalRef = useRef(refreshSignal);
+  const globalIsInitializedRef = useRef(globalIsInitialized);
+  globalIsInitializedRef.current = globalIsInitialized;
+  useEffect(() => {
+    if (refreshSignal === prevSidebarRefreshSignalRef.current) return;
+    prevSidebarRefreshSignalRef.current = refreshSignal;
+    if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !displayIsStreaming) {
+      loadGlobalMessages(globalConversationId);
+    }
+  }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, loadGlobalMessages]);
 
   // Load-on-select guarantee for global mode (1B).
   //
@@ -862,23 +862,24 @@ const SidebarChatTab: React.FC = () => {
   const handleUndoSuccess = useCallback(async () => {
     setUndoDialogMessageId(null);
     if (!currentConversationId) return;
-    try {
-      const url = selectedAgent
-        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
-        : `/api/ai/global/${currentConversationId}/messages`;
-      const res = await fetchWithAuth(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (selectedAgent) {
+    if (selectedAgent) {
+      // Agent mode: direct fetch (loadGlobalMessages is global-only).
+      try {
+        const res = await fetchWithAuth(
+          `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`,
+        );
+        if (res.ok) {
+          const data = await res.json();
           setMessages(data.messages);
-        } else {
-          setGlobalMessages(data.messages);
         }
+      } catch (error) {
+        console.error('Failed to refresh messages after undo:', error);
       }
-    } catch (error) {
-      console.error('Failed to refresh messages after undo:', error);
+    } else {
+      // Global mode: route through loadGlobalMessages for stale guard + pending merge.
+      loadGlobalMessages(currentConversationId);
     }
-  }, [currentConversationId, selectedAgent, setMessages, setGlobalMessages]);
+  }, [currentConversationId, selectedAgent, setMessages, loadGlobalMessages]);
 
   // ============================================
   // Computed Values for Rendering
