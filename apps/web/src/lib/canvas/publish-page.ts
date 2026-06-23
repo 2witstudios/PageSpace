@@ -14,11 +14,14 @@ import { renderPublishedPage } from './render-published';
 import {
   buildPublishedKey,
   putPublishedArtifact,
+  putPublishedSiteFile,
+  publishedArtifactExists,
   deletePublishedArtifact,
   isPublishConfigured,
   getPublishAssetBaseUrl,
 } from './published-storage';
 import { rewriteCanvasAssets, extractAndStripOgMeta } from './asset-pipeline';
+import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml } from '@pagespace/lib/canvas/site-files';
 
 export const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
@@ -290,10 +293,108 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     }
   }
 
+  // ------------------------------------------------------------------
+  // 10. Regenerate the drive's site-level files (robots / sitemap / 404)
+  // ------------------------------------------------------------------
+  // The published page is already live and the DB is committed, so a failure to
+  // refresh the crawl files must not roll back the publish — log and move on.
+  // The next publish/unpublish regenerates them.
+  await regeneratePublishedSiteFiles(driveId);
+
   // The home page's primary public URL is the subdomain root (matching the
   // canonical tag baked above); it is also reachable at its slug. Other pages
   // live only at their slug.
   return { url: isHomePage ? rootUrl : publishedUrl, subdomain, path, isHomePage };
+}
+
+/**
+ * (Re)generate the site-level files for a published drive — `robots.txt`,
+ * `sitemap.xml`, and `404.html` — and write them to storage at the subdomain
+ * root (`published/<sub>/<file>`).
+ *
+ * Call this after EVERY publish AND unpublish in the drive: the sitemap is built
+ * from the live `published_pages` rows, so regenerating on unpublish is what keeps
+ * it from advertising a route that no longer serves anything.
+ *
+ * Best-effort by contract: these files make a published drive a "real" website
+ * but are secondary to the page artifacts themselves. A failure here is logged,
+ * not thrown — the caller's publish/unpublish has already succeeded, and the next
+ * lifecycle event will rebuild the files. No-op when publishing is unconfigured
+ * or the drive has not yet been allocated a subdomain.
+ */
+export async function regeneratePublishedSiteFiles(driveId: string): Promise<void> {
+  try {
+    if (!isPublishConfigured()) return;
+
+    const drive = await db.query.drives.findFirst({
+      where: eq(drives.id, driveId),
+      columns: { name: true, publishSubdomain: true, homePageId: true },
+    });
+    const subdomain = drive?.publishSubdomain;
+    if (!subdomain) return;
+
+    const origin = `https://${subdomain}.${PUBLISH_HOST}`;
+
+    const published = await db.query.publishedPages.findMany({
+      where: eq(publishedPages.driveId, driveId),
+      columns: { pageId: true, path: true, updatedAt: true },
+    });
+
+    // The home page is canonicalised to the subdomain root (where it is
+    // mirror-served) instead of its slug, so the inventory has no duplicate for
+    // it — but ONLY when the root mirror actually exists. Setting `homePageId` is
+    // metadata-only and never writes `published/<sub>/index.html`; a page
+    // published at its slug and later made the home page has no root mirror until
+    // it is re-published as such. Advertising `/` in that case would surface a
+    // dead route and drop the live slug URL, so confirm the mirror first.
+    const homeRow = drive.homePageId
+      ? published.find((row) => row.pageId === drive.homePageId)
+      : undefined;
+    let rootMirrorExists = false;
+    if (homeRow) {
+      try {
+        rootMirrorExists = await publishedArtifactExists(buildPublishedKey(subdomain, ''));
+      } catch (err) {
+        // If we can't determine whether the mirror exists, fall back to the
+        // slug URL (which always serves) rather than risk advertising a dead
+        // root — and don't let a probe failure abort the whole regeneration.
+        loggers.api.warn('Failed to probe published home-page root mirror; using slug URL in sitemap', {
+          driveId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Build one sitemap entry per published page.
+    //
+    // NOTE: `publishCanvasPage` accepts a transient `noindex` flag that only sets
+    // the page's `<meta robots>` — it is NOT persisted to `published_pages`, so
+    // the sitemap cannot honor it yet (the page-level noindex meta still keeps it
+    // out of the index). When a persisted `noindex` column lands, filter it out
+    // HERE (e.g. `published.filter((p) => !p.noindex)`).
+    const routes = published.map((row) => ({
+      loc:
+        rootMirrorExists && row.pageId === drive.homePageId
+          ? `${origin}/`
+          : `${origin}/${row.path}`,
+      lastmod: row.updatedAt?.toISOString(),
+    }));
+
+    const sitemapXml = buildSitemapXml(routes);
+    const robotsTxt = buildRobotsTxt({ sitemapUrl: `${origin}/sitemap.xml` });
+    const notFoundHtml = buildNotFoundHtml({ siteName: drive.name ?? undefined });
+
+    await Promise.all([
+      putPublishedSiteFile({ subdomain, file: 'robots.txt', body: robotsTxt }),
+      putPublishedSiteFile({ subdomain, file: 'sitemap.xml', body: sitemapXml }),
+      putPublishedSiteFile({ subdomain, file: '404.html', body: notFoundHtml }),
+    ]);
+  } catch (err) {
+    loggers.api.warn('Failed to regenerate published site files', {
+      driveId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

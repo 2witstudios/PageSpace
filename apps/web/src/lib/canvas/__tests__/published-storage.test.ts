@@ -3,6 +3,9 @@ import { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectComm
 import {
   buildPublishedKey,
   putPublishedArtifact,
+  buildSiteFileKey,
+  putPublishedSiteFile,
+  publishedArtifactExists,
   deletePublishedArtifact,
   isPublishConfigured,
   buildAssetKey,
@@ -86,6 +89,79 @@ describe('putPublishedArtifact', () => {
       Body: '<!doctype html><html></html>',
       ContentType: 'text/html; charset=utf-8',
     });
+  });
+});
+
+describe('buildSiteFileKey', () => {
+  it('places site files at a literal key directly under the subdomain prefix', () => {
+    expect(buildSiteFileKey('acme', 'robots.txt')).toBe('published/acme/robots.txt');
+    expect(buildSiteFileKey('acme', 'sitemap.xml')).toBe('published/acme/sitemap.xml');
+    expect(buildSiteFileKey('acme', '404.html')).toBe('published/acme/404.html');
+  });
+});
+
+describe('putPublishedSiteFile', () => {
+  beforeEach(() => {
+    send.mockReset();
+    send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('writes robots.txt as text/plain at the subdomain-root key', async () => {
+    const result = await putPublishedSiteFile({ subdomain: 'acme', file: 'robots.txt', body: 'User-agent: *' });
+
+    expect(result).toEqual({ key: 'published/acme/robots.txt' });
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(PutObjectCommand);
+    expect(command.input).toEqual({
+      Bucket: 'test-bucket',
+      Key: 'published/acme/robots.txt',
+      Body: 'User-agent: *',
+      ContentType: 'text/plain; charset=utf-8',
+    });
+  });
+
+  it('writes sitemap.xml as application/xml', async () => {
+    await putPublishedSiteFile({ subdomain: 'acme', file: 'sitemap.xml', body: '<urlset/>' });
+    expect(send.mock.calls[0][0].input.ContentType).toBe('application/xml; charset=utf-8');
+  });
+
+  it('writes 404.html as text/html', async () => {
+    await putPublishedSiteFile({ subdomain: 'acme', file: '404.html', body: '<!doctype html>' });
+    expect(send.mock.calls[0][0].input.ContentType).toBe('text/html; charset=utf-8');
+  });
+});
+
+describe('publishedArtifactExists', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('returns true and sends a HeadObjectCommand when the object is present', async () => {
+    send.mockResolvedValue({});
+
+    const exists = await publishedArtifactExists('published/acme/index.html');
+
+    expect(exists).toBe(true);
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(HeadObjectCommand);
+    expect(command.input).toEqual({ Bucket: 'test-bucket', Key: 'published/acme/index.html' });
+  });
+
+  it('returns false on a NotFound error', async () => {
+    send.mockRejectedValue(Object.assign(new Error('not found'), { name: 'NotFound' }));
+    await expect(publishedArtifactExists('published/acme/index.html')).resolves.toBe(false);
+  });
+
+  it('returns false on a 404 status', async () => {
+    send.mockRejectedValue(Object.assign(new Error('nope'), { $metadata: { httpStatusCode: 404 } }));
+    await expect(publishedArtifactExists('published/acme/index.html')).resolves.toBe(false);
+  });
+
+  it('propagates non-404 errors rather than reporting a false negative', async () => {
+    send.mockRejectedValue(Object.assign(new Error('access denied'), { $metadata: { httpStatusCode: 403 } }));
+    await expect(publishedArtifactExists('published/acme/index.html')).rejects.toThrow('access denied');
   });
 });
 

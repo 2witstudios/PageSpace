@@ -6,7 +6,7 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       pages: { findFirst: vi.fn() },
       drives: { findFirst: vi.fn() },
-      publishedPages: { findFirst: vi.fn() },
+      publishedPages: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
     },
     insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) })),
@@ -32,9 +32,20 @@ vi.mock('@pagespace/db/schema/published-pages', () => ({
 vi.mock('../published-storage', () => ({
   buildPublishedKey: vi.fn((sub: string, path: string) => `published/${sub}/${path || 'index'}.html`),
   putPublishedArtifact: vi.fn().mockResolvedValue(undefined),
+  putPublishedSiteFile: vi.fn().mockResolvedValue(undefined),
+  publishedArtifactExists: vi.fn().mockResolvedValue(true),
   deletePublishedArtifact: vi.fn().mockResolvedValue(undefined),
   isPublishConfigured: vi.fn().mockReturnValue(true),
   getPublishAssetBaseUrl: vi.fn().mockReturnValue('https://cdn.example.com'),
+}));
+
+// Pure builders run for real elsewhere (canvas/site-files.test.ts). Here we
+// only assert the wiring — that the lifecycle writes all three site files — so
+// stub the builders with deterministic stand-ins.
+vi.mock('@pagespace/lib/canvas/site-files', () => ({
+  buildRobotsTxt: vi.fn(({ sitemapUrl }: { sitemapUrl: string }) => `robots:${sitemapUrl}`),
+  buildSitemapXml: vi.fn((routes: { loc: string }[]) => `sitemap:${routes.map((r) => r.loc).join(',')}`),
+  buildNotFoundHtml: vi.fn(({ siteName }: { siteName?: string }) => `404:${siteName ?? ''}`),
 }));
 
 vi.mock('../render-published', () => ({
@@ -80,8 +91,8 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { putPublishedArtifact, deletePublishedArtifact, isPublishConfigured } from '../published-storage';
-import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, PublishError } from '../publish-page';
+import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, isPublishConfigured } from '../published-storage';
+import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError } from '../publish-page';
 
 // The mocked `db` keeps the real relational-query return types, so partial test
 // fixtures are cast through `unknown` to the row shape (never `any`).
@@ -347,5 +358,135 @@ describe('clearPublishedHomeRoot', () => {
     vi.mocked(deletePublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
 
     await expect(clearPublishedHomeRoot('drive-1')).rejects.toThrow('S3 down');
+  });
+});
+
+// The mocked relational query keeps its real return types; published_pages rows
+// are cast through `unknown` to the partial-column shape (never `any`).
+type PublishedRow = Awaited<ReturnType<typeof db.query.publishedPages.findMany>>[number];
+const publishedRows = (rows: Record<string, unknown>[]) => rows as unknown as PublishedRow[];
+
+describe('publishCanvasPage site-file regeneration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isPublishConfigured).mockReturnValue(true);
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([]));
+  });
+
+  it('writes robots.txt, sitemap.xml, and 404.html after a successful publish', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', name: 'My Drive', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD', homePageId: 'page-1',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    const files = vi.mocked(putPublishedSiteFile).mock.calls.map((c) => c[0].file).sort();
+    expect(files).toEqual(['404.html', 'robots.txt', 'sitemap.xml']);
+    expect(putPublishedSiteFile).toHaveBeenCalledWith(
+      expect.objectContaining({ subdomain: 'my-drive', file: 'robots.txt' }),
+    );
+  });
+});
+
+describe('regeneratePublishedSiteFiles', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isPublishConfigured).mockReturnValue(true);
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([]));
+    vi.mocked(publishedArtifactExists).mockResolvedValue(true);
+  });
+
+  it('canonicalizes the home page to root when its root mirror exists', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: 'home-page',
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'home-page', path: 'welcome', updatedAt: new Date('2026-06-22T00:00:00.000Z') },
+      { pageId: 'about-page', path: 'about', updatedAt: new Date('2026-06-21T00:00:00.000Z') },
+    ]));
+    vi.mocked(publishedArtifactExists).mockResolvedValue(true);
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    // The sitemap stub joins each route's loc; the home page resolves to the
+    // root, the other page to its slug.
+    const sitemapCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === 'sitemap.xml');
+    expect(sitemapCall?.[0].body).toContain('https://acme.pagespace.site/');
+    expect(sitemapCall?.[0].body).toContain('https://acme.pagespace.site/about');
+    expect(sitemapCall?.[0].body).not.toContain('/welcome');
+  });
+
+  it('keeps the home page slug URL when no root mirror exists (homePageId set as metadata only)', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: 'home-page',
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'home-page', path: 'welcome', updatedAt: new Date('2026-06-22T00:00:00.000Z') },
+    ]));
+    // The page was published at its slug, then set as home page without being
+    // re-published — so published/<sub>/index.html does NOT exist.
+    vi.mocked(publishedArtifactExists).mockResolvedValue(false);
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    const sitemapCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === 'sitemap.xml');
+    // The live slug URL is advertised; the (nonexistent) root is NOT.
+    expect(sitemapCall?.[0].body).toContain('https://acme.pagespace.site/welcome');
+    expect(sitemapCall?.[0].body).not.toMatch(/acme\.pagespace\.site\/(?!welcome)/);
+  });
+
+  it('does not probe storage for the root mirror when the drive has no home page', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'about-page', path: 'about', updatedAt: new Date('2026-06-21T00:00:00.000Z') },
+    ]));
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    expect(publishedArtifactExists).not.toHaveBeenCalled();
+  });
+
+  it('regenerates the sitemap even with zero published pages (unpublish to empty)', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([]));
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    expect(putPublishedSiteFile).toHaveBeenCalledTimes(3);
+  });
+
+  it('is a no-op when publishing is not configured', async () => {
+    vi.mocked(isPublishConfigured).mockReturnValue(false);
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    expect(putPublishedSiteFile).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the drive has no subdomain', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: null, homePageId: null,
+    }));
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    expect(putPublishedSiteFile).not.toHaveBeenCalled();
+  });
+
+  it('swallows storage failures so a publish/unpublish is never rolled back by a site-file write', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: null,
+    }));
+    vi.mocked(putPublishedSiteFile).mockRejectedValue(new Error('S3 down'));
+
+    await expect(regeneratePublishedSiteFiles('drive-1')).resolves.toBeUndefined();
   });
 });
