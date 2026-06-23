@@ -3,6 +3,7 @@ import {
   runBashInSandbox,
   writeSandboxFile,
   readSandboxFile,
+  editSandboxFile,
   MAX_WRITE_BYTES,
   type SandboxActorContext,
   type SandboxRunDeps,
@@ -339,6 +340,119 @@ describe('writeSandboxFile', () => {
     expect(result).toEqual({ success: true, path: 'a/b.txt', bytesWritten: 2 });
     expect(writtenPaths[0]).toBe(`${SANDBOX_ROOT}/a/b.txt`);
     expect(slots.released).toBe(1);
+  });
+});
+
+describe('editSandboxFile', () => {
+  function makeEditDeps(fileContents: string | null) {
+    const written: Array<{ path: string; content: string }> = [];
+    const { deps, slots, audits } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          readFileToBuffer: async () => (fileContents === null ? null : Buffer.from(fileContents)),
+          writeFiles: async (files) => {
+            written.push(...files);
+          },
+        }),
+    });
+    return { deps, slots, audits, written };
+  }
+
+  it('given a unique oldString, should write the edited content and report one replacement', async () => {
+    const { deps, written, slots } = makeEditDeps('hello world');
+    const result = await editSandboxFile({
+      path: 'a.txt',
+      oldString: 'world',
+      newString: 'there',
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ success: true, path: 'a.txt', replacements: 1 });
+    expect(written[0]).toEqual({ path: `${SANDBOX_ROOT}/a.txt`, content: 'hello there' });
+    expect(slots.released).toBe(1);
+  });
+
+  it('given replaceAll, should replace every occurrence', async () => {
+    const { deps, written } = makeEditDeps('x x x');
+    const result = await editSandboxFile({
+      path: 'a.txt',
+      oldString: 'x',
+      newString: 'Y',
+      replaceAll: true,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ success: true, replacements: 3 });
+    expect(written[0].content).toBe('Y Y Y');
+  });
+
+  it('given a traversal path, should deny path_escape before provisioning and audit a blocked_command', async () => {
+    let acquired = false;
+    const { deps, audits } = makeDeps({
+      acquireSandbox: async () => {
+        acquired = true;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+      },
+    });
+    const result = await editSandboxFile({
+      path: '../../etc/passwd',
+      oldString: 'a',
+      newString: 'b',
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ success: false, reason: 'path_escape' });
+    expect(acquired).toBe(false);
+    expect(audits[0]?.anomaly).toBe('blocked_command');
+  });
+
+  it('given a missing file, should deny not_found', async () => {
+    const { deps } = makeEditDeps(null);
+    const result = await editSandboxFile({
+      path: 'nope.txt',
+      oldString: 'a',
+      newString: 'b',
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ success: false, reason: 'not_found' });
+  });
+
+  it('given an oldString that does not occur, should deny edit_no_match', async () => {
+    const { deps } = makeEditDeps('hello');
+    const result = await editSandboxFile({
+      path: 'a.txt',
+      oldString: 'zzz',
+      newString: 'b',
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ success: false, reason: 'edit_no_match' });
+  });
+
+  it('given a non-unique oldString without replaceAll, should deny edit_not_unique', async () => {
+    const { deps } = makeEditDeps('x x');
+    const result = await editSandboxFile({
+      path: 'a.txt',
+      oldString: 'x',
+      newString: 'Y',
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ success: false, reason: 'edit_not_unique' });
+  });
+
+  it('given an edit that grows the file past the write cap, should deny content_too_large', async () => {
+    const { deps } = makeEditDeps('SEED');
+    const huge = 'a'.repeat(MAX_WRITE_BYTES + 10);
+    const result = await editSandboxFile({
+      path: 'a.txt',
+      oldString: 'SEED',
+      newString: huge,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
   });
 });
 

@@ -29,6 +29,7 @@ import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy
 import { evaluateCommandPolicy } from './command-policy';
 import { truncateToBytes } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
+import { applyEdit } from './edit-file';
 import { buildSandboxEnv } from './sandbox-env';
 import { getValidatedEnv } from '../../config/env-validation';
 import type { AcquireSandboxInput, AcquireSandboxResult } from './session-manager';
@@ -117,6 +118,8 @@ export type SandboxToolDenialReason =
   | 'github_over_bash'
   | 'path_escape'
   | 'content_too_large'
+  | 'edit_no_match'
+  | 'edit_not_unique'
   | 'provision_failed'
   | 'provision_rate_limited'
   | 'execution_failed'
@@ -135,6 +138,10 @@ export type ReadFileToolResult =
   | { success: true; path: string; content: string; truncated: boolean }
   | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
 
+export type EditFileToolResult =
+  | { success: true; path: string; replacements: number }
+  | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
+
 const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
   app_admin_required: 'Code execution is currently restricted to application administrators.',
@@ -149,6 +156,8 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
     'The bash sandbox has no GitHub credentials. Use the dedicated git_*/gh_* tools for GitHub operations (e.g. git_clone, git_push, gh_pr_create) — they carry your connected GitHub auth.',
   path_escape: 'The path is invalid or escapes the sandbox root.',
   content_too_large: 'The file content is too large.',
+  edit_no_match: 'The oldString was not found in the file. Read the file and copy the exact text to replace.',
+  edit_not_unique: 'The oldString is not unique in the file. Include more surrounding context, or set replaceAll to replace every occurrence.',
   provision_failed: 'Could not provision a sandbox for this run.',
   provision_rate_limited: 'The sandbox service is busy (rate limited). Retry shortly.',
   execution_failed: 'Command execution failed or timed out.',
@@ -514,6 +523,82 @@ export async function readSandboxFile({
       durationMs,
     });
     return { success: true, path, content: text, truncated };
+  } finally {
+    session.release();
+  }
+}
+
+export async function editSandboxFile({
+  path,
+  oldString,
+  newString,
+  replaceAll,
+  ctx,
+  deps,
+}: {
+  path: string;
+  oldString: string;
+  newString: string;
+  replaceAll?: boolean;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+}): Promise<EditFileToolResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const resolved = resolveSandboxPath(path);
+  if (!resolved) {
+    await safeAudit(deps, ctx, {
+      code: `editFile ${path}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+
+  const session = await openSession(ctx, deps);
+  if (!session.ok) return fail(session.reason, session.retryAfter);
+
+  try {
+    const startedAt = deps.now();
+    let buffer: Buffer | null;
+    try {
+      buffer = await session.sandbox.readFileToBuffer({ path: resolved });
+    } catch {
+      const durationMs = deps.now().getTime() - startedAt.getTime();
+      await safeAudit(deps, ctx, { code: `editFile ${path}`, exitCode: null, durationMs, anomaly: 'nonzero_exit' });
+      return fail('execution_failed');
+    }
+    if (buffer === null) {
+      const durationMs = deps.now().getTime() - startedAt.getTime();
+      await safeAudit(deps, ctx, { code: `editFile ${path}`, exitCode: 1, durationMs, anomaly: 'nonzero_exit' });
+      return fail('not_found');
+    }
+
+    const edit = applyEdit({ content: buffer.toString('utf8'), oldString, newString, replaceAll });
+    if (!edit.ok) {
+      const durationMs = deps.now().getTime() - startedAt.getTime();
+      await safeAudit(deps, ctx, { code: `editFile ${path}`, exitCode: 1, durationMs, anomaly: 'nonzero_exit' });
+      return fail(edit.reason);
+    }
+
+    const bytes = Buffer.byteLength(edit.content, 'utf8');
+    if (bytes > MAX_WRITE_BYTES) return fail('content_too_large');
+
+    try {
+      await session.sandbox.writeFiles([{ path: resolved, content: edit.content }]);
+    } catch {
+      const durationMs = deps.now().getTime() - startedAt.getTime();
+      await safeAudit(deps, ctx, { code: `editFile ${path}`, exitCode: null, durationMs, anomaly: 'nonzero_exit' });
+      return fail('execution_failed');
+    }
+    const durationMs = deps.now().getTime() - startedAt.getTime();
+    await safeAudit(deps, ctx, {
+      code: `editFile ${path} (${edit.replacements} replaced)`,
+      exitCode: 0,
+      durationMs,
+    });
+    return { success: true, path, replacements: edit.replacements };
   } finally {
     session.release();
   }
