@@ -5,6 +5,7 @@ import {
   putPublishedArtifact,
   buildSiteFileKey,
   putPublishedSiteFile,
+  publishedArtifactExists,
   deletePublishedArtifact,
   isPublishConfigured,
   buildAssetKey,
@@ -128,6 +129,39 @@ describe('putPublishedSiteFile', () => {
   it('writes 404.html as text/html', async () => {
     await putPublishedSiteFile({ subdomain: 'acme', file: '404.html', body: '<!doctype html>' });
     expect(send.mock.calls[0][0].input.ContentType).toBe('text/html; charset=utf-8');
+  });
+});
+
+describe('publishedArtifactExists', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('returns true and sends a HeadObjectCommand when the object is present', async () => {
+    send.mockResolvedValue({});
+
+    const exists = await publishedArtifactExists('published/acme/index.html');
+
+    expect(exists).toBe(true);
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(HeadObjectCommand);
+    expect(command.input).toEqual({ Bucket: 'test-bucket', Key: 'published/acme/index.html' });
+  });
+
+  it('returns false on a NotFound error', async () => {
+    send.mockRejectedValue(Object.assign(new Error('not found'), { name: 'NotFound' }));
+    await expect(publishedArtifactExists('published/acme/index.html')).resolves.toBe(false);
+  });
+
+  it('returns false on a 404 status', async () => {
+    send.mockRejectedValue(Object.assign(new Error('nope'), { $metadata: { httpStatusCode: 404 } }));
+    await expect(publishedArtifactExists('published/acme/index.html')).resolves.toBe(false);
+  });
+
+  it('propagates non-404 errors rather than reporting a false negative', async () => {
+    send.mockRejectedValue(Object.assign(new Error('access denied'), { $metadata: { httpStatusCode: 403 } }));
+    await expect(publishedArtifactExists('published/acme/index.html')).rejects.toThrow('access denied');
   });
 });
 

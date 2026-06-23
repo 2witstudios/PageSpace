@@ -14,6 +14,7 @@ import {
   buildPublishedKey,
   putPublishedArtifact,
   putPublishedSiteFile,
+  publishedArtifactExists,
   deletePublishedArtifact,
   isPublishConfigured,
   getPublishAssetBaseUrl,
@@ -321,16 +322,39 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
       columns: { pageId: true, path: true, updatedAt: true },
     });
 
-    // Build one sitemap entry per published page. The home page is canonicalised
-    // to the subdomain root (where it is mirror-served) instead of its slug, so
-    // the inventory has no duplicate for it.
+    // The home page is canonicalised to the subdomain root (where it is
+    // mirror-served) instead of its slug, so the inventory has no duplicate for
+    // it — but ONLY when the root mirror actually exists. Setting `homePageId` is
+    // metadata-only and never writes `published/<sub>/index.html`; a page
+    // published at its slug and later made the home page has no root mirror until
+    // it is re-published as such. Advertising `/` in that case would surface a
+    // dead route and drop the live slug URL, so confirm the mirror first.
+    const homeRow = drive.homePageId
+      ? published.find((row) => row.pageId === drive.homePageId)
+      : undefined;
+    let rootMirrorExists = false;
+    if (homeRow) {
+      try {
+        rootMirrorExists = await publishedArtifactExists(buildPublishedKey(subdomain, ''));
+      } catch (err) {
+        // If we can't determine whether the mirror exists, fall back to the
+        // slug URL (which always serves) rather than risk advertising a dead
+        // root — and don't let a probe failure abort the whole regeneration.
+        loggers.api.warn('Failed to probe published home-page root mirror; using slug URL in sitemap', {
+          driveId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Build one sitemap entry per published page.
     //
     // NOTE: there is no per-page `noindex` flag yet. When one lands, filter it
     // out HERE (e.g. `published.filter((p) => !p.noindex)`) so excluded pages
     // never enter the sitemap.
     const routes = published.map((row) => ({
       loc:
-        row.pageId === drive.homePageId
+        rootMirrorExists && row.pageId === drive.homePageId
           ? `${origin}/`
           : `${origin}/${row.path}`,
       lastmod: row.updatedAt?.toISOString(),

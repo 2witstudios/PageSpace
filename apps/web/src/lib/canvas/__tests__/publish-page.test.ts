@@ -33,6 +33,7 @@ vi.mock('../published-storage', () => ({
   buildPublishedKey: vi.fn((sub: string, path: string) => `published/${sub}/${path || 'index'}.html`),
   putPublishedArtifact: vi.fn().mockResolvedValue(undefined),
   putPublishedSiteFile: vi.fn().mockResolvedValue(undefined),
+  publishedArtifactExists: vi.fn().mockResolvedValue(true),
   deletePublishedArtifact: vi.fn().mockResolvedValue(undefined),
   isPublishConfigured: vi.fn().mockReturnValue(true),
   getPublishAssetBaseUrl: vi.fn().mockReturnValue('https://cdn.example.com'),
@@ -90,7 +91,7 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { putPublishedArtifact, putPublishedSiteFile, deletePublishedArtifact, isPublishConfigured } from '../published-storage';
+import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, isPublishConfigured } from '../published-storage';
 import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError } from '../publish-page';
 
 // The mocked `db` keeps the real relational-query return types, so partial test
@@ -396,9 +397,10 @@ describe('regeneratePublishedSiteFiles', () => {
     vi.clearAllMocks();
     vi.mocked(isPublishConfigured).mockReturnValue(true);
     vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([]));
+    vi.mocked(publishedArtifactExists).mockResolvedValue(true);
   });
 
-  it('builds the sitemap from the live published_pages rows, home page canonicalized to root', async () => {
+  it('canonicalizes the home page to root when its root mirror exists', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       name: 'Acme', publishSubdomain: 'acme', homePageId: 'home-page',
     }));
@@ -406,6 +408,7 @@ describe('regeneratePublishedSiteFiles', () => {
       { pageId: 'home-page', path: 'welcome', updatedAt: new Date('2026-06-22T00:00:00.000Z') },
       { pageId: 'about-page', path: 'about', updatedAt: new Date('2026-06-21T00:00:00.000Z') },
     ]));
+    vi.mocked(publishedArtifactExists).mockResolvedValue(true);
 
     await regeneratePublishedSiteFiles('drive-1');
 
@@ -415,6 +418,38 @@ describe('regeneratePublishedSiteFiles', () => {
     expect(sitemapCall?.[0].body).toContain('https://acme.pagespace.site/');
     expect(sitemapCall?.[0].body).toContain('https://acme.pagespace.site/about');
     expect(sitemapCall?.[0].body).not.toContain('/welcome');
+  });
+
+  it('keeps the home page slug URL when no root mirror exists (homePageId set as metadata only)', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: 'home-page',
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'home-page', path: 'welcome', updatedAt: new Date('2026-06-22T00:00:00.000Z') },
+    ]));
+    // The page was published at its slug, then set as home page without being
+    // re-published — so published/<sub>/index.html does NOT exist.
+    vi.mocked(publishedArtifactExists).mockResolvedValue(false);
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    const sitemapCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === 'sitemap.xml');
+    // The live slug URL is advertised; the (nonexistent) root is NOT.
+    expect(sitemapCall?.[0].body).toContain('https://acme.pagespace.site/welcome');
+    expect(sitemapCall?.[0].body).not.toMatch(/acme\.pagespace\.site\/(?!welcome)/);
+  });
+
+  it('does not probe storage for the root mirror when the drive has no home page', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'about-page', path: 'about', updatedAt: new Date('2026-06-21T00:00:00.000Z') },
+    ]));
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    expect(publishedArtifactExists).not.toHaveBeenCalled();
   });
 
   it('regenerates the sitemap even with zero published pages (unpublish to empty)', async () => {

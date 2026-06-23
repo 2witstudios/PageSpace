@@ -203,6 +203,36 @@ export async function putPublishedSiteFile(params: {
 }
 
 /**
+ * Whether an object exists at the given key in the publish bucket.
+ *
+ * Used to decide a page's canonical sitemap URL: the home page is served at the
+ * subdomain root only once it has been deliberately published *as* the home page
+ * (which writes `published/<sub>/index.html`). Setting `homePageId` is
+ * metadata-only and does NOT create that mirror, so the sitemap must confirm the
+ * root object is really there before advertising `/` instead of the slug.
+ *
+ * A 404/NotFound means "not present" → false. Any other error propagates so the
+ * caller (a best-effort regeneration) can log and skip rather than silently treat
+ * a transient failure as a definitive answer.
+ */
+export async function publishedArtifactExists(key: string): Promise<boolean> {
+  try {
+    await getPublishClient().send(
+      new HeadObjectCommand({ Bucket: getPublishBucket(), Key: key }),
+    );
+    return true;
+  } catch (err: unknown) {
+    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+    const is404 =
+      anyErr?.name === 'NotFound' ||
+      anyErr?.name === 'NoSuchKey' ||
+      anyErr?.$metadata?.httpStatusCode === 404;
+    if (is404) return false;
+    throw err;
+  }
+}
+
+/**
  * Delete a previously-published artifact by its storage key.
  */
 export async function deletePublishedArtifact(key: string): Promise<void> {
