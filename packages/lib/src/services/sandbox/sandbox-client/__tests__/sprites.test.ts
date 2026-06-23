@@ -481,7 +481,45 @@ describe('ExecutableSandbox.runCommand', () => {
     await expect(handle!.runCommand({ cmd: 'sh' })).rejects.toThrow('websocket closed');
   });
 
-  it('should spawn with a structured (file, args[]) form and the policy cwd/env (no host shell string)', async () => {
+  it('given a cwd, should route through the self-healing sh wrapper with cwd/cmd/args as positional data args (no host shell string)', async () => {
+    let seen: { file: string; args?: string[]; opts?: { cwd?: string; env?: Record<string, string> } } | null = null;
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          spawn: (file, args, opts) => {
+            seen = { file, args, opts };
+            return fakeCommand({ exitCode: 0 });
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    await handle!.runCommand({
+      cmd: 'git',
+      args: ['status', '--short'],
+      cwd: '/workspace',
+      env: { NODE_ENV: 'test' },
+    });
+    // The wrapper recreates + enters the cwd, then execs the real command. cwd/cmd/
+    // args ride along as positional DATA args (never interpolated into the script),
+    // so a deleted /workspace self-heals on the next command instead of bricking.
+    // cwd is entered by the wrapper, NOT passed in spawn opts.
+    expect(seen).toEqual({
+      file: 'sh',
+      args: [
+        '-c',
+        'mkdir -p "$1" 2>/dev/null; cd "$1" || exit 1; shift; exec "$@"',
+        'sh',
+        '/workspace',
+        'git',
+        'status',
+        '--short',
+      ],
+      opts: { env: { NODE_ENV: 'test' } },
+    });
+  });
+
+  it('given NO cwd, should spawn the command directly (structured file/args, no wrapper)', async () => {
     let seen: { file: string; args?: string[]; opts?: { cwd?: string; env?: Record<string, string> } } | null = null;
     const { sdk } = makeSdk({
       getSprite: async () =>
@@ -497,13 +535,12 @@ describe('ExecutableSandbox.runCommand', () => {
     await handle!.runCommand({
       cmd: 'sh',
       args: ['-c', 'echo $(whoami)'],
-      cwd: '/workspace',
       env: { NODE_ENV: 'test' },
     });
     expect(seen).toEqual({
       file: 'sh',
       args: ['-c', 'echo $(whoami)'],
-      opts: { cwd: '/workspace', env: { NODE_ENV: 'test' } },
+      opts: { env: { NODE_ENV: 'test' } },
     });
   });
 });
