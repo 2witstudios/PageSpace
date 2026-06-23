@@ -82,7 +82,9 @@ vi.mock('@/stores/usePendingStreamsStore', () => ({
 }));
 
 vi.mock('@/hooks/usePageSocketRoom', () => ({ usePageSocketRoom: vi.fn() }));
-vi.mock('@/hooks/useChannelStreamSocket', () => ({ useChannelStreamSocket: vi.fn() }));
+vi.mock('@/hooks/useChannelStreamSocket', () => ({
+  useChannelStreamSocket: vi.fn(() => ({ rejoinActiveStreams: vi.fn() })),
+}));
 vi.mock('@/hooks/useAppStateRecovery', () => ({ useAppStateRecovery: vi.fn() }));
 
 vi.mock('@/hooks/useDisplayPreferences', () => ({
@@ -495,6 +497,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
     vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
       capturedCallback = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
     });
 
     setupNoConversationsInit();
@@ -536,6 +539,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
     vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
       capturedCallback = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
     });
 
     setupNoConversationsInit();
@@ -578,6 +582,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
     vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
       capturedCallback = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
     });
 
     setupNoConversationsInit();
@@ -618,6 +623,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
     vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
       capturedCallback = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
     });
 
     setupNoConversationsInit();
@@ -659,6 +665,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     let capturedCallback: ((messageId: string) => void) | undefined;
     vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
       capturedCallback = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
     });
 
     setupNoConversationsInit();
@@ -709,6 +716,7 @@ describe('AiChatView late-joiner conversation sync', () => {
     let capturedPageACallback: ((messageId: string) => void) | undefined;
     vi.mocked(useChannelStreamSocket).mockImplementation((pageId, opts) => {
       if (pageId === PAGE_ID) capturedPageACallback = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
     });
 
     let resolveSyncFetch!: () => void;
@@ -787,6 +795,7 @@ describe('AiChatView remote user-message broadcast', () => {
     let captured: UserMsgCallback | undefined;
     vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
       captured = opts?.onUserMessage as UserMsgCallback | undefined;
+      return { rejoinActiveStreams: vi.fn() };
     });
     return () => captured;
   };

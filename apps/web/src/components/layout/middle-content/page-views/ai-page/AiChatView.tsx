@@ -30,7 +30,9 @@ import { clearActiveStreamId } from '@/lib/ai/core/client';
 import { abortActiveStream, abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
+import { isCapacitorApp } from '@/hooks/useCapacitor';
 import { isEditingActive } from '@/stores/useEditingStore';
+import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
@@ -422,7 +424,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }, [chatStop, ownStreamMessageId, isStreaming, lastAssistantMessageId, streamTrackingId, page.id]);
 
   usePageSocketRoom(page.id);
-  useChannelStreamSocket(page.id, {
+  const { rejoinActiveStreams } = useChannelStreamSocket(page.id, {
     onUserMessage: (message, payload) => {
       if (payload.conversationId !== currentConversationId) return;
       setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
@@ -701,12 +703,27 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }
   }, [currentConversationId, page.id, setMessages]);
 
-  // App state recovery - refresh messages when returning from background
-  // This catches completed AI responses that finished while the app was backgrounded
+  // App state recovery - re-attach/refetch AI stream when returning from background.
+  // On native (Capacitor): if streaming, stop the local fetch, rejoin any still-live
+  // server stream, then refetch to recover a stream that finished while backgrounded.
+  // On web: never interrupt a live fetch on tab-switch (the fetch stays alive).
+  // Known limitation (pre-existing): if the user switched conversation while backgrounded,
+  // onStreamComplete's conversationId guard suppresses the append; the message is still
+  // persisted and appears on navigating back to the conversation.
   useAppStateRecovery({
-    onResume: handlePullUpRefresh,
-    // Block recovery if streaming OR pending send OR any editing active
-    enabled: !isStreaming && currentConversationId !== null && !isEditingActive(),
+    onResume: useCallback(async () => {
+      const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: effectiveIsStreaming });
+      if (action === 'noop') return;
+      if (action === 'rejoin-and-refresh') {
+        // chatStop is local-only; it does NOT signal the server (the existing effectiveStop
+        // does that separately via abortActiveStreamByMessageId). We only need to clear the
+        // local useChat streaming state so rejoin can attach cleanly.
+        chatStop();
+        rejoinActiveStreams();
+      }
+      await handlePullUpRefresh();
+    }, [effectiveIsStreaming, chatStop, rejoinActiveStreams, handlePullUpRefresh]),
+    enabled: currentConversationId !== null && !isEditingActive(),
   });
 
   // Clean up stream tracking when conversation changes or on unmount
