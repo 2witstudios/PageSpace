@@ -15,6 +15,8 @@ export interface LinkPreviewData {
   taskCount?: number;
 }
 
+const MAX_PREVIEWS = 5;
+
 export async function fetchLinkPreviews(content: string): Promise<LinkPreviewData[]> {
   const urls = extractPageUrls(content);
   if (urls.length === 0) return [];
@@ -24,7 +26,7 @@ export async function fetchLinkPreviews(content: string): Promise<LinkPreviewDat
     if (seen.has(pageId)) return false;
     seen.add(pageId);
     return true;
-  });
+  }).slice(0, MAX_PREVIEWS);
 
   const results = await Promise.all(
     unique.map(async ({ pageId, driveId }) => {

@@ -31,11 +31,31 @@ describe('parsePageUrl', () => {
     expect(parsePageUrl('')).toBeNull();
   });
 
-  it('handles absolute URL on any origin (not just pagespace.ai)', () => {
+  it('accepts localhost with port', () => {
     expect(parsePageUrl('https://localhost:3000/dashboard/abc/xyz')).toEqual({
       driveId: 'abc',
       pageId: 'xyz',
     });
+  });
+
+  it('accepts RFC 1918 class-A addresses (10.x)', () => {
+    expect(parsePageUrl('http://10.0.0.1:3000/dashboard/abc/xyz')).toEqual({
+      driveId: 'abc',
+      pageId: 'xyz',
+    });
+  });
+
+  it('accepts RFC 1918 class-B addresses (172.16-31.x)', () => {
+    expect(parsePageUrl('http://172.16.0.1/dashboard/abc/xyz')).toEqual({
+      driveId: 'abc',
+      pageId: 'xyz',
+    });
+    expect(parsePageUrl('http://172.31.0.1/dashboard/abc/xyz')).toEqual({
+      driveId: 'abc',
+      pageId: 'xyz',
+    });
+    expect(parsePageUrl('http://172.15.0.1/dashboard/abc/xyz')).toBeNull();
+    expect(parsePageUrl('http://172.32.0.1/dashboard/abc/xyz')).toBeNull();
   });
 });
 

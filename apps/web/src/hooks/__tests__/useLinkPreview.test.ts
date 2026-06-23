@@ -95,4 +95,16 @@ describe('fetchLinkPreviews', () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual(metadata);
   });
+
+  it('caps fetches at 5 when message contains more than 5 unique page links', async () => {
+    const manyUrls = Array.from({ length: 8 }, (_, i) => ({ pageId: `p${i}`, driveId: 'd1' }));
+    mockExtract.mockReturnValue(manyUrls);
+    mockFetch.mockResolvedValue(
+      makeOkResponse({ id: 'px', title: 'Page', type: 'DOCUMENT', driveId: 'd1', driveName: 'Drive' }),
+    );
+
+    await fetchLinkPreviews('message with 8 unique links');
+
+    expect(mockFetch).toHaveBeenCalledTimes(5);
+  });
 });

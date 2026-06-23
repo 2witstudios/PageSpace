@@ -7,12 +7,22 @@ const DASHBOARD_RE = /\/dashboard\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)/;
 const DEEP_LINK_RE = /\/p\/([a-zA-Z0-9_-]+)/;
 const SHARE_LINK_RE = /\/s\/[a-zA-Z0-9_-]+/;
 
+function isPrivateClass172(hostname: string): boolean {
+  if (!hostname.startsWith('172.')) return false;
+  const dot = hostname.indexOf('.', 4);
+  if (dot === -1) return false;
+  const oct = parseInt(hostname.slice(4, dot), 10);
+  return oct >= 16 && oct <= 31;
+}
+
 function isPageSpaceHost(hostname: string): boolean {
   return hostname === 'pagespace.ai'
     || hostname.endsWith('.pagespace.ai')
     || hostname === 'localhost'
     || hostname.startsWith('127.')
-    || hostname.startsWith('192.168.');
+    || hostname.startsWith('10.')
+    || hostname.startsWith('192.168.')
+    || isPrivateClass172(hostname);
 }
 
 export function parsePageUrl(url: string): ParsedPageUrl | null {
@@ -46,8 +56,12 @@ export function parsePageUrl(url: string): ParsedPageUrl | null {
   return null;
 }
 
-// URL regex that matches both absolute and relative PageSpace URLs in free text
-const URL_RE = /(?:https?:\/\/[^\s<>"']+?)?(?:\/dashboard\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+|\/p\/[a-zA-Z0-9_-]+)(?=[^a-zA-Z0-9_-]|$)/g;
+// Two separate regexes — no optional groups, no polynomial backtracking risk.
+// ABS_URL_RE captures absolute URLs starting with http(s); greedy [^\s<>"']+ is safe
+// because it is not followed by any constraint that requires backtracking.
+const ABS_URL_RE = /https?:\/\/[^\s<>"']+/g;
+// REL_PATH_RE captures relative PageSpace paths; fixed alternation with no ambiguity.
+const REL_PATH_RE = /\/(?:dashboard\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+|p\/[a-zA-Z0-9_-]+)(?=[^a-zA-Z0-9_-]|$)/g;
 
 export function extractPageUrls(text: string): ParsedPageUrl[] {
   if (!text) return [];
@@ -55,8 +69,15 @@ export function extractPageUrls(text: string): ParsedPageUrl[] {
   const seen = new Set<string>();
   const results: ParsedPageUrl[] = [];
 
-  const matches = text.match(URL_RE) ?? [];
-  for (const match of matches) {
+  for (const match of (text.match(ABS_URL_RE) ?? [])) {
+    const parsed = parsePageUrl(match);
+    if (parsed && !seen.has(parsed.pageId)) {
+      seen.add(parsed.pageId);
+      results.push(parsed);
+    }
+  }
+
+  for (const match of (text.match(REL_PATH_RE) ?? [])) {
     const parsed = parsePageUrl(match);
     if (parsed && !seen.has(parsed.pageId)) {
       seen.add(parsed.pageId);
