@@ -106,12 +106,13 @@ vi.mock('@/lib/logging/mask', () => ({
 
 import { pageReadTools } from '../page-read-tools';
 import { db } from '@pagespace/db/db';
-import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
+import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
 const mockGetUserAccessLevel = vi.mocked(getUserAccessLevel);
 const mockGetUserAccessiblePagesInDrive = vi.mocked(getUserAccessiblePagesInDriveWithDetails);
+const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
 
 const createMockPage = (content: string, type = 'DOCUMENT') => ({
   id: 'page-1',
@@ -168,6 +169,173 @@ describe('page-read-tools', () => {
         context
       );
       expect(result).toMatchObject({ success: false });
+    });
+
+    describe('ls-mode navigation (new behavior)', () => {
+      const driveSlug = 'my-drive';
+      const driveId = 'drive-1';
+
+      const rootFolder = { id: 'folder-1', title: 'Docs', type: 'FOLDER', parentId: null, position: 1, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const rootDoc = { id: 'doc-1', title: 'README', type: 'DOCUMENT', parentId: null, position: 2, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const childPage = { id: 'child-1', title: 'Setup Guide', type: 'DOCUMENT', parentId: 'folder-1', position: 1, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+
+      const setupDriveAccess = () => {
+        mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+        mockGetUserAccessiblePagesInDrive.mockResolvedValue([rootFolder, rootDoc, childPage] as unknown as never);
+        (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+      };
+
+      it('returns only root-level pages when no parentId supplied', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        assert({
+          given: 'list_pages with no parentId',
+          should: 'return success',
+          actual: result.success,
+          expected: true,
+        });
+
+        const pages = result.pages as Array<{ id: string }>;
+        assert({
+          given: 'list_pages with no parentId',
+          should: 'return only root-level pages (2, not 3)',
+          actual: pages.length,
+          expected: 2,
+        });
+
+        assert({
+          given: 'list_pages with no parentId',
+          should: 'not include nested child page',
+          actual: pages.some(p => p.id === 'child-1'),
+          expected: false,
+        });
+      });
+
+      it('includes hasChildren flag indicating whether folder has children', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        const pages = result.pages as Array<{ id: string; hasChildren: boolean }>;
+        const folder = pages.find(p => p.id === 'folder-1');
+        const doc = pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'a folder that has children',
+          should: 'have hasChildren: true',
+          actual: folder?.hasChildren,
+          expected: true,
+        });
+
+        assert({
+          given: 'a document with no children',
+          should: 'have hasChildren: false',
+          actual: doc?.hasChildren,
+          expected: false,
+        });
+      });
+
+      it('returns only children of parentId when supplied', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, parentId: 'folder-1' },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        const pages = result.pages as Array<{ id: string }>;
+        assert({
+          given: 'list_pages with parentId = folder-1',
+          should: 'return only direct children of that folder',
+          actual: pages.length,
+          expected: 1,
+        });
+
+        assert({
+          given: 'list_pages with parentId = folder-1',
+          should: 'return the child page',
+          actual: pages[0]?.id,
+          expected: 'child-1',
+        });
+      });
+
+      it('returns error when parentId is not accessible', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, parentId: 'nonexistent-id' },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        assert({
+          given: 'list_pages with inaccessible parentId',
+          should: 'return success: false',
+          actual: result.success,
+          expected: false,
+        });
+      });
+
+      it('returns all pages when recursive is true', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, recursive: true },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        const pages = result.pages as Array<{ id: string }>;
+        assert({
+          given: 'list_pages with recursive: true',
+          should: 'return all 3 pages',
+          actual: pages.length,
+          expected: 3,
+        });
+      });
+
+      it('includes totalInDrive to signal overall drive scale', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        assert({
+          given: 'list_pages',
+          should: 'include totalInDrive count',
+          actual: result.totalInDrive,
+          expected: 3,
+        });
+      });
+
+      it('includes breadcrumb when parentId is supplied', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, parentId: 'folder-1' },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        const breadcrumb = result.breadcrumb as Array<{ id: string; title: string }>;
+        assert({
+          given: 'list_pages navigating into a folder',
+          should: 'include breadcrumb with parent folder',
+          actual: breadcrumb.length,
+          expected: 1,
+        });
+
+        assert({
+          given: 'breadcrumb entry',
+          should: 'contain folder id and title',
+          actual: breadcrumb[0],
+          expected: { id: 'folder-1', title: 'Docs' },
+        });
+      });
     });
 
   });
