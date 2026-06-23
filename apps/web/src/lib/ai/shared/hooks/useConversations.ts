@@ -40,6 +40,7 @@ interface UseConversationsOptions {
    * Callbacks for state updates
    */
   onConversationLoad?: (conversationId: string, messages: UIMessage[]) => void;
+  onConversationLoadError?: (conversationId: string, error: Error) => void;
   onConversationCreate?: (conversationId: string) => void;
   onConversationDelete?: (conversationId: string) => void;
 }
@@ -81,6 +82,7 @@ export function useConversations({
   currentConversationId,
   enabled = true,
   onConversationLoad,
+  onConversationLoadError,
   onConversationCreate,
   onConversationDelete,
 }: UseConversationsOptions): UseConversationsResult {
@@ -176,14 +178,16 @@ export function useConversations({
           const messages = messagesData.messages || [];
           onConversationLoad?.(conversationId, messages);
         } else {
-          throw new Error('Failed to load conversation');
+          const err = new Error('Failed to load conversation');
+          onConversationLoadError?.(conversationId, err);
+          throw err;
         }
       } catch (error) {
         console.error('Failed to load conversation:', error);
         toast.error('Failed to load conversation');
       }
     },
-    [isAgentMode, agentId, onConversationLoad]
+    [isAgentMode, agentId, onConversationLoad, onConversationLoadError]
   );
 
   // Create a new conversation
