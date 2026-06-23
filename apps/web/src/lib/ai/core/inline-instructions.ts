@@ -58,7 +58,7 @@ const AUTOMATION = `AUTOMATION:
 • After setting a trigger, tell the user what will run, when, and what the agent will receive as context`;
 
 const SEARCH = `SEARCH:
-• list_pages returns the full page tree — use it to explore structure before creating, not just to check one folder
+• list_pages returns one level at a time (ls-style) — navigate with parentId to drill into folders; use recursive: true for a full subtree dump
 • Escalate: list_pages (structure) → glob_search (name pattern) → regex_search (content) → multi_drive_search (location unknown)
 • When a task needs domain expertise, check list_agents — a workspace agent may already know the answer better than a page search will
 • Try at least two angles before declaring something not found; a single failed search is not "not found"

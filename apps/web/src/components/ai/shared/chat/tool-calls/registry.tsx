@@ -104,7 +104,39 @@ const getSendChannelMessagePreview = (
   return null;
 };
 
-// Parse the list_pages "paths" string format into a tree structure.
+// Convert the new list_pages structured pages array into a TreeItem tree.
+const pagesArrayToTree = (pages: Array<{ id: string; title: string; type: string; path: string }>): TreeItem[] => {
+  interface Entry { id: string; title: string; type: string; path: string; segments: string[] }
+  const entries: Entry[] = pages.map(p => ({ ...p, segments: p.path.split('/').filter(Boolean) }));
+
+  const build = (items: Entry[], depth: number): TreeItem[] => {
+    const result: TreeItem[] = [];
+    const seen = new Map<string, { entry?: Entry; children: Entry[] }>();
+    for (const e of items) {
+      if (e.segments.length <= depth) continue;
+      const isDirect = e.segments.length === depth + 1;
+      const key = isDirect ? e.id : e.segments[depth];
+      if (!seen.has(key)) seen.set(key, { children: [] });
+      const bucket = seen.get(key)!;
+      if (isDirect) bucket.entry = e;
+      else bucket.children.push(e);
+    }
+    for (const [, { entry, children }] of seen) {
+      result.push({
+        path: entry?.path ?? '',
+        title: entry?.title ?? children[0]?.segments[depth] ?? 'Folder',
+        type: entry?.type ?? 'FOLDER',
+        pageId: entry?.id,
+        children: build(children, depth + 1),
+      });
+    }
+    return result;
+  };
+
+  return build(entries, 1);
+};
+
+// Parse the legacy list_pages "paths" string format into a tree structure.
 // Path format: "📁 [FOLDER](Task) ID: xxx Path: /drive/folder"
 const parsePathsToTree = (paths: string[]): TreeItem[] => {
   const pathRegex = /^\S+\s+\[([^\]]+)\](?:\s+\(Task\))?\s+ID:\s+(\S+)\s+Path:\s+(.+)$/;
@@ -242,24 +274,21 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 
   // === PAGE READ TOOLS ===
   list_pages: ({ parsedOutput }) => {
-    if (parsedOutput.tree) {
-      return (
-        <PageTreeRenderer
-          tree={parsedOutput.tree as TreeItem[]}
-          driveName={parsedOutput.driveName as string | undefined}
-          driveId={parsedOutput.driveId as string | undefined}
-        />
-      );
+    const driveName = (parsedOutput.driveName ?? parsedOutput.driveSlug) as string | undefined;
+    const driveId = parsedOutput.driveId as string | undefined;
+    // New structured format
+    if (parsedOutput.pages && Array.isArray(parsedOutput.pages)) {
+      const tree = pagesArrayToTree(parsedOutput.pages as Array<{ id: string; title: string; type: string; path: string }>);
+      return <PageTreeRenderer tree={tree} driveName={driveName} driveId={driveId} />;
     }
+    // Legacy: pre-built tree
+    if (parsedOutput.tree) {
+      return <PageTreeRenderer tree={parsedOutput.tree as TreeItem[]} driveName={driveName} driveId={driveId} />;
+    }
+    // Legacy: raw path strings
     if (parsedOutput.paths && Array.isArray(parsedOutput.paths)) {
       const tree = parsePathsToTree(parsedOutput.paths as string[]);
-      return (
-        <PageTreeRenderer
-          tree={tree}
-          driveName={(parsedOutput.driveName ?? parsedOutput.driveSlug) as string | undefined}
-          driveId={parsedOutput.driveId as string | undefined}
-        />
-      );
+      return <PageTreeRenderer tree={tree} driveName={driveName} driveId={driveId} />;
     }
     return null;
   },

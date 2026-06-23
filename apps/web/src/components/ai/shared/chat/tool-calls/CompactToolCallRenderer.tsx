@@ -262,9 +262,12 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
         return `${(result.drives as unknown[]).length} drives`;
       }
 
-      if (toolName === 'list_pages' && result.tree) {
-        const pageCount = countPages((result.tree as TreeItem[]) || []);
-        return `${pageCount} pages`;
+      if (toolName === 'list_pages') {
+        if (result.count !== undefined) return `${result.count} pages`;
+        if (result.tree) {
+          const pageCount = countPages((result.tree as TreeItem[]) || []);
+          return `${pageCount} pages`;
+        }
       }
 
       if (toolName === 'read_page') {
