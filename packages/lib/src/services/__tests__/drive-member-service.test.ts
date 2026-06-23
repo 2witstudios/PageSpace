@@ -49,12 +49,15 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveRoles: { id: 'dr.id', name: 'dr.name', color: 'dr.color' },
   pagePermissions: { pageId: 'pp.pageId', userId: 'pp.userId', canView: 'pp.canView', canEdit: 'pp.canEdit', canShare: 'pp.canShare', grantedBy: 'pp.grantedBy', grantedAt: 'pp.grantedAt' },
 }));
-vi.mock('@pagespace/db/operators', () => ({
-  eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
-  and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
-  isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
-  sql: vi.fn(),
-}));
+vi.mock('@pagespace/db/operators', () => {
+  const sqlFn = Object.assign(vi.fn(), { join: vi.fn(() => ({})) });
+  return {
+    eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+    and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+    isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
+    sql: sqlFn,
+  };
+});
 
 import { db } from '@pagespace/db/db';
 import {
@@ -369,25 +372,50 @@ describe('drive-member-service', () => {
   });
 
   describe('listDriveMembers', () => {
-    it('should return members with permission counts', async () => {
+    it('should return empty array without querying permissions when no members', async () => {
+      const chain = { leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue([]) };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      const result = await listDriveMembers('drive-1');
+      expect(result).toEqual([]);
+      expect(mockDb.execute).not.toHaveBeenCalled();
+    });
+
+    it('should return members with permission counts from batched query', async () => {
       const members = [
-        { userId: 'u1', role: 'MEMBER', id: 'dm-1', invitedBy: null, invitedAt: null, acceptedAt: null, lastAccessedAt: null, user: { id: 'u1', email: 'a@b.com', name: 'A' }, profile: { username: 'a', displayName: 'A', avatarUrl: null }, customRole: { id: null, name: null, color: null } },
+        { userId: 'u1', role: 'MEMBER', id: 'dm-1', invitedBy: null, invitedAt: null,
+          acceptedAt: null, lastAccessedAt: null,
+          user: { id: 'u1', email: 'a@b.com', name: 'A' },
+          profile: { username: 'a', displayName: 'A', avatarUrl: null },
+          customRole: { id: null, name: null, color: null } },
       ];
-      const chain = {
-        leftJoin: vi.fn().mockReturnThis(),
-        where: vi.fn().mockResolvedValue(members),
-      };
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnValue(chain),
-      });
+      const chain = { leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue(members) };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
 
       mockDb.execute.mockResolvedValue({
-        rows: [{ view_count: '3', edit_count: '1', share_count: '0' }],
+        rows: [{ userId: 'u1', view_count: '3', edit_count: '1', share_count: '0' }],
       });
 
       const result = await listDriveMembers('drive-1');
       expect(result).toHaveLength(1);
       expect(result[0].permissionCounts).toEqual({ view: 3, edit: 1, share: 0 });
+      expect(mockDb.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('should default permission counts to zero for members with no page permissions', async () => {
+      const members = [
+        { userId: 'u2', role: 'MEMBER', id: 'dm-2', invitedBy: null, invitedAt: null,
+          acceptedAt: null, lastAccessedAt: null,
+          user: { id: 'u2', email: 'b@b.com', name: 'B' },
+          profile: null, customRole: null },
+      ];
+      const chain = { leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue(members) };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      mockDb.execute.mockResolvedValue({ rows: [] });
+
+      const result = await listDriveMembers('drive-1');
+      expect(result[0].permissionCounts).toEqual({ view: 0, edit: 0, share: 0 });
     });
   });
 });
