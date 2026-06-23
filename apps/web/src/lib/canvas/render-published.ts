@@ -28,19 +28,25 @@ export interface RenderPublishedPageInput {
   faviconBaseUrl?: string;
   /** Explicit favicon href from the canvas — see RenderCanvasDocumentInput.faviconHref. */
   faviconHref?: string;
-  /** Canonical public URL for OG meta tags — see RenderCanvasDocumentInput.pageUrl. */
+  /** Canonical public URL for OG/canonical meta tags — see RenderCanvasDocumentInput.pageUrl. */
   pageUrl?: string;
   /** Absolute URL of the OG social preview image — see RenderCanvasDocumentInput.ogImageUrl. */
   ogImageUrl?: string;
   /** Short description for og:description — see RenderCanvasDocumentInput.ogDescription. */
   ogDescription?: string;
+  /** Document language for `<html lang>` — see RenderCanvasDocumentInput.lang (defaults to "en"). */
+  lang?: string;
+  /** SEO meta description; derived from content when omitted — see RenderCanvasDocumentInput.description. */
+  description?: string;
+  /** Robots directive; defaults to "index, follow" — see RenderCanvasDocumentInput.robots. */
+  robots?: string;
 }
 
 /**
  * Render a complete, standalone HTML document for a published canvas page.
  */
 export function renderPublishedPage(input: RenderPublishedPageInput): string {
-  const { assetBaseUrl, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, ...rest } = input;
+  const { assetBaseUrl, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, ...rest } = input;
   const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
-  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription });
+  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots });
 }
