@@ -35,6 +35,7 @@ vi.mock('@/hooks/useChannelStreamSocket', () => ({
     capturedChannel.channelId = channelId;
     capturedChannel.options = options;
     mockUseChannelStreamSocket(channelId, options);
+    return { rejoinActiveStreams: vi.fn() };
   },
 }));
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useSocket } from './useSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { consumeStreamJoin } from '@/lib/ai/core/stream-join-client';
@@ -95,8 +95,11 @@ export interface UseChannelStreamSocketOptions {
 export function useChannelStreamSocket(
   channelId: string | undefined,
   options?: UseChannelStreamSocketOptions,
-): void {
+): { rejoinActiveStreams: () => void } {
   const socket = useSocket();
+  // Holds the latest runBootstrap closure so rejoinActiveStreams can call it without
+  // needing to be in the effect's dep array (the effect re-creates this on every run).
+  const bootstrapRef = useRef<(() => void) | null>(null);
   // Stable refs so callback identity changes never trigger handler re-registration.
   const onStreamCompleteRef = useRef(options?.onStreamComplete);
   const onOwnStreamBootstrapRef = useRef(options?.onOwnStreamBootstrap);
@@ -186,8 +189,10 @@ export function useChannelStreamSocket(
     };
 
     // Bootstrap: replay in-flight streams from the DB so a refresh mid-stream
-    // doesn't lose visibility on what's currently happening in this channel.
-    (async () => {
+    // (or a mobile resume) doesn't lose visibility on what's currently happening
+    // in this channel. Re-running is idempotent: claimBootstrapConsumer +
+    // shouldSkipBootstrappedStream skip streams already being consumed.
+    const runBootstrap = async () => {
       try {
         const res = await fetchWithAuth(
           `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
@@ -217,7 +222,13 @@ export function useChannelStreamSocket(
         if (cancelled) return;
         console.warn('[useChannelStreamSocket] bootstrap failed', err);
       }
-    })();
+    };
+
+    // Expose runBootstrap so rejoinActiveStreams (returned from the hook) can
+    // trigger it on mobile resume — always points at the live closure.
+    bootstrapRef.current = runBootstrap;
+
+    void runBootstrap();
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
@@ -320,4 +331,9 @@ export function useChannelStreamSocket(
       clearPageStreams(channelId);
     };
   }, [socket, channelId]);
+
+  // Stable callback; the ref always points at the latest runBootstrap closure.
+  const rejoinActiveStreams = useCallback(() => { bootstrapRef.current?.(); }, []);
+
+  return { rejoinActiveStreams };
 }
