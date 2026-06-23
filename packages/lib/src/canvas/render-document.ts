@@ -64,6 +64,25 @@ export interface RenderCanvasDocumentInput {
    * set. Falls back to no description tag when omitted.
    */
   ogDescription?: string;
+  /**
+   * Document language, emitted as `<html lang>`. Defaults to `"en"`. Applies to
+   * both in-app and published rendering (it is a basic accessibility/SEO signal,
+   * not gated on `pageUrl`).
+   */
+  lang?: string;
+  /**
+   * SEO `<meta name="description">` content. Only emitted for the PUBLISHED page
+   * (i.e. when `pageUrl` is set). When omitted, a fallback is derived from the
+   * page's first text content via `deriveDescription`. Distinct from
+   * `ogDescription` (the author-supplied social blurb).
+   */
+  description?: string;
+  /**
+   * `<meta name="robots">` content. Only emitted when `pageUrl` is set. Defaults
+   * to `"index, follow"`; pass `"noindex"` (or `"noindex, nofollow"`) to keep a
+   * page out of search indexes.
+   */
+  robots?: string;
 }
 
 /**
@@ -136,10 +155,12 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots } = input;
 
   const { css, body } = extractAndSanitizeStyles(html ?? '', allowedAssetHosts);
-  const safeTitle = escapeHtml(title && title.trim() ? title : 'Untitled');
+  const rawTitle = title && title.trim() ? title : 'Untitled';
+  const safeTitle = escapeHtml(rawTitle);
+  const safeLang = escapeHtml(lang && lang.trim() ? lang : 'en');
   const baseTag = baseTarget ? `<base target="${baseTarget}">` : '';
 
   const faviconTags = faviconHref
@@ -148,17 +169,29 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
       ? buildFaviconTags(faviconBaseUrl)
       : '';
 
-  const ogTags = pageUrl
-    ? buildOgTags({ title: safeTitle, pageUrl, ogImageUrl, ogDescription })
-    : '';
+  // SEO + social tags describe a PUBLIC landing page, so they are emitted only
+  // for the published artifact (signalled by `pageUrl`). The in-app iframe
+  // rendering — which never receives `pageUrl` — is left byte-for-byte unchanged.
+  let seoTags = '';
+  let ogTags = '';
+  if (pageUrl) {
+    const metaDescription = (description ?? deriveDescription(body)).trim();
+    const socialDescription = ogDescription ?? metaDescription;
+    ogTags = buildOgTags({ title: safeTitle, pageUrl, ogImageUrl, ogDescription });
+    seoTags =
+      buildSeoTags({ pageUrl, description: metaDescription, robots: robots ?? 'index, follow' }) +
+      buildTwitterTags({ title: safeTitle, description: socialDescription, imageUrl: ogImageUrl }) +
+      buildJsonLd({ title: rawTitle, pageUrl, description: metaDescription });
+  }
 
   return (
-    '<!doctype html><html><head>' +
+    `<!doctype html><html lang="${safeLang}"><head>` +
     '<meta charset="utf-8">' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
     baseTag +
     `<title>${safeTitle}</title>` +
     faviconTags +
+    seoTags +
     ogTags +
     `<meta http-equiv="Content-Security-Policy" content="${BASELINE_CSP}">` +
     `<style>${BASELINE_RESET}${css}</style>` +
@@ -196,4 +229,106 @@ function buildOgTags(params: { title: string; pageUrl: string; ogImageUrl?: stri
     descriptionTag +
     imageTags
   );
+}
+
+/**
+ * Core SEO `<head>` tags for a published page: meta description, robots
+ * directive, and the canonical link. `description` and `pageUrl` are raw and
+ * HTML-escaped here; an empty description simply omits the tag.
+ */
+function buildSeoTags(params: { pageUrl: string; description: string; robots: string }): string {
+  const { pageUrl, description, robots } = params;
+  const descriptionTag = description ? `<meta name="description" content="${escapeHtml(description)}">` : '';
+  return (
+    descriptionTag +
+    `<meta name="robots" content="${escapeHtml(robots)}">` +
+    `<link rel="canonical" href="${escapeHtml(pageUrl)}">`
+  );
+}
+
+/**
+ * Twitter Card tags. Reuses the OG title/description/image values: `title` is
+ * already HTML-escaped; `description` and `imageUrl` are raw and escaped here.
+ */
+function buildTwitterTags(params: { title: string; description?: string; imageUrl?: string }): string {
+  const { title, description, imageUrl } = params;
+  const descriptionTag = description ? `<meta name="twitter:description" content="${escapeHtml(description)}">` : '';
+  const imageTag = imageUrl ? `<meta name="twitter:image" content="${escapeHtml(imageUrl)}">` : '';
+  return (
+    `<meta name="twitter:card" content="summary_large_image">` +
+    `<meta name="twitter:title" content="${title}">` +
+    descriptionTag +
+    imageTag
+  );
+}
+
+/**
+ * Escape a JSON string for safe embedding inside an HTML `<script>` element.
+ * Neutralises `<`, `>` and `&` (so an author title containing `</script>` cannot
+ * break out of the block) using JSON-legal `\uXXXX` escapes — the result still
+ * parses as the same JSON value.
+ */
+function jsonLdEscape(json: string): string {
+  return json.replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+}
+
+/**
+ * JSON-LD structured data: a `WebSite` node (the publish origin) plus a `WebPage`
+ * node for this page. `title`/`description` are RAW (JSON.stringify handles
+ * escaping); the result is then `jsonLdEscape`d for the script context.
+ */
+function buildJsonLd(params: { title: string; pageUrl: string; description: string }): string {
+  const { title, pageUrl, description } = params;
+  const origin = pageUrl.match(/^https?:\/\/[^/]+/)?.[0] ?? pageUrl;
+  const webPage: Record<string, string> = { '@type': 'WebPage', name: title, url: pageUrl };
+  if (description) webPage.description = description;
+  const data = {
+    '@context': 'https://schema.org',
+    '@graph': [{ '@type': 'WebSite', name: 'PageSpace', url: origin }, webPage],
+  };
+  return `<script type="application/ld+json">${jsonLdEscape(JSON.stringify(data))}</script>`;
+}
+
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+/**
+ * Derive a plain-text summary from author HTML (or text) for use as a fallback
+ * meta description. Pure: drops `<script>`/`<style>` blocks, strips remaining
+ * tags, decodes the common HTML entities (so the value can be safely
+ * re-escaped without double-encoding), collapses whitespace, and truncates to
+ * ~`maxLength` chars at a word boundary with an ellipsis.
+ */
+export function deriveDescription(htmlOrText: string, maxLength = 155): string {
+  const stripped = (htmlOrText ?? '')
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ');
+
+  const decoded = stripped.replace(/&(#x[0-9a-f]+|#\d+|[a-z0-9]+);/gi, (match, entity: string) => {
+    const key = entity.toLowerCase();
+    if (key in NAMED_ENTITIES) return NAMED_ENTITIES[key];
+    let code: number | undefined;
+    if (key.startsWith('#x')) code = parseInt(key.slice(2), 16);
+    else if (key.startsWith('#')) code = parseInt(key.slice(1), 10);
+    if (code === undefined || !Number.isFinite(code)) return match;
+    try {
+      return String.fromCodePoint(code);
+    } catch {
+      return match;
+    }
+  });
+
+  const text = decoded.replace(/\s+/g, ' ').trim();
+  if (text.length <= maxLength) return text;
+
+  const truncated = text.slice(0, maxLength);
+  const lastSpace = truncated.lastIndexOf(' ');
+  const base = (lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated).trimEnd();
+  return `${base}…`;
 }

@@ -9,6 +9,7 @@ import { eq, and, isNull } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
+import { deriveDescription } from '@pagespace/lib/canvas/render-document';
 import { renderPublishedPage } from './render-published';
 import {
   buildPublishedKey,
@@ -68,6 +69,13 @@ export interface PublishCanvasPageInput {
    * (or a new one is allocated from the drive slug).
    */
   subdomain?: string;
+  /**
+   * When true, the published page emits `<meta name="robots" content="noindex">`
+   * so search engines keep it out of their indexes. Defaults to indexable. The
+   * author-facing toggle + persistence is a separate task; this just honors the
+   * flag when a caller passes it.
+   */
+  noindex?: boolean;
 }
 
 export interface PublishCanvasPageResult {
@@ -187,16 +195,26 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   const { html: rewrittenHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId, db });
   const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
   const assetBaseUrl = getPublishAssetBaseUrl();
+  const rootUrl = `https://${subdomain}.${PUBLISH_HOST}/`;
   const publishedUrl = `https://${subdomain}.${PUBLISH_HOST}/${path}`;
+  // The canonical/OG/JSON-LD URL is the page's PRIMARY public URL. For the home
+  // page that is the subdomain root (the same artifact is also mirrored there),
+  // not the secondary slug path — using the slug would make the root page
+  // canonicalize itself away to `/<slug>`. Other pages are canonical at their
+  // slug. The SEO description prefers the author's og:description, falling back
+  // to text derived from the page content; robots defaults to indexable.
+  const canonicalUrl = isHomePage ? rootUrl : publishedUrl;
   const html = renderPublishedPage({
     html: bodyHtml,
     title: page.title ?? undefined,
     assetBaseUrl,
     faviconHref: meta.faviconHref,
     faviconBaseUrl: meta.faviconHref ? undefined : FAVICON_BASE_URL,
-    pageUrl: publishedUrl,
+    pageUrl: canonicalUrl,
     ogImageUrl: meta.ogImageUrl,
     ogDescription: meta.ogDescription,
+    description: meta.ogDescription ?? deriveDescription(bodyHtml),
+    robots: input.noindex ? 'noindex' : undefined,
   });
   const key = buildPublishedKey(subdomain, path);
 
@@ -272,9 +290,9 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     }
   }
 
-  // The home page's primary public URL is the subdomain root; it is also
-  // reachable at its slug. Other pages live only at their slug.
-  const rootUrl = `https://${subdomain}.${PUBLISH_HOST}/`;
+  // The home page's primary public URL is the subdomain root (matching the
+  // canonical tag baked above); it is also reachable at its slug. Other pages
+  // live only at their slug.
   return { url: isHomePage ? rootUrl : publishedUrl, subdomain, path, isHomePage };
 }
 
