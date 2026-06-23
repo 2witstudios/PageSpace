@@ -28,9 +28,13 @@ function assertSandboxRuntime(): void {
 export async function getRealtimeSpritesSdk(): Promise<SpritesSdk> {
   if (cachedSdk) return cachedSdk;
   assertSandboxRuntime();
-  // @fly/sprites is ESM-only. TS 5.8 with module:commonjs preserves dynamic import()
-  // as-is (does not lower to require()), so Node 24 in production handles it natively.
-  const { SpritesClient } = await import('@fly/sprites');
+  // tsc(module:commonjs) lowers a direct `import()` to require(), which Node refuses
+  // for the ESM-only @fly/sprites ("No exports main defined"). Indirecting through the
+  // Function constructor hides the import from the compiler so a NATIVE dynamic import
+  // survives — Node's import() loads the ESM SDK from this CJS module.
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+  const importEsm = new Function('s', 'return import(s)') as <T = unknown>(s: string) => Promise<T>;
+  const { SpritesClient } = await importEsm<typeof import('@fly/sprites')>('@fly/sprites');
   const client = new SpritesClient(resolveSpritesToken());
   cachedSdk = {
     getSprite: (name) => client.getSprite(name) as unknown as Promise<SpriteInstanceLike>,
