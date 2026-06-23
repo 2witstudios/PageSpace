@@ -63,7 +63,8 @@ beforeEach(() => {
   publishHomePageAtRoot.mockResolvedValue({
     url: 'https://acme.pagespace.site/',
     subdomain: 'acme',
-    path: '',
+    path: 'welcome',
+    isHomePage: true,
   });
 });
 
@@ -129,7 +130,7 @@ describe('POST /api/drives/[driveId]/publish-home', () => {
     expect(res.status).toBe(200);
     expect(publishHomePageAtRoot).toHaveBeenCalledWith('drive-1', 'user-1');
     const json = await res.json();
-    expect(json).toEqual({ url: 'https://acme.pagespace.site/', subdomain: 'acme', path: '' });
+    expect(json).toEqual({ url: 'https://acme.pagespace.site/', subdomain: 'acme', path: 'welcome', isHomePage: true });
     expect(auditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

@@ -42,12 +42,6 @@ vi.mock('@/lib/logging/mask', () => ({
 vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
   listAgentDrives: vi.fn(),
 }));
-vi.mock('@/lib/canvas/publish-page', () => ({
-  publishHomePageAtRoot: vi.fn().mockResolvedValue(null),
-}));
-vi.mock('@/lib/canvas/published-storage', () => ({
-  isPublishConfigured: vi.fn().mockReturnValue(false),
-}));
 // Stub drive-service so the create-drive tool's allocatePublishSubdomain call
 // doesn't pull drive-service's transitive DB-schema imports into this test.
 vi.mock('@pagespace/lib/services/drive-service', () => ({

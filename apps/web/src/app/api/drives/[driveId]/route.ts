@@ -10,8 +10,6 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPA
 import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { publishHomePageAtRoot } from '@/lib/canvas/publish-page';
-import { isPublishConfigured } from '@/lib/canvas/published-storage';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -212,12 +210,10 @@ export async function PATCH(
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'update' } });
 
-    // Auto-publish home page at subdomain root when homePageId changes (fire-and-forget).
-    if (typeof validatedBody.homePageId === "string" && validatedBody.homePageId && isPublishConfigured()) {
-      publishHomePageAtRoot(driveId, userId).catch((err) => {
-        loggers.api.warn("Failed to auto-publish home page at root", { driveId, error: err instanceof Error ? err.message : String(err) });
-      });
-    }
+    // Setting a drive's home page is metadata only — it never publishes the page.
+    // The home page is served at the subdomain root only once it is deliberately
+    // published (via the page publish API), like setting a repo's entry point and
+    // then deploying.
     return NextResponse.json(updatedDrive);
   } catch (error) {
     if (error instanceof z.ZodError) {

@@ -11,8 +11,6 @@ import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDriv
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
-import { publishHomePageAtRoot } from '@/lib/canvas/publish-page';
-import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import type { ToolExecutionContext } from '../core/types';
 import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
 
@@ -568,12 +566,9 @@ This context persists across conversations and helps provide better assistance. 
           console.error('Home page updated, but activity logging failed:', sideEffectError);
         }
 
-        // Auto-publish home page at subdomain root (fire-and-forget).
-        if (pageId && isPublishConfigured()) {
-          publishHomePageAtRoot(driveId, userId).catch((err) => {
-            console.warn('Failed to auto-publish home page at root:', err instanceof Error ? err.message : String(err));
-          });
-        }
+        // Setting the home page is metadata only — it never publishes the page.
+        // The home page reaches the subdomain root only when deliberately
+        // published via the page publish API.
 
         const message = pageId
           ? `Successfully set home page for "${drive.name}"`

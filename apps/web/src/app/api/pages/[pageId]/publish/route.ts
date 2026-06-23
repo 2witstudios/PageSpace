@@ -4,7 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
-import { publishCanvasPage, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
+import { publishCanvasPage, clearPublishedHomeRoot, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
@@ -62,7 +62,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     const [drive, livePage] = await Promise.all([
       db.query.drives.findFirst({
         where: eq(drives.id, row.driveId),
-        columns: { publishSubdomain: true },
+        columns: { publishSubdomain: true, homePageId: true },
       }),
       db.query.pages.findFirst({
         where: eq(pages.id, pageId),
@@ -77,13 +77,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         ? livePage.updatedAt > lastPublishedAt
         : false;
 
+    // The home page is served at the subdomain root (in addition to its slug),
+    // so report the root as its primary URL.
+    const isHomePage = drive?.homePageId === pageId;
+    const url = isHomePage
+      ? `https://${subdomain}.${PUBLISH_HOST}/`
+      : `https://${subdomain}.${PUBLISH_HOST}/${row.path}`;
+
     return NextResponse.json({
       published: true,
       available,
       isStale,
-      url: `https://${subdomain}.${PUBLISH_HOST}/${row.path}`,
+      url,
       subdomain,
       path: row.path,
+      isHomePage,
     });
   } catch (error) {
     loggers.api.error('Error reading publish status:', error as Error);
@@ -191,7 +199,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
   try {
     const row = await db.query.publishedPages.findFirst({
       where: eq(publishedPages.pageId, pageId),
-      columns: { id: true, artifactKey: true },
+      columns: { id: true, artifactKey: true, driveId: true },
     });
 
     if (!row) {
@@ -201,6 +209,16 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     const { deletePublishedArtifact } = await import('@/lib/canvas/published-storage');
     await deletePublishedArtifact(row.artifactKey);
     await db.delete(publishedPages).where(eq(publishedPages.pageId, pageId));
+
+    // If this page was the drive's home page it was also mirrored to the
+    // subdomain root — remove that copy so the root stops serving it.
+    const drv = await db.query.drives.findFirst({
+      where: eq(drives.id, row.driveId),
+      columns: { homePageId: true },
+    });
+    if (drv?.homePageId === pageId) {
+      await clearPublishedHomeRoot(row.driveId);
+    }
 
     auditRequest(req, {
       eventType: 'data.delete',

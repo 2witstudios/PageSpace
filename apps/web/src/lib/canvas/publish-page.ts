@@ -71,9 +71,13 @@ export interface PublishCanvasPageInput {
 }
 
 export interface PublishCanvasPageResult {
+  /** Primary public URL — the subdomain root for the home page, else the slug URL. */
   url: string;
   subdomain: string;
+  /** The published_pages.path (slug). The home page is also served at the root. */
   path: string;
+  /** True when this page is the drive's home page (also mirrored to the root). */
+  isHomePage: boolean;
 }
 
 /**
@@ -115,7 +119,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
-    columns: { id: true, slug: true, publishSubdomain: true, kind: true },
+    columns: { id: true, slug: true, publishSubdomain: true, kind: true, homePageId: true },
   });
 
   if (!drive) {
@@ -166,18 +170,16 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   // 3. Resolve path
   // ------------------------------------------------------------------
-  // An explicit '' means "publish at the subdomain root" (home-page-at-root).
-  // Any other explicit path is canonicalized so the DB row and storage key
-  // agree; a non-empty path that canonicalizes to empty falls back to the page
-  // id rather than silently landing at the root.
-  let path: string;
-  if (input.path === undefined) {
-    path = slugify(page.title ?? '') || pageId;
-  } else if (input.path === '') {
-    path = '';
-  } else {
-    path = normalizePublishPath(input.path) || pageId;
-  }
+  // Every page publishes at a non-empty slug path. The subdomain root ('') is
+  // never a directly-publishable path — it is reserved for the drive's home page
+  // and written as a mirror below, so an arbitrary page can't claim the root.
+  // Explicit paths are canonicalized so the DB row and storage key agree (a
+  // value that canonicalizes to empty falls back to the page id).
+  const isHomePage = drive.homePageId === pageId;
+  const path =
+    input.path === undefined
+      ? slugify(page.title ?? '') || pageId
+      : normalizePublishPath(input.path) || pageId;
 
   // ------------------------------------------------------------------
   // 4. Rewrite assets + extract OG meta
@@ -236,12 +238,23 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   }
 
   // ------------------------------------------------------------------
-  // 7. Upload artifact
+  // 7. Upload artifact (slug path)
   // ------------------------------------------------------------------
   await putPublishedArtifact({ subdomain, path, html });
 
   // ------------------------------------------------------------------
-  // 8. Advance updatedAt + cleanup stale artifact
+  // 8. Mirror the home page to the subdomain root
+  // ------------------------------------------------------------------
+  // The drive's home page is its "index": serve it at `<sub>.pagespace.site/`
+  // in addition to its slug path. The root artifact key is stable
+  // (`published/<sub>/index.html`), so a later home-page publish overwrites it
+  // in place; it is removed when the home page is unpublished.
+  if (isHomePage) {
+    await putPublishedArtifact({ subdomain, path: '', html });
+  }
+
+  // ------------------------------------------------------------------
+  // 9. Advance updatedAt + cleanup stale artifact
   // ------------------------------------------------------------------
   await db
     .update(publishedPages)
@@ -259,18 +272,22 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     }
   }
 
-  return { url: publishedUrl, subdomain, path };
+  // The home page's primary public URL is the subdomain root; it is also
+  // reachable at its slug. Other pages live only at their slug.
+  const rootUrl = `https://${subdomain}.${PUBLISH_HOST}/`;
+  return { url: isHomePage ? rootUrl : publishedUrl, subdomain, path, isHomePage };
 }
 
 /**
- * Publish a drive's home page at the root path (''), so that
- * `<subdomain>.pagespace.site/` serves it directly.
+ * Deliberately (re)publish a drive's canvas home page. Because the page is the
+ * drive's home page, `publishCanvasPage` mirrors it to the subdomain root so
+ * `<subdomain>.pagespace.site/` serves it (in addition to its slug path), and
+ * allocates the drive's publish subdomain if it doesn't have one yet.
  *
- * Returns null (no-op) when:
- *  - The drive has no homePageId
- *  - The home page is not a CANVAS
- *  - The drive has no publishSubdomain
- *  - Publishing is not configured (missing S3 bucket)
+ * This is a deliberate publish action — setting a page as the home page never
+ * calls it. Returns null only when the drive has no home page set (the caller
+ * maps that to a 400); all other failure modes surface as `PublishError`
+ * (non-canvas → 400, Home drive → 403, …).
  */
 export async function publishHomePageAtRoot(
   driveId: string,
@@ -278,39 +295,40 @@ export async function publishHomePageAtRoot(
 ): Promise<PublishCanvasPageResult | null> {
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
-    columns: { id: true, homePageId: true, publishSubdomain: true, kind: true },
+    columns: { id: true, homePageId: true },
   });
 
   if (!drive?.homePageId) return null;
-  if (!drive.publishSubdomain) return null;
-  if (isHomeDrive(drive)) return null;
-  if (!isPublishConfigured()) return null;
-
-  const homePage = await db.query.pages.findFirst({
-    where: eq(pages.id, drive.homePageId),
-    columns: { id: true, type: true },
-  });
-
-  if (!homePage || homePage.type !== 'CANVAS') return null;
-
-  // Replacement semantics: the subdomain root ('') belongs to whichever page is
-  // the *current* home page. If a different page still occupies the root (e.g.
-  // the home page just changed from A to B), release that row first so the new
-  // home page is not rejected by the unique (driveId, path) constraint. The root
-  // artifact key is identical for both pages, so the upcoming upload overwrites
-  // it in place — no orphaned artifact is left behind.
-  const existingRoot = await db.query.publishedPages.findFirst({
-    where: and(eq(publishedPages.driveId, driveId), eq(publishedPages.path, '')),
-    columns: { pageId: true },
-  });
-  if (existingRoot && existingRoot.pageId !== drive.homePageId) {
-    await db.delete(publishedPages).where(eq(publishedPages.pageId, existingRoot.pageId));
-  }
 
   return publishCanvasPage({
     pageId: drive.homePageId,
     driveId,
     userId,
-    path: '',
   });
+}
+
+/**
+ * Remove the subdomain-root mirror for a drive (the served copy of the home page
+ * at `<subdomain>.pagespace.site/`). Called when the home page is unpublished so
+ * the root stops serving it. This only *un-serves* the root copy — it never
+ * publishes anything. No-op when the drive has no subdomain or publishing is not
+ * configured.
+ */
+export async function clearPublishedHomeRoot(driveId: string): Promise<void> {
+  if (!isPublishConfigured()) return;
+
+  const drive = await db.query.drives.findFirst({
+    where: eq(drives.id, driveId),
+    columns: { publishSubdomain: true },
+  });
+  if (!drive?.publishSubdomain) return;
+
+  try {
+    await deletePublishedArtifact(buildPublishedKey(drive.publishSubdomain, ''));
+  } catch (err) {
+    loggers.api.warn('Failed to clear published home-page root mirror', {
+      driveId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
