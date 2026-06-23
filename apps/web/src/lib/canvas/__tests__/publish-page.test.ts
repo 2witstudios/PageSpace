@@ -54,6 +54,7 @@ vi.mock('../render-published', () => ({
 
 vi.mock('../asset-pipeline', () => ({
   rewriteCanvasAssets: vi.fn(async ({ html }: { html: string }) => ({ html })),
+  rewriteInterPageLinksForDrive: vi.fn(async ({ html }: { html: string }) => ({ html })),
   extractAndStripOgMeta: vi.fn((html: string) => ({
     meta: { faviconHref: null, ogImageUrl: null, ogDescription: null },
     html,

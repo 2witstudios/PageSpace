@@ -1,9 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractFileIds, extractAndStripOgMeta, rewriteCanvasAssets } from '../asset-pipeline';
+import {
+  extractFileIds,
+  extractAndStripOgMeta,
+  rewriteCanvasAssets,
+  rewriteInterPageLinksForDrive,
+} from '../asset-pipeline';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { warn: vi.fn() } },
+}));
+
+// Capture the SQL operators so the shell test can assert the published_pages
+// lookup is scoped to the publishing drive. findMany itself is mocked, so the
+// shapes returned here are only inspected by assertions, never executed.
+vi.mock('@pagespace/db/operators', () => ({
+  and: (...conds: unknown[]) => ({ kind: 'and', conds }),
+  eq: (col: unknown, val: unknown) => ({ kind: 'eq', col, val }),
+  inArray: (col: unknown, vals: unknown) => ({ kind: 'inArray', col, vals }),
 }));
 
 const canUserViewPage = vi.fn();
@@ -295,6 +309,113 @@ describe('rewriteCanvasAssets', () => {
     const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
 
     expect(result.html).toContain('/api/files/fileId1/view');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rewriteInterPageLinksForDrive — shell: builds the drive-scoped map, mocked DB
+// ---------------------------------------------------------------------------
+
+const mockInterPageDb = {
+  query: {
+    publishedPages: {
+      findMany: vi.fn(),
+    },
+  },
+};
+
+describe('rewriteInterPageLinksForDrive', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInterPageDb.query.publishedPages.findMany.mockResolvedValue([]);
+  });
+
+  it('given no inter-page links, should return the HTML unchanged without querying', async () => {
+    const html = '<p>nothing to link</p>';
+    const result = await rewriteInterPageLinksForDrive({
+      html,
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      homePageId: null,
+      db: mockInterPageDb as never,
+    });
+
+    expect(result.html).toBe(html);
+    expect(mockInterPageDb.query.publishedPages.findMany).not.toHaveBeenCalled();
+  });
+
+  it('should scope the published_pages lookup to the publishing drive and the referenced pages', async () => {
+    const html = [
+      '<a href="/dashboard/drive-1/page-a">a</a>',
+      '<a href="/dashboard/drive-1/page-b/view">b</a>',
+    ].join('');
+
+    await rewriteInterPageLinksForDrive({
+      html,
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      homePageId: null,
+      db: mockInterPageDb as never,
+    });
+
+    expect(mockInterPageDb.query.publishedPages.findMany).toHaveBeenCalledTimes(1);
+    const arg = mockInterPageDb.query.publishedPages.findMany.mock.calls[0][0];
+    expect(arg.where).toEqual({
+      kind: 'and',
+      conds: [
+        expect.objectContaining({ kind: 'eq', val: 'drive-1' }),
+        expect.objectContaining({ kind: 'inArray', vals: ['page-a', 'page-b'] }),
+      ],
+    });
+  });
+
+  it('given a published sibling, should rewrite the link to its pagespace.site URL', async () => {
+    const html = '<a href="/dashboard/drive-1/page-a">a</a>';
+    mockInterPageDb.query.publishedPages.findMany.mockResolvedValue([
+      { pageId: 'page-a', path: 'about' },
+    ]);
+
+    const result = await rewriteInterPageLinksForDrive({
+      html,
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      homePageId: null,
+      db: mockInterPageDb as never,
+    });
+
+    expect(result.html).toBe('<a href="https://acme.pagespace.site/about">a</a>');
+  });
+
+  it('given a link to the drive home page, should rewrite it to the site root', async () => {
+    const html = '<a href="/dashboard/drive-1/home-1">home</a>';
+    mockInterPageDb.query.publishedPages.findMany.mockResolvedValue([
+      { pageId: 'home-1', path: 'landing' },
+    ]);
+
+    const result = await rewriteInterPageLinksForDrive({
+      html,
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      homePageId: 'home-1',
+      db: mockInterPageDb as never,
+    });
+
+    expect(result.html).toBe('<a href="/">home</a>');
+  });
+
+  it('given a link to an unpublished page (not returned by the query), should leave it unchanged', async () => {
+    const html = '<a href="/dashboard/drive-1/missing">x</a>';
+    mockInterPageDb.query.publishedPages.findMany.mockResolvedValue([]);
+
+    const result = await rewriteInterPageLinksForDrive({
+      html,
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      homePageId: null,
+      db: mockInterPageDb as never,
+    });
+
+    expect(result.html).toBe(html);
   });
 });
 
