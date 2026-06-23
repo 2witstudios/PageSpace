@@ -7,6 +7,7 @@ import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermission
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { MessageWithUser } from '@/hooks/usePageTree';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
+import { MessageLinkPreviews } from '@/components/messages/MessageLinkPreviews';
 import {
   Conversation,
   ConversationContent,
@@ -595,6 +596,7 @@ function ChannelView({ page }: ChannelViewProps) {
               />
             </div>
           )}
+          {m.content && <MessageLinkPreviews content={m.content} />}
           <MessageAttachment message={m} />
         </div>
       </div>
@@ -773,6 +775,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                         />
                                       </div>
                                     )}
+                                    {m.content && <MessageLinkPreviews content={m.content} />}
                                     {!isFirst && m.editedAt && (
                                       <span className="text-xs text-muted-foreground italic">(Edited)</span>
                                     )}

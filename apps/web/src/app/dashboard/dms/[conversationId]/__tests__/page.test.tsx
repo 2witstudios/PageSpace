@@ -109,6 +109,11 @@ vi.mock('@/components/messages/RichText', () => ({
   addHardLineBreaks: (content: string) => content,
 }));
 
+// MessageLinkPreviews — stub out; this test covers attachments, not link previews
+vi.mock('@/components/messages/MessageLinkPreviews', () => ({
+  MessageLinkPreviews: () => null,
+}));
+
 // MessageAttachment — sentinel for inspection
 const messageAttachmentCalls = vi.fn();
 vi.mock('@/components/shared/MessageAttachment', () => ({

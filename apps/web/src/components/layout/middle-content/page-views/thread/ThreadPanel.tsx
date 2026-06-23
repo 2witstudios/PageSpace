@@ -28,6 +28,7 @@ import { Bell, BellOff, Check, X } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
+import { MessageLinkPreviews } from '@/components/messages/MessageLinkPreviews';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 import { isCommandInertForMessage } from '@/lib/commands/command-chip-model';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
@@ -837,6 +838,7 @@ export function ThreadPanel({
                           />
                         </div>
                       )}
+                      {reply.content && <MessageLinkPreviews content={reply.content} />}
                       {(reply.fileId || reply.attachmentMeta) && (
                         <MessageAttachment
                           message={{
