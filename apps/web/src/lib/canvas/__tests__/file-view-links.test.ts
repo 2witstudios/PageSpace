@@ -68,6 +68,16 @@ describe('extractInterPageLinks', () => {
     expect(extractInterPageLinks('<a href="/dashboard/inbox">x</a>')).toEqual([]);
   });
 
+  it('given a protocol-relative dashboard link, should extract the page ref', () => {
+    expect(extractInterPageLinks('<a href="//app.pagespace.ai/dashboard/drive-1/page-1">x</a>')).toEqual([
+      { driveId: 'drive-1', pageId: 'page-1' },
+    ]);
+  });
+
+  it('given /dashboard/ embedded mid-token (not at a delimiter), should not extract it', () => {
+    expect(extractInterPageLinks('<a href="docs/dashboard/drive-1/page-1">x</a>')).toEqual([]);
+  });
+
   it('given no dashboard links, should return an empty array', () => {
     expect(extractInterPageLinks('<p>no links</p>')).toEqual([]);
     expect(extractInterPageLinks('')).toEqual([]);
@@ -106,6 +116,22 @@ describe('rewriteInterPageLinks', () => {
     const html = '<a href="/dashboard/drive-1/missing">x</a>';
 
     expect(rewriteInterPageLinks(html, new Map(), SUB)).toBe(html);
+  });
+
+  it('given a protocol-relative link, should replace the whole URL (no leftover prefix)', () => {
+    const html = '<a href="//app.pagespace.ai/dashboard/drive-1/page-1">go</a>';
+    const map = new Map([['page-1', 'about']]);
+
+    const out = rewriteInterPageLinks(html, map, SUB);
+    expect(out).toBe('<a href="https://acme.pagespace.site/about">go</a>');
+    expect(out).not.toContain('app.pagespace.ai');
+  });
+
+  it('given /dashboard/ embedded mid-token, should leave it untouched (no glued URL)', () => {
+    const html = '<a href="docs/dashboard/drive-1/page-1">x</a>';
+    const map = new Map([['page-1', 'about']]);
+
+    expect(rewriteInterPageLinks(html, map, SUB)).toBe(html);
   });
 
   it('given a mix of published and unpublished links, should rewrite only the published ones', () => {

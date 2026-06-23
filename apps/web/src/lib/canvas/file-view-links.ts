@@ -51,12 +51,16 @@ export interface InterPageLink {
 }
 
 // Matches both the plain (`/dashboard/{d}/{p}`) and file-view
-// (`/dashboard/{d}/{p}/view`) link forms, with an optional absolute origin
-// prefix and optional query string. The trailing boundary lookahead ensures a
-// longer path segment (`/edit`, `/viewer`, `/p/child`, …) never matches as an
-// inter-page link.
+// (`/dashboard/{d}/{p}/view`) link forms, with an optional absolute or
+// protocol-relative origin prefix and optional query string.
+//  - Leading lookbehind: the path must start at a delimiter (string start,
+//    whitespace, quote, `(`, `=`, `,`) so a `/dashboard/` embedded mid-token
+//    (e.g. a relative `docs/dashboard/...`) is not matched and corrupted by
+//    gluing the rewritten URL onto the leftover prefix.
+//  - Trailing lookahead: a longer path segment (`/edit`, `/viewer`, `/p/child`,
+//    …) never matches as an inter-page link.
 const INTER_PAGE_LINK_RE =
-  /(?:https?:\/\/[^/'">\s]*)?\/dashboard\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)(?:\/view)?(?:\?[^"')\s>]*)?(?=$|[#"')\s>])/g;
+  /(?<=^|[\s"'(=,])(?:(?:https?:)?\/\/[^/'">\s]+)?\/dashboard\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)(?:\/view)?(?:\?[^"')\s>]*)?(?=$|[#"')\s>])/g;
 
 const interPageKey = ({ driveId, pageId }: InterPageLink): string => `${driveId}:${pageId}`;
 
