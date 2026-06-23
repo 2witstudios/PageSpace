@@ -118,9 +118,14 @@ vi.mock('@/services/api/task-sync-service', () => ({
   syncTaskItemOnMove: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('@/lib/canvas/publish-page', () => ({
+  syncPublishedHomeRoot: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
 import { POST } from '../route';
+import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
@@ -721,6 +726,27 @@ describe('POST /api/pages/bulk-move', () => {
       expect(response.status).toBe(200);
       expect(txQueryDrivesFindFirst).not.toHaveBeenCalled();
       expect(txUpdateSet).not.toHaveBeenCalledWith({ homePageId: null });
+    });
+
+    it('fires syncPublishedHomeRoot (fire-and-forget) for each drive whose home page moved out', async () => {
+      setupSuccessScenario();
+      txQueryDrivesFindFirst.mockResolvedValue({ homePageId: 'page-1' });
+      // After move the page is no longer in the source drive
+      txQueryPagesFindFirst.mockResolvedValue(undefined);
+
+      await POST(createRequest(validBody));
+
+      expect(syncPublishedHomeRoot).toHaveBeenCalledWith(mockSourceDriveId);
+    });
+
+    it('does not fire syncPublishedHomeRoot when homePageId was not cleared', async () => {
+      setupSuccessScenario();
+      // Source drive has no home page set
+      txQueryDrivesFindFirst.mockResolvedValue({ homePageId: null });
+
+      await POST(createRequest(validBody));
+
+      expect(syncPublishedHomeRoot).not.toHaveBeenCalled();
     });
   });
 

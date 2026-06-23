@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 
 const CONTENT_HASH_RE = /^[0-9a-f]{64}$/i;
@@ -206,10 +206,11 @@ export async function putPublishedSiteFile(params: {
  * Whether an object exists at the given key in the publish bucket.
  *
  * Used to decide a page's canonical sitemap URL: the home page is served at the
- * subdomain root only once it has been deliberately published *as* the home page
- * (which writes `published/<sub>/index.html`). Setting `homePageId` is
- * metadata-only and does NOT create that mirror, so the sitemap must confirm the
- * root object is really there before advertising `/` instead of the slug.
+ * subdomain root only once the root mirror exists at `published/<sub>/index.html`.
+ * `syncPublishedHomeRoot` creates that mirror automatically after `homePageId`
+ * changes, but there is a brief async window and legacy drives may predate the
+ * auto-sync. Confirming the object exists before advertising `/` prevents
+ * surfacing a dead route in the sitemap.
  *
  * A 404/NotFound means "not present" → false. Any other error propagates so the
  * caller (a best-effort regeneration) can log and skip rather than silently treat
@@ -240,6 +241,29 @@ export async function deletePublishedArtifact(key: string): Promise<void> {
     new DeleteObjectCommand({
       Bucket: getPublishBucket(),
       Key: key,
+    }),
+  );
+}
+
+/**
+ * Copy an already-published artifact to another key within the same publish
+ * bucket. Used to route an existing slug artifact to the subdomain root when a
+ * page is designated the drive's home page.
+ *
+ * Copies bytes as-is — no re-render. The root carries the slug's canonical URL
+ * (since it is the slug render); that is acceptable (slug is a valid canonical).
+ * MetadataDirective=REPLACE ensures the text/html content-type is always set
+ * correctly regardless of what the source object's stored metadata says.
+ */
+export async function copyPublishedArtifact(fromKey: string, toKey: string): Promise<void> {
+  const bucket = getPublishBucket();
+  await getPublishClient().send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: `${bucket}/${fromKey}`,
+      Key: toKey,
+      ContentType: 'text/html; charset=utf-8',
+      MetadataDirective: 'REPLACE',
     }),
   );
 }

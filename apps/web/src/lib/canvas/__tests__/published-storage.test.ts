@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
 import {
   buildPublishedKey,
   putPublishedArtifact,
@@ -7,6 +7,7 @@ import {
   putPublishedSiteFile,
   publishedArtifactExists,
   deletePublishedArtifact,
+  copyPublishedArtifact,
   isPublishConfigured,
   buildAssetKey,
   buildAssetUrl,
@@ -182,6 +183,41 @@ describe('deletePublishedArtifact', () => {
       Bucket: 'test-bucket',
       Key: 'published/acme/index.html',
     });
+  });
+});
+
+describe('copyPublishedArtifact', () => {
+  beforeEach(() => {
+    send.mockReset();
+    send.mockResolvedValue({});
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('sends a CopyObjectCommand within the publish bucket', async () => {
+    await copyPublishedArtifact(
+      'published/acme/about/index.html',
+      'published/acme/index.html',
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(CopyObjectCommand);
+    expect(command.input).toMatchObject({
+      Bucket: 'test-bucket',
+      CopySource: 'test-bucket/published/acme/about/index.html',
+      Key: 'published/acme/index.html',
+      ContentType: 'text/html; charset=utf-8',
+      MetadataDirective: 'REPLACE',
+    });
+  });
+
+  it('uses the publish bucket for both source and destination', async () => {
+    process.env.PUBLISH_BUCKET = 'my-site-bucket';
+    await copyPublishedArtifact('published/sub/slug/index.html', 'published/sub/index.html');
+
+    const command = send.mock.calls[0][0];
+    expect(command.input.Bucket).toBe('my-site-bucket');
+    expect(command.input.CopySource).toContain('my-site-bucket/');
   });
 });
 

@@ -13,6 +13,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
 import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
+import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -566,9 +567,10 @@ This context persists across conversations and helps provide better assistance. 
           console.error('Home page updated, but activity logging failed:', sideEffectError);
         }
 
-        // Setting the home page is metadata only — it never publishes the page.
-        // The home page reaches the subdomain root only when deliberately
-        // published via the page publish API.
+        // Sync the subdomain root so `/` immediately reflects the new home page
+        // without requiring a manual republish. Fire-and-forget: never blocks
+        // the tool response. An unpublished page set as home stays private.
+        void syncPublishedHomeRoot(driveId);
 
         const message = pageId
           ? `Successfully set home page for "${drive.name}"`
