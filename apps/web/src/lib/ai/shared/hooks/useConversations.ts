@@ -178,12 +178,12 @@ export function useConversations({
           const messages = messagesData.messages || [];
           onConversationLoad?.(conversationId, messages);
         } else {
-          const err = new Error('Failed to load conversation');
-          onConversationLoadError?.(conversationId, err);
-          throw err;
+          throw new Error('Failed to load conversation');
         }
       } catch (error) {
-        console.error('Failed to load conversation:', error);
+        const err = error instanceof Error ? error : new Error('Failed to load conversation');
+        onConversationLoadError?.(conversationId, err);
+        console.error('Failed to load conversation:', err);
         toast.error('Failed to load conversation');
       }
     },

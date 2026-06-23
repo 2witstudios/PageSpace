@@ -430,15 +430,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`,
                 { signal: controller.signal }
               );
-              const { messages: loaded } = msgResponse.ok
-                ? ((await msgResponse.json()) as ConversationMessagesResponse)
-                : { messages: [] as UIMessage[] };
+              // undefined = fetch failed; keep undefined so loadMessagesForConversation
+              // takes the network path and shows the error banner on failure.
+              const loaded = msgResponse.ok
+                ? (((await msgResponse.json()) as ConversationMessagesResponse).messages ?? [])
+                : undefined;
               if (controller.signal.aborted) return;
               // Supply pre-fetched messages directly to the one-writer path and suppress
               // the load-on-select effect so we don't re-fetch what we just loaded.
-              skipLoadEffectRef.current = conv.id;
+              // Only suppress when the fetch actually succeeded (loaded !== undefined).
+              if (loaded !== undefined) {
+                skipLoadEffectRef.current = conv.id;
+              }
               setCurrentConversationId(conv.id);
-              void loadMessagesForConversation(conv.id, loaded ?? []);
+              void loadMessagesForConversation(conv.id, loaded);
               setIsInitialized(true);
               return;
             }
