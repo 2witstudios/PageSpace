@@ -242,7 +242,7 @@ describe('acquireTerminalSandbox', () => {
     expect(storeCalls.save).toBe(1);
   });
 
-  it('given fresh existing session and client.get returns a handle, returns { ok: true, resumed: true } without calling getOrCreate', async () => {
+  it('given fresh existing session, reconnects via getOrCreate (reapplies egress policy) and returns resumed: true', async () => {
     const { store, calls: storeCalls } = makeStore(seedRecord());
     const { client, calls } = makeClient();
     const result = await acquireTerminalSandbox({
@@ -250,23 +250,28 @@ describe('acquireTerminalSandbox', () => {
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
-    expect(calls.get).toEqual(['sbx-existing']);
-    expect(calls.getOrCreate).toEqual([]);
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
+    // getOrCreate is used for reconnects (reapplies policy); get is never called.
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
+    expect(calls.get).toEqual([]);
     expect(storeCalls.touch).toBe(1);
   });
 
-  it('given existing session but client.get returns null (VM gone), provisions fresh (calls getOrCreate)', async () => {
+  it('given existing session with a gone VM, getOrCreate transparently re-provisions under the same key', async () => {
+    // In real Sprites: getOrCreate(name) finds the sprite by name; if 404, creates fresh.
+    // The sandboxId is always name.slice(0,63), so the store record stays valid.
     const { store, calls: storeCalls } = makeStore(seedRecord());
-    const { client, calls } = makeClient({ get: async () => null });
+    const { client, calls } = makeClient();
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
-    expect(storeCalls.remove).toBe(1);
+    // getOrCreate handles the VM-gone case transparently — no explicit remove + re-provision.
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
+    expect(storeCalls.remove).toBe(0);
+    expect(storeCalls.touch).toBe(1);
   });
 
   it('given store.save throws after getOrCreate, calls client.stop and returns { ok: false, reason: provision_failed }', async () => {
@@ -300,9 +305,10 @@ describe('acquireTerminalSandbox', () => {
     expect(calls.stop).toEqual([]);
   });
 
-  it('given an idle (hibernated) session, reconnects + wakes it instead of destroying it (persistent)', async () => {
+  it('given an idle (hibernated) session, reconnects via getOrCreate (wakes and reapplies policy, never destroys)', async () => {
     // 20 min idle would have tripped the old 15-min destroy timer. With Sprites
-    // hibernation, acquire now resumes the sleeping VM rather than tearing it down.
+    // hibernation + persistent:true, acquire reconnects via getOrCreate which
+    // wakes the VM and reapplies the open egress policy in one call.
     const stale = seedRecord({ lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) });
     const { store, calls: storeCalls } = makeStore(stale);
     const { client, calls } = makeClient();
@@ -311,14 +317,14 @@ describe('acquireTerminalSandbox', () => {
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
-    expect(calls.get).toEqual(['sbx-existing']);
-    expect(calls.getOrCreate).toEqual([]);
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
+    expect(calls.get).toEqual([]);
     expect(calls.stop).toEqual([]);
     expect(storeCalls.touch).toBe(1);
   });
 
-  it('provisions with egressMode: open (not the tight agent allowlist)', async () => {
+  it('provisions fresh terminal with egressMode: open (not the tight agent allowlist)', async () => {
     const { store } = makeStore();
     const { client, calls } = makeClient();
     const result = await acquireTerminalSandbox({
@@ -333,17 +339,37 @@ describe('acquireTerminalSandbox', () => {
     expect(calls.getOrCreate[0].options).not.toHaveProperty('egressAllowlist');
   });
 
-  it('given an idle session whose VM has vanished, drops the stale link and provisions fresh', async () => {
-    const stale = seedRecord({ lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) });
-    const { store, calls: storeCalls } = makeStore(stale);
-    const { client, calls } = makeClient({ get: async () => null });
+  it('reconnects also use egressMode: open via getOrCreate (applies policy on every hand-back, not just fresh provisions)', async () => {
+    // This covers the migration path: a session created before the egress change
+    // still gets the open policy applied on the next reconnect.
+    const { store } = makeStore(seedRecord());
+    const { client, calls } = makeClient();
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
-    expect(storeCalls.remove).toBe(1);
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
+    expect(calls.getOrCreate).toHaveLength(1);
+    expect(calls.getOrCreate[0].options).toMatchObject({ egressMode: 'open' });
+    expect(calls.get).toEqual([]);
+  });
+
+  it('given an idle session whose VM has vanished, getOrCreate transparently recreates it under the same name', async () => {
+    // In production: sandboxId = key.slice(0,63), so the store record stays valid
+    // after re-creation. The reconnect returns resumed: true because the session
+    // record exists (the planner returns noop for persistent sessions, not create).
+    const stale = seedRecord({ lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) });
+    const { store, calls: storeCalls } = makeStore(stale);
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: { store, client, now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
+    expect(storeCalls.remove).toBe(0);
+    expect(storeCalls.touch).toBe(1);
   });
 });
