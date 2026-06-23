@@ -566,6 +566,10 @@ This context persists across conversations and helps provide better assistance. 
           console.error('Home page updated, but activity logging failed:', sideEffectError);
         }
 
+        // Setting the home page is metadata only — it never publishes the page.
+        // The home page reaches the subdomain root only when deliberately
+        // published via the page publish API.
+
         const message = pageId
           ? `Successfully set home page for "${drive.name}"`
           : `Successfully cleared home page for "${drive.name}"`;

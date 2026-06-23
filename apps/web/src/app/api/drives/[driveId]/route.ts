@@ -210,6 +210,10 @@ export async function PATCH(
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'update' } });
 
+    // Setting a drive's home page is metadata only — it never publishes the page.
+    // The home page is served at the subdomain root only once it is deliberately
+    // published (via the page publish API), like setting a repo's entry point and
+    // then deploying.
     return NextResponse.json(updatedDrive);
   } catch (error) {
     if (error instanceof z.ZodError) {

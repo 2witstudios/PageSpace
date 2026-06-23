@@ -74,6 +74,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
+  and: vi.fn((...args: unknown[]) => ({ and: args })),
+  isNull: vi.fn((a: unknown) => ({ isNull: a })),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -163,6 +165,14 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(putPublishedArtifact).not.toHaveBeenCalled();
   });
 
+  it('returns 404 and touches nothing when the page does not exist', async () => {
+    findFirstPage.mockResolvedValue(undefined);
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(404);
+    expect(onConflictDoUpdate).not.toHaveBeenCalled();
+    expect(putPublishedArtifact).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when the page is not a canvas page', async () => {
     findFirstPage.mockResolvedValue({ id: 'page-1', type: 'DOCUMENT', title: 'T', content: 'x', driveId: 'drive-1' });
     const res = await POST(makeReq({}), { params });
@@ -207,6 +217,27 @@ describe('POST /api/pages/[pageId]/publish', () => {
       url: 'https://acme.pagespace.site/welcome',
       subdomain: 'acme',
       path: 'welcome',
+      isHomePage: false,
+    });
+  });
+
+  it('publishing the drive home page mirrors it to the subdomain root and returns the root url', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: 'page-1' });
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(200);
+
+    // Two uploads: the slug artifact + the stable root mirror.
+    expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
+    expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: '', html: '<html>rendered</html>' });
+
+    const json = await res.json();
+    expect(json).toEqual({
+      url: 'https://acme.pagespace.site/',
+      subdomain: 'acme',
+      path: 'welcome',
+      isHomePage: true,
     });
   });
 
@@ -394,7 +425,23 @@ describe('GET /api/pages/[pageId]/publish', () => {
       url: 'https://acme.pagespace.site/welcome',
       subdomain: 'acme',
       path: 'welcome',
+      isHomePage: false,
     });
+  });
+
+  it('reports the subdomain root as the URL when the published page is the drive home page', async () => {
+    const publishedAt = new Date('2024-01-01T10:00:00Z');
+    const updatedAt = new Date('2024-01-01T10:00:01Z');
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt, updatedAt });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme', homePageId: 'page-1' });
+    findFirstPage.mockResolvedValue({ updatedAt: new Date('2024-01-01T09:55:00Z') });
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.isHomePage).toBe(true);
+    expect(json.url).toBe('https://acme.pagespace.site/');
+    expect(json.path).toBe('welcome');
   });
 
   it('returns isStale: true when the page was edited after its last publish', async () => {
@@ -458,11 +505,14 @@ describe('DELETE /api/pages/[pageId]/publish', () => {
   });
 
   it('removes the artifact and row, returns 200', async () => {
-    findFirstPublished.mockResolvedValue({ id: 'pub-1', artifactKey: 'published/acme/welcome/index.html' });
+    findFirstPublished.mockResolvedValue({ id: 'pub-1', artifactKey: 'published/acme/welcome/index.html', driveId: 'drive-1' });
+    // Not the home page → no root-mirror cleanup.
+    findFirstDrive.mockResolvedValue({ homePageId: 'other-page' });
 
     const res = await DELETE(makeReq(), { params });
     expect(res.status).toBe(200);
     expect(deletePublishedArtifact).toHaveBeenCalledWith('published/acme/welcome/index.html');
+    expect(deletePublishedArtifact).toHaveBeenCalledTimes(1);
     expect(deleteWhere).toHaveBeenCalledTimes(1);
     const json = await res.json();
     expect(json).toEqual({ unpublished: true });
@@ -473,5 +523,35 @@ describe('DELETE /api/pages/[pageId]/publish', () => {
     const res = await DELETE(makeReq(), { params });
     expect(res.status).toBe(404);
     expect(deletePublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('also clears the subdomain root mirror when unpublishing the drive home page', async () => {
+    findFirstPublished.mockResolvedValue({ id: 'pub-1', artifactKey: 'published/acme/welcome/index.html', driveId: 'drive-1' });
+    findFirstDrive
+      // DELETE handler: is this page the drive's home page?
+      .mockResolvedValueOnce({ homePageId: 'page-1' })
+      // clearPublishedHomeRoot: resolve the subdomain for the root key
+      .mockResolvedValueOnce({ publishSubdomain: 'acme' });
+
+    const res = await DELETE(makeReq(), { params });
+    expect(res.status).toBe(200);
+    // The slug artifact and the root mirror are both deleted.
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('published/acme/welcome/index.html');
+    expect(buildPublishedKey).toHaveBeenCalledWith('acme', '');
+    expect(deletePublishedArtifact).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns 500 and does NOT delete the row when clearing the home-page root mirror fails (retryable)', async () => {
+    findFirstPublished.mockResolvedValue({ id: 'pub-1', artifactKey: 'published/acme/welcome/index.html', driveId: 'drive-1' });
+    findFirstDrive
+      .mockResolvedValueOnce({ homePageId: 'page-1' })
+      .mockResolvedValueOnce({ publishSubdomain: 'acme' });
+    // Slug delete succeeds; the root-mirror delete fails.
+    deletePublishedArtifact.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('S3 down'));
+
+    const res = await DELETE(makeReq(), { params });
+    expect(res.status).toBe(500);
+    // The DB row must survive so the unpublish can be retried.
+    expect(deleteWhere).not.toHaveBeenCalled();
   });
 });
