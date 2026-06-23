@@ -206,10 +206,11 @@ export async function putPublishedSiteFile(params: {
  * Whether an object exists at the given key in the publish bucket.
  *
  * Used to decide a page's canonical sitemap URL: the home page is served at the
- * subdomain root only once it has been deliberately published *as* the home page
- * (which writes `published/<sub>/index.html`). Setting `homePageId` is
- * metadata-only and does NOT create that mirror, so the sitemap must confirm the
- * root object is really there before advertising `/` instead of the slug.
+ * subdomain root only once the root mirror exists at `published/<sub>/index.html`.
+ * `syncPublishedHomeRoot` creates that mirror automatically after `homePageId`
+ * changes, but there is a brief async window and legacy drives may predate the
+ * auto-sync. Confirming the object exists before advertising `/` prevents
+ * surfacing a dead route in the sitemap.
  *
  * A 404/NotFound means "not present" → false. Any other error propagates so the
  * caller (a best-effort regeneration) can log and skip rather than silently treat
