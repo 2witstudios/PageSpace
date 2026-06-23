@@ -326,6 +326,22 @@ describe('git_push', () => {
     expect(calls[0].args).toContain('main:feature');
   });
 
+  it('rejects deleting the default branch via an empty-source refspec (:main)', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!({ branch: ':main' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('allows deleting a feature branch (:feature)', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    await git_push.execute!({ branch: ':feature' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain(':feature');
+  });
+
   it('allows a non-force push with no branch (current branch)', async () => {
     const deps = makeDeps();
     const { git_push } = createSandboxGitTools(deps);

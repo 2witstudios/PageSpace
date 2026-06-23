@@ -41,6 +41,14 @@ function pushDestinationBranch(refspec: string): string {
   return dst.replace(/^refs\/heads\//, '').trim().toLowerCase();
 }
 
+// A delete refspec has an empty source: `:dst` (or `+:dst`). `git push origin
+// :main` deletes the remote default branch — as destructive as a force-push, so
+// the same guard must catch it.
+function isDeleteRefspec(refspec: string): boolean {
+  const spec = refspec.startsWith('+') ? refspec.slice(1) : refspec;
+  return spec.includes(':') && spec.slice(0, spec.lastIndexOf(':')).trim() === '';
+}
+
 export interface GitSandboxToolsDeps {
   gitRunDeps: GitSandboxRunDeps;
   resolveContext: ResolveSandboxContext;
@@ -400,21 +408,22 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       // from here — and check the refspec DESTINATION, not the raw value, so
       // `HEAD:main` / `feature:refs/heads/master` can't slip past.
       const forcing = force === true || (branch?.startsWith('+') ?? false);
-      if (forcing) {
-        if (!branch) {
-          return {
-            success: false as const,
-            error:
-              'Force-push requires an explicit branch so the target can be verified. Name the feature/PR branch to push to.',
-          };
-        }
-        if (DEFAULT_BRANCHES.has(pushDestinationBranch(branch))) {
-          return {
-            success: false as const,
-            error:
-              'Refusing to force-push to the default branch (main/master). Force-push is allowed on feature/PR branches only.',
-          };
-        }
+      if (forcing && !branch) {
+        return {
+          success: false as const,
+          error:
+            'Force-push requires an explicit branch so the target can be verified. Name the feature/PR branch to push to.',
+        };
+      }
+      // Destructive = force-push (rewrites history) or delete (`:branch`). Either
+      // one against the default branch is refused; a normal fast-forward push is not.
+      const destructive = forcing || (branch ? isDeleteRefspec(branch) : false);
+      if (destructive && branch && DEFAULT_BRANCHES.has(pushDestinationBranch(branch))) {
+        return {
+          success: false as const,
+          error:
+            'Refusing to force-push or delete the default branch (main/master). These are allowed on feature/PR branches only.',
+        };
       }
       return withToken(options, (ctx, token) =>
         gitR(
