@@ -108,6 +108,11 @@ const getSendChannelMessagePreview = (
 const pagesArrayToTree = (pages: Array<{ id: string; title: string; type: string; path: string }>): TreeItem[] => {
   interface Entry { id: string; title: string; type: string; path: string; segments: string[] }
   const entries: Entry[] = pages.map(p => ({ ...p, segments: p.path.split('/').filter(Boolean) }));
+  if (entries.length === 0) return [];
+
+  // Start at the shallowest depth present so subfolder ls-results render flat,
+  // not nested under a phantom parent node.
+  const startDepth = Math.min(...entries.map(e => e.segments.length)) - 1;
 
   const build = (items: Entry[], depth: number): TreeItem[] => {
     const result: TreeItem[] = [];
@@ -133,7 +138,7 @@ const pagesArrayToTree = (pages: Array<{ id: string; title: string; type: string
     return result;
   };
 
-  return build(entries, 1);
+  return build(entries, startDepth);
 };
 
 // Parse the legacy list_pages "paths" string format into a tree structure.
