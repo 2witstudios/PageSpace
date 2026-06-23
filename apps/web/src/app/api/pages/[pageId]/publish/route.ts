@@ -206,19 +206,22 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       return NextResponse.json({ error: 'Page is not published' }, { status: 404 });
     }
 
-    const { deletePublishedArtifact } = await import('@/lib/canvas/published-storage');
-    await deletePublishedArtifact(row.artifactKey);
-    await db.delete(publishedPages).where(eq(publishedPages.pageId, pageId));
-
-    // If this page was the drive's home page it was also mirrored to the
-    // subdomain root — remove that copy so the root stops serving it.
+    // If this page is the drive's home page it was also mirrored to the
+    // subdomain root. Clear that mirror BEFORE deleting the DB row so a failed
+    // root delete surfaces as an error with the row still present — i.e. the
+    // unpublish is retryable and never reports success while the page is still
+    // publicly reachable at the root.
     const drv = await db.query.drives.findFirst({
       where: eq(drives.id, row.driveId),
       columns: { homePageId: true },
     });
+
+    const { deletePublishedArtifact } = await import('@/lib/canvas/published-storage');
+    await deletePublishedArtifact(row.artifactKey);
     if (drv?.homePageId === pageId) {
       await clearPublishedHomeRoot(row.driveId);
     }
+    await db.delete(publishedPages).where(eq(publishedPages.pageId, pageId));
 
     auditRequest(req, {
       eventType: 'data.delete',

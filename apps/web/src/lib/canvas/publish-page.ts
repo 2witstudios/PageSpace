@@ -313,6 +313,10 @@ export async function publishHomePageAtRoot(
  * the root stops serving it. This only *un-serves* the root copy — it never
  * publishes anything. No-op when the drive has no subdomain or publishing is not
  * configured.
+ *
+ * Throws if the delete itself fails: the caller (unpublish) must NOT report
+ * success while the home page is still publicly reachable at the root. Callers
+ * run this before committing the rest of the unpublish so a failure is retryable.
  */
 export async function clearPublishedHomeRoot(driveId: string): Promise<void> {
   if (!isPublishConfigured()) return;
@@ -330,5 +334,6 @@ export async function clearPublishedHomeRoot(driveId: string): Promise<void> {
       driveId,
       error: err instanceof Error ? err.message : String(err),
     });
+    throw err;
   }
 }

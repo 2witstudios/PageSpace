@@ -540,4 +540,18 @@ describe('DELETE /api/pages/[pageId]/publish', () => {
     expect(buildPublishedKey).toHaveBeenCalledWith('acme', '');
     expect(deletePublishedArtifact).toHaveBeenCalledTimes(2);
   });
+
+  it('returns 500 and does NOT delete the row when clearing the home-page root mirror fails (retryable)', async () => {
+    findFirstPublished.mockResolvedValue({ id: 'pub-1', artifactKey: 'published/acme/welcome/index.html', driveId: 'drive-1' });
+    findFirstDrive
+      .mockResolvedValueOnce({ homePageId: 'page-1' })
+      .mockResolvedValueOnce({ publishSubdomain: 'acme' });
+    // Slug delete succeeds; the root-mirror delete fails.
+    deletePublishedArtifact.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('S3 down'));
+
+    const res = await DELETE(makeReq(), { params });
+    expect(res.status).toBe(500);
+    // The DB row must survive so the unpublish can be retried.
+    expect(deleteWhere).not.toHaveBeenCalled();
+  });
 });

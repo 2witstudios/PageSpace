@@ -341,4 +341,11 @@ describe('clearPublishedHomeRoot', () => {
 
     expect(deletePublishedArtifact).not.toHaveBeenCalled();
   });
+
+  it('rethrows when the root-mirror delete fails (unpublish must not silently succeed)', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({ publishSubdomain: 'sub' }));
+    vi.mocked(deletePublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
+
+    await expect(clearPublishedHomeRoot('drive-1')).rejects.toThrow('S3 down');
+  });
 });
