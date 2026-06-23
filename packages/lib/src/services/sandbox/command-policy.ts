@@ -27,7 +27,8 @@ export const MAX_COMMAND_BYTES = 16 * 1024;
 export type CommandPolicyDenialReason =
   | 'empty_command'
   | 'command_too_large'
-  | 'blocked_metadata_access';
+  | 'blocked_metadata_access'
+  | 'github_over_bash';
 
 export type CommandPolicyDecision =
   | { ok: true }
@@ -36,6 +37,17 @@ export type CommandPolicyDecision =
 // The IPv4 link-local metadata address and its common decimal/hex encodings.
 // Each alternative is a fixed literal — the alternation is linear.
 const METADATA_ADDRESS = /169\.254\.169\.254|0xa9fea9fe|2852039166/i;
+
+// The `gh` CLI (any subcommand) or git's auth-requiring subcommands run in `bash`,
+// which carries NO GitHub credentials — only the dedicated git_*/gh_* tools do.
+// This is a UX redirect to those tools, NOT a security control (isolation + egress
+// own security; see this file's header). Anchored to a command-start boundary
+// (start of string, or just after `;`/`&`/`|`/newline) to limit false positives,
+// and local credential-free git (status/diff/log/add/commit) is intentionally NOT
+// matched. The trailing `(?![\w-])` requires the command token to end, so `github`
+// and `git pushy` do not match. One linear scan — no nested/overlapping
+// quantifiers (CodeQL js/polynomial-redos safe).
+const GITHUB_OVER_BASH = /(?:^|[\n;&|])[ \t]*(?:gh|git[ \t]+(?:clone|fetch|pull|push))(?![\w-])/i;
 
 const deny = (reason: CommandPolicyDenialReason): CommandPolicyDecision => ({
   ok: false,
@@ -58,6 +70,9 @@ export function evaluateCommandPolicy({
   }
   if (METADATA_ADDRESS.test(command)) {
     return deny('blocked_metadata_access');
+  }
+  if (GITHUB_OVER_BASH.test(command)) {
+    return deny('github_over_bash');
   }
   return { ok: true };
 }

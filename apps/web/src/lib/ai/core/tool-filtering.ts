@@ -61,6 +61,33 @@ export const WRITE_TOOLS = new Set([
   'create_command',
   'update_command',
   'delete_command',
+  // Sandbox / code-execution operations — all mutate the persistent sandbox
+  // filesystem or a remote. bash can run arbitrary mutations, so it is excluded
+  // in read-only mode too. Read-only sandbox tools (readFile, git_status,
+  // git_diff, git_log, gh_pr_list, gh_pr_view, gh_issue_list, gh_issue_view) are
+  // intentionally NOT listed and remain available.
+  'bash',
+  'writeFile',
+  'editFile',
+  'git_clone',
+  'git_init',
+  'git_config',
+  'git_remote_add',
+  'git_add',
+  'git_reset',
+  'git_stash',
+  'git_commit',
+  'git_merge',
+  'git_rebase',
+  'git_checkout',
+  'git_branch',
+  'git_fetch',
+  'git_pull',
+  'git_push',
+  'gh_pr_create',
+  'gh_pr_merge',
+  'gh_pr_checkout',
+  'gh_issue_create',
 ]);
 
 // Web search tools (excluded when web search is disabled)

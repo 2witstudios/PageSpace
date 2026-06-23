@@ -1,6 +1,6 @@
 import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy';
 import { truncateToBytes } from './output-limit';
-import { SANDBOX_ROOT } from './sandbox-paths';
+import { SANDBOX_ROOT, resolveSandboxPath } from './sandbox-paths';
 import type { SandboxActorContext, SandboxRunDeps, BashToolResult } from './tool-runners';
 
 export interface GitSandboxRunDeps extends SandboxRunDeps {
@@ -47,6 +47,21 @@ export async function runGitInSandbox({
     return { success: false, error: 'Code execution is disabled.', reason: 'kill_switch_off' };
   }
 
+  // A provided working directory must stay inside the sandbox root — mirror the
+  // bash path. Validate BEFORE acquiring a slot so a bad cwd consumes no quota.
+  let resolvedCwd: string = SANDBOX_ROOT;
+  if (cwd !== undefined) {
+    const candidate = resolveSandboxPath(cwd);
+    if (!candidate) {
+      return {
+        success: false,
+        error: 'The path is invalid or escapes the sandbox root.',
+        reason: 'path_escape',
+      };
+    }
+    resolvedCwd = candidate;
+  }
+
   // Pre-fetch token BEFORE acquiring a sandbox slot — a missing token on a
   // network-requiring command must not consume quota.
   const token =
@@ -81,7 +96,6 @@ export async function runGitInSandbox({
       return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };
     }
 
-    const resolvedCwd = cwd ?? SANDBOX_ROOT;
     const startedAt = deps.now();
 
     let run: { exitCode: number; stdout: string; stderr: string };
