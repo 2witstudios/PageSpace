@@ -345,7 +345,7 @@ describe('writeSandboxFile', () => {
 
 describe('editSandboxFile', () => {
   function makeEditDeps(fileContents: string | null) {
-    const written: Array<{ path: string; content: string }> = [];
+    const written: Array<{ path: string; content: string | Uint8Array }> = [];
     const { deps, slots, audits } = makeDeps({
       reconnect: async () =>
         makeSandbox({
