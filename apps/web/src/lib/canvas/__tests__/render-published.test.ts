@@ -5,7 +5,7 @@ describe('renderPublishedPage', () => {
   it('given any input, should return a full HTML document', () => {
     const out = renderPublishedPage({ html: '<p>hello</p>' });
     expect(out.startsWith('<!doctype html>')).toBe(true);
-    expect(out).toContain('<html>');
+    expect(out).toContain('<html lang="en">');
     expect(out).toContain('</html>');
     expect(out).toContain('<body>');
   });
@@ -114,5 +114,44 @@ describe('renderPublishedPage — assetBaseUrl', () => {
       html: '<style>body { background: url("https://cdn.example.com/assets/x"); }</style>',
       assetBaseUrl: 'https://user:pass@cdn.example.com',
     })).toThrow(/origin/i);
+  });
+});
+
+describe('renderPublishedPage — SEO + social passthrough', () => {
+  const pageUrl = 'https://acme.pagespace.site/my-page';
+
+  it('given pageUrl, should emit canonical, robots (default index), and JSON-LD', () => {
+    const out = renderPublishedPage({ html: '<p>About cats.</p>', title: 'Cats', pageUrl });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain(`<link rel="canonical" href="${pageUrl}">`);
+    expect(head).toContain('<meta name="robots" content="index, follow">');
+    expect(head).toContain('<script type="application/ld+json">');
+  });
+
+  it('given an explicit description, should emit it as the meta description', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>', pageUrl, description: 'Hand-written summary' });
+    expect(out).toContain('<meta name="description" content="Hand-written summary">');
+  });
+
+  it('given robots="noindex", should emit a noindex robots directive', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>', pageUrl, robots: 'noindex' });
+    expect(out).toContain('<meta name="robots" content="noindex">');
+  });
+
+  it('given ogImageUrl + ogDescription, should emit twitter card tags reusing them', () => {
+    const out = renderPublishedPage({
+      html: '<p>x</p>',
+      pageUrl,
+      ogImageUrl: 'https://pagespace.ai/og.png',
+      ogDescription: 'Social blurb',
+    });
+    expect(out).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(out).toContain('<meta name="twitter:image" content="https://pagespace.ai/og.png">');
+    expect(out).toContain('<meta name="twitter:description" content="Social blurb">');
+  });
+
+  it('given a lang, should set <html lang>', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>', pageUrl, lang: 'es' });
+    expect(out).toContain('<html lang="es">');
   });
 });

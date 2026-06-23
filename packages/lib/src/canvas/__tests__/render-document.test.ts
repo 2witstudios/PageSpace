@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { renderCanvasDocument, escapeHtml, BASELINE_CSP, BASELINE_RESET } from '../render-document';
+import { renderCanvasDocument, deriveDescription, escapeHtml, BASELINE_CSP, BASELINE_RESET } from '../render-document';
 
 describe('renderCanvasDocument', () => {
   it('given any input, should return a full HTML document', () => {
     const out = renderCanvasDocument({ html: '<p>hello</p>' });
     expect(out.startsWith('<!doctype html>')).toBe(true);
-    expect(out).toContain('<html>');
+    expect(out).toContain('<html lang="en">');
     expect(out).toContain('</html>');
     expect(out).toContain('<body>');
     expect(out).toContain('<p>hello</p>');
@@ -352,5 +352,224 @@ describe('renderCanvasDocument — allowedAssetHosts', () => {
     });
     expect(out).not.toContain('cdn.example.com');
     expect(out).toContain('url("")');
+  });
+});
+
+describe('renderCanvasDocument — <html lang>', () => {
+  it('given no lang, should default the html lang to "en"', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>' });
+    expect(out).toContain('<html lang="en">');
+  });
+
+  it('given an explicit lang, should use it', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', lang: 'fr' });
+    expect(out).toContain('<html lang="fr">');
+    expect(out).not.toContain('<html lang="en">');
+  });
+
+  it('given a blank lang, should fall back to "en"', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', lang: '   ' });
+    expect(out).toContain('<html lang="en">');
+  });
+
+  it('given a lang with a double-quote, should HTML-escape it', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', lang: 'en"><script>' });
+    expect(out).not.toContain('<html lang="en"><script>');
+    expect(out).toContain('&quot;&gt;&lt;script&gt;');
+  });
+});
+
+describe('deriveDescription', () => {
+  it('given plain text shorter than the limit, should return it unchanged', () => {
+    expect(deriveDescription('Hello world')).toBe('Hello world');
+  });
+
+  it('given HTML, should strip tags and collapse whitespace', () => {
+    expect(deriveDescription('<h1>Hi</h1>\n\n  <p>there   friend</p>')).toBe('Hi there friend');
+  });
+
+  it('given <script> and <style> blocks, should drop their contents entirely', () => {
+    const html = '<style>.x{color:red}</style><p>Visible copy</p><script>const t="hidden";</script>';
+    expect(deriveDescription(html)).toBe('Visible copy');
+  });
+
+  it('given HTML entities, should decode them (so re-escaping does not double-encode)', () => {
+    expect(deriveDescription('<p>Tom &amp; Jerry &lt;3 &#39;quotes&#39;</p>')).toBe("Tom & Jerry <3 'quotes'");
+  });
+
+  it('given text longer than ~155 chars, should truncate at a word boundary and add an ellipsis', () => {
+    const long = 'word '.repeat(60).trim(); // 60 words, ~299 chars
+    const out = deriveDescription(long);
+    expect(out.length).toBeLessThanOrEqual(156);
+    expect(out.endsWith('…')).toBe(true);
+    expect(out).not.toContain('wor…'); // no mid-word cut
+  });
+
+  it('given empty/whitespace-only content, should return an empty string', () => {
+    expect(deriveDescription('   \n\t ')).toBe('');
+    expect(deriveDescription('')).toBe('');
+  });
+});
+
+describe('renderCanvasDocument — SEO meta (published only)', () => {
+  it('given pageUrl, should emit a canonical link with the exact published URL', () => {
+    const url = 'https://acme.pagespace.site/my-page';
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: url });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain(`<link rel="canonical" href="${url}">`);
+  });
+
+  it('given pageUrl and no robots, should default robots to "index, follow"', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://acme.pagespace.site/p' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta name="robots" content="index, follow">');
+  });
+
+  it('given robots="noindex", should emit that value', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://acme.pagespace.site/p', robots: 'noindex' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta name="robots" content="noindex">');
+    expect(head).not.toContain('index, follow');
+  });
+
+  it('given a description input, should emit it as meta name=description', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+      description: 'A crafted summary',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta name="description" content="A crafted summary">');
+  });
+
+  it('given no description input, should derive the meta description from the body text', () => {
+    const out = renderCanvasDocument({
+      html: '<h1>Welcome</h1><p>This page is about cats.</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta name="description" content="Welcome This page is about cats.">');
+  });
+
+  it('given a description with HTML special chars, should escape it', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+      description: 'A & B <draft>',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('content="A &amp; B &lt;draft&gt;"');
+  });
+
+  it('given no pageUrl, should emit no canonical/robots/description SEO tags (in-app rendering unchanged)', () => {
+    const out = renderCanvasDocument({ html: '<p>some text</p>', title: 'My Page' });
+    expect(out).not.toContain('rel="canonical"');
+    expect(out).not.toContain('name="robots"');
+    expect(out).not.toContain('name="description"');
+  });
+
+  it('given pageUrl, SEO tags must appear inside <head> not <body>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://acme.pagespace.site/p' });
+    const bodyStart = out.indexOf('<body>');
+    expect(out.indexOf('rel="canonical"')).toBeGreaterThanOrEqual(0);
+    expect(out.indexOf('rel="canonical"')).toBeLessThan(bodyStart);
+    expect(out.indexOf('name="robots"')).toBeLessThan(bodyStart);
+  });
+});
+
+describe('renderCanvasDocument — JSON-LD structured data', () => {
+  function extractJsonLd(out: string): unknown {
+    const m = out.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+    if (!m) throw new Error('no JSON-LD script found');
+    return JSON.parse(m[1]);
+  }
+
+  it('given pageUrl, should emit a valid JSON-LD script with WebSite + WebPage nodes', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      title: 'My Page',
+      pageUrl: 'https://acme.pagespace.site/my-page',
+      description: 'A summary',
+    });
+    const data = extractJsonLd(out) as { '@context': string; '@graph': Array<Record<string, string>> };
+    expect(data['@context']).toBe('https://schema.org');
+    const types = data['@graph'].map((n) => n['@type']);
+    expect(types).toContain('WebSite');
+    expect(types).toContain('WebPage');
+    const webPage = data['@graph'].find((n) => n['@type'] === 'WebPage')!;
+    expect(webPage.name).toBe('My Page');
+    expect(webPage.url).toBe('https://acme.pagespace.site/my-page');
+    expect(webPage.description).toBe('A summary');
+    const webSite = data['@graph'].find((n) => n['@type'] === 'WebSite')!;
+    expect(webSite.url).toBe('https://acme.pagespace.site');
+  });
+
+  it('given a title containing </script>, should not break out of the JSON-LD script element', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      title: 'Pwn </script><script>alert(1)</script>',
+      pageUrl: 'https://acme.pagespace.site/p',
+    });
+    // The raw closing tag must be escaped inside the JSON-LD block.
+    const m = out.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)!;
+    expect(m[1]).not.toContain('</script>');
+    // …and the JSON is still valid and round-trips the title.
+    const data = JSON.parse(m[1]) as { '@graph': Array<Record<string, string>> };
+    const webPage = data['@graph'].find((n) => n['@type'] === 'WebPage')!;
+    expect(webPage.name).toBe('Pwn </script><script>alert(1)</script>');
+  });
+
+  it('given no pageUrl, should emit no JSON-LD', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', title: 'My Page' });
+    expect(out).not.toContain('application/ld+json');
+  });
+});
+
+describe('renderCanvasDocument — Twitter Card', () => {
+  it('given pageUrl, should emit twitter:card=summary_large_image and twitter:title', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', title: 'My Page', pageUrl: 'https://acme.pagespace.site/p' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(head).toContain('<meta name="twitter:title" content="My Page">');
+  });
+
+  it('given ogImageUrl, should reuse it for twitter:image', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+      ogImageUrl: 'https://pagespace.ai/og.png',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta name="twitter:image" content="https://pagespace.ai/og.png">');
+  });
+
+  it('given ogDescription, should reuse it for twitter:description', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+      ogDescription: 'Shared blurb',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta name="twitter:description" content="Shared blurb">');
+  });
+
+  it('given no ogDescription but derivable body text, should fall back to the SEO description for twitter:description', () => {
+    const out = renderCanvasDocument({
+      html: '<p>Body sentence here.</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta name="twitter:description" content="Body sentence here.">');
+  });
+
+  it('given a title with special chars, should escape twitter:title', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', title: '<b>bold & bright</b>', pageUrl: 'https://acme.pagespace.site/p' });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('name="twitter:title" content="&lt;b&gt;bold &amp; bright&lt;/b&gt;"');
+  });
+
+  it('given no pageUrl, should emit no twitter tags', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', title: 'My Page' });
+    expect(out).not.toContain('twitter:');
   });
 });

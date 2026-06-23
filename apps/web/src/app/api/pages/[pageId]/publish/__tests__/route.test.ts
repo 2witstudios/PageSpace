@@ -208,7 +208,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(updateWhere).toHaveBeenCalledTimes(2);
 
     expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
-    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome' }));
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome', description: 'hi', robots: undefined }));
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
     expect(onConflictDoUpdate).toHaveBeenCalledTimes(1);
 
@@ -251,6 +251,28 @@ describe('POST /api/pages/[pageId]/publish', () => {
     const res = await POST(makeReq({}), { params });
     expect(res.status).toBe(200);
     expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ ogImageUrl: ogImg, ogDescription: 'My gallery' }));
+  });
+
+  it('passes the author og:description through as the SEO meta description when present', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Gallery', content: '<p>body text</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'PERSONAL' });
+    findFirstPublished.mockResolvedValue(null);
+    extractAndStripOgMeta.mockReturnValue({ meta: { ogDescription: 'Curated blurb' }, html: '<p>body text</p>' });
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(200);
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ description: 'Curated blurb' }));
+  });
+
+  it('derives the SEO meta description from page content when no og:description is set', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Plain', content: '<h1>Title</h1><p>Real body copy.</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'PERSONAL' });
+    findFirstPublished.mockResolvedValue(null);
+    extractAndStripOgMeta.mockReturnValue({ meta: {}, html: '<h1>Title</h1><p>Real body copy.</p>' });
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(200);
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ description: 'Title Real body copy.' }));
   });
 
   it('uses favicon from canvas link rel=icon when present and skips faviconBaseUrl', async () => {

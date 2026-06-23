@@ -9,6 +9,7 @@ import { eq, and, isNull } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
+import { deriveDescription } from '@pagespace/lib/canvas/render-document';
 import { renderPublishedPage } from './render-published';
 import {
   buildPublishedKey,
@@ -68,6 +69,13 @@ export interface PublishCanvasPageInput {
    * (or a new one is allocated from the drive slug).
    */
   subdomain?: string;
+  /**
+   * When true, the published page emits `<meta name="robots" content="noindex">`
+   * so search engines keep it out of their indexes. Defaults to indexable. The
+   * author-facing toggle + persistence is a separate task; this just honors the
+   * flag when a caller passes it.
+   */
+  noindex?: boolean;
 }
 
 export interface PublishCanvasPageResult {
@@ -187,6 +195,9 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   const { html: rewrittenHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId, db });
   const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
   const assetBaseUrl = getPublishAssetBaseUrl();
+  // The canonical URL is exactly the page's published URL. The SEO description
+  // prefers the author's og:description, falling back to text derived from the
+  // page content. Robots defaults to indexable unless the caller opts out.
   const publishedUrl = `https://${subdomain}.${PUBLISH_HOST}/${path}`;
   const html = renderPublishedPage({
     html: bodyHtml,
@@ -197,6 +208,8 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     pageUrl: publishedUrl,
     ogImageUrl: meta.ogImageUrl,
     ogDescription: meta.ogDescription,
+    description: meta.ogDescription ?? deriveDescription(bodyHtml),
+    robots: input.noindex ? 'noindex' : undefined,
   });
   const key = buildPublishedKey(subdomain, path);
 
