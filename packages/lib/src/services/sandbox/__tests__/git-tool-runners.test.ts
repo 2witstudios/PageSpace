@@ -5,6 +5,7 @@ import {
 } from '../git-tool-runners';
 import type { SandboxActorContext } from '../tool-runners';
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
+import { SANDBOX_ROOT } from '../sandbox-paths';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
@@ -163,6 +164,32 @@ describe('runGitInSandbox', () => {
     const { deps, runCommandCalls } = makeDepsWithSpy();
     await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx(), deps });
     expect(runCommandCalls[0].timeoutMs).toBe(120_000);
+  });
+
+  it('given no cwd, should default the working directory to the sandbox root', async () => {
+    const { deps, runCommandCalls } = makeDepsWithSpy();
+    await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx(), deps });
+    expect(runCommandCalls[0].cwd).toBe(SANDBOX_ROOT);
+  });
+
+  it('given a valid relative cwd, should forward the resolved absolute path to runCommand', async () => {
+    const { deps, runCommandCalls } = makeDepsWithSpy();
+    await runGitInSandbox({ cmd: 'git', args: ['status'], cwd: 'myrepo', ctx: makeCtx(), deps });
+    expect(runCommandCalls[0].cwd).toBe(`${SANDBOX_ROOT}/myrepo`);
+  });
+
+  it('given a cwd that escapes the sandbox root, should deny path_escape before acquiring a slot', async () => {
+    const { deps, slots, runCommandCalls } = makeDepsWithSpy();
+    const result = await runGitInSandbox({
+      cmd: 'git',
+      args: ['status'],
+      cwd: '../../etc',
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ success: false, reason: 'path_escape' });
+    expect(slots.acquired).toBe(0);
+    expect(runCommandCalls).toHaveLength(0);
   });
 
   it('releases the concurrency slot in finally even when sandbox.runCommand throws', async () => {
