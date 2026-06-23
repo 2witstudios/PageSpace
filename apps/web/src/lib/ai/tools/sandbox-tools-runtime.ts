@@ -250,7 +250,7 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
  * default-OFF feature flag — importing this object does not expose anything by
  * itself.
  */
-export function buildSandboxTools(): { bash: Tool; writeFile: Tool; readFile: Tool } {
+export function buildSandboxTools(): { bash: Tool; writeFile: Tool; readFile: Tool; editFile: Tool } {
   return createSandboxTools({
     runDeps: buildRealSandboxRunDeps(),
     resolveContext: resolveSandboxActorContext,

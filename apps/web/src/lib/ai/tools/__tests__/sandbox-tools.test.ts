@@ -123,4 +123,39 @@ describe('createSandboxTools', () => {
     expect(schema.safeParse({ command: '' }).success).toBe(false);
     expect(schema.safeParse({ command: 'ls' }).success).toBe(true);
   });
+
+  it('editFile: should delegate and report replacements', async () => {
+    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const result = await exec(tools.editFile, { path: 'a.txt', oldString: 'data', newString: 'X' }, {});
+    expect(result).toMatchObject({ success: true, path: 'a.txt', replacements: 1 });
+  });
+
+  it('editFile: given the gate denies, should not edit', async () => {
+    let wrote = false;
+    const runDeps = fakeRunDeps();
+    runDeps.reconnect = async () => ({
+      sandboxId: 'sbx',
+      runCommand: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFiles: async () => {
+        wrote = true;
+      },
+      readFileToBuffer: async () => Buffer.from('data'),
+    });
+    const tools = createSandboxTools({
+      runDeps,
+      resolveContext: okResolve,
+      gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
+    });
+    const result = await exec(tools.editFile, { path: 'a.txt', oldString: 'data', newString: 'X' }, {});
+    expect(result).toEqual({ success: false, error: 'disabled' });
+    expect(wrote).toBe(false);
+  });
+
+  it('editFile inputSchema: should require path/oldString/newString and accept replaceAll', () => {
+    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const schema = tools.editFile.inputSchema as { safeParse: (v: unknown) => { success: boolean } };
+    expect(schema.safeParse({ path: 'a', oldString: 'x', newString: 'y' }).success).toBe(true);
+    expect(schema.safeParse({ path: 'a', oldString: 'x', newString: 'y', replaceAll: true }).success).toBe(true);
+    expect(schema.safeParse({ path: 'a', oldString: 'x' }).success).toBe(false);
+  });
 });

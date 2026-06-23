@@ -23,6 +23,7 @@ import {
   runBashInSandbox,
   writeSandboxFile,
   readSandboxFile,
+  editSandboxFile,
   MAX_WRITE_BYTES,
   type SandboxActorContext,
   type SandboxRunDeps,
@@ -48,6 +49,13 @@ export const writeFileInputSchema = z.object({
 
 export const readFileInputSchema = z.object({
   path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
+});
+
+export const editFileInputSchema = z.object({
+  path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
+  oldString: z.string().min(1, 'oldString is required'),
+  newString: z.string(),
+  replaceAll: z.boolean().optional(),
 });
 
 /** Resolves the actor context for a turn, or an error to surface to the model. */
@@ -84,6 +92,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
   bash: Tool;
   writeFile: Tool;
   readFile: Tool;
+  editFile: Tool;
 } {
   // Resolve the actor, then run the call-time gate (kill-switch + canRunCode +
   // quota) BEFORE delegating to the runner — a denial returns a safe error and
@@ -130,6 +139,17 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
         const opened = await open(options);
         if (!opened.ok) return opened.error;
         return readSandboxFile({ path, ctx: opened.ctx, deps: runDeps });
+      },
+    }),
+
+    editFile: tool({
+      description:
+        'Edit a file in this conversation\'s sandbox by replacing oldString with newString. oldString must be unique in the file unless replaceAll is set. Prefer this over writeFile for targeted changes — it does not rewrite the whole file. The path is relative to the sandbox root and cannot escape it.',
+      inputSchema: editFileInputSchema,
+      execute: async ({ path, oldString, newString, replaceAll }, options) => {
+        const opened = await open(options);
+        if (!opened.ok) return opened.error;
+        return editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps });
       },
     }),
   };
