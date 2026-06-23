@@ -13,6 +13,7 @@ import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard'
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
+import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -167,6 +168,9 @@ export async function POST(request: Request) {
     const affectedDriveIds = new Set<string>();
     affectedDriveIds.add(targetDriveId);
 
+    // Drives whose homePageId was cleared during the move (synced after tx commits).
+    const clearedHomePageDriveIds: string[] = [];
+
     // Move pages in transaction
     await db.transaction(async (tx) => {
       for (const page of sourcePages) {
@@ -218,6 +222,7 @@ export async function POST(request: Request) {
           await tx.update(drives)
             .set({ homePageId: null })
             .where(eq(drives.id, sourceDriveId));
+          clearedHomePageDriveIds.push(sourceDriveId);
         }
       }
     });
@@ -251,6 +256,12 @@ export async function POST(request: Request) {
       await broadcastPageEvent(
         createPageEventPayload(driveId, '', 'moved')
       );
+    }
+
+    // Sync the subdomain root for drives whose home page was bulk-moved away.
+    // Fire-and-forget: never blocks the response; syncPublishedHomeRoot swallows errors.
+    for (const driveId of clearedHomePageDriveIds) {
+      void syncPublishedHomeRoot(driveId);
     }
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page', resourceId: 'bulk', details: { operation: 'bulk_move', count: pageIds.length } });
