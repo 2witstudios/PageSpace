@@ -208,7 +208,12 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(updateWhere).toHaveBeenCalledTimes(2);
 
     expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
-    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome', description: 'hi', robots: undefined }));
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome', description: 'hi' }));
+    // `robots` is forwarded EXPLICITLY (as undefined) so the renderer applies its
+    // index default — objectContaining alone can't prove the key was passed.
+    const firstCallArg = renderPublishedPage.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(firstCallArg, 'robots')).toBe(true);
+    expect(firstCallArg.robots).toBeUndefined();
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
     expect(onConflictDoUpdate).toHaveBeenCalledTimes(1);
 
@@ -227,6 +232,11 @@ describe('POST /api/pages/[pageId]/publish', () => {
 
     const res = await POST(makeReq({}), { params });
     expect(res.status).toBe(200);
+
+    // The home page's primary public URL is the subdomain ROOT, so its baked
+    // canonical/OG/JSON-LD URL must be the root — not the secondary slug path
+    // (otherwise the root page canonicalizes itself away to /welcome).
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ pageUrl: 'https://acme.pagespace.site/' }));
 
     // Two uploads: the slug artifact + the stable root mirror.
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
