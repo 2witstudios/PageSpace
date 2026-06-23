@@ -341,6 +341,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     mockCreateStreamLifecycle.mockResolvedValue({
       pushPart: mockLifecyclePushPart,
       finish: mockLifecycleFinish,
+      getBufferedParts: vi.fn().mockReturnValue([]),
     });
   });
 
