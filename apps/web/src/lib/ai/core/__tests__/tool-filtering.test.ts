@@ -186,4 +186,59 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
     expect(filtered).not.toHaveProperty('delete_task_trigger');
     expect(filtered).toHaveProperty('list_calendar_events');
   });
+
+  it('classifies sandbox mutators (bash/writeFile/editFile + writing git/gh) as write tools', () => {
+    for (const name of [
+      'bash',
+      'writeFile',
+      'editFile',
+      'git_clone',
+      'git_add',
+      'git_commit',
+      'git_push',
+      'git_checkout',
+      'gh_pr_create',
+      'gh_pr_merge',
+      'gh_issue_create',
+    ]) {
+      expect(isWriteTool(name)).toBe(true);
+    }
+  });
+
+  it('keeps read-only sandbox tools available (readFile, git_status/diff/log, gh_pr_view/list)', () => {
+    for (const name of [
+      'readFile',
+      'git_status',
+      'git_diff',
+      'git_log',
+      'gh_pr_list',
+      'gh_pr_view',
+      'gh_issue_list',
+      'gh_issue_view',
+    ]) {
+      expect(isWriteTool(name)).toBe(false);
+    }
+  });
+
+  it('excludes sandbox mutators in read-only mode but keeps readFile and git_status', () => {
+    const tools = {
+      bash: 'w',
+      writeFile: 'w',
+      editFile: 'w',
+      git_push: 'w',
+      gh_pr_create: 'w',
+      readFile: 'r',
+      git_status: 'r',
+      gh_pr_view: 'r',
+    };
+    const filtered = filterToolsForReadOnly(tools, true);
+    expect(filtered).not.toHaveProperty('bash');
+    expect(filtered).not.toHaveProperty('writeFile');
+    expect(filtered).not.toHaveProperty('editFile');
+    expect(filtered).not.toHaveProperty('git_push');
+    expect(filtered).not.toHaveProperty('gh_pr_create');
+    expect(filtered).toHaveProperty('readFile');
+    expect(filtered).toHaveProperty('git_status');
+    expect(filtered).toHaveProperty('gh_pr_view');
+  });
 });
