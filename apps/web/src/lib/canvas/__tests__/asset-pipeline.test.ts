@@ -337,6 +337,8 @@ describe('rewriteInterPageLinksForDrive', () => {
       driveId: 'drive-1',
       subdomain: 'acme',
       homePageId: null,
+      currentPageId: 'current-page',
+      currentPath: 'current',
       db: mockInterPageDb as never,
     });
 
@@ -355,6 +357,8 @@ describe('rewriteInterPageLinksForDrive', () => {
       driveId: 'drive-1',
       subdomain: 'acme',
       homePageId: null,
+      currentPageId: 'current-page',
+      currentPath: 'current',
       db: mockInterPageDb as never,
     });
 
@@ -380,6 +384,8 @@ describe('rewriteInterPageLinksForDrive', () => {
       driveId: 'drive-1',
       subdomain: 'acme',
       homePageId: null,
+      currentPageId: 'current-page',
+      currentPath: 'current',
       db: mockInterPageDb as never,
     });
 
@@ -397,6 +403,8 @@ describe('rewriteInterPageLinksForDrive', () => {
       driveId: 'drive-1',
       subdomain: 'acme',
       homePageId: 'home-1',
+      currentPageId: 'current-page',
+      currentPath: 'current',
       db: mockInterPageDb as never,
     });
 
@@ -412,10 +420,66 @@ describe('rewriteInterPageLinksForDrive', () => {
       driveId: 'drive-1',
       subdomain: 'acme',
       homePageId: null,
+      currentPageId: 'current-page',
+      currentPath: 'current',
       db: mockInterPageDb as never,
     });
 
     expect(result.html).toBe(html);
+  });
+
+  it('given a self-link to the page being published with no DB row yet (first publish), should rewrite from the computed path', async () => {
+    const html = '<a href="/dashboard/drive-1/page-self">home</a>';
+    mockInterPageDb.query.publishedPages.findMany.mockResolvedValue([]); // not upserted yet
+
+    const result = await rewriteInterPageLinksForDrive({
+      html,
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      homePageId: null,
+      currentPageId: 'page-self',
+      currentPath: 'welcome',
+      db: mockInterPageDb as never,
+    });
+
+    expect(result.html).toBe('<a href="https://acme.pagespace.site/welcome">home</a>');
+  });
+
+  it('given a republish at a new path, should rewrite a self-link to the NEW path, not the stale DB row', async () => {
+    const html = '<a href="/dashboard/drive-1/page-self">me</a>';
+    mockInterPageDb.query.publishedPages.findMany.mockResolvedValue([
+      { pageId: 'page-self', path: 'old-path' },
+    ]);
+
+    const result = await rewriteInterPageLinksForDrive({
+      html,
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      homePageId: null,
+      currentPageId: 'page-self',
+      currentPath: 'new-path',
+      db: mockInterPageDb as never,
+    });
+
+    expect(result.html).toBe('<a href="https://acme.pagespace.site/new-path">me</a>');
+    expect(result.html).not.toContain('old-path');
+  });
+
+  it('given the page being published is the drive home page, should rewrite a self-link to the site root even with no DB row', async () => {
+    const html = '<a href="/dashboard/drive-1/home-self">home</a>';
+    mockInterPageDb.query.publishedPages.findMany.mockResolvedValue([]);
+
+    const result = await rewriteInterPageLinksForDrive({
+      html,
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      homePageId: 'home-self',
+      currentPageId: 'home-self',
+      currentPath: 'landing',
+      db: mockInterPageDb as never,
+    });
+
+    expect(result.html).toBe('<a href="/">home</a>');
   });
 });
 

@@ -204,6 +204,8 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     driveId,
     subdomain,
     homePageId: drive.homePageId,
+    currentPageId: pageId,
+    currentPath: path,
     db,
   });
   const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);

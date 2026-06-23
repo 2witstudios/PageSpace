@@ -279,15 +279,26 @@ export async function rewriteCanvasAssets(params: {
  * Runs AFTER `rewriteCanvasAssets`: file-view links to actual file pages are
  * already CDN URLs by then, so the only `/dashboard/.../view` links left for
  * this pass are page→page links.
+ *
+ * The page CURRENTLY being published (`currentPageId` / `currentPath`) is seeded
+ * into the map directly rather than read from the DB: its `published_pages` row
+ * does not exist yet on first publish, and still holds the OLD path when
+ * republishing at a new path (the upsert happens later in `publishCanvasPage`).
+ * Seeding from the freshly-computed path means a canvas link back to the page
+ * being published — common in nav/logo links, and the norm for a home page —
+ * resolves to the correct public URL instead of a dead `/dashboard/...` link or
+ * a stale path.
  */
 export async function rewriteInterPageLinksForDrive(params: {
   html: string;
   driveId: string;
   subdomain: string;
   homePageId: string | null;
+  currentPageId: string;
+  currentPath: string;
   db: Pick<typeof DbType, 'query'>;
 }): Promise<{ html: string }> {
-  const { html, driveId, subdomain, homePageId, db } = params;
+  const { html, driveId, subdomain, homePageId, currentPageId, currentPath, db } = params;
 
   const links = extractInterPageLinks(html);
   const pageIds = Array.from(new Set(links.map(({ pageId }) => pageId)));
@@ -305,6 +316,11 @@ export async function rewriteInterPageLinksForDrive(params: {
   if (homePageId && pathByPageId.has(homePageId)) {
     pathByPageId.set(homePageId, '');
   }
+
+  // Seed the page being published from its freshly-computed path, overriding any
+  // missing (first publish) or stale (republish at a new path) DB row. The home
+  // page is served at the root, so it resolves to '/'.
+  pathByPageId.set(currentPageId, currentPageId === homePageId ? '' : currentPath);
 
   return { html: rewriteInterPageLinks(html, pathByPageId, subdomain) };
 }
