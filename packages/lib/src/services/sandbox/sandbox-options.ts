@@ -13,7 +13,9 @@ export interface SandboxResourceCaps {
 }
 
 export interface SandboxCreateOptions {
-  egressAllowlist: readonly string[];
+  egressAllowlist?: readonly string[];
+  /** Open egress (human terminal) vs named allowlist (agent sandbox). Default: 'allowlist'. */
+  egressMode?: 'allowlist' | 'open';
   /** Resource caps applied at creation; omitted → provider defaults. */
   caps?: SandboxResourceCaps;
 }

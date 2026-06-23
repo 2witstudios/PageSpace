@@ -62,6 +62,53 @@ describe('buildSpriteNetworkPolicy', () => {
   });
 });
 
+describe('buildSpriteNetworkPolicy — open mode', () => {
+  it('given egressMode: open, should return INCLUDE_DEFAULTS then an allow-all (no terminating deny)', () => {
+    const { rules } = buildSpriteNetworkPolicy({ egressMode: 'open' });
+    expect(rules).toEqual([
+      { include: 'defaults' },
+      { domain: '*', action: 'allow' },
+    ]);
+  });
+
+  it('given egressMode: open, INCLUDE_DEFAULTS must be at index 0 (internal surface denied first)', () => {
+    const { rules } = buildSpriteNetworkPolicy({ egressMode: 'open' });
+    expect(rules[0]).toEqual({ include: 'defaults' });
+  });
+
+  it('given egressMode: open, should include an allow-all domain rule', () => {
+    const { rules } = buildSpriteNetworkPolicy({ egressMode: 'open' });
+    expect(rules.some((r) => r.domain === '*' && r.action === 'allow')).toBe(true);
+  });
+
+  it('given egressMode: open, must NOT contain a terminating deny-all rule', () => {
+    const { rules } = buildSpriteNetworkPolicy({ egressMode: 'open' });
+    expect(rules.some((r) => r.domain === '*' && r.action === 'deny')).toBe(false);
+  });
+
+  it('given egressMode: open with an egressAllowlist, should ignore the allowlist (allowlist is irrelevant in open mode)', () => {
+    const { rules } = buildSpriteNetworkPolicy({
+      egressMode: 'open',
+      egressAllowlist: ['registry.npmjs.org'],
+    });
+    expect(rules).toEqual([
+      { include: 'defaults' },
+      { domain: '*', action: 'allow' },
+    ]);
+  });
+
+  it('given egressMode: allowlist (explicit), should behave identically to the default (no-mode) path', () => {
+    const withMode = buildSpriteNetworkPolicy({ egressMode: 'allowlist', egressAllowlist: ['pypi.org'] });
+    const withoutMode = buildSpriteNetworkPolicy({ egressAllowlist: ['pypi.org'] });
+    expect(withMode).toEqual(withoutMode);
+  });
+
+  it('given egressMode: allowlist and empty allowlist, should be pure deny-all (no change from default)', () => {
+    const { rules } = buildSpriteNetworkPolicy({ egressMode: 'allowlist', egressAllowlist: [] });
+    expect(rules).toEqual([{ domain: '*', action: 'deny' }]);
+  });
+});
+
 describe('sanitizeEgressAllowlist', () => {
   it('keeps literal hostnames, trimmed and lowercased', () => {
     expect(sanitizeEgressAllowlist([' Registry.NPMJS.org ', 'pypi.org'])).toEqual([

@@ -52,13 +52,13 @@ function makeStore(seed?: SandboxSessionRecord) {
 
 function makeClient(overrides: Partial<SandboxClient> = {}) {
   const calls = {
-    getOrCreate: [] as Array<{ name: string }>,
+    getOrCreate: [] as Array<{ name: string; options: import('../sandbox-options').SandboxCreateOptions }>,
     get: [] as string[],
     stop: [] as string[],
   };
   const client: SandboxClient = {
-    getOrCreate: async ({ name }) => {
-      calls.getOrCreate.push({ name });
+    getOrCreate: async ({ name, options }) => {
+      calls.getOrCreate.push({ name, options });
       return { sandboxId: 'sbx-new' };
     },
     get: async ({ sandboxId }) => {
@@ -95,7 +95,7 @@ describe('acquireConversationSandbox', () => {
       deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
-    expect(calls.getOrCreate).toEqual([{ name: keyFor() }]);
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(storeCalls.save).toBe(1);
   });
 
@@ -145,7 +145,7 @@ describe('acquireConversationSandbox', () => {
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.stop).toEqual(['sbx-existing']);
-    expect(calls.getOrCreate).toEqual([{ name: keyFor() }]);
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(storeCalls.remove).toBe(1);
     expect(storeCalls.save).toBe(1);
   });
@@ -159,7 +159,7 @@ describe('acquireConversationSandbox', () => {
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(storeCalls.remove).toBe(1);
-    expect(calls.getOrCreate).toEqual([{ name: keyFor() }]);
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
   });
 
   it('given provisioning that throws, should report failure without persisting a link', async () => {
@@ -241,6 +241,22 @@ describe('acquireConversationSandbox', () => {
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.getOrCreate.length).toBe(1);
+  });
+
+  it('agent path: provisions with the tight SANDBOX_EGRESS_ALLOWLIST and no egressMode (open mode must NOT bleed into agent sandbox)', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireConversationSandbox({
+      ...actor,
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
+    expect(calls.getOrCreate).toHaveLength(1);
+    // Must use the tight named allowlist, not open egress.
+    const { options } = calls.getOrCreate[0];
+    expect(options.egressMode).toBeUndefined();
+    expect(Array.isArray(options.egressAllowlist)).toBe(true);
+    expect((options.egressAllowlist as string[]).length).toBeGreaterThan(0);
   });
 
   it('given an empty session secret, should deny without provisioning (fail closed)', async () => {

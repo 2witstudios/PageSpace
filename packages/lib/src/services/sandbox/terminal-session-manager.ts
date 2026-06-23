@@ -1,5 +1,6 @@
 import { createHmac } from 'crypto';
-import { SANDBOX_EGRESS_ALLOWLIST, SANDBOX_RESOURCE_CAPS } from './execution-policy';
+import { SANDBOX_RESOURCE_CAPS } from './execution-policy';
+import type { SandboxCreateOptions } from './sandbox-options';
 import type { SandboxClient } from './session-manager';
 import { loggers } from '../../logging/logger-config';
 
@@ -147,6 +148,14 @@ async function safeTouch(store: TerminalSessionStore, sessionKey: string, now: D
   }
 }
 
+// Applied on every hand-back (fresh + reconnect) so the open egress policy is
+// always current — handles both normal reconnects and the migration path for
+// sessions created before this egress change was deployed.
+const TERMINAL_SANDBOX_OPTIONS: SandboxCreateOptions = {
+  egressMode: 'open',
+  caps: SANDBOX_RESOURCE_CAPS,
+};
+
 async function provisionFreshTerminal({
   key,
   input,
@@ -155,7 +164,7 @@ async function provisionFreshTerminal({
   input: AcquireTerminalSandboxInput;
 }): Promise<AcquireTerminalSandboxResult> {
   const { deps, pageId, userId, driveId } = input;
-  const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST, caps: SANDBOX_RESOURCE_CAPS };
+  const options = TERMINAL_SANDBOX_OPTIONS;
 
   let sandboxId: string;
   try {
@@ -211,20 +220,29 @@ export async function acquireTerminalSandbox(
       persistent: true,
     });
 
-    // Reconnect to a known-live (possibly hibernating) sandbox, re-provisioning
-    // under the same key only if it has genuinely vanished. Shared by `resume`
-    // (within the warm window) and `noop` (persistent-idle: the VM is sleeping,
-    // not gone). The VM is warmed before the PTY opens by the realtime path
-    // (ensureSpriteAwake), so a hibernated terminal's `bash` spawn lands on an
-    // awake VM instead of racing a cold-start drop.
-    const reconnectExisting = async (sandboxId: string): Promise<AcquireTerminalSandboxResult> => {
-      const handle = await deps.client.get({ sandboxId });
-      if (!handle) {
-        await deps.store.remove(key);
-        return await provisionFreshTerminal({ key, input });
+    // Reconnect to an existing session, re-applying the open egress policy via
+    // getOrCreate on every hand-back. This covers: (a) normal reconnects to warm
+    // or hibernating VMs, (b) transparent re-provision if the VM has since been
+    // destroyed (getOrCreate recreates it under the same name so the sandboxId
+    // stays stable), (c) policy migration for sessions created before this change.
+    // Shared by `resume` (within the warm window) and `noop` (persistent-idle:
+    // VM is hibernating). The VM is warmed before the PTY opens by the realtime
+    // path (ensureSpriteAwake), so a hibernated terminal's `bash` spawn lands on
+    // an awake VM instead of racing a cold-start drop.
+    const reconnectExisting = async (): Promise<AcquireTerminalSandboxResult> => {
+      try {
+        const handle = await deps.client.getOrCreate({ name: key, options: TERMINAL_SANDBOX_OPTIONS });
+        await safeTouch(deps.store, key, deps.now());
+        return { ok: true, sandboxId: handle.sandboxId, resumed: true };
+      } catch (error) {
+        const meta = { reason: 'provision_failed', userId, pageId, driveId };
+        if (error instanceof Error) {
+          loggers.api.error('Terminal sandbox reconnect failed', error, meta);
+        } else {
+          loggers.api.error('Terminal sandbox reconnect failed', meta);
+        }
+        return { ok: false, reason: 'provision_failed', cause: error };
       }
-      await safeTouch(deps.store, key, deps.now());
-      return { ok: true, sandboxId: handle.sandboxId, resumed: true };
     };
 
     switch (plan.action) {
@@ -235,12 +253,12 @@ export async function acquireTerminalSandbox(
         return await provisionFreshTerminal({ key, input });
 
       case 'resume':
-        return await reconnectExisting(plan.sandboxId);
+        return await reconnectExisting();
 
       case 'noop':
         // Persistent-idle: existing is guaranteed (noop only arises with a session).
         return existing
-          ? await reconnectExisting(existing.sandboxId)
+          ? await reconnectExisting()
           : { ok: false, reason: 'error' };
 
       case 'teardown': {

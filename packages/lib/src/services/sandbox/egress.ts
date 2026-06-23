@@ -1,12 +1,17 @@
 /**
  * Sprite egress network policy construction (pure).
  *
- * Maps a policy's `egressAllowlist` to a Fly Sprites L3 `NetworkPolicy` — an
- * ordered, domain-matched rule list applied to the Sprite via the authenticated
- * policy API. Egress is default-DENY: the policy ALWAYS ends in a terminating
- * `{ domain: '*', action: 'deny' }` catch-all, so anything not explicitly allowed
- * is dropped. v1 ships an empty allowlist on every profile, so the policy is pure
- * deny-all — no outbound network at all.
+ * Maps a policy's `egressAllowlist` (or `egressMode: 'open'`) to a Fly Sprites
+ * L3 `NetworkPolicy` — an ordered, domain-matched rule list applied to the Sprite
+ * via the authenticated policy API.
+ *
+ * Two modes:
+ *  - `'allowlist'` (default): deny-by-default. The policy ends in a terminating
+ *    `{ domain: '*', action: 'deny' }` catch-all. v1 ships an empty allowlist,
+ *    so the policy is pure deny-all — no outbound at all.
+ *  - `'open'`: allow all public internet. Returns `[INCLUDE_DEFAULTS, allow-*]`.
+ *    Used exclusively by the human terminal (admin-gated, isolated Sprite) where
+ *    the tight allowlist would block coding CLIs that need their provider hosts.
  *
  * Allowlist entries are sanitized first (`sanitizeEgressAllowlist`): trimmed,
  * lowercased, and restricted to literal DNS hostnames. A wildcard `'*'`, an IP
@@ -76,9 +81,19 @@ export function sanitizeEgressAllowlist(egressAllowlist: readonly string[] = [])
 
 export function buildSpriteNetworkPolicy({
   egressAllowlist = [],
+  egressMode = 'allowlist',
 }: {
   egressAllowlist?: readonly string[];
+  egressMode?: 'allowlist' | 'open';
 } = {}): NetworkPolicy {
+  // Open mode: allow all public internet while keeping the SDK's internal-surface
+  // preset first (first-match-wins denies *.internal / metadata / Flycast /
+  // Tigris before the catch-all allow fires). The allow-all is emitted directly —
+  // NOT routed through sanitizeEgressAllowlist, which intentionally strips '*'.
+  if (egressMode === 'open') {
+    return { rules: [{ ...INCLUDE_DEFAULTS }, { domain: '*', action: 'allow' }] };
+  }
+
   const hosts = sanitizeEgressAllowlist(egressAllowlist);
   if (hosts.length === 0) {
     // Default-deny: no outbound at all. Pure deny-all — no preset semantics.
