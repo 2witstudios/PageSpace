@@ -52,9 +52,32 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   allocatePublishSubdomain: vi.fn().mockResolvedValue('test-drive'),
 }));
 
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  logDriveActivity: vi.fn(),
+  getActorInfo: vi.fn().mockResolvedValue({ actorType: 'user' }),
+}));
+
+vi.mock('../actor-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../actor-permissions')>();
+  return {
+    ...actual,
+    canActorManageDrive: vi.fn().mockResolvedValue(true),
+  };
+});
+
+vi.mock('@/lib/canvas/publish-page', () => ({
+  syncPublishedHomeRoot: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { driveTools } from '../drive-tools';
 import { db } from '@pagespace/db/db';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
+import { getDriveById, isValidDriveHomePage, updateDrive } from '@pagespace/lib/services/drive-service';
+import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
@@ -181,6 +204,12 @@ describe('drive-tools', () => {
   });
 
   describe('set_home_page', () => {
+    const authedContext = {
+      toolCallId: '1',
+      messages: [],
+      experimental_context: { userId: 'user-1' } as ToolExecutionContext,
+    };
+
     it('has correct tool definition', () => {
       expect(typeof driveTools.set_home_page).toBe('object');
       expect(typeof driveTools.set_home_page.description).toBe('string');
@@ -193,6 +222,39 @@ describe('drive-tools', () => {
       await expect(
         driveTools.set_home_page.execute!({ driveId: 'drive-1', pageId: 'page-1' }, context)
       ).rejects.toThrow('User authentication required');
+    });
+
+    it('fires syncPublishedHomeRoot (fire-and-forget) after setting the home page', async () => {
+      vi.mocked(getDriveById).mockResolvedValue({
+        id: 'drive-1', name: 'My Drive', homePageId: null,
+      } as Awaited<ReturnType<typeof getDriveById>>);
+      vi.mocked(isValidDriveHomePage).mockResolvedValue(true);
+      vi.mocked(updateDrive).mockResolvedValue({
+        id: 'drive-1', name: 'My Drive', homePageId: 'page-1',
+      } as Awaited<ReturnType<typeof updateDrive>>);
+
+      await driveTools.set_home_page.execute!(
+        { driveId: 'drive-1', pageId: 'page-1' },
+        authedContext,
+      );
+
+      expect(syncPublishedHomeRoot).toHaveBeenCalledWith('drive-1');
+    });
+
+    it('fires syncPublishedHomeRoot when clearing the home page', async () => {
+      vi.mocked(getDriveById).mockResolvedValue({
+        id: 'drive-1', name: 'My Drive', homePageId: 'page-1',
+      } as Awaited<ReturnType<typeof getDriveById>>);
+      vi.mocked(updateDrive).mockResolvedValue({
+        id: 'drive-1', name: 'My Drive', homePageId: null,
+      } as Awaited<ReturnType<typeof updateDrive>>);
+
+      await driveTools.set_home_page.execute!(
+        { driveId: 'drive-1', pageId: null },
+        authedContext,
+      );
+
+      expect(syncPublishedHomeRoot).toHaveBeenCalledWith('drive-1');
     });
   });
 });

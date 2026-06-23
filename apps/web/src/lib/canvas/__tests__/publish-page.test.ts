@@ -35,6 +35,7 @@ vi.mock('../published-storage', () => ({
   putPublishedSiteFile: vi.fn().mockResolvedValue(undefined),
   publishedArtifactExists: vi.fn().mockResolvedValue(true),
   deletePublishedArtifact: vi.fn().mockResolvedValue(undefined),
+  copyPublishedArtifact: vi.fn().mockResolvedValue(undefined),
   isPublishConfigured: vi.fn().mockReturnValue(true),
   getPublishAssetBaseUrl: vi.fn().mockReturnValue('https://cdn.example.com'),
 }));
@@ -92,8 +93,8 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, isPublishConfigured } from '../published-storage';
-import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError } from '../publish-page';
+import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, copyPublishedArtifact, isPublishConfigured } from '../published-storage';
+import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, PublishError } from '../publish-page';
 
 // The mocked `db` keeps the real relational-query return types, so partial test
 // fixtures are cast through `unknown` to the row shape (never `any`).
@@ -489,5 +490,104 @@ describe('regeneratePublishedSiteFiles', () => {
     vi.mocked(putPublishedSiteFile).mockRejectedValue(new Error('S3 down'));
 
     await expect(regeneratePublishedSiteFiles('drive-1')).resolves.toBeUndefined();
+  });
+});
+
+// Published-page row cast helper (parallel to the PageRow helper above).
+type PublishedPageRow = NonNullable<Awaited<ReturnType<typeof db.query.publishedPages.findFirst>>>;
+const publishedPageRow = (row: Record<string, unknown>) => row as unknown as PublishedPageRow;
+
+describe('syncPublishedHomeRoot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isPublishConfigured).mockReturnValue(true);
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue([]);
+  });
+
+  it('is a no-op when publishing is not configured', async () => {
+    vi.mocked(isPublishConfigured).mockReturnValue(false);
+
+    await syncPublishedHomeRoot('drive-1');
+
+    expect(copyPublishedArtifact).not.toHaveBeenCalled();
+    expect(deletePublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the drive has no publishSubdomain', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: null, homePageId: 'page-1',
+    }));
+
+    await syncPublishedHomeRoot('drive-1');
+
+    expect(copyPublishedArtifact).not.toHaveBeenCalled();
+    expect(deletePublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('deletes the root when homePageId is cleared (null)', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'sub', homePageId: null,
+    }));
+
+    await syncPublishedHomeRoot('drive-1');
+
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('published/sub/index.html');
+    expect(copyPublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('copies the slug artifact to the root when the home page is published', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'sub', homePageId: 'page-1',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(publishedPageRow({
+      artifactKey: 'published/sub/home/index.html',
+    }));
+
+    await syncPublishedHomeRoot('drive-1');
+
+    expect(copyPublishedArtifact).toHaveBeenCalledWith(
+      'published/sub/home/index.html',
+      'published/sub/index.html',
+    );
+    // Site files regenerated so the sitemap lists `/`.
+    expect(putPublishedSiteFile).toHaveBeenCalled();
+  });
+
+  it('deletes the root when the home page is not yet published (unpublished stays private)', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'sub', homePageId: 'page-1',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    await syncPublishedHomeRoot('drive-1');
+
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('published/sub/index.html');
+    expect(copyPublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent: re-marking the same published home page re-copies without error', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'sub', homePageId: 'page-1',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(publishedPageRow({
+      artifactKey: 'published/sub/home/index.html',
+    }));
+
+    await syncPublishedHomeRoot('drive-1');
+    await syncPublishedHomeRoot('drive-1');
+
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(2);
+  });
+
+  it('swallows errors so the metadata update is never blocked', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'sub', homePageId: 'page-1',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(publishedPageRow({
+      artifactKey: 'published/sub/home/index.html',
+    }));
+    vi.mocked(copyPublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
+
+    await expect(syncPublishedHomeRoot('drive-1')).resolves.toBeUndefined();
   });
 });

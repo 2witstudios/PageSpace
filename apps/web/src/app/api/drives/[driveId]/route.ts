@@ -10,6 +10,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPA
 import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -210,10 +211,14 @@ export async function PATCH(
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'drive', resourceId: driveId, details: { operation: 'update' } });
 
-    // Setting a drive's home page is metadata only — it never publishes the page.
-    // The home page is served at the subdomain root only once it is deliberately
-    // published (via the page publish API), like setting a repo's entry point and
-    // then deploying.
+    // When the home page changes, sync the subdomain root immediately so `/`
+    // reflects the new home without requiring a manual republish. Best-effort,
+    // fire-and-forget — never blocks the response. An unpublished page set as
+    // home stays private (syncPublishedHomeRoot checks the published_pages table).
+    if (validatedBody.homePageId !== undefined) {
+      void syncPublishedHomeRoot(driveId);
+    }
+
     return NextResponse.json(updatedDrive);
   } catch (error) {
     if (error instanceof z.ZodError) {

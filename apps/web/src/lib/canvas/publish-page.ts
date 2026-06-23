@@ -17,6 +17,7 @@ import {
   putPublishedSiteFile,
   publishedArtifactExists,
   deletePublishedArtifact,
+  copyPublishedArtifact,
   isPublishConfigured,
   getPublishAssetBaseUrl,
 } from './published-storage';
@@ -354,11 +355,11 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
 
     // The home page is canonicalised to the subdomain root (where it is
     // mirror-served) instead of its slug, so the inventory has no duplicate for
-    // it — but ONLY when the root mirror actually exists. Setting `homePageId` is
-    // metadata-only and never writes `published/<sub>/index.html`; a page
-    // published at its slug and later made the home page has no root mirror until
-    // it is re-published as such. Advertising `/` in that case would surface a
-    // dead route and drop the live slug URL, so confirm the mirror first.
+    // it — but ONLY when the root mirror actually exists. `syncPublishedHomeRoot`
+    // writes `published/<sub>/index.html` whenever a published page is made the
+    // home, but a page published at its slug and made home BEFORE the first sync
+    // may still not have the mirror. Confirm the root object exists before
+    // advertising `/` to avoid surfacing a dead route.
     const homeRow = drive.homePageId
       ? published.find((row) => row.pageId === drive.homePageId)
       : undefined;
@@ -436,6 +437,68 @@ export async function publishHomePageAtRoot(
     driveId,
     userId,
   });
+}
+
+/**
+ * Sync the subdomain root to reflect the drive's current home page.
+ *
+ * Called (fire-and-forget) after `homePageId` changes on a drive — both from
+ * the PATCH /api/drives/[driveId] route and the `set_home_page` AI tool. Never
+ * blocks the metadata update; all errors are logged and swallowed.
+ *
+ * Decision matrix (implements Option B — route bytes already in storage):
+ *   - not configured / no subdomain        → no-op
+ *   - homePageId cleared (null)            → delete root (clears stale home)
+ *   - homePageId set, page not published   → delete root (unpublished ≠ public)
+ *   - homePageId set, page IS published    → S3-copy slug artifact to root +
+ *                                            regenerate site files
+ *
+ * Idempotent: re-marking the same home page just re-copies. The copy is
+ * byte-for-byte identical to the slug artifact — no re-render, no new content
+ * pushed live. An unpublished page set as home is never written to the root.
+ */
+export async function syncPublishedHomeRoot(driveId: string): Promise<void> {
+  try {
+    if (!isPublishConfigured()) return;
+
+    const drive = await db.query.drives.findFirst({
+      where: eq(drives.id, driveId),
+      columns: { publishSubdomain: true, homePageId: true },
+    });
+    const subdomain = drive?.publishSubdomain;
+    if (!subdomain) return;
+
+    const rootKey = buildPublishedKey(subdomain, '');
+
+    if (!drive.homePageId) {
+      await deletePublishedArtifact(rootKey);
+      return;
+    }
+
+    const publishedRow = await db.query.publishedPages.findFirst({
+      where: eq(publishedPages.pageId, drive.homePageId),
+      columns: { artifactKey: true },
+    });
+
+    if (!publishedRow) {
+      // Home page designated but not yet published — clear any stale root mirror
+      // so `/` never serves content that is no longer the intended home page.
+      await deletePublishedArtifact(rootKey);
+      return;
+    }
+
+    // Home page is already published at its slug — copy those live bytes to the
+    // root key. This is a storage-layer copy (no re-render), so only content
+    // that was deliberately published ever reaches the root.
+    await copyPublishedArtifact(publishedRow.artifactKey, rootKey);
+    // Regenerate site files so the sitemap advertises `/` for the home page.
+    await regeneratePublishedSiteFiles(driveId);
+  } catch (err) {
+    loggers.api.warn('Failed to sync published home-page root mirror', {
+      driveId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

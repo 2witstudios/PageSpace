@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 
 const CONTENT_HASH_RE = /^[0-9a-f]{64}$/i;
@@ -240,6 +240,29 @@ export async function deletePublishedArtifact(key: string): Promise<void> {
     new DeleteObjectCommand({
       Bucket: getPublishBucket(),
       Key: key,
+    }),
+  );
+}
+
+/**
+ * Copy an already-published artifact to another key within the same publish
+ * bucket. Used to route an existing slug artifact to the subdomain root when a
+ * page is designated the drive's home page.
+ *
+ * Copies bytes as-is — no re-render. The root carries the slug's canonical URL
+ * (since it is the slug render); that is acceptable (slug is a valid canonical).
+ * MetadataDirective=REPLACE ensures the text/html content-type is always set
+ * correctly regardless of what the source object's stored metadata says.
+ */
+export async function copyPublishedArtifact(fromKey: string, toKey: string): Promise<void> {
+  const bucket = getPublishBucket();
+  await getPublishClient().send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: `${bucket}/${fromKey}`,
+      Key: toKey,
+      ContentType: 'text/html; charset=utf-8',
+      MetadataDirective: 'REPLACE',
     }),
   );
 }
