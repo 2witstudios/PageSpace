@@ -632,6 +632,11 @@
       "import": "./dist/canvas/render-document.js",
       "require": "./dist/canvas/render-document.js"
     },
+    "./canvas/site-files": {
+      "types": "./dist/canvas/site-files.d.ts",
+      "import": "./dist/canvas/site-files.js",
+      "require": "./dist/canvas/site-files.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -1311,6 +1316,9 @@
       ],
       "canvas/render-document": [
         "./dist/canvas/render-document.d.ts"
+      ],
+      "canvas/site-files": [
+        "./dist/canvas/site-files.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"

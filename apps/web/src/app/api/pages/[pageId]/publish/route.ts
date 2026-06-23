@@ -4,7 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
-import { publishCanvasPage, clearPublishedHomeRoot, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
+import { publishCanvasPage, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
@@ -222,6 +222,11 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       await clearPublishedHomeRoot(row.driveId);
     }
     await db.delete(publishedPages).where(eq(publishedPages.pageId, pageId));
+
+    // Rebuild the drive's sitemap so it no longer advertises the route we just
+    // removed (and refresh robots/404 alongside it). Best-effort — the page is
+    // already unpublished and the row deleted.
+    await regeneratePublishedSiteFiles(row.driveId);
 
     auditRequest(req, {
       eventType: 'data.delete',

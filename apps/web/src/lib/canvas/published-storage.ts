@@ -159,6 +159,50 @@ export async function putPublishedArtifact(params: {
 }
 
 /**
+ * Site-level files served at the root of every published drive. Unlike page
+ * artifacts (`.../<path>/index.html`) these live at a fixed, literal key directly
+ * under the subdomain prefix because the edge serves them by exact name, bypassing
+ * the `<path>/index.html` rewrite (see the deploy-repo Caddy snippet).
+ */
+const SITE_FILE_CONTENT_TYPES = {
+  'robots.txt': 'text/plain; charset=utf-8',
+  'sitemap.xml': 'application/xml; charset=utf-8',
+  '404.html': 'text/html; charset=utf-8',
+} as const;
+
+export type PublishedSiteFile = keyof typeof SITE_FILE_CONTENT_TYPES;
+
+/** Build the S3 object key for a drive's site-level file (`published/<sub>/<file>`). */
+export function buildSiteFileKey(subdomain: string, file: PublishedSiteFile): string {
+  return `published/${subdomain}/${file}`;
+}
+
+/**
+ * Upload a site-level file (robots.txt / sitemap.xml / 404.html) for a drive to
+ * the public publish bucket, with the correct content type for its kind. Kept
+ * separate from `putPublishedArtifact` so page-artifact accounting (key layout,
+ * call counts) is unaffected by site-file writes.
+ */
+export async function putPublishedSiteFile(params: {
+  subdomain: string;
+  file: PublishedSiteFile;
+  body: string;
+}): Promise<{ key: string }> {
+  const key = buildSiteFileKey(params.subdomain, params.file);
+
+  await getPublishClient().send(
+    new PutObjectCommand({
+      Bucket: getPublishBucket(),
+      Key: key,
+      Body: params.body,
+      ContentType: SITE_FILE_CONTENT_TYPES[params.file],
+    }),
+  );
+
+  return { key };
+}
+
+/**
  * Delete a previously-published artifact by its storage key.
  */
 export async function deletePublishedArtifact(key: string): Promise<void> {
