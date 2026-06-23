@@ -291,6 +291,41 @@ describe('git_push', () => {
     expect(calls[0].args).toContain('pu/fix-x');
   });
 
+  it('rejects a force-push refspec whose destination is the default branch (HEAD:main)', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!({ force: true, branch: 'HEAD:main' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('rejects a force-push refspec to a fully-qualified default ref (feature:refs/heads/master)', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!(
+      { force: true, branch: 'feature:refs/heads/master' },
+      {} as never,
+    );
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('rejects a +-prefixed force refspec to the default branch even without the force flag', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!({ branch: '+main' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('allows a force-push whose refspec destination is a feature branch (main:feature)', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    await git_push.execute!({ force: true, branch: 'main:feature' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('main:feature');
+  });
+
   it('allows a non-force push with no branch (current branch)', async () => {
     const deps = makeDeps();
     const { git_push } = createSandboxGitTools(deps);

@@ -31,6 +31,16 @@ const cwdField = z.string().max(MAX_PATH_LENGTH).optional();
 // names are auto-protected (a custom default branch is not).
 const DEFAULT_BRANCHES = new Set(['main', 'master']);
 
+// The ref a push actually writes on the remote. A push target is a refspec
+// `[+]<src>:<dst>` (or `[+]<branch>`), so the destination is the segment after
+// the last ':' — a bare-name check misses `HEAD:main` or `feature:refs/heads/master`.
+// Returns the lowercased short branch name for comparison against DEFAULT_BRANCHES.
+function pushDestinationBranch(refspec: string): string {
+  const spec = refspec.startsWith('+') ? refspec.slice(1) : refspec;
+  const dst = spec.includes(':') ? spec.slice(spec.lastIndexOf(':') + 1) : spec;
+  return dst.replace(/^refs\/heads\//, '').trim().toLowerCase();
+}
+
 export interface GitSandboxToolsDeps {
   gitRunDeps: GitSandboxRunDeps;
   resolveContext: ResolveSandboxContext;
@@ -384,9 +394,13 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     }),
     execute: async ({ remote, branch, force, set_upstream, cwd }, options) => {
       // Force-push is fine for a feature/PR branch, but never the default branch.
-      // Require an explicit branch under force so we can verify the target — we
-      // can't see the sandbox's current branch from here.
-      if (force) {
+      // A push forces when the `force` flag is set OR the refspec is `+`-prefixed
+      // (per-refspec force), so guard both. Require an explicit branch under force
+      // so the target can be verified — we can't see the sandbox's current branch
+      // from here — and check the refspec DESTINATION, not the raw value, so
+      // `HEAD:main` / `feature:refs/heads/master` can't slip past.
+      const forcing = force === true || (branch?.startsWith('+') ?? false);
+      if (forcing) {
         if (!branch) {
           return {
             success: false as const,
@@ -394,7 +408,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
               'Force-push requires an explicit branch so the target can be verified. Name the feature/PR branch to push to.',
           };
         }
-        if (DEFAULT_BRANCHES.has(branch.toLowerCase())) {
+        if (DEFAULT_BRANCHES.has(pushDestinationBranch(branch))) {
           return {
             success: false as const,
             error:
