@@ -31,7 +31,7 @@ import { MAX_COMMAND_BYTES } from '@pagespace/lib/services/sandbox/command-polic
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
 import type { ToolExecutionContext } from '../core/types';
 
-const MAX_PATH_LENGTH = 1024;
+export const MAX_PATH_LENGTH = 1024;
 
 export const bashInputSchema = z.object({
   command: z

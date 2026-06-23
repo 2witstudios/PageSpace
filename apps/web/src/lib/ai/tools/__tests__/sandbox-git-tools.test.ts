@@ -252,10 +252,51 @@ describe('git_push', () => {
   it('uses --force-with-lease, not --force', async () => {
     const deps = makeDeps();
     const { git_push } = createSandboxGitTools(deps);
-    await git_push.execute!({ force: true }, {} as never);
+    await git_push.execute!({ force: true, branch: 'feature' }, {} as never);
     const calls = getRunCalls(deps);
     expect(calls[0].args).toContain('--force-with-lease');
     expect(calls[0].args).not.toContain('--force');
+  });
+
+  it('rejects force-push to main without opening a sandbox', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!({ force: true, branch: 'main' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('rejects force-push to master (case-insensitive)', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!({ force: true, branch: 'MASTER' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('rejects force-push without an explicit branch (cannot verify the target)', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!({ force: true }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('allows force-push to a feature branch', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    await git_push.execute!({ force: true, branch: 'pu/fix-x' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('--force-with-lease');
+    expect(calls[0].args).toContain('pu/fix-x');
+  });
+
+  it('allows a non-force push with no branch (current branch)', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    await git_push.execute!({}, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args[0]).toBe('push');
   });
 
   it('includes -u when set_upstream: true', async () => {
@@ -348,6 +389,42 @@ describe('gh_issue_create', () => {
     const result = await gh_issue_create.execute!({ title: 'Issue', body: 'b' }, {} as never);
     expect(result).toMatchObject({ success: false });
     expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
+// ── cwd threading ────────────────────────────────────────────────────────────
+
+describe('cwd threading', () => {
+  it('git_status forwards cwd into the runner, resolved under /workspace', async () => {
+    const deps = makeDeps();
+    const { git_status } = createSandboxGitTools(deps);
+    await git_status.execute!({ cwd: 'repo' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect((calls[0] as unknown as { cwd: string }).cwd).toBe('/workspace/repo');
+  });
+
+  it('git_commit forwards cwd into the runner', async () => {
+    const deps = makeDeps();
+    const { git_commit } = createSandboxGitTools(deps);
+    await git_commit.execute!({ message: 'msg', cwd: 'repo' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect((calls[0] as unknown as { cwd: string }).cwd).toBe('/workspace/repo');
+  });
+
+  it('gh_pr_create forwards cwd into the runner', async () => {
+    const deps = makeDeps();
+    const { gh_pr_create } = createSandboxGitTools(deps);
+    await gh_pr_create.execute!({ title: 'PR', body: 'b', cwd: 'repo' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect((calls[0] as unknown as { cwd: string }).cwd).toBe('/workspace/repo');
+  });
+
+  it('defaults to the sandbox root when no cwd is given', async () => {
+    const deps = makeDeps();
+    const { git_status } = createSandboxGitTools(deps);
+    await git_status.execute!({}, {} as never);
+    const calls = getRunCalls(deps);
+    expect((calls[0] as unknown as { cwd: string }).cwd).toBe('/workspace');
   });
 });
 
