@@ -90,6 +90,20 @@ describe('runBashInSandbox', () => {
     expect(audits[0]?.exitCode).toBeNull();
   });
 
+  it('given a GitHub op over bash (no creds there), should deny github_over_bash, audit blocked_command, and never provision', async () => {
+    let acquireCalls = 0;
+    const { deps, audits } = makeDeps({
+      acquireSandbox: async () => {
+        acquireCalls += 1;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+      },
+    });
+    const result = await runBashInSandbox({ command: 'gh pr list', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'github_over_bash' });
+    expect(acquireCalls).toBe(0);
+    expect(audits[0]?.anomaly).toBe('blocked_command');
+  });
+
   it('given a saturated concurrency limit, should deny with concurrency_limit', async () => {
     const { deps } = makeDeps({
       quota: {

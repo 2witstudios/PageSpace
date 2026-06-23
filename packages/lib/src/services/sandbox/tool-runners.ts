@@ -114,6 +114,7 @@ export type SandboxToolDenialReason =
   | 'empty_command'
   | 'command_too_large'
   | 'blocked_metadata_access'
+  | 'github_over_bash'
   | 'path_escape'
   | 'content_too_large'
   | 'provision_failed'
@@ -144,6 +145,8 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   empty_command: 'No command was provided.',
   command_too_large: 'The command is too large.',
   blocked_metadata_access: 'This command is blocked by policy.',
+  github_over_bash:
+    'The bash sandbox has no GitHub credentials. Use the dedicated git_*/gh_* tools for GitHub operations (e.g. git_clone, git_push, gh_pr_create) — they carry your connected GitHub auth.',
   path_escape: 'The path is invalid or escapes the sandbox root.',
   content_too_large: 'The file content is too large.',
   provision_failed: 'Could not provision a sandbox for this run.',
