@@ -448,8 +448,8 @@ export async function publishHomePageAtRoot(
  *
  * Decision matrix (implements Option B — route bytes already in storage):
  *   - not configured / no subdomain        → no-op
- *   - homePageId cleared (null)            → delete root (clears stale home)
- *   - homePageId set, page not published   → delete root (unpublished ≠ public)
+ *   - homePageId cleared (null)            → delete root + regenerate site files
+ *   - homePageId set, page not published   → delete root + regenerate site files
  *   - homePageId set, page IS published    → S3-copy slug artifact to root +
  *                                            regenerate site files
  *
@@ -472,6 +472,8 @@ export async function syncPublishedHomeRoot(driveId: string): Promise<void> {
 
     if (!drive.homePageId) {
       await deletePublishedArtifact(rootKey);
+      // Regenerate so the sitemap stops advertising the now-dead `/` route.
+      await regeneratePublishedSiteFiles(driveId);
       return;
     }
 
@@ -484,6 +486,8 @@ export async function syncPublishedHomeRoot(driveId: string): Promise<void> {
       // Home page designated but not yet published — clear any stale root mirror
       // so `/` never serves content that is no longer the intended home page.
       await deletePublishedArtifact(rootKey);
+      // Regenerate so the sitemap stops advertising the now-dead `/` route.
+      await regeneratePublishedSiteFiles(driveId);
       return;
     }
 

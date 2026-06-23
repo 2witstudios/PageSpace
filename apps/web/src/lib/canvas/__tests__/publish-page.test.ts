@@ -524,7 +524,7 @@ describe('syncPublishedHomeRoot', () => {
     expect(deletePublishedArtifact).not.toHaveBeenCalled();
   });
 
-  it('deletes the root when homePageId is cleared (null)', async () => {
+  it('deletes the root and regenerates site files when homePageId is cleared (null)', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       publishSubdomain: 'sub', homePageId: null,
     }));
@@ -533,6 +533,8 @@ describe('syncPublishedHomeRoot', () => {
 
     expect(deletePublishedArtifact).toHaveBeenCalledWith('published/sub/index.html');
     expect(copyPublishedArtifact).not.toHaveBeenCalled();
+    // Sitemap must no longer advertise the dead `/` route.
+    expect(putPublishedSiteFile).toHaveBeenCalled();
   });
 
   it('copies the slug artifact to the root when the home page is published', async () => {
@@ -553,7 +555,7 @@ describe('syncPublishedHomeRoot', () => {
     expect(putPublishedSiteFile).toHaveBeenCalled();
   });
 
-  it('deletes the root when the home page is not yet published (unpublished stays private)', async () => {
+  it('deletes the root and regenerates site files when the home page is not yet published (unpublished stays private)', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       publishSubdomain: 'sub', homePageId: 'page-1',
     }));
@@ -563,6 +565,8 @@ describe('syncPublishedHomeRoot', () => {
 
     expect(deletePublishedArtifact).toHaveBeenCalledWith('published/sub/index.html');
     expect(copyPublishedArtifact).not.toHaveBeenCalled();
+    // Sitemap must no longer advertise the dead `/` route.
+    expect(putPublishedSiteFile).toHaveBeenCalled();
   });
 
   it('is idempotent: re-marking the same published home page re-copies without error', async () => {
