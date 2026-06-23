@@ -43,6 +43,8 @@ import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo'
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
 import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
+import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
+import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
 import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
@@ -103,6 +105,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
+  // Message-load state — tracks in-progress DB fetches and their failures independently
+  // of the useChat streaming state so blank → spinner instead of blank → blank.
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [messagesLoadError, setMessagesLoadError] = useState<Error | null>(null);
   // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
   const voiceBaselineRef = useRef<string | null | undefined>(undefined);
   // Voice mode state
@@ -126,6 +132,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Always reflects the current page.id so async callbacks can detect stale pages
   const pageIdRef = useRef(page.id);
   useEffect(() => { pageIdRef.current = page.id; }, [page.id]);
+  // Tracks the conversationId of the most recent loadMessagesForConversation call so
+  // stale in-flight fetches (from a previous conversation) are silently dropped.
+  const loadRequestedIdRef = useRef<string | null>(null);
+  // When set to a conversationId, the load-on-select effect skips the fetch for that
+  // id on its next fire (messages are already provided inline, avoiding a double-fetch).
+  const skipLoadEffectRef = useRef<string | null>(null);
 
   // ============================================
   // SHARED HOOKS
@@ -171,11 +183,21 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     currentConversationId,
     enabled: activeTab === 'history',
     onConversationLoad: (conversationId, messages) => {
+      // Use the pre-fetched messages directly (no re-fetch) and suppress the
+      // load-on-select effect for this id so we don't double-request the server.
+      skipLoadEffectRef.current = conversationId;
       setCurrentConversationId(conversationId);
-      setMessages(messages);
       setActiveTab('chat');
+      void loadMessagesForConversation(conversationId, messages);
+    },
+    onConversationLoadError: (_conversationId, error) => {
+      // The conversation list fetch failed — show the error inline without
+      // clearing existing messages (caller's toast already announced the failure).
+      setMessagesLoadError(error);
     },
     onConversationCreate: (conversationId) => {
+      // New conversation has no messages — skip the load effect.
+      skipLoadEffectRef.current = conversationId;
       setCurrentConversationId(conversationId);
       setMessages([]);
       setActiveTab('chat');
@@ -235,6 +257,71 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   const isStreaming = status === 'submitted' || status === 'streaming';
 
+  // ============================================
+  // AUTHORITATIVE MESSAGE LOADER (the ONE setMessages writer)
+  // ============================================
+  // Fetches the latest DB messages for a conversation and writes them to useChat
+  // via setMessages. All other paths (init, history-select, pull-up, undo) funnel
+  // through here so there is never a competing write from a stale in-flight fetch.
+  //
+  // Pass preloadedMessages to skip the network round-trip when the caller already
+  // has fresh data (e.g. useConversations.loadConversation already fetched them).
+  // The stale-guard and pending-stream reconciliation still run in both paths.
+  const loadMessagesForConversation = useCallback(async (
+    conversationId: string,
+    preloadedMessages?: UIMessage[],
+  ): Promise<void> => {
+    // Skip the placeholder id — it has no server-side messages yet.
+    if (conversationId === `${page.id}-default`) return;
+
+    loadRequestedIdRef.current = conversationId;
+    setIsLoadingMessages(true);
+    setMessagesLoadError(null);
+
+    try {
+      let serverMessages: UIMessage[];
+
+      if (preloadedMessages !== undefined) {
+        // Fast path: caller already did the fetch (history-select, init).
+        serverMessages = preloadedMessages;
+      } else {
+        const res = await fetchWithAuth(
+          `/api/ai/page-agents/${page.id}/conversations/${conversationId}/messages`,
+        );
+        // Stale check after await — user may have switched conversation.
+        if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+        if (!res.ok) throw new Error(`Failed to load messages (${res.status})`);
+        const data = await res.json();
+        if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+        serverMessages = (data as ConversationMessagesResponse).messages ?? [];
+      }
+
+      if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+
+      // Reconcile with any in-flight own stream so a DB reload during an active
+      // stream doesn't drop the streaming bubble or duplicate it once persisted.
+      // NOTE: prod runs multiple web instances — live tokens from a stream on another
+      // instance won't be in the pending store; the persisted message still shows up
+      // on the next DB load. Cross-instance live-token rejoin is a known follow-up.
+      const ownStream = usePendingStreamsStore.getState().getOwnStreams(page.id)[0];
+      const merged =
+        ownStream?.conversationId === conversationId && ownStream.messageId
+          ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId)
+          : serverMessages;
+
+      setMessages(merged);
+      setMessagesLoadError(null);
+    } catch (err) {
+      if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+      // Keep the messages the user was already looking at — never silently blank on failure.
+      setMessagesLoadError(err instanceof Error ? err : new Error('Failed to load messages'));
+    } finally {
+      if (shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) {
+        setIsLoadingMessages(false);
+      }
+    }
+  }, [page.id, setMessages]);
+
   // Find in page
   const findQuery = useFindStore((s) => s.query);
   const findIndex = useFindStore((s) => s.currentIndex);
@@ -275,7 +362,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       .map((p) => (p as { type: 'text'; text: string }).text)
       .join('');
   }, [messages, isStreaming]);
-  const isLoading = !isInitialized;
+  // Show a loading indicator (not a blank) both during init and during any
+  // subsequent message-fetch triggered by conversation switch or refresh.
+  const isLoading = !isInitialized || isLoadingMessages;
 
   // ============================================
   // MESSAGE ACTIONS (shared hook)
@@ -341,12 +430,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`,
                 { signal: controller.signal }
               );
-              const { messages: loaded } = msgResponse.ok
-                ? ((await msgResponse.json()) as ConversationMessagesResponse)
-                : { messages: [] as UIMessage[] };
+              // undefined = fetch failed; keep undefined so loadMessagesForConversation
+              // takes the network path and shows the error banner on failure.
+              const loaded = msgResponse.ok
+                ? (((await msgResponse.json()) as ConversationMessagesResponse).messages ?? [])
+                : undefined;
               if (controller.signal.aborted) return;
+              // Supply pre-fetched messages directly to the one-writer path and suppress
+              // the load-on-select effect so we don't re-fetch what we just loaded.
+              // Only suppress when the fetch actually succeeded (loaded !== undefined).
+              if (loaded !== undefined) {
+                skipLoadEffectRef.current = conv.id;
+              }
               setCurrentConversationId(conv.id);
-              setMessages(loaded ?? []);
+              void loadMessagesForConversation(conv.id, loaded);
               setIsInitialized(true);
               return;
             }
@@ -377,6 +474,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page.id]);
+
+  // Load-on-select guarantee: whenever currentConversationId changes to a real
+  // (non-placeholder) id, reload the latest messages from the DB. This fires for
+  // conversation switches triggered from sources other than the init / history-select
+  // paths (which use the preloaded fast-path and set skipLoadEffectRef to opt out).
+  useEffect(() => {
+    if (!currentConversationId) return;
+    if (currentConversationId === `${page.id}-default`) return;
+    if (skipLoadEffectRef.current === currentConversationId) {
+      skipLoadEffectRef.current = null; // consume the skip token
+      return;
+    }
+    void loadMessagesForConversation(currentConversationId);
+  }, [currentConversationId, page.id, loadMessagesForConversation]);
 
   // Register streaming state with editing store
   useStreamingRegistration(
@@ -674,34 +785,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   const handleUndoSuccess = useCallback(async () => {
     if (!currentConversationId) return;
-    try {
-      const res = await fetchWithAuth(
-        `/api/ai/page-agents/${page.id}/conversations/${currentConversationId}/messages`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setMessages(data.messages);
-      }
-    } catch (error) {
-      console.error('Failed to refresh messages after undo:', error);
-    }
-  }, [currentConversationId, page.id, setMessages]);
+    await loadMessagesForConversation(currentConversationId);
+  }, [currentConversationId, loadMessagesForConversation]);
 
   // Pull-up refresh handler for mobile - check for missed messages
   const handlePullUpRefresh = useCallback(async () => {
     if (!currentConversationId) return;
-    try {
-      const res = await fetchWithAuth(
-        `/api/ai/page-agents/${page.id}/conversations/${currentConversationId}/messages`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setMessages(data.messages);
-      }
-    } catch (error) {
-      console.error('Failed to refresh messages:', error);
-    }
-  }, [currentConversationId, page.id, setMessages]);
+    await loadMessagesForConversation(currentConversationId);
+  }, [currentConversationId, loadMessagesForConversation]);
 
   // App state recovery - re-attach/refetch AI stream when returning from background.
   // On native (Capacitor): if streaming, stop the local fetch, rejoin any still-live
@@ -833,6 +924,25 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
         {/* Chat Tab */}
         <TabsContent value="chat" className="flex flex-col flex-1 overflow-hidden relative">
+          {/* Inline error shown when a message-load fails — never silently blank. */}
+          {messagesLoadError && (
+            <div className="flex items-center justify-between gap-2 px-4 py-2 bg-destructive/10 text-destructive text-sm border-b border-destructive/20">
+              <span className="truncate">Failed to load messages: {messagesLoadError.message}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                onClick={() => {
+                  if (currentConversationId) {
+                    setMessagesLoadError(null);
+                    void loadMessagesForConversation(currentConversationId);
+                  }
+                }}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
           <ChatLayout
             ref={chatLayoutRef}
             messages={messages}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { UIMessage } from 'ai';
+import type { UIMessage } from 'ai';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ChatInput, type ChatInputRef } from '@/components/ai/chat/input';
@@ -41,6 +41,8 @@ import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
+import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
+import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
 
@@ -338,6 +340,13 @@ const SidebarChatTab: React.FC = () => {
   // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
   const voiceBaselineRef = useRef<string | null | undefined>(undefined);
 
+  // Global-mode load-on-select state: tracks in-progress DB fetches and their
+  // failures so the sidebar never shows a silent blank on conversation select.
+  const [isLoadingGlobalMessages, setIsLoadingGlobalMessages] = useState(false);
+  const [globalMessagesLoadError, setGlobalMessagesLoadError] = useState<Error | null>(null);
+  // Stale-request guard: holds the conversationId of the most recent load request.
+  const globalLoadRequestedIdRef = useRef<string | null>(null);
+
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
   const voiceOwner = useVoiceModeStore((s) => s.owner);
@@ -485,10 +494,53 @@ const SidebarChatTab: React.FC = () => {
     { conversationId: currentConversationId || undefined, componentName: 'SidebarChatTab' }
   );
 
+  // Fetches the latest DB messages for the active global conversation and writes
+  // them to the useChat instance via setGlobalMessages. Single writer for the
+  // global-mode server→view path; shared by the load-on-select effect, the
+  // refreshSignal handler, and the retry button.
+  //
+  // NOTE: prod runs multiple web instances — live tokens from a stream on another
+  // instance won't be in the pending store; the persisted message still shows up
+  // on the next DB load. Cross-instance live-token rejoin is a known follow-up.
+  const loadGlobalMessages = useCallback((conversationId: string) => {
+    globalLoadRequestedIdRef.current = conversationId;
+    setIsLoadingGlobalMessages(true);
+    setGlobalMessagesLoadError(null);
+
+    fetchWithAuth(`/api/ai/global/${conversationId}/messages`)
+      .then(async (res) => {
+        if (!shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) return;
+        if (!res.ok) throw new Error(`Failed to load messages (${res.status})`);
+        const data = await res.json();
+        if (!shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) return;
+        const serverMessages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
+        // Reconcile with any in-flight own stream to avoid dropping the streaming bubble.
+        const ownStream = Array.from(usePendingStreamsStore.getState().streams.values())
+          .find((s) => s.isOwn && s.conversationId === conversationId);
+        const merged = ownStream
+          ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId)
+          : serverMessages;
+        setGlobalMessages(merged);
+        setGlobalMessagesLoadError(null);
+      })
+      .catch((err) => {
+        if (!shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) return;
+        // Keep prior messages — never silently blank on failure.
+        setGlobalMessagesLoadError(err instanceof Error ? err : new Error('Failed to load messages'));
+      })
+      .finally(() => {
+        if (shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) {
+          setIsLoadingGlobalMessages(false);
+        }
+      });
+  }, [setGlobalMessages]);
+
   // When remote events fire (reconnect, undo from another tab, cross-tab
   // edit/delete), GlobalChatContext increments refreshSignal. If
   // GlobalAssistantView is not mounted (user is on a page, not the dashboard),
   // this sidebar is responsible for re-fetching global messages.
+  // Routed through loadGlobalMessages so the stale-request guard prevents a
+  // race where a slow refreshSignal fetch overwrites a newer conversation's messages.
   const prevSidebarRefreshSignalRef = useRef(refreshSignal);
   const globalIsInitializedRef = useRef(globalIsInitialized);
   globalIsInitializedRef.current = globalIsInitialized;
@@ -496,12 +548,23 @@ const SidebarChatTab: React.FC = () => {
     if (refreshSignal === prevSidebarRefreshSignalRef.current) return;
     prevSidebarRefreshSignalRef.current = refreshSignal;
     if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !displayIsStreaming) {
-      fetchWithAuth(`/api/ai/global/${globalConversationId}/messages`)
-        .then((res) => res.ok ? res.json() : null)
-        .then((data) => { if (data) setGlobalMessages(data.messages); })
-        .catch((err) => console.error('Sidebar refreshSignal fetch failed:', err));
+      loadGlobalMessages(globalConversationId);
     }
-  }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, setGlobalMessages]);
+  }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, loadGlobalMessages]);
+
+  // Load-on-select guarantee for global mode (1B).
+  //
+  // Whenever the active global conversation changes (or the context finishes
+  // initialising), explicitly fetch the latest DB messages and write them
+  // directly to the useChat instance via setGlobalMessages. This does NOT rely
+  // on GlobalChatContext seeding useChat via chatConfig.messages (which only
+  // fires on the useChat `id` prop changing — a path prone to timing gaps when
+  // the conversation id is the same across refreshes).
+  useEffect(() => {
+    if (selectedAgent) return; // agent mode handled by useAgentChannelMultiplayer
+    if (!globalIsInitialized || !globalConversationId) return;
+    loadGlobalMessages(globalConversationId);
+  }, [globalConversationId, globalIsInitialized, selectedAgent, loadGlobalMessages]);
 
   // ============================================
   // Effects: UI State
@@ -607,6 +670,11 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Handlers
   // ============================================
+
+  const handleRetryGlobalMessageLoad = useCallback(() => {
+    if (selectedAgent || !globalConversationId || !globalIsInitialized) return;
+    loadGlobalMessages(globalConversationId);
+  }, [selectedAgent, globalConversationId, globalIsInitialized, loadGlobalMessages]);
 
   const handleNewConversation = useCallback(async () => {
     try {
@@ -794,23 +862,24 @@ const SidebarChatTab: React.FC = () => {
   const handleUndoSuccess = useCallback(async () => {
     setUndoDialogMessageId(null);
     if (!currentConversationId) return;
-    try {
-      const url = selectedAgent
-        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
-        : `/api/ai/global/${currentConversationId}/messages`;
-      const res = await fetchWithAuth(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (selectedAgent) {
+    if (selectedAgent) {
+      // Agent mode: direct fetch (loadGlobalMessages is global-only).
+      try {
+        const res = await fetchWithAuth(
+          `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`,
+        );
+        if (res.ok) {
+          const data = await res.json();
           setMessages(data.messages);
-        } else {
-          setGlobalMessages(data.messages);
         }
+      } catch (error) {
+        console.error('Failed to refresh messages after undo:', error);
       }
-    } catch (error) {
-      console.error('Failed to refresh messages after undo:', error);
+    } else {
+      // Global mode: route through loadGlobalMessages for stale guard + pending merge.
+      loadGlobalMessages(currentConversationId);
     }
-  }, [currentConversationId, selectedAgent, setMessages, setGlobalMessages]);
+  }, [currentConversationId, selectedAgent, setMessages, loadGlobalMessages]);
 
   // ============================================
   // Computed Values for Rendering
@@ -873,25 +942,47 @@ const SidebarChatTab: React.FC = () => {
         )}
       </div>
 
+      {/* Global-mode message-load error — shown above messages so it's always visible. */}
+      {!selectedAgent && globalMessagesLoadError && (
+        <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-destructive/10 text-destructive text-xs border-b border-destructive/20">
+          <span className="truncate">Failed to load messages</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+            onClick={handleRetryGlobalMessageLoad}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Messages - using use-stick-to-bottom for pinned scrolling */}
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden" style={{ contain: 'layout' }}>
-        <Conversation className="h-full">
-          <SidebarMessagesContent
-            messages={displayMessages}
-            assistantName={assistantName}
-            locationContext={locationContext}
-            handleEdit={handleEdit}
-            handleDelete={handleDelete}
-            handleRetry={handleRetry}
-            handleUndoFromHere={handleUndoFromHere}
-            lastAssistantMessageId={lastAssistantMessageId}
-            lastUserMessageId={lastUserMessageId}
-            displayIsStreaming={displayIsStreaming}
-            remoteStreams={remoteStreams}
-          />
-          {/* Scroll-to-bottom button - visible when user scrolls up */}
-          <ConversationScrollButton className="z-10 bottom-8" />
-        </Conversation>
+        {/* Loading indicator during global-mode message fetch (prevents blank). */}
+        {!selectedAgent && isLoadingGlobalMessages && displayMessages.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : (
+          <Conversation className="h-full">
+            <SidebarMessagesContent
+              messages={displayMessages}
+              assistantName={assistantName}
+              locationContext={locationContext}
+              handleEdit={handleEdit}
+              handleDelete={handleDelete}
+              handleRetry={handleRetry}
+              handleUndoFromHere={handleUndoFromHere}
+              lastAssistantMessageId={lastAssistantMessageId}
+              lastUserMessageId={lastUserMessageId}
+              displayIsStreaming={displayIsStreaming}
+              remoteStreams={remoteStreams}
+            />
+            {/* Scroll-to-bottom button - visible when user scrolls up */}
+            <ConversationScrollButton className="z-10 bottom-8" />
+          </Conversation>
+        )}
       </div>
 
       {/* Input - adds keyboard height padding on mobile to stay above keyboard */}
