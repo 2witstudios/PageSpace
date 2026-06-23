@@ -77,7 +77,11 @@ vi.mock('@/stores/useEditingStore', () => ({
 
 vi.mock('@/stores/usePendingStreamsStore', () => ({
   usePendingStreamsStore: Object.assign(vi.fn(() => []), {
-    getState: vi.fn(() => ({ streams: new Map() })),
+    getState: vi.fn(() => ({
+      streams: new Map(),
+      getOwnStreams: vi.fn(() => []),
+      getRemotePageStreams: vi.fn(() => []),
+    })),
   }),
 }));
 
