@@ -19,6 +19,7 @@ import {
   type JsonSchema,
 } from './schema-introspection';
 import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { pageSpaceTools } from './ai-tools';
 import { buildTimestampSystemPrompt } from './timestamp-utils';
 import { buildMentionSystemPrompt } from './mention-processor';
@@ -126,7 +127,9 @@ export function buildCompleteRequest(
           breadcrumbs: locationContext.breadcrumbs?.map((b) => b.title),
         }
       : undefined,
-    isReadOnly
+    isReadOnly,
+    undefined,
+    isCodeExecutionEnabled()
   );
 
   // Build inline instructions based on context type

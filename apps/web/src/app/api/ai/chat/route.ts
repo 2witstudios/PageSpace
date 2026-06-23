@@ -49,6 +49,7 @@ import {
 import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
@@ -836,7 +837,8 @@ export async function POST(request: Request) {
           breadcrumbs: pageContext.breadcrumbs,
         } : undefined,
         readOnlyMode,
-        personalization ?? undefined
+        personalization ?? undefined,
+        isCodeExecutionEnabled()
       );
 
       // Append workspace knowledge (tool-aware). Custom systemPrompt = opt-out (blank slate).

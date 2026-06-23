@@ -85,6 +85,17 @@ const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 • Focus on exploring, analyzing, and planning
 • Create actionable plans for the user to execute later`;
 
+// Appended only when the code-execution sandbox tools are registered for the
+// request (same gate as ai-tools.ts). Deliberately short — the basics that make
+// the sandbox smooth to use, not a wall of instructions.
+const SANDBOX_INSTRUCTIONS = `CODE SANDBOX:
+• Working dir is /workspace; writeFile/readFile/editFile paths are relative to it.
+• The /workspace filesystem persists across turns and tool calls in this conversation — your clone, branch checkout, and commits are still there next turn. Check state before recreating it: git_status / git_branch before re-cloning or branching; gh_pr_list / gh_pr_view before opening a PR. To update an open PR, push more commits to its branch (force-push is fine for your PR branch, never to main/master) — don't open a second PR.
+• Each tool call is a fresh process — cd does NOT persist between calls (the filesystem persists, the shell does not). Pass cwd to operate inside a subdirectory (e.g. a cloned repo).
+• bash has NO GitHub credentials. For anything touching GitHub (clone/fetch/pull/push, PRs, issues) use the dedicated git_*/gh_* tools — they carry your connected GitHub auth.
+• Use editFile for targeted string edits; writeFile rewrites the whole file.
+• Key tools (call via execute_tool; no need to tool_search these): bash, readFile, writeFile, editFile, git_clone, git_checkout, git_add, git_commit, git_push, gh_pr_create, gh_pr_list, gh_pr_view.`;
+
 /**
  * Build personalization prompt section from user preferences
  */
@@ -155,7 +166,8 @@ export function buildSystemPrompt(
   contextType: 'dashboard' | 'drive' | 'page',
   contextInfo?: ContextInfo,
   isReadOnly: boolean = false,
-  personalization?: PersonalizationInfo
+  personalization?: PersonalizationInfo,
+  codeExecutionEnabled: boolean = false
 ): string {
   const contextPrompt = buildContextPrompt(contextType, contextInfo);
   const personalizationPrompt = buildPersonalizationPrompt(personalization);
@@ -172,6 +184,7 @@ export function buildSystemPrompt(
     contextPrompt,
     BEHAVIOR_PROMPT,
     isReadOnly ? READ_ONLY_CONSTRAINT : null,
+    codeExecutionEnabled ? SANDBOX_INSTRUCTIONS : null,
   ].filter(Boolean);
 
   return sections.join('\n\n');

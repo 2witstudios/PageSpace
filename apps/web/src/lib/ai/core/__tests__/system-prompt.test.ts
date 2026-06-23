@@ -75,6 +75,37 @@ describe('buildSystemPrompt — general', () => {
   });
 });
 
+describe('buildSystemPrompt — sandbox guidance', () => {
+  it('given codeExecutionEnabled true, should include the sandbox guidance section', () => {
+    const result = buildSystemPrompt('drive', { driveSlug: 'd', driveId: '1' }, false, undefined, true);
+    expect(result).toContain('/workspace');
+    expect(result).toContain('persists');
+  });
+
+  it('given the default call (no flag), should NOT include sandbox guidance', () => {
+    const result = buildSystemPrompt('drive', { driveSlug: 'd', driveId: '1' });
+    expect(result).not.toContain('/workspace');
+  });
+
+  it('given codeExecutionEnabled false explicitly, should NOT include sandbox guidance', () => {
+    const result = buildSystemPrompt('dashboard', undefined, false, undefined, false);
+    expect(result).not.toContain('/workspace');
+  });
+
+  it('given the sandbox guidance, should cover the auth boundary, cwd, editFile, persistence, and key tools', () => {
+    const result = buildSystemPrompt('dashboard', undefined, false, undefined, true);
+    // Auth boundary → dedicated tools
+    expect(result).toContain('gh_pr_create');
+    expect(result).toContain('git_*');
+    // cwd / fresh-process
+    expect(result).toContain('cwd');
+    // editFile vs writeFile
+    expect(result).toContain('editFile');
+    // reuse-don't-recreate
+    expect(result).toContain('gh_pr_list');
+  });
+});
+
 describe('buildPersonalizationPrompt', () => {
   it('returns null when personalization is disabled', () => {
     const result = buildPersonalizationPrompt({ enabled: false });

@@ -31,6 +31,7 @@ import {
 import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
 import { filterToolsForReadOnly, filterToolsForWebSearch } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
@@ -595,7 +596,8 @@ export async function POST(
         breadcrumbs: locationContext.breadcrumbs,
       } : undefined,
       readOnlyMode,
-      personalization ?? undefined
+      personalization ?? undefined,
+      isCodeExecutionEnabled()
     );
 
     // Build timestamp system prompt for temporal awareness (using user's timezone)
