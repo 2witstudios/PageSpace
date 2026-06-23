@@ -5,18 +5,20 @@ import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home } from 'lucide-react';
+import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home, Globe, Trash2, Plus } from 'lucide-react';
 import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
 import { usePageTree } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { toast } from 'sonner';
-import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
+import { normalizeHostname, validateCustomDomain, buildDnsInstructions } from '@pagespace/lib/validators/custom-domain';
 
 interface DriveMember {
   id: string;
@@ -37,6 +39,18 @@ interface AppMembersResponse {
   appMembers: { id: string }[];
 }
 
+interface CustomDomain {
+  id: string;
+  driveId: string;
+  hostname: string;
+  status: 'pending' | 'verified' | 'failed';
+  createdAt: string;
+}
+
+interface DomainsResponse {
+  domains: CustomDomain[];
+}
+
 const fetcher = (url: string) => fetchWithAuth(url).then((r) => r.json());
 
 export default function GeneralSettingsPage() {
@@ -52,6 +66,9 @@ export default function GeneralSettingsPage() {
   const [name, setName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isClearingHomePage, setIsClearingHomePage] = useState(false);
+  const [newDomain, setNewDomain] = useState('');
+  const [isAddingDomain, setIsAddingDomain] = useState(false);
+  const [removingDomainId, setRemovingDomainId] = useState<string | null>(null);
   const startEditing = useEditingStore((s) => s.startEditing);
   const endEditing = useEditingStore((s) => s.endEditing);
 
@@ -82,6 +99,10 @@ export default function GeneralSettingsPage() {
     drive ? `/api/drives/${driveId}/apps/members` : null,
     fetcher
   );
+  const { data: domainsData, mutate: mutateDomains } = useSWR<DomainsResponse>(
+    drive && canManage ? `/api/drives/${driveId}/domains` : null,
+    fetcher
+  );
 
   const homePageId = drive?.homePageId ?? null;
   // Memoized: the controlled name input re-renders this page per keystroke,
@@ -90,6 +111,46 @@ export default function GeneralSettingsPage() {
     () => (homePageId ? findNodeAndParent(tree, homePageId)?.node ?? null : null),
     [tree, homePageId]
   );
+
+  const handleAddDomain = async () => {
+    const hostname = normalizeHostname(newDomain.trim());
+    const validation = validateCustomDomain(hostname);
+    if (!validation.valid) {
+      toast.error(validation.reason);
+      return;
+    }
+    if (isAddingDomain) return;
+    setIsAddingDomain(true);
+    try {
+      await fetchWithAuth(`/api/drives/${driveId}/domains`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostname }),
+      });
+      setNewDomain('');
+      await mutateDomains();
+      toast.success('Domain added — set the DNS records below to activate it');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to add domain';
+      toast.error(msg.includes('already') ? 'That domain is already registered' : msg);
+    } finally {
+      setIsAddingDomain(false);
+    }
+  };
+
+  const handleRemoveDomain = async (domainId: string) => {
+    if (removingDomainId) return;
+    setRemovingDomainId(domainId);
+    try {
+      await del(`/api/drives/${driveId}/domains/${domainId}`);
+      await mutateDomains();
+      toast.success('Domain removed');
+    } catch {
+      toast.error('Failed to remove domain');
+    } finally {
+      setRemovingDomainId(null);
+    }
+  };
 
   const handleClearHomePage = async () => {
     if (isClearingHomePage) return;
@@ -283,6 +344,161 @@ export default function GeneralSettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      <CustomDomainsCard
+        driveId={driveId}
+        domains={domainsData?.domains ?? []}
+        newDomain={newDomain}
+        onNewDomainChange={setNewDomain}
+        onAdd={handleAddDomain}
+        onRemove={handleRemoveDomain}
+        isAdding={isAddingDomain}
+        removingId={removingDomainId}
+      />
+    </div>
+  );
+}
+
+// ── Custom Domains Card ───────────────────────────────────────────────────────
+
+interface CustomDomainsCardProps {
+  driveId: string;
+  domains: CustomDomain[];
+  newDomain: string;
+  onNewDomainChange: (v: string) => void;
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+  isAdding: boolean;
+  removingId: string | null;
+}
+
+const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
+const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
+const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
+
+function CustomDomainsCard({
+  domains,
+  newDomain,
+  onNewDomainChange,
+  onAdd,
+  onRemove,
+  isAdding,
+  removingId,
+}: CustomDomainsCardProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Globe className="h-4 w-4" />
+          Custom Domains
+        </CardTitle>
+        <CardDescription>
+          Point your own domain at this drive&apos;s published canvas site
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex gap-2">
+          <Input
+            placeholder="e.g. docs.acme.com or acme.com"
+            value={newDomain}
+            onChange={(e) => onNewDomainChange(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && onAdd()}
+            className="flex-1"
+          />
+          <Button onClick={onAdd} disabled={isAdding || !newDomain.trim()}>
+            {isAdding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Add
+          </Button>
+        </div>
+
+        {domains.length > 0 ? (
+          <div className="space-y-3">
+            {domains.map((domain) => (
+              <DomainRow
+                key={domain.id}
+                domain={domain}
+                onRemove={onRemove}
+                isRemoving={removingId === domain.id}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No custom domains yet</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DomainRow({
+  domain,
+  onRemove,
+  isRemoving,
+}: {
+  domain: CustomDomain;
+  onRemove: (id: string) => void;
+  isRemoving: boolean;
+}) {
+  const [showDns, setShowDns] = useState(false);
+  const instructions = buildDnsInstructions({
+    hostname: domain.hostname,
+    edgeIpv4: EDGE_IPV4,
+    edgeIpv6: EDGE_IPV6,
+    cnameTarget: CNAME_TARGET,
+  });
+
+  return (
+    <div className="border rounded-md p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Globe className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+          <span className="text-sm font-medium truncate">{domain.hostname}</span>
+          <Badge variant="secondary" className="text-xs">
+            {domain.status === 'pending' ? 'Pending DNS' : domain.status}
+          </Badge>
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs h-7"
+            onClick={() => setShowDns((p) => !p)}
+          >
+            {showDns ? 'Hide DNS' : 'Show DNS'}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+            onClick={() => onRemove(domain.id)}
+            disabled={isRemoving}
+          >
+            {isRemoving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+          </Button>
+        </div>
+      </div>
+
+      {showDns && (
+        <div className="bg-muted rounded p-3 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            {instructions.isApex
+              ? 'Add these records at your DNS provider:'
+              : 'Add this record at your DNS provider:'}
+          </p>
+          <div className="space-y-1">
+            {instructions.records.map((r, i) => (
+              <div key={i} className="flex gap-3 text-xs font-mono">
+                <span className="w-12 text-muted-foreground">{r.type}</span>
+                <span className="w-8 text-muted-foreground">{r.name}</span>
+                <span className="break-all">{r.value}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            DNS verification and SSL provisioning will happen automatically once records propagate.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

@@ -207,6 +207,11 @@
       "import": "./dist/utils/api-utils.js",
       "require": "./dist/utils/api-utils.js"
     },
+    "./validators/custom-domain": {
+      "types": "./dist/validators/custom-domain.d.ts",
+      "import": "./dist/validators/custom-domain.js",
+      "require": "./dist/validators/custom-domain.js"
+    },
     "./audit/security-audit": {
       "types": "./dist/audit/security-audit.d.ts",
       "import": "./dist/audit/security-audit.js",
@@ -995,6 +1000,9 @@
   },
   "typesVersions": {
     "*": {
+      "validators/custom-domain": [
+        "./dist/validators/custom-domain.d.ts"
+      ],
       "client-safe": [
         "./dist/client-safe.d.ts"
       ],
