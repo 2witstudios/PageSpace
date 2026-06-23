@@ -236,32 +236,39 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
     .leftJoin(driveRoles, eq(driveMembers.customRoleId, driveRoles.id))
     .where(eq(driveMembers.driveId, driveId));
 
-  // Get permission counts for each member
-  const memberData = await Promise.all(
-    members.map(async (member) => {
-      const { rows: permCounts } = await db.execute(sql`
-        SELECT 
-          COUNT(CASE WHEN pp."canView" = true THEN 1 END) as view_count,
-          COUNT(CASE WHEN pp."canEdit" = true THEN 1 END) as edit_count,
-          COUNT(CASE WHEN pp."canShare" = true THEN 1 END) as share_count
-        FROM page_permissions pp
-        JOIN pages p ON pp."pageId" = p.id
-        WHERE pp."userId" = ${member.userId} AND p."driveId" = ${driveId}
-      `);
+  if (members.length === 0) return [];
 
-      return {
-        ...member,
-        role: member.role as 'OWNER' | 'ADMIN' | 'MEMBER',
-        permissionCounts: {
-          view: Number(permCounts[0]?.view_count || 0),
-          edit: Number(permCounts[0]?.edit_count || 0),
-          share: Number(permCounts[0]?.share_count || 0),
-        },
-      };
-    })
+  const memberUserIds = members.map((m) => m.userId);
+  const idList = sql.join(memberUserIds.map((id) => sql`${id}`), sql`, `);
+
+  const { rows: permCountRows } = await db.execute(sql`
+    SELECT pp."userId",
+      COUNT(CASE WHEN pp."canView" THEN 1 END) as view_count,
+      COUNT(CASE WHEN pp."canEdit" THEN 1 END) as edit_count,
+      COUNT(CASE WHEN pp."canShare" THEN 1 END) as share_count
+    FROM page_permissions pp
+    JOIN pages p ON pp."pageId" = p.id
+    WHERE p."driveId" = ${driveId}
+      AND pp."userId" IN (${idList})
+    GROUP BY pp."userId"
+  `);
+
+  const permMap = new Map(
+    (permCountRows as Array<Record<string, unknown>>).map((row) => [
+      row.userId as string,
+      {
+        view: Number(row.view_count || 0),
+        edit: Number(row.edit_count || 0),
+        share: Number(row.share_count || 0),
+      },
+    ])
   );
 
-  return memberData;
+  return members.map((member) => ({
+    ...member,
+    role: member.role as 'OWNER' | 'ADMIN' | 'MEMBER',
+    permissionCounts: permMap.get(member.userId) ?? { view: 0, edit: 0, share: 0 },
+  }));
 }
 
 /**
