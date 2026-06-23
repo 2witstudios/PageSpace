@@ -282,6 +282,42 @@ describe('StreamMulticastRegistry', () => {
     });
   });
 
+  describe('getBufferedParts', () => {
+    it('returns a copy of the accumulated parts', () => {
+      const registry = new StreamMulticastRegistry();
+      registry.register('msg-1', meta());
+      registry.push('msg-1', text('hello'));
+      registry.push('msg-1', text(' world'));
+
+      expect(registry.getBufferedParts('msg-1')).toEqual([text('hello'), text(' world')]);
+    });
+
+    it('returns an empty array for an unknown messageId', () => {
+      const registry = new StreamMulticastRegistry();
+      expect(registry.getBufferedParts('unknown')).toEqual([]);
+    });
+
+    it('returns an empty array after finish() deletes the entry', () => {
+      const registry = new StreamMulticastRegistry();
+      registry.register('msg-1', meta());
+      registry.push('msg-1', text('data'));
+      registry.finish('msg-1');
+
+      expect(registry.getBufferedParts('msg-1')).toEqual([]);
+    });
+
+    it('returns a defensive copy — mutating the result does not affect the internal buffer', () => {
+      const registry = new StreamMulticastRegistry();
+      registry.register('msg-1', meta());
+      registry.push('msg-1', text('original'));
+
+      const copy = registry.getBufferedParts('msg-1');
+      copy.push(text('injected'));
+
+      expect(registry.getBufferedParts('msg-1')).toHaveLength(1);
+    });
+  });
+
   describe('resilience', () => {
     it('given a subscriber whose onChunk throws, should not interrupt fanout to remaining subscribers', () => {
       const registry = new StreamMulticastRegistry();

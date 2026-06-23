@@ -4,6 +4,7 @@ const {
   mockRegistryRegister,
   mockRegistryPush,
   mockRegistryFinish,
+  mockRegistryGetBufferedParts,
   mockBroadcastStart,
   mockBroadcastComplete,
   mockInsertValues,
@@ -16,6 +17,7 @@ const {
   mockRegistryRegister: vi.fn(),
   mockRegistryPush: vi.fn(),
   mockRegistryFinish: vi.fn(),
+  mockRegistryGetBufferedParts: vi.fn().mockReturnValue([]),
   mockBroadcastStart: vi.fn().mockResolvedValue(undefined),
   mockBroadcastComplete: vi.fn().mockResolvedValue(undefined),
   mockInsertValues: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock('@/lib/ai/core/stream-multicast-registry', () => ({
     register: mockRegistryRegister,
     push: mockRegistryPush,
     finish: mockRegistryFinish,
+    getBufferedParts: mockRegistryGetBufferedParts,
     getMeta: vi.fn(),
     subscribe: vi.fn(),
   },
@@ -352,6 +355,26 @@ describe('createStreamLifecycle', () => {
 
       expect(mockUpdateSet).toHaveBeenCalled();
       expect(mockBroadcastComplete).toHaveBeenCalled();
+    });
+  });
+
+  describe('getBufferedParts', () => {
+    it('delegates to streamMulticastRegistry.getBufferedParts with the messageId', async () => {
+      const fakeParts = [{ type: 'text' as const, text: 'hi' }];
+      mockRegistryGetBufferedParts.mockReturnValueOnce(fakeParts);
+      const lifecycle = await createStreamLifecycle(params());
+
+      const result = lifecycle.getBufferedParts();
+
+      expect(mockRegistryGetBufferedParts).toHaveBeenCalledWith('msg-1');
+      expect(result).toBe(fakeParts);
+    });
+
+    it('returns an empty array when the registry returns none', async () => {
+      mockRegistryGetBufferedParts.mockReturnValueOnce([]);
+      const lifecycle = await createStreamLifecycle(params());
+
+      expect(lifecycle.getBufferedParts()).toEqual([]);
     });
   });
 });

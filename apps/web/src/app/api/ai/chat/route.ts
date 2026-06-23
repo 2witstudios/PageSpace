@@ -39,6 +39,7 @@ import { createAIProvider, updateUserProviderSettings, createProviderErrorRespon
 import { buildProviderAvailabilityMap } from '@/lib/ai/core/ai-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, saveMessageToDatabase, sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
@@ -1116,6 +1117,31 @@ export async function POST(request: Request) {
           // consumeCredits → one hold settle: no double-charge, but failed/partial
           // attempts ARE billed because the provider charged us for those tokens.
           agentRun = runResult;
+
+          // Durable server-side persistence — runs regardless of whether the client
+          // is still connected. onFinish is coupled to the response stream and may
+          // never fire when the mobile client backgrounds mid-stream. This is an
+          // idempotent upsert: onFinish, when it runs, refines this write with the
+          // richer SDK responseMessage (better tool ordering). When onFinish never
+          // runs, this write stands as the sole record of the message.
+          if (chatId && serverAssistantMessageId) {
+            const bufferedParts = lifecycle!.getBufferedParts();
+            if (bufferedParts.length > 0) {
+              const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
+              try {
+                await saveMessageToDatabase({
+                  messageId: serverAssistantMessageId,
+                  pageId: chatId,
+                  conversationId: conversationId!,
+                  userId: null,
+                  role: 'assistant',
+                  ...payload,
+                });
+              } catch (e) {
+                loggers.ai.error('AI Chat API: execute-end persist failed', e as Error);
+              }
+            }
+          }
         },
         onFinish: async ({ responseMessage }) => {
           // Clean up abort controller from registry
@@ -1155,9 +1181,12 @@ export async function POST(request: Request) {
           // Save the AI's response message with tool calls and results (database-first
           // approach). Best-effort: persistence errors must NOT skip usage/credit
           // settlement below — that would leak the gate's hold.
+          // Uses buildAssistantPersistencePayload so this path and the execute-end
+          // durable path share the same extraction logic and cannot diverge.
           if (chatId && responseMessage) {
             try {
-              const messageContent = extractMessageContent(responseMessage);
+              const { content: messageContent, toolCalls, toolResults, uiMessage } =
+                buildAssistantPersistencePayload(messageId, responseMessage.parts);
 
               loggers.ai.debug('AI Chat API: Saving AI response message', {
                 id: messageId,
@@ -1174,17 +1203,16 @@ export async function POST(request: Request) {
                 toolResults: extractedToolResults.length
               });
 
-              // Use the new helper function to save the message with complete UIMessage for chronological ordering
               await saveMessageToDatabase({
                 messageId,
                 pageId: chatId,
-                conversationId: conversationId!, // Group messages into conversation sessions
-                userId: null, // AI message
+                conversationId: conversationId!,
+                userId: null,
                 role: 'assistant',
                 content: messageContent,
-                toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
-                toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
-                uiMessage: responseMessage, // Pass complete UIMessage to preserve part ordering
+                toolCalls,
+                toolResults,
+                uiMessage,
                 ...(page?.driveId && userId && isConversationShared && {
                   mentionNotify: {
                     driveId: page.driveId,

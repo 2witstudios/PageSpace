@@ -101,6 +101,10 @@ export class StreamMulticastRegistry {
     }
   }
 
+  getBufferedParts(messageId: string): UIMessagePart[] {
+    return this.entries.get(messageId)?.buffer.slice() ?? [];
+  }
+
   getMeta(messageId: string): StreamMeta | undefined {
     return this.entries.get(messageId)?.meta;
   }

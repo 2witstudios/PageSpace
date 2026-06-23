@@ -341,6 +341,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     mockCreateStreamLifecycle.mockResolvedValue({
       pushPart: mockLifecyclePushPart,
       finish: mockLifecycleFinish,
+      getBufferedParts: vi.fn().mockReturnValue([]),
     });
   });
 
@@ -564,6 +565,56 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       captured.streamTextOptions.onChunk?.({ chunk: { type: 'finish-step' } });
 
       expect(mockLifecyclePushPart).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('execute-end durable persistence', () => {
+    it('given buffered parts exist, should persist the assistant message before lifecycle.finish()', async () => {
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'server reply' }]),
+      });
+
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave).toBeDefined();
+      expect(assistantSave?.[0]).toMatchObject({
+        messageId: 'test-message-id',
+        pageId: 'page-1',
+        conversationId: 'conv-1',
+        userId: null,
+        role: 'assistant',
+      });
+    });
+
+    it('given buffered parts are empty, should NOT persist from the execute path', async () => {
+      // beforeEach already mocks getBufferedParts to return [] — no override needed
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave).toBeUndefined();
+    });
+
+    it('given saveMessageToDatabase rejects from the execute path, should not propagate the error', async () => {
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'will fail' }]),
+      });
+
+      await POST(makeRequest());
+      // User message save has already run; next call is the execute-end assistant persist
+      mockSaveMessageToDatabase.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(
+        captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() }),
+      ).resolves.toBeUndefined();
     });
   });
 

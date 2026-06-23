@@ -20,6 +20,7 @@ export interface StreamLifecycleParams {
 export interface StreamLifecycleHandle {
   finish: (aborted: boolean) => void;
   pushPart: (part: UIMessagePart) => void;
+  getBufferedParts: () => UIMessagePart[];
 }
 
 export const createStreamLifecycle = async (
@@ -134,5 +135,8 @@ export const createStreamLifecycle = async (
     }
   };
 
-  return { finish, pushPart };
+  const getBufferedParts = (): UIMessagePart[] =>
+    streamMulticastRegistry.getBufferedParts(messageId);
+
+  return { finish, pushPart, getBufferedParts };
 };
