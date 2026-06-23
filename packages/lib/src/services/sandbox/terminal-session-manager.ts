@@ -1,5 +1,5 @@
 import { createHmac } from 'crypto';
-import { SANDBOX_EGRESS_ALLOWLIST, SANDBOX_RESOURCE_CAPS } from './execution-policy';
+import { SANDBOX_RESOURCE_CAPS } from './execution-policy';
 import type { SandboxClient } from './session-manager';
 import { loggers } from '../../logging/logger-config';
 
@@ -155,7 +155,7 @@ async function provisionFreshTerminal({
   input: AcquireTerminalSandboxInput;
 }): Promise<AcquireTerminalSandboxResult> {
   const { deps, pageId, userId, driveId } = input;
-  const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST, caps: SANDBOX_RESOURCE_CAPS };
+  const options = { egressMode: 'open' as const, caps: SANDBOX_RESOURCE_CAPS };
 
   let sandboxId: string;
   try {

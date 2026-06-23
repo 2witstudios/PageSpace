@@ -502,7 +502,9 @@ async function applyEgressLockdown({
   destroyOnFailure: boolean;
 }): Promise<void> {
   try {
-    await sprite.updateNetworkPolicy(buildSpriteNetworkPolicy({ egressAllowlist: options.egressAllowlist }));
+    await sprite.updateNetworkPolicy(
+      buildSpriteNetworkPolicy({ egressAllowlist: options.egressAllowlist, egressMode: options.egressMode }),
+    );
     // Use spawn + runSpawned (30 s wall-clock) to create the workspace dir instead
     // of filesystem().mkdir(). The filesystem API uses a bare fetch() with no
     // AbortSignal — it hangs for 52–90 s when the Sprite VM is cold-booting and

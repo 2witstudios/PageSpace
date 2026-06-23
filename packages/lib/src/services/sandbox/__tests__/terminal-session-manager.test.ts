@@ -49,13 +49,13 @@ function makeStore(seed?: TerminalSessionRecord) {
 
 function makeClient(overrides: Partial<SandboxClient> = {}) {
   const calls = {
-    getOrCreate: [] as Array<{ name: string }>,
+    getOrCreate: [] as Array<{ name: string; options: import('../sandbox-options').SandboxCreateOptions }>,
     get: [] as string[],
     stop: [] as string[],
   };
   const client: SandboxClient = {
-    getOrCreate: async ({ name }) => {
-      calls.getOrCreate.push({ name });
+    getOrCreate: async ({ name, options }) => {
+      calls.getOrCreate.push({ name, options });
       return { sandboxId: 'sbx-new' };
     },
     get: async ({ sandboxId }) => {
@@ -238,7 +238,7 @@ describe('acquireTerminalSandbox', () => {
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
-    expect(calls.getOrCreate).toEqual([{ name: keyFor() }]);
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(storeCalls.save).toBe(1);
   });
 
@@ -266,7 +266,7 @@ describe('acquireTerminalSandbox', () => {
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(storeCalls.remove).toBe(1);
-    expect(calls.getOrCreate).toEqual([{ name: keyFor() }]);
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
   });
 
   it('given store.save throws after getOrCreate, calls client.stop and returns { ok: false, reason: provision_failed }', async () => {
@@ -318,6 +318,21 @@ describe('acquireTerminalSandbox', () => {
     expect(storeCalls.touch).toBe(1);
   });
 
+  it('provisions with egressMode: open (not the tight agent allowlist)', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: { store, client, now: () => NOW, secret: SECRET },
+    });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
+    expect(calls.getOrCreate).toHaveLength(1);
+    expect(calls.getOrCreate[0].options).toMatchObject({ egressMode: 'open' });
+    // The tight SANDBOX_EGRESS_ALLOWLIST must NOT appear on the terminal path.
+    expect(calls.getOrCreate[0].options).not.toHaveProperty('egressAllowlist');
+  });
+
   it('given an idle session whose VM has vanished, drops the stale link and provisions fresh', async () => {
     const stale = seedRecord({ lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) });
     const { store, calls: storeCalls } = makeStore(stale);
@@ -329,6 +344,6 @@ describe('acquireTerminalSandbox', () => {
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(storeCalls.remove).toBe(1);
-    expect(calls.getOrCreate).toEqual([{ name: keyFor() }]);
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
   });
 });
