@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import useSWR from 'swr';
 import { extractPageUrls } from '@pagespace/lib/links/page-url-parser';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
@@ -48,17 +48,10 @@ export async function fetchLinkPreviews(content: string): Promise<LinkPreviewDat
 }
 
 export function useLinkPreview(content: string): LinkPreviewData[] {
-  const [previews, setPreviews] = useState<LinkPreviewData[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchLinkPreviews(content).then((data) => {
-      if (!cancelled) setPreviews(data);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [content]);
-
-  return previews;
+  const { data } = useSWR(
+    ['link-previews', content],
+    () => fetchLinkPreviews(content),
+    { fallbackData: [] },
+  );
+  return data;
 }

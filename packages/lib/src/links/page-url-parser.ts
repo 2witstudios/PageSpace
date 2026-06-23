@@ -25,11 +25,14 @@ function isPageSpaceHost(hostname: string): boolean {
     || isPrivateClass172(hostname);
 }
 
+const HTTP_SCHEME_RE = /^https?:\/\//i;
+const ANY_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 export function parsePageUrl(url: string): ParsedPageUrl | null {
   if (!url) return null;
 
   let path: string;
-  if (url.startsWith('http://') || url.startsWith('https://')) {
+  if (HTTP_SCHEME_RE.test(url)) {
     try {
       const parsed = new URL(url);
       if (!isPageSpaceHost(parsed.hostname)) return null;
@@ -37,6 +40,8 @@ export function parsePageUrl(url: string): ParsedPageUrl | null {
     } catch {
       return null;
     }
+  } else if (ANY_SCHEME_RE.test(url)) {
+    return null;
   } else {
     path = url;
   }

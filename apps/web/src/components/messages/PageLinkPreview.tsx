@@ -65,7 +65,12 @@ export function PageLinkPreview({ preview }: PageLinkPreviewProps) {
       className="mt-1 flex cursor-pointer items-start gap-3 rounded-md border p-3 hover:bg-muted"
       onClick={() => router.push(buildPreviewHref(preview))}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') router.push(buildPreviewHref(preview));
+        if (e.key === 'Enter') {
+          router.push(buildPreviewHref(preview));
+        } else if (e.key === ' ') {
+          e.preventDefault();
+          router.push(buildPreviewHref(preview));
+        }
       }}
     >
       <PageTypeIcon type={preview.type} />

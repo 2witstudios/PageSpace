@@ -31,6 +31,17 @@ describe('parsePageUrl', () => {
     expect(parsePageUrl('')).toBeNull();
   });
 
+  it('parses uppercase HTTP scheme (case-insensitive)', () => {
+    expect(parsePageUrl('HTTP://pagespace.ai/dashboard/abc/xyz')).toEqual({
+      driveId: 'abc',
+      pageId: 'xyz',
+    });
+  });
+
+  it('returns null for non-http schemes (e.g. ftp)', () => {
+    expect(parsePageUrl('ftp://server/dashboard/abc/xyz')).toBeNull();
+  });
+
   it('accepts localhost with port', () => {
     expect(parsePageUrl('https://localhost:3000/dashboard/abc/xyz')).toEqual({
       driveId: 'abc',
