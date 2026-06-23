@@ -52,6 +52,11 @@
       "import": "./dist/ai/model-defaults.js",
       "require": "./dist/ai/model-defaults.js"
     },
+    "./links/page-url-parser": {
+      "types": "./dist/links/page-url-parser.d.ts",
+      "import": "./dist/links/page-url-parser.js",
+      "require": "./dist/links/page-url-parser.js"
+    },
     "./logging/logger": {
       "types": "./dist/logging/logger.d.ts",
       "import": "./dist/logging/logger.js",
@@ -1005,6 +1010,9 @@
       ],
       "ai/model-defaults": [
         "./dist/ai/model-defaults.d.ts"
+      ],
+      "links/page-url-parser": [
+        "./dist/links/page-url-parser.d.ts"
       ],
       "logging/logger": [
         "./dist/logging/logger.d.ts"

@@ -19,6 +19,7 @@ import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
+import { MessageLinkPreviews } from '@/components/messages/MessageLinkPreviews';
 import type { AttachmentMeta } from '@/lib/attachment-utils';
 import useSWR from 'swr';
 import { toast } from 'sonner';
@@ -517,6 +518,7 @@ export default function InboxDMPage() {
               {<RichText content={addHardLineBreaks(m.content)} commandChipInert />}
             </div>
           )}
+          {m.content && <MessageLinkPreviews content={m.content} />}
           <MessageAttachment message={m} />
         </div>
       </div>
@@ -696,6 +698,7 @@ export default function InboxDMPage() {
                             {<RichText content={addHardLineBreaks(message.content)} commandChipInert />}
                           </div>
                         )}
+                        {message.content && <MessageLinkPreviews content={message.content} />}
                         <MessageAttachment message={message} />
                         {!isFirst && (message.isEdited || (isLastRead && isOwnMessage)) && (
                           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
