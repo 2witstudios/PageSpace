@@ -20,7 +20,7 @@ import {
   isPublishConfigured,
   getPublishAssetBaseUrl,
 } from './published-storage';
-import { rewriteCanvasAssets, extractAndStripOgMeta } from './asset-pipeline';
+import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMeta } from './asset-pipeline';
 import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml } from '@pagespace/lib/canvas/site-files';
 
 export const PUBLISH_HOST = 'pagespace.site';
@@ -195,7 +195,19 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   // 4. Rewrite assets + extract OG meta
   // ------------------------------------------------------------------
-  const { html: rewrittenHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId, db });
+  const { html: assetHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId, db });
+  // Rewrite page→page links to their public published URLs so navigation between
+  // published pages works on the subdomain site (drive-scoped; unpublished /
+  // out-of-drive targets are left unchanged).
+  const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
+    html: assetHtml,
+    driveId,
+    subdomain,
+    homePageId: drive.homePageId,
+    currentPageId: pageId,
+    currentPath: path,
+    db,
+  });
   const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
   const assetBaseUrl = getPublishAssetBaseUrl();
   const rootUrl = `https://${subdomain}.${PUBLISH_HOST}/`;

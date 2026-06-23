@@ -53,9 +53,11 @@ vi.mock('@/lib/canvas/published-storage', () => ({
 }));
 
 const rewriteCanvasAssets = vi.fn();
+const rewriteInterPageLinksForDrive = vi.fn();
 const extractAndStripOgMeta = vi.fn();
 vi.mock('@/lib/canvas/asset-pipeline', () => ({
   rewriteCanvasAssets: (...args: unknown[]) => rewriteCanvasAssets(...args),
+  rewriteInterPageLinksForDrive: (...args: unknown[]) => rewriteInterPageLinksForDrive(...args),
   extractAndStripOgMeta: (...args: unknown[]) => extractAndStripOgMeta(...args),
 }));
 
@@ -123,6 +125,7 @@ beforeEach(() => {
   isPublishConfigured.mockReturnValue(true);
   getPublishAssetBaseUrl.mockReturnValue('https://test-publish.t3.tigrisfiles.io');
   rewriteCanvasAssets.mockImplementation(async ({ html }: { html: string }) => ({ html }));
+  rewriteInterPageLinksForDrive.mockImplementation(async ({ html }: { html: string }) => ({ html }));
   extractAndStripOgMeta.mockImplementation((html: string) => ({ meta: {}, html }));
   buildPublishedKey.mockImplementation((subdomain: string, path: string) => `published/${subdomain}/${path}/index.html`);
   putPublishedArtifact.mockResolvedValue({ key: 'published/acme/welcome/index.html' });

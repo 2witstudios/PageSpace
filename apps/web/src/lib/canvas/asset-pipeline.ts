@@ -3,9 +3,11 @@ import 'server-only';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { type db as DbType } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
-import { inArray } from '@pagespace/db/operators';
+import { publishedPages } from '@pagespace/db/schema/published-pages';
+import { and, eq, inArray } from '@pagespace/db/operators';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { buildAssetKey, buildAssetUrlFromKey, copyObjectToPublishBucket } from './published-storage';
+import { extractInterPageLinks, rewriteInterPageLinks } from './file-view-links';
 
 type FileReferenceKind = 'view' | 'thumbnail';
 
@@ -257,4 +259,68 @@ export async function rewriteCanvasAssets(params: {
   });
 
   return { html: rewritten };
+}
+
+/**
+ * Rewrite canvas inter-page links (`/dashboard/{driveId}/{pageId}` and the
+ * `/view` variant) to the target page's PUBLIC published URL, so navigation
+ * between published pages works on `<subdomain>.pagespace.site`.
+ *
+ * This is the thin I/O shell around the pure `rewriteInterPageLinks` transform:
+ * it builds the `pageId → published path` map by querying `published_pages`,
+ * scoped to THIS drive (`driveId` in the WHERE clause) and restricted to the
+ * page ids actually referenced in the HTML. Because only same-drive published
+ * pages enter the map:
+ *  - a link to a published sibling rewrites to its `pagespace.site/<path>` URL;
+ *  - a link to the drive home page rewrites to the site root `/`;
+ *  - a link to an unpublished or out-of-drive page is left unchanged (the pure
+ *    transform's documented fallback) so it never fails the publish build.
+ *
+ * Runs AFTER `rewriteCanvasAssets`: file-view links to actual file pages are
+ * already CDN URLs by then, so the only `/dashboard/.../view` links left for
+ * this pass are page→page links.
+ *
+ * The page CURRENTLY being published (`currentPageId` / `currentPath`) is seeded
+ * into the map directly rather than read from the DB: its `published_pages` row
+ * does not exist yet on first publish, and still holds the OLD path when
+ * republishing at a new path (the upsert happens later in `publishCanvasPage`).
+ * Seeding from the freshly-computed path means a canvas link back to the page
+ * being published — common in nav/logo links, and the norm for a home page —
+ * resolves to the correct public URL instead of a dead `/dashboard/...` link or
+ * a stale path.
+ */
+export async function rewriteInterPageLinksForDrive(params: {
+  html: string;
+  driveId: string;
+  subdomain: string;
+  homePageId: string | null;
+  currentPageId: string;
+  currentPath: string;
+  db: Pick<typeof DbType, 'query'>;
+}): Promise<{ html: string }> {
+  const { html, driveId, subdomain, homePageId, currentPageId, currentPath, db } = params;
+
+  const links = extractInterPageLinks(html);
+  const pageIds = Array.from(new Set(links.map(({ pageId }) => pageId)));
+  if (pageIds.length === 0) return { html };
+
+  // Drive-scoped: only pages published under THIS drive's site may be linked.
+  const rows = (await db.query.publishedPages.findMany({
+    where: and(eq(publishedPages.driveId, driveId), inArray(publishedPages.pageId, pageIds)),
+    columns: { pageId: true, path: true },
+  })) as Array<{ pageId: string; path: string }>;
+
+  const pathByPageId = new Map(rows.map((row) => [row.pageId, row.path]));
+
+  // The drive home page is also served at the site root; link to it as '/'.
+  if (homePageId && pathByPageId.has(homePageId)) {
+    pathByPageId.set(homePageId, '');
+  }
+
+  // Seed the page being published from its freshly-computed path, overriding any
+  // missing (first publish) or stale (republish at a new path) DB row. The home
+  // page is served at the root, so it resolves to '/'.
+  pathByPageId.set(currentPageId, currentPageId === homePageId ? '' : currentPath);
+
+  return { html: rewriteInterPageLinks(html, pathByPageId, subdomain) };
 }
