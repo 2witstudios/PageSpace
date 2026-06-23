@@ -10,11 +10,14 @@ vi.mock('@pagespace/db/db', () => ({
     },
     insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) })),
+    delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
   },
 }));
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  and: vi.fn(),
+  isNull: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -83,9 +86,11 @@ import { publishCanvasPage, publishHomePageAtRoot, PublishError } from '../publi
 // fixtures are cast through `unknown` to the row shape (never `any`).
 type PageRow = NonNullable<Awaited<ReturnType<typeof db.query.pages.findFirst>>>;
 type DriveRow = NonNullable<Awaited<ReturnType<typeof db.query.drives.findFirst>>>;
+type PublishedRow = NonNullable<Awaited<ReturnType<typeof db.query.publishedPages.findFirst>>>;
 
 const pageRow = (row: Record<string, unknown>) => row as unknown as PageRow;
 const driveRow = (row: Record<string, unknown>) => row as unknown as DriveRow;
+const publishedRow = (row: Record<string, unknown>) => row as unknown as PublishedRow;
 
 describe('publishCanvasPage', () => {
   beforeEach(() => {
@@ -229,6 +234,16 @@ describe('publishCanvasPage', () => {
     expect(result.path).toBe('page-1');
   });
 
+  it('throws 404 when the page does not belong to the given drive', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'X', content: '', driveId: 'other-drive',
+    }));
+
+    await expect(publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1',
+    })).rejects.toMatchObject({ statusCode: 404 });
+  });
+
   it('PublishError carries an HTTP status code for non-canvas pages', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'DOCUMENT', title: 'Doc', content: '', driveId: 'drive-1',
@@ -302,5 +317,55 @@ describe('publishHomePageAtRoot', () => {
     expect(result).not.toBeNull();
     expect(result!.path).toBe('');
     expect(result!.url).toBe('https://sub.pagespace.site/');
+  });
+
+  it('releases an existing root publication owned by a different page (replacement semantics)', async () => {
+    vi.mocked(db.query.drives.findFirst)
+      .mockResolvedValueOnce(driveRow({
+        id: 'drive-1', homePageId: 'page-new', publishSubdomain: 'sub', kind: 'STANDARD',
+      }))
+      .mockResolvedValueOnce(driveRow({
+        id: 'drive-1', slug: 'my-drive', publishSubdomain: 'sub', kind: 'STANDARD',
+      }));
+    vi.mocked(db.query.pages.findFirst)
+      .mockResolvedValueOnce(pageRow({ id: 'page-new', type: 'CANVAS' }))
+      .mockResolvedValueOnce(pageRow({
+        id: 'page-new', type: 'CANVAS', title: 'New Home', content: '<div>x</div>', driveId: 'drive-1',
+      }));
+    vi.mocked(db.query.publishedPages.findFirst)
+      // existingRoot lookup: an OLD page still owns the root path
+      .mockResolvedValueOnce(publishedRow({ pageId: 'page-old' }))
+      // cleanup lookup inside publishCanvasPage
+      .mockResolvedValue(undefined);
+
+    const result = await publishHomePageAtRoot('drive-1', 'user-1');
+
+    // The stale root row must be deleted so the new home page can take the root.
+    expect(db.delete).toHaveBeenCalled();
+    expect(result).not.toBeNull();
+    expect(result!.path).toBe('');
+  });
+
+  it('does NOT delete the root row when it already belongs to the current home page', async () => {
+    vi.mocked(db.query.drives.findFirst)
+      .mockResolvedValueOnce(driveRow({
+        id: 'drive-1', homePageId: 'page-1', publishSubdomain: 'sub', kind: 'STANDARD',
+      }))
+      .mockResolvedValueOnce(driveRow({
+        id: 'drive-1', slug: 'my-drive', publishSubdomain: 'sub', kind: 'STANDARD',
+      }));
+    vi.mocked(db.query.pages.findFirst)
+      .mockResolvedValueOnce(pageRow({ id: 'page-1', type: 'CANVAS' }))
+      .mockResolvedValueOnce(pageRow({
+        id: 'page-1', type: 'CANVAS', title: 'Home', content: '<div>x</div>', driveId: 'drive-1',
+      }));
+    vi.mocked(db.query.publishedPages.findFirst)
+      .mockResolvedValueOnce(publishedRow({ pageId: 'page-1' }))
+      .mockResolvedValue(undefined);
+
+    const result = await publishHomePageAtRoot('drive-1', 'user-1');
+
+    expect(db.delete).not.toHaveBeenCalled();
+    expect(result!.path).toBe('');
   });
 });

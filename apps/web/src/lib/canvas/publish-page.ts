@@ -5,7 +5,7 @@ import { normalizeSubdomain, validatePublishSubdomain } from '@pagespace/lib/val
 import { isUniqueViolation } from '@pagespace/lib/services/subdomain-allocation';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, and, isNull } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
@@ -19,7 +19,7 @@ import {
 } from './published-storage';
 import { rewriteCanvasAssets, extractAndStripOgMeta } from './asset-pipeline';
 
-const PUBLISH_HOST = 'pagespace.site';
+export const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
 
 /**
@@ -102,6 +102,14 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     throw new PublishError('Only canvas pages can be published', 400);
   }
 
+  // The page must actually live in the drive whose subdomain we are about to
+  // resolve and reserve under. Otherwise a mismatched caller could publish one
+  // drive's page under another drive's subdomain, and the path-collision
+  // constraint would apply to the wrong drive.
+  if (page.driveId !== driveId) {
+    throw new PublishError('Page not found', 404);
+  }
+
   // ------------------------------------------------------------------
   // 2. Load drive (resolve subdomain)
   // ------------------------------------------------------------------
@@ -133,14 +141,26 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     }
 
     try {
-      await db.update(drives).set({ publishSubdomain: candidate }).where(eq(drives.id, drive.id));
+      // Compare-and-set: only the first publisher (publishSubdomain still NULL)
+      // wins the allocation. A concurrent loser's update matches no rows, so we
+      // re-read and adopt the winner's subdomain instead of returning a URL for
+      // a subdomain the drive no longer owns.
+      await db
+        .update(drives)
+        .set({ publishSubdomain: candidate })
+        .where(and(eq(drives.id, drive.id), isNull(drives.publishSubdomain)));
     } catch (err) {
       if (isUniqueViolation(err)) {
         throw new PublishError('Subdomain taken, choose another', 409);
       }
       throw err;
     }
-    subdomain = candidate;
+
+    const allocated = await db.query.drives.findFirst({
+      where: eq(drives.id, drive.id),
+      columns: { publishSubdomain: true },
+    });
+    subdomain = allocated?.publishSubdomain ?? candidate;
   }
 
   // ------------------------------------------------------------------
@@ -272,6 +292,20 @@ export async function publishHomePageAtRoot(
   });
 
   if (!homePage || homePage.type !== 'CANVAS') return null;
+
+  // Replacement semantics: the subdomain root ('') belongs to whichever page is
+  // the *current* home page. If a different page still occupies the root (e.g.
+  // the home page just changed from A to B), release that row first so the new
+  // home page is not rejected by the unique (driveId, path) constraint. The root
+  // artifact key is identical for both pages, so the upcoming upload overwrites
+  // it in place — no orphaned artifact is left behind.
+  const existingRoot = await db.query.publishedPages.findFirst({
+    where: and(eq(publishedPages.driveId, driveId), eq(publishedPages.path, '')),
+    columns: { pageId: true },
+  });
+  if (existingRoot && existingRoot.pageId !== drive.homePageId) {
+    await db.delete(publishedPages).where(eq(publishedPages.pageId, existingRoot.pageId));
+  }
 
   return publishCanvasPage({
     pageId: drive.homePageId,

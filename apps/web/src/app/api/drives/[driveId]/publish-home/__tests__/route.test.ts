@@ -27,6 +27,14 @@ vi.mock('@/lib/auth', () => ({
 const publishHomePageAtRoot = vi.fn();
 vi.mock('@/lib/canvas/publish-page', () => ({
   publishHomePageAtRoot: (...args: unknown[]) => publishHomePageAtRoot(...args),
+  PublishError: class PublishError extends Error {
+    statusCode: number;
+    constructor(message: string, statusCode: number = 500) {
+      super(message);
+      this.name = 'PublishError';
+      this.statusCode = statusCode;
+    }
+  },
 }));
 
 const isPublishConfigured = vi.fn();
@@ -86,6 +94,27 @@ describe('POST /api/drives/[driveId]/publish-home', () => {
     const res = await POST(makeReq(), { params });
     expect(res.status).toBe(503);
     expect(publishHomePageAtRoot).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 when the global publishing kill-switch is engaged', async () => {
+    const prev = process.env.CANVAS_PUBLISHING_DISABLED;
+    process.env.CANVAS_PUBLISHING_DISABLED = 'true';
+    try {
+      const res = await POST(makeReq(), { params });
+      expect(res.status).toBe(503);
+      expect(publishHomePageAtRoot).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.CANVAS_PUBLISHING_DISABLED;
+      else process.env.CANVAS_PUBLISHING_DISABLED = prev;
+    }
+  });
+
+  it('preserves the PublishError HTTP status code (e.g. 409) instead of collapsing to 500', async () => {
+    const { PublishError } = await import('@/lib/canvas/publish-page');
+    publishHomePageAtRoot.mockRejectedValue(new PublishError('Subdomain taken, choose another', 409));
+    const res = await POST(makeReq(), { params });
+    expect(res.status).toBe(409);
+    expect(auditRequest).not.toHaveBeenCalled();
   });
 
   it('returns 400 when there is no publishable canvas home page (null result)', async () => {

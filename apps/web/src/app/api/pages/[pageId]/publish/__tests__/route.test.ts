@@ -74,6 +74,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
+  and: vi.fn((...args: unknown[]) => ({ and: args })),
+  isNull: vi.fn((a: unknown) => ({ isNull: a })),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -159,6 +161,14 @@ describe('POST /api/pages/[pageId]/publish', () => {
     const json = await res.json();
     expect(json.error).toMatch(/not configured/i);
     // fails fast BEFORE any DB reservation or upload
+    expect(onConflictDoUpdate).not.toHaveBeenCalled();
+    expect(putPublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 and touches nothing when the page does not exist', async () => {
+    findFirstPage.mockResolvedValue(undefined);
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(404);
     expect(onConflictDoUpdate).not.toHaveBeenCalled();
     expect(putPublishedArtifact).not.toHaveBeenCalled();
   });

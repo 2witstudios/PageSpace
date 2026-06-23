@@ -4,7 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
-import { publishCanvasPage, PublishError } from '@/lib/canvas/publish-page';
+import { publishCanvasPage, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
@@ -81,7 +81,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       published: true,
       available,
       isStale,
-      url: `https://${subdomain}.${'pagespace.site'}/${row.path}`,
+      url: `https://${subdomain}.${PUBLISH_HOST}/${row.path}`,
       subdomain,
       path: row.path,
     });
@@ -116,19 +116,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     return NextResponse.json({ error: 'Publishing is not configured' }, { status: 503 });
   }
 
-  // Reject Home drives before any DB reservation.
+  // Resolve the page's drive up front: reject Home drives before any DB
+  // reservation, and return a deterministic 404 for a missing/deleted page
+  // instead of dereferencing a null below.
   const pageCheck = await db.query.pages.findFirst({
     where: eq(pages.id, pageId),
     columns: { driveId: true },
   });
-  if (pageCheck) {
-    const drv = await db.query.drives.findFirst({
-      where: eq(drives.id, pageCheck.driveId),
-      columns: { id: true, kind: true },
-    });
-    if (drv && isHomeDrive(drv)) {
-      return NextResponse.json({ error: homeDriveActionError(drv, 'publish') }, { status: 403 });
-    }
+  if (!pageCheck) {
+    return NextResponse.json({ error: 'Page not found' }, { status: 404 });
+  }
+  const drv = await db.query.drives.findFirst({
+    where: eq(drives.id, pageCheck.driveId),
+    columns: { id: true, kind: true },
+  });
+  if (drv && isHomeDrive(drv)) {
+    return NextResponse.json({ error: homeDriveActionError(drv, 'publish') }, { status: 403 });
   }
 
   try {
@@ -142,7 +145,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     const result = await publishCanvasPage({
       pageId,
-      driveId: pageCheck!.driveId,
+      driveId: pageCheck.driveId,
       userId,
       path: parsedBody?.path,
       subdomain: parsedBody?.subdomain,

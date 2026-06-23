@@ -5,7 +5,7 @@ import {
   checkMCPDriveScope,
   isPrincipalDriveOwnerOrAdmin,
 } from '@/lib/auth';
-import { publishHomePageAtRoot } from '@/lib/canvas/publish-page';
+import { publishHomePageAtRoot, PublishError } from '@/lib/canvas/publish-page';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -40,6 +40,15 @@ export async function POST(
     );
   }
 
+  // Operational kill-switch: mirror the per-page publish endpoint so this route
+  // can't be used to bypass a global publishing freeze.
+  if (process.env.CANVAS_PUBLISHING_DISABLED === 'true') {
+    return NextResponse.json(
+      { error: 'Publishing is temporarily disabled' },
+      { status: 503 },
+    );
+  }
+
   if (!isPublishConfigured()) {
     return NextResponse.json(
       { error: 'Publishing is not configured' },
@@ -69,6 +78,7 @@ export async function POST(
   } catch (error) {
     loggers.api.error('Error publishing home page:', error as Error);
     const message = error instanceof Error ? error.message : 'Failed to publish home page';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const statusCode = error instanceof PublishError ? error.statusCode : 500;
+    return NextResponse.json({ error: message }, { status: statusCode });
   }
 }
