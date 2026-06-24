@@ -343,6 +343,11 @@ const GlobalAssistantView: React.FC = () => {
   }, [messages, isStreaming]);
   const latestAgentMessagesRef = useRef(agentMessages);
   const latestGlobalMessagesRef = useRef(globalLocalMessages);
+  // Synchronously updated each render — lets tryRecover read the live message
+  // count without adding messages to its useCallback deps (which would cause
+  // the useStreamRecovery effect to re-subscribe on every message update).
+  const currentMessagesRef = useRef(messages);
+  currentMessagesRef.current = messages;
 
   useEffect(() => {
     latestAgentMessagesRef.current = agentMessages;
@@ -454,7 +459,11 @@ const GlobalAssistantView: React.FC = () => {
       }
     } catch { /* network error — fall through to DB check */ }
 
-    // Step 2: DB check for persisted reply
+    // Step 2: DB check for persisted reply for the CURRENT turn.
+    // Only accept when the DB has at least as many user messages as we have locally —
+    // this guards against the case where the network error fired before the user's
+    // message reached the server, making the DB end with the PREVIOUS turn's
+    // assistant reply and causing us to silently drop the new user prompt.
     try {
       const url = selectedAgent
         ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
@@ -463,7 +472,14 @@ const GlobalAssistantView: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         const msgs = (Array.isArray(data) ? data : (data.messages ?? [])) as Array<{ role: string }>;
-        const hasPersistedReply = msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant';
+        const localUserCount = currentMessagesRef.current.filter((m) => m.role === 'user').length;
+        const dbUserCount = msgs.filter((m) => m.role === 'user').length;
+        // DB must have at least as many user messages as local (the user's turn
+        // was persisted) AND end with an assistant reply (the run completed).
+        const hasPersistedReply =
+          msgs.length > 0 &&
+          msgs[msgs.length - 1].role === 'assistant' &&
+          dbUserCount >= localUserCount;
         if (decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch') {
           if (selectedAgent) {
             setAgentMessages(data.messages);

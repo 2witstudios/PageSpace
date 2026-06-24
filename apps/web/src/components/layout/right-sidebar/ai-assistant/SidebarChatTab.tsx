@@ -348,6 +348,10 @@ const SidebarChatTab: React.FC = () => {
   const [globalMessagesLoadError, setGlobalMessagesLoadError] = useState<Error | null>(null);
   // Stale-request guard: holds the conversationId of the most recent load request.
   const globalLoadRequestedIdRef = useRef<string | null>(null);
+  // Synchronously updated each render — lets tryRecover read the live message
+  // count without adding messages to its useCallback deps.
+  const currentMessagesRef = useRef(messages);
+  currentMessagesRef.current = messages;
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -842,7 +846,11 @@ const SidebarChatTab: React.FC = () => {
       }
     } catch { /* network error — fall through to DB check */ }
 
-    // Step 2: DB check for persisted reply
+    // Step 2: DB check for persisted reply for the CURRENT turn.
+    // Only accept when the DB has at least as many user messages as we have locally —
+    // this guards against the case where the network error fired before the user's
+    // message reached the server, making the DB end with the PREVIOUS turn's
+    // assistant reply and causing us to silently drop the new user prompt.
     try {
       const url = selectedAgent
         ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
@@ -851,7 +859,12 @@ const SidebarChatTab: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         const msgs = (Array.isArray(data) ? data : (data.messages ?? [])) as Array<{ role: string }>;
-        const hasPersistedReply = msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant';
+        const localUserCount = currentMessagesRef.current.filter((m) => m.role === 'user').length;
+        const dbUserCount = msgs.filter((m) => m.role === 'user').length;
+        const hasPersistedReply =
+          msgs.length > 0 &&
+          msgs[msgs.length - 1].role === 'assistant' &&
+          dbUserCount >= localUserCount;
         if (decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch') {
           if (selectedAgent) {
             setMessages(data.messages);
