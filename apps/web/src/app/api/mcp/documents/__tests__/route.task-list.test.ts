@@ -90,10 +90,10 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
   taskStatusConfigs: { taskListId: 'taskStatusConfigs.taskListId', position: 'taskStatusConfigs.position' },
   DEFAULT_TASK_STATUSES: [
-    { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#6b7280' },
-    { slug: 'in_progress', name: 'In Progress', group: 'in_progress', position: 1, color: '#3b82f6' },
-    { slug: 'blocked', name: 'Blocked', group: 'in_progress', position: 2, color: '#ef4444' },
-    { slug: 'completed', name: 'Done', group: 'done', position: 3, color: '#22c55e' },
+    { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
+    { slug: 'in_progress', name: 'In Progress', group: 'in_progress', position: 1, color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },
+    { slug: 'blocked', name: 'Blocked', group: 'in_progress', position: 2, color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' },
+    { slug: 'completed', name: 'Done', group: 'done', position: 3, color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
   ],
 }));
 

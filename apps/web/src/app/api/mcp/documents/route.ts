@@ -196,12 +196,13 @@ export async function POST(req: NextRequest) {
             taskList = newTaskList;
           }
 
-          const tasks = await fetchEnrichedTasks(pageId);
-
-          const statusConfigs = await db.query.taskStatusConfigs.findMany({
-            where: eq(taskStatusConfigs.taskListId, taskList.id),
-            orderBy: [asc(taskStatusConfigs.position)],
-          });
+          const [tasks, statusConfigs] = await Promise.all([
+            fetchEnrichedTasks(pageId),
+            db.query.taskStatusConfigs.findMany({
+              where: eq(taskStatusConfigs.taskListId, taskList.id),
+              orderBy: [asc(taskStatusConfigs.position)],
+            }),
+          ]);
 
           const availableStatuses = statusConfigs.length > 0
             ? statusConfigs.map(c => ({ slug: c.slug, label: c.name, group: c.group, position: c.position, color: c.color }))
