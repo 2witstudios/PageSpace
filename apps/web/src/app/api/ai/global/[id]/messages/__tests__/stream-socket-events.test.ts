@@ -500,13 +500,16 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     });
   });
 
+  const newConv = {
+    id: 'conv-1', userId: 'user-1', title: null, type: 'global',
+    contextId: null, isActive: true, isShared: false,
+    createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
+  };
+
   describe('global conversation-added broadcast', () => {
     it('given isNew=true, should broadcast chat:global_conversation_added to the user channel', async () => {
       const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
-      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({
-        conversation: { id: 'conv-1', userId: 'user-1', title: null, type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
-        isNew: true,
-      });
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
 
       await POST(makeRequest({ browserSessionId: 'session-z' }), makeContext());
 
@@ -522,10 +525,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
 
     it('given isNew=true and no prior title, broadcast carries the auto-generated title', async () => {
       const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
-      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({
-        conversation: { id: 'conv-1', userId: 'user-1', title: null, type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
-        isNew: true,
-      });
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
 
       await POST(makeRequest(), makeContext());
 
