@@ -43,6 +43,7 @@ import { isEditingActive } from '@/stores/useEditingStore';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
 import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
+import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
 
@@ -185,6 +186,7 @@ const SidebarChatTab: React.FC = () => {
     isInitialized: globalIsInitialized,
     createNewConversation: createGlobalConversation,
     refreshSignal,
+    rejoinGlobalStream,
   } = useGlobalChatConversation();
 
   const {
@@ -298,7 +300,7 @@ const SidebarChatTab: React.FC = () => {
   // registers `ai-channel-${agent.id}` with the editing store (same key as
   // GlobalAssistantView agent mode → natural same-channel de-dup), and
   // re-fetches the active conversation on socket reconnect.
-  useAgentChannelMultiplayer({
+  const { rejoinActiveStreams: rejoinAgentStream } = useAgentChannelMultiplayer({
     selectedAgent,
     agentConversationId,
     setLocalMessages: setMessages,
@@ -807,8 +809,74 @@ const SidebarChatTab: React.FC = () => {
       regenerate,
     });
 
-  // Auto-retry on network errors (e.g. ERR_NETWORK_CHANGED killing mid-stream)
-  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2 });
+  // Rejoin-first recovery probe for useStreamRecovery.
+  // On a network error (e.g. iOS backgrounding kills the fetch):
+  //   1. Check /api/ai/chat/active-streams — if the original run is still live, rejoin it.
+  //   2. Else fetch messages from the DB — if the run persisted a reply, surface it.
+  //   3. Only fall through to regenerate() when neither path finds anything to recover.
+  const tryRecover = useCallback(async (): Promise<boolean> => {
+    if (!currentConversationId) return false;
+    const channelId = selectedAgent?.id ?? channelIdForGlobal;
+    if (!channelId) return false;
+
+    // Step 1: live stream check
+    try {
+      const res = await fetchWithAuth(
+        `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
+      );
+      if (res.ok) {
+        const data = (await res.json()) as {
+          streams?: Array<{ conversationId: string; triggeredBy: { userId: string } }>;
+        };
+        const hasLiveStream = (data.streams ?? []).some(
+          (s) => s.conversationId === currentConversationId && s.triggeredBy.userId === user?.id,
+        );
+        if (decideRecovery({ hasLiveStream, hasPersistedReply: false }) === 'rejoin') {
+          if (selectedAgent) {
+            rejoinAgentStream();
+          } else {
+            rejoinGlobalStream();
+          }
+          return true;
+        }
+      }
+    } catch { /* network error — fall through to DB check */ }
+
+    // Step 2: DB check for persisted reply
+    try {
+      const url = selectedAgent
+        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
+        : `/api/ai/global/${currentConversationId}/messages`;
+      const res = await fetchWithAuth(url);
+      if (res.ok) {
+        const data = await res.json();
+        const msgs = (Array.isArray(data) ? data : (data.messages ?? [])) as Array<{ role: string }>;
+        const hasPersistedReply = msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant';
+        if (decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch') {
+          if (selectedAgent) {
+            setMessages(data.messages);
+          } else {
+            setGlobalMessages(data.messages);
+          }
+          return true;
+        }
+      }
+    } catch { /* network error — fall through to regenerate */ }
+
+    return false;
+  }, [
+    currentConversationId,
+    selectedAgent,
+    channelIdForGlobal,
+    user,
+    rejoinGlobalStream,
+    rejoinAgentStream,
+    setMessages,
+    setGlobalMessages,
+  ]);
+
+  // Auto-retry on network errors — rejoin-first, regenerate only as last resort
+  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2, tryRecover });
 
   // Adapter for AgentSelector (converts SidebarAgentInfo to AgentInfo shape)
   const handleSelectAgent = useCallback((agent: SidebarAgentInfo | null) => {
