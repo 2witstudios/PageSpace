@@ -121,6 +121,20 @@ describe('globalConversationRepository.listConversations — EXISTS filter', () 
   });
 });
 
+describe('globalConversationRepository.getActiveGlobalConversation — hasMessages filter', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('includes the EXISTS condition in the WHERE clause', async () => {
+    const { db, mockWhere } = makeDb([CONV]);
+    Object.assign(dbRef, db);
+
+    await globalConversationRepository.getActiveGlobalConversation('user1');
+
+    const whereArg = mockWhere.mock.calls[0]?.[0];
+    expect(JSON.stringify(whereArg)).toContain('exists');
+  });
+});
+
 describe('globalConversationRepository.getActiveGlobalConversation — ordering', () => {
   beforeEach(() => vi.clearAllMocks());
 
