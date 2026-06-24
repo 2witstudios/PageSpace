@@ -450,7 +450,7 @@ const SidebarChatTab: React.FC = () => {
             if (parsed.pageId) {
               currentPage = await fetchPageContext(parsed.pageId, currentDrive);
             }
-            label = currentPage?.title ?? getStaticTabMeta(parsed)?.title ?? null;
+            label = currentPage?.title ?? null;
             break;
           }
 
@@ -481,8 +481,10 @@ const SidebarChatTab: React.FC = () => {
 
           // Everything else with a known static title (dms, channels, tasks,
           // calendar, files/drives, activity, drive-scoped variants, …).
+          // 'unknown' routes have no meaningful label (getStaticTabMeta would
+          // echo the raw path), so fall back to the generic prompt.
           default: {
-            label = getStaticTabMeta(parsed)?.title ?? null;
+            label = parsed.type === 'unknown' ? null : getStaticTabMeta(parsed)?.title ?? null;
             break;
           }
         }
