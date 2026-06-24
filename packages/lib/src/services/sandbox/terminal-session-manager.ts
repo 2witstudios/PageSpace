@@ -120,7 +120,7 @@ export interface AcquireTerminalSandboxInput {
 }
 
 export type AcquireTerminalSandboxResult =
-  | { ok: true; sandboxId: string; resumed: boolean }
+  | { ok: true; sandboxId: string; sessionKey: string; resumed: boolean }
   | { ok: false; reason: 'deny' | 'provision_failed' | 'error'; cause?: unknown };
 
 async function safeStop(client: SandboxClient, sandboxId: string): Promise<boolean> {
@@ -189,7 +189,7 @@ async function provisionFreshTerminal({
     return { ok: false, reason: 'provision_failed', cause: error };
   }
 
-  return { ok: true, sandboxId, resumed: false };
+  return { ok: true, sandboxId, sessionKey: key, resumed: false };
 }
 
 export async function acquireTerminalSandbox(
@@ -233,7 +233,7 @@ export async function acquireTerminalSandbox(
       try {
         const handle = await deps.client.getOrCreate({ name: key, options: TERMINAL_SANDBOX_OPTIONS });
         await safeTouch(deps.store, key, deps.now());
-        return { ok: true, sandboxId: handle.sandboxId, resumed: true };
+        return { ok: true, sandboxId: handle.sandboxId, sessionKey: key, resumed: true };
       } catch (error) {
         const meta = { reason: 'provision_failed', userId, pageId, driveId };
         if (error instanceof Error) {

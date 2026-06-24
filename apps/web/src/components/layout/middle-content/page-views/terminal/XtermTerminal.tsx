@@ -37,7 +37,10 @@ export default function XtermTerminal({ socket, pageId, onReady, onError }: Xter
         const onData = terminal.onData((data) => socket.emit('terminal:input', { data }));
 
         const handleOutput = ({ data }: { data: string }) => terminal.write(data);
-        const handleReady = () => onReady?.();
+        const handleReady = ({ scrollback }: { scrollback?: string } = {}) => {
+          if (scrollback) terminal.write(scrollback);
+          onReady?.();
+        };
         const handleClosed = ({ exitCode }: { exitCode: number }) =>
           terminal.writeln(`\r\n\x1b[90mProcess exited with code ${exitCode}\x1b[0m`);
         const handleError = ({ message }: { message: string }) => {
@@ -67,7 +70,6 @@ export default function XtermTerminal({ socket, pageId, onReady, onError }: Xter
           socket.off('terminal:ready', handleReady);
           socket.off('terminal:closed', handleClosed);
           socket.off('terminal:error', handleError);
-          socket.emit('terminal:disconnect');
           terminal.dispose();
         };
 

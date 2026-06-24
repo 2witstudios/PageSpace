@@ -14,14 +14,22 @@ interface TerminalViewProps {
 
 const XtermTerminal = dynamic(() => import('./XtermTerminal'), { ssr: false });
 
+const SESSION_FLAG_KEY = (pageId: string) => `terminal-session:${pageId}`;
+
 const TerminalView = ({ pageId }: TerminalViewProps) => {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isReconnect = typeof sessionStorage !== 'undefined' && !!sessionStorage.getItem(SESSION_FLAG_KEY(pageId));
   const socket = useSocket();
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
-  const handleReady = useCallback(() => setConnected(true), []);
+  const handleReady = useCallback(() => {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(SESSION_FLAG_KEY(pageId), '1');
+    }
+    setConnected(true);
+  }, [pageId]);
   const handleError = useCallback((message: string) => {
     setError(message);
     toast.error(`Terminal error: ${message}`);
@@ -60,7 +68,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
             ) : (
               <div className="flex items-center gap-2">
                 <div className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm text-green-400">Connecting to shell...</span>
+                <span className="text-sm text-green-400">{isReconnect ? 'Reconnecting to shell...' : 'Connecting to shell...'}</span>
               </div>
             )}
           </div>

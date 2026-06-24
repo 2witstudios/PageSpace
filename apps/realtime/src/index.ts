@@ -145,7 +145,7 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
     },
   }).catch(() => {});
 
-  return { ok: true, sandboxId, sprite, releaseSlot };
+  return { ok: true, sandboxId, sessionKey: sandboxResult.sessionKey, sprite, releaseSlot };
 }
 
 /**
@@ -1024,9 +1024,9 @@ io.on('connection', (socket: AuthSocket) => {
 
   socket.on('terminal:connect', (payload) => {
     terminalHandlers.onConnect(payload).then(() => {
-      const session = terminalSessionMap.get(socket.id);
+      const session = terminalSessionMap.getBySocket(socket.id);
       if (session) {
-        loggers.realtime.info('Terminal session opened', { userId: user?.id, socketId: socket.id, sandboxId: session.sandboxId });
+        loggers.realtime.info('Terminal session opened', { userId: user?.id, sessionKey: session.sessionKey, sandboxId: session.sandboxId });
       }
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : 'Internal error';

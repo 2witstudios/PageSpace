@@ -237,7 +237,8 @@ describe('acquireTerminalSandbox', () => {
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: false });
+    if (result.ok) expect(result.sessionKey).toBe(keyFor());
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(storeCalls.save).toBe(1);
   });
@@ -250,7 +251,8 @@ describe('acquireTerminalSandbox', () => {
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
+    if (result.ok) expect(result.sessionKey).toBe(keyFor());
     // getOrCreate is used for reconnects (reapplies policy); get is never called.
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(calls.get).toEqual([]);
@@ -268,7 +270,7 @@ describe('acquireTerminalSandbox', () => {
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
     // getOrCreate handles the VM-gone case transparently — no explicit remove + re-provision.
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(storeCalls.remove).toBe(0);
     expect(storeCalls.touch).toBe(1);
@@ -299,7 +301,7 @@ describe('acquireTerminalSandbox', () => {
       canRun: false,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: false, reason: 'deny' });
+    expect(result).toMatchObject({ ok: false, reason: 'deny' });
     expect(calls.get).toEqual([]);
     expect(calls.getOrCreate).toEqual([]);
     expect(calls.stop).toEqual([]);
@@ -317,7 +319,7 @@ describe('acquireTerminalSandbox', () => {
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(calls.get).toEqual([]);
     expect(calls.stop).toEqual([]);
@@ -332,7 +334,7 @@ describe('acquireTerminalSandbox', () => {
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.getOrCreate).toHaveLength(1);
     expect(calls.getOrCreate[0].options).toMatchObject({ egressMode: 'open' });
     // The tight SANDBOX_EGRESS_ALLOWLIST must NOT appear on the terminal path.
@@ -349,7 +351,7 @@ describe('acquireTerminalSandbox', () => {
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toHaveLength(1);
     expect(calls.getOrCreate[0].options).toMatchObject({ egressMode: 'open' });
     expect(calls.get).toEqual([]);
@@ -367,7 +369,7 @@ describe('acquireTerminalSandbox', () => {
       canRun: true,
       deps: { store, client, now: () => NOW, secret: SECRET },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: true });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(storeCalls.remove).toBe(0);
     expect(storeCalls.touch).toBe(1);
