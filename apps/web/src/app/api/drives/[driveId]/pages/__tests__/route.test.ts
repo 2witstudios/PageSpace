@@ -534,6 +534,7 @@ describe('GET /api/drives/[driveId]/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(404);
+      expect(body.error).toContain('parentId');
     });
 
     it('should return full subtree when recursive=true', async () => {
