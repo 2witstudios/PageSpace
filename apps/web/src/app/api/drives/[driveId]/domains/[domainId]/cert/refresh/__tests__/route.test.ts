@@ -51,6 +51,11 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
   },
 }));
 
+const mirrorDriveToCustomHost = vi.fn().mockResolvedValue(undefined);
+vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
+  mirrorDriveToCustomHost: (...args: unknown[]) => mirrorDriveToCustomHost(...args),
+}));
+
 const DRIVE_ID = 'drive-1';
 const DOMAIN_ID = 'dom-1';
 const USER_ID = 'user-1';
@@ -289,5 +294,43 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
     });
     const res = await POST(makeReq(), ctx());
     expect(res.status).toBe(500);
+  });
+
+  describe('backfill on domain activation', () => {
+    it('triggers mirrorDriveToCustomHost when domain transitions to active', async () => {
+      setupSelectReturning([VERIFIED_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+      await POST(makeReq(), ctx());
+
+      expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+    });
+
+    it('triggers mirrorDriveToCustomHost when provisioning domain becomes active', async () => {
+      setupSelectReturning([PROVISIONING_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+      await POST(makeReq(), ctx());
+
+      expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+    });
+
+    it('does NOT trigger mirrorDriveToCustomHost when already-active domain is re-checked', async () => {
+      setupSelectReturning([ACTIVE_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+      await POST(makeReq(), ctx());
+
+      expect(mirrorDriveToCustomHost).not.toHaveBeenCalled();
+    });
+
+    it('does NOT trigger mirrorDriveToCustomHost when domain stays in provisioning', async () => {
+      setupSelectReturning([VERIFIED_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: false });
+
+      await POST(makeReq(), ctx());
+
+      expect(mirrorDriveToCustomHost).not.toHaveBeenCalled();
+    });
   });
 });
