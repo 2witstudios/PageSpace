@@ -144,8 +144,10 @@ export function buildDnsInstructions({
     };
   }
 
-  // Extract the leftmost label as the CNAME name (e.g. "www" from "www.acme.com").
-  const name = hostname.split('.')[0];
+  // Keep all subdomain labels left of the apex 2-label base.
+  // e.g. "docs.blog" from "docs.blog.acme.com", "www" from "www.acme.com".
+  const labels = hostname.split('.');
+  const name = labels.slice(0, -2).join('.');
   return {
     isApex: false,
     records: [{ type: 'CNAME', name, value: cnameTarget }],

@@ -60,7 +60,14 @@ export async function POST(
       return NextResponse.json({ error: 'Only drive owners and admins can add custom domains' }, { status: 403 });
     }
 
-    const body = addDomainSchema.safeParse(await request.json());
+    let requestBody: unknown;
+    try {
+      requestBody = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
+
+    const body = addDomainSchema.safeParse(requestBody);
     if (!body.success) {
       return NextResponse.json({ error: 'Invalid request body', details: body.error.issues }, { status: 400 });
     }

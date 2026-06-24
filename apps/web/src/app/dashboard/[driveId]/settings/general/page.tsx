@@ -122,17 +122,25 @@ export default function GeneralSettingsPage() {
     if (isAddingDomain) return;
     setIsAddingDomain(true);
     try {
-      await fetchWithAuth(`/api/drives/${driveId}/domains`, {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hostname }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        if (res.status === 409) {
+          toast.error('That domain is already registered');
+        } else {
+          toast.error(data.error ?? 'Failed to add domain');
+        }
+        return;
+      }
       setNewDomain('');
       await mutateDomains();
       toast.success('Domain added — set the DNS records below to activate it');
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to add domain';
-      toast.error(msg.includes('already') ? 'That domain is already registered' : msg);
+    } catch {
+      toast.error('Failed to add domain');
     } finally {
       setIsAddingDomain(false);
     }
@@ -398,7 +406,9 @@ function CustomDomainsCard({
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex gap-2">
+          <Label htmlFor="new-custom-domain" className="sr-only">Custom domain</Label>
           <Input
+            id="new-custom-domain"
             placeholder="e.g. docs.acme.com or acme.com"
             value={newDomain}
             onChange={(e) => onNewDomainChange(e.target.value)}
@@ -472,6 +482,7 @@ function DomainRow({
             className="h-7 w-7 p-0 text-destructive hover:text-destructive"
             onClick={() => onRemove(domain.id)}
             disabled={isRemoving}
+            aria-label={`Remove domain ${domain.hostname}`}
           >
             {isRemoving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
           </Button>

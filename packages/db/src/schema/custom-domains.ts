@@ -1,13 +1,15 @@
-import { pgTable, text, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, index, uniqueIndex, pgEnum } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { drives } from './core';
+
+export const customDomainStatus = pgEnum('custom_domain_status', ['pending', 'verified', 'failed']);
 
 export const customDomains = pgTable('custom_domains', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   driveId: text('drive_id').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   hostname: text('hostname').notNull(),
-  status: text('status', { enum: ['pending', 'verified', 'failed'] }).default('pending').notNull(),
+  status: customDomainStatus('status').default('pending').notNull(),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   hostnameKey: uniqueIndex('custom_domains_hostname_key').on(table.hostname),

@@ -1,8 +1,14 @@
+DO $$ BEGIN
+ CREATE TYPE "public"."custom_domain_status" AS ENUM('pending', 'verified', 'failed');
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "custom_domains" (
 	"id" text PRIMARY KEY NOT NULL,
 	"drive_id" text NOT NULL,
 	"hostname" text NOT NULL,
-	"status" text DEFAULT 'pending' NOT NULL,
+	"status" "custom_domain_status" DEFAULT 'pending' NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint

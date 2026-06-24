@@ -1,5 +1,5 @@
 {
-  "id": "e883635d-950c-469c-9c8b-79f675cc084b",
+  "id": "8e5745dd-861b-45ad-8131-a0ba0fc366b9",
   "prevId": "5a4bd1da-beae-4bf6-b3c3-d890ab246f2d",
   "version": "7",
   "dialect": "postgresql",
@@ -16884,7 +16884,8 @@
         },
         "status": {
           "name": "status",
-          "type": "text",
+          "type": "custom_domain_status",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
           "default": "'pending'"
@@ -17309,6 +17310,15 @@
         "expired",
         "error",
         "disconnected"
+      ]
+    },
+    "public.custom_domain_status": {
+      "name": "custom_domain_status",
+      "schema": "public",
+      "values": [
+        "pending",
+        "verified",
+        "failed"
       ]
     }
   },

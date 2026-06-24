@@ -162,4 +162,10 @@ describe('buildDnsInstructions', () => {
     expect(result.isApex).toBe(false);
     expect(result.records[0]).toEqual({ type: 'CNAME', name: 'blog', value: params.cnameTarget });
   });
+
+  it('preserves all subdomain labels for deep subdomains', () => {
+    const result = buildDnsInstructions({ hostname: 'docs.blog.acme.com', ...params });
+    expect(result.isApex).toBe(false);
+    expect(result.records[0]).toEqual({ type: 'CNAME', name: 'docs.blog', value: params.cnameTarget });
+  });
 });
