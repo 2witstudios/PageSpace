@@ -133,6 +133,13 @@ const createContext = (driveId: string) => ({
 const createRequest = (driveId = 'drive_abc') =>
   new Request(`https://example.com/api/drives/${driveId}/pages`);
 
+const createLsRequest = (driveId = 'drive_abc', params: Record<string, string> = {}) => {
+  const url = new URL(`https://example.com/api/drives/${driveId}/pages`);
+  url.searchParams.set('ls', 'true');
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  return new Request(url.toString());
+};
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -421,6 +428,150 @@ describe('GET /api/drives/[driveId]/pages', () => {
       await GET(createRequest() as never, createContext(mockDriveId));
 
       expect(loggers.api.error).toHaveBeenCalledWith('Error fetching pages:', error);
+    });
+  });
+
+  // ---------- ls-mode (?ls=true) ----------
+
+  describe('ls-mode (?ls=true)', () => {
+    const flatPages = [
+      { id: 'page_root1', parentId: null, position: 0, type: 'DOCUMENT', title: 'Root Doc' },
+      { id: 'page_folder', parentId: null, position: 1, type: 'FOLDER', title: 'Folder' },
+      { id: 'page_child1', parentId: 'page_folder', position: 0, type: 'DOCUMENT', title: 'Child Doc' },
+    ];
+
+    beforeEach(() => {
+      // Drive needs a slug for ls-mode location strings
+      mockFindFirst.mockResolvedValue({
+        id: mockDriveId,
+        ownerId: mockUserId,
+        name: 'Test Drive',
+        slug: 'test-drive',
+      });
+      mockFindMany.mockResolvedValue(flatPages);
+      mockSelectDistinctWhere.mockResolvedValue([]);
+    });
+
+    it('should return ls-mode shape instead of tree when ?ls=true', async () => {
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.mode).toBe('ls');
+      expect(body.driveName).toBe('Test Drive');
+      expect(body.driveSlug).toBe('test-drive');
+      // buildTree should NOT be called in ls-mode
+      expect(buildTree).not.toHaveBeenCalled();
+    });
+
+    it('should return only root-level pages when no parentId is given', async () => {
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.pages).toHaveLength(2);
+      expect(body.pages.map((p: { id: string }) => p.id)).toEqual(['page_root1', 'page_folder']);
+      expect(body.count).toBe(2);
+      expect(body.totalInDrive).toBe(3);
+    });
+
+    it('should set hasChildren=true on folder that has children', async () => {
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      const folder = body.pages.find((p: { id: string }) => p.id === 'page_folder');
+      const doc = body.pages.find((p: { id: string }) => p.id === 'page_root1');
+      expect(folder.hasChildren).toBe(true);
+      expect(doc.hasChildren).toBe(false);
+    });
+
+    it('should return root location when no parentId', async () => {
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.location).toBe('/test-drive');
+      expect(body.breadcrumb).toEqual([]);
+    });
+
+    it('should return children of parentId when parentId is given', async () => {
+      const response = await GET(
+        createLsRequest(mockDriveId, { parentId: 'page_folder' }) as never,
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(body.pages).toHaveLength(1);
+      expect(body.pages[0].id).toBe('page_child1');
+      expect(body.pages[0].hasChildren).toBe(false);
+    });
+
+    it('should include breadcrumb when navigating into a folder', async () => {
+      const response = await GET(
+        createLsRequest(mockDriveId, { parentId: 'page_folder' }) as never,
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(body.breadcrumb).toEqual([{ id: 'page_folder', title: 'Folder' }]);
+      expect(body.location).toBe('/test-drive/Folder');
+    });
+
+    it('should return 404 when parentId does not exist in visible pages', async () => {
+      const response = await GET(
+        createLsRequest(mockDriveId, { parentId: 'nonexistent_page' }) as never,
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toContain('parentId');
+    });
+
+    it('should return full subtree when recursive=true', async () => {
+      const response = await GET(
+        createLsRequest(mockDriveId, { recursive: 'true' }) as never,
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      // All 3 pages should appear in depth-first order: root1, folder, child1
+      expect(body.pages).toHaveLength(3);
+      expect(body.pages.map((p: { id: string }) => p.id)).toEqual([
+        'page_root1',
+        'page_folder',
+        'page_child1',
+      ]);
+    });
+
+    it('should mark isTaskLinked on pages linked to tasks', async () => {
+      mockSelectDistinctWhere.mockResolvedValue([{ pageId: 'page_root1' }]);
+
+      const response = await GET(createLsRequest() as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      const doc = body.pages.find((p: { id: string }) => p.id === 'page_root1');
+      const folder = body.pages.find((p: { id: string }) => p.id === 'page_folder');
+      expect(doc.isTaskLinked).toBe(true);
+      expect(folder.isTaskLinked).toBe(false);
+    });
+
+    it('should NOT call buildTree in ls-mode (backward compat: tree still works without ?ls)', async () => {
+      // Tree mode (no ?ls)
+      await GET(createRequest() as never, createContext(mockDriveId));
+      expect(buildTree).toHaveBeenCalled();
+
+      vi.clearAllMocks();
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValue(false);
+      vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+      mockFindFirst.mockResolvedValue({ id: mockDriveId, ownerId: mockUserId, name: 'Test Drive', slug: 'test-drive' });
+      mockFindMany.mockResolvedValue(flatPages);
+      mockSelectDistinctWhere.mockResolvedValue([]);
+      mockExecute.mockResolvedValue({ rows: [] });
+      vi.mocked(buildTree).mockImplementation((items: unknown[]) => items as ReturnType<typeof buildTree>);
+
+      // ls-mode
+      await GET(createLsRequest() as never, createContext(mockDriveId));
+      expect(buildTree).not.toHaveBeenCalled();
     });
   });
 });
