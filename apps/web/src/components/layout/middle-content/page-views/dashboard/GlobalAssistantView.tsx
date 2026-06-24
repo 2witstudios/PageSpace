@@ -72,6 +72,7 @@ import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
+import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
   ProviderSetupCard,
@@ -102,7 +103,7 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   const { chatConfig: globalChatConfig, setIsStreaming: setGlobalIsStreaming, setStopStreaming: setGlobalStopStreaming } = useGlobalChatConfig();
   const { isStreaming: contextIsStreaming, stopStreaming: contextStopStreaming } = useGlobalChatStream();
-  const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, createNewConversation, refreshSignal } = useGlobalChatConversation();
+  const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, createNewConversation, refreshSignal, rejoinGlobalStream } = useGlobalChatConversation();
 
   // ============================================
   // AGENT STORE - for agent selection and conversation management
@@ -180,6 +181,9 @@ const GlobalAssistantView: React.FC = () => {
   const inputRef = useRef<ChatInputRef>(null);
   const prevStatusRef = useRef<string>('ready');
   const prevAgentStatusRef = useRef<string>('ready');
+  // Populated after useAgentChannelMultiplayer runs (called further down); used
+  // in tryRecover via ref so the callback doesn't depend on hook ordering.
+  const rejoinAgentStreamRef = useRef<() => void>(() => {});
 
   // ============================================
   // SHARED HOOKS
@@ -339,6 +343,11 @@ const GlobalAssistantView: React.FC = () => {
   }, [messages, isStreaming]);
   const latestAgentMessagesRef = useRef(agentMessages);
   const latestGlobalMessagesRef = useRef(globalLocalMessages);
+  // Synchronously updated each render — lets tryRecover read the live message
+  // count without adding messages to its useCallback deps (which would cause
+  // the useStreamRecovery effect to re-subscribe on every message update).
+  const currentMessagesRef = useRef(messages);
+  currentMessagesRef.current = messages;
 
   useEffect(() => {
     latestAgentMessagesRef.current = agentMessages;
@@ -417,8 +426,85 @@ const GlobalAssistantView: React.FC = () => {
       regenerate,
     });
 
-  // Auto-retry on network errors (e.g. ERR_NETWORK_CHANGED killing mid-stream)
-  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2 });
+  // Rejoin-first recovery probe for useStreamRecovery.
+  // On a network error (e.g. iOS backgrounding kills the fetch):
+  //   1. Check /api/ai/chat/active-streams — if the original run is still live, rejoin it.
+  //   2. Else fetch messages from the DB — if the run already persisted a reply, surface it.
+  //   3. Only fall through to regenerate() when neither path finds anything to recover.
+  const tryRecover = useCallback(async (): Promise<boolean> => {
+    if (!currentConversationId) return false;
+    const channelId = selectedAgent?.id ?? (user?.id ? globalChannelId(user.id) : null);
+    if (!channelId) return false;
+
+    // Step 1: live stream check
+    try {
+      const res = await fetchWithAuth(
+        `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
+      );
+      if (res.ok) {
+        const data = (await res.json()) as {
+          streams?: Array<{ conversationId: string; triggeredBy: { userId: string } }>;
+        };
+        const hasLiveStream = (data.streams ?? []).some(
+          (s) => s.conversationId === currentConversationId && s.triggeredBy.userId === user?.id,
+        );
+        if (decideRecovery({ hasLiveStream, hasPersistedReply: false }) === 'rejoin') {
+          if (selectedAgent) {
+            rejoinAgentStreamRef.current();
+          } else {
+            rejoinGlobalStream();
+          }
+          return true;
+        }
+      }
+    } catch { /* network error — fall through to DB check */ }
+
+    // Step 2: DB check for persisted reply for the CURRENT turn.
+    // Only accept when the DB has at least as many user messages as we have locally —
+    // this guards against the case where the network error fired before the user's
+    // message reached the server, making the DB end with the PREVIOUS turn's
+    // assistant reply and causing us to silently drop the new user prompt.
+    try {
+      const url = selectedAgent
+        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
+        : `/api/ai/global/${currentConversationId}/messages`;
+      const res = await fetchWithAuth(url);
+      if (res.ok) {
+        const data = await res.json();
+        const msgs = (Array.isArray(data) ? data : (data.messages ?? [])) as Array<{ role: string }>;
+        const localUserCount = currentMessagesRef.current.filter((m) => m.role === 'user').length;
+        const dbUserCount = msgs.filter((m) => m.role === 'user').length;
+        // DB must have at least as many user messages as local (the user's turn
+        // was persisted) AND end with an assistant reply (the run completed).
+        const hasPersistedReply =
+          msgs.length > 0 &&
+          msgs[msgs.length - 1].role === 'assistant' &&
+          dbUserCount >= localUserCount;
+        if (decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch') {
+          if (selectedAgent) {
+            setAgentMessages(data.messages);
+            setAgentStoreMessages(data.messages);
+          } else {
+            setGlobalLocalMessages(data.messages);
+          }
+          return true;
+        }
+      }
+    } catch { /* network error — fall through to regenerate */ }
+
+    return false;
+  }, [
+    currentConversationId,
+    selectedAgent,
+    user,
+    rejoinGlobalStream,
+    setAgentMessages,
+    setAgentStoreMessages,
+    setGlobalLocalMessages,
+  ]);
+
+  // Auto-retry on network errors — rejoin-first, regenerate only as last resort
+  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2, tryRecover });
 
   const handleUndoSuccess = useCallback(async () => {
     if (!currentConversationId) return;
@@ -622,7 +708,7 @@ const GlobalAssistantView: React.FC = () => {
   // is null. Encapsulates page-room subscription, stream bootstrap/socket
   // events, dashboard-store stop-slot single-writer claim, channel-id-keyed
   // editing-store registration, and reconnect-refresh.
-  useAgentChannelMultiplayer({
+  const { rejoinActiveStreams: rejoinAgentStream } = useAgentChannelMultiplayer({
     selectedAgent,
     agentConversationId,
     setLocalMessages: setAgentMessages,
@@ -630,6 +716,9 @@ const GlobalAssistantView: React.FC = () => {
     surfaceComponentName: 'GlobalAssistantView',
     loadConversation: loadAgentConversation,
   });
+  // Keep the ref current so tryRecover (defined above) can call it without
+  // depending on hook-call ordering.
+  rejoinAgentStreamRef.current = rejoinAgentStream;
 
   // Register streaming state with editing store
   useStreamingRegistration(

@@ -44,6 +44,8 @@ interface GlobalChatConversationContextValue {
   setCurrentConversationId: (id: string | null) => void;
   loadConversation: (id: string) => Promise<void>;
   createNewConversation: () => Promise<void>;
+  /** Re-runs the global channel bootstrap to rejoin any still-live own stream. */
+  rejoinGlobalStream: () => void;
 }
 
 interface GlobalChatStreamContextValue {
@@ -222,7 +224,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const setRefreshSignalRef = useRef(setRefreshSignal);
   setRefreshSignalRef.current = setRefreshSignal;
 
-  useChannelStreamSocket(channelId, {
+  const { rejoinActiveStreams: rejoinGlobalStream } = useChannelStreamSocket(channelId, {
     // Cross-tab same-user events: signal surfaces to re-fetch rather than
     // updating context state that nobody renders from.
     onUserMessage: (_message, payload) => {
@@ -300,6 +302,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     setCurrentConversationId,
     loadConversation,
     createNewConversation,
+    rejoinGlobalStream,
   }), [
     currentConversationId,
     initialMessages,
@@ -307,6 +310,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     refreshSignal,
     loadConversation,
     createNewConversation,
+    rejoinGlobalStream,
   ]);
 
   const streamContextValue: GlobalChatStreamContextValue = useMemo(() => ({

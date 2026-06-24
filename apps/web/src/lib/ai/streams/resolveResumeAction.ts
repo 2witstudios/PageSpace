@@ -7,6 +7,10 @@ export function resolveResumeAction({
   native: boolean;
   isStreaming: boolean;
 }): ResumeAction {
-  if (isStreaming) return native ? 'rejoin-and-refresh' : 'noop';
+  // On native (Capacitor) the local fetch is always dead after backgrounding —
+  // regardless of whether useChat still reports streaming — so we always rejoin.
+  if (native) return 'rejoin-and-refresh';
+  // Web + live fetch: don't clobber it; the existing stream is healthy.
+  if (isStreaming) return 'noop';
   return 'refresh';
 }

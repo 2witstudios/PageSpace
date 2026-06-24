@@ -11,6 +11,13 @@ interface UseStreamRecoveryOptions {
   handleRetry: () => Promise<void>;
   /** Max auto-retry attempts before giving up (default: 2) */
   maxRetries?: number;
+  /**
+   * Optional rejoin-first recovery probe. Called before handleRetry (regenerate).
+   * Should attempt to rejoin a live server stream or refetch the persisted result.
+   * Return true if recovery succeeded (skip regenerate); false to fall through to
+   * handleRetry. When absent, handleRetry is always called on network error.
+   */
+  tryRecover?: () => Promise<boolean>;
 }
 
 /** Returns true if the error looks like a network/connection failure (not an API error) */
@@ -48,6 +55,7 @@ export function useStreamRecovery({
   clearError,
   handleRetry,
   maxRetries = 2,
+  tryRecover,
 }: UseStreamRecoveryOptions) {
   const retryCountRef = useRef(0);
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -77,6 +85,7 @@ export function useStreamRecovery({
       isRetryingRef.current = true;
       clearError();
       try {
+        if (tryRecover && await tryRecover()) return;
         await handleRetry();
       } finally {
         isRetryingRef.current = false;
@@ -89,7 +98,7 @@ export function useStreamRecovery({
         retryTimeoutRef.current = null;
       }
     };
-  }, [error, status, clearError, handleRetry, maxRetries]);
+  }, [error, status, clearError, handleRetry, maxRetries, tryRecover]);
 
   // Cleanup on unmount
   useEffect(() => {

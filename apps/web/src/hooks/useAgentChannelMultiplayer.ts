@@ -63,7 +63,7 @@ export function useAgentChannelMultiplayer({
   isLocallyStreaming,
   surfaceComponentName,
   loadConversation,
-}: UseAgentChannelMultiplayerOptions): void {
+}: UseAgentChannelMultiplayerOptions): { rejoinActiveStreams: () => void } {
   const channelId = selectedAgent?.id;
 
   usePageSocketRoom(channelId);
@@ -92,7 +92,7 @@ export function useAgentChannelMultiplayer({
     };
   }, []);
 
-  useChannelStreamSocket(channelId, {
+  const { rejoinActiveStreams } = useChannelStreamSocket(channelId, {
     onUserMessage: (message, payload) => {
       if (payload.conversationId !== agentConversationIdRef.current) return;
       setLocalMessagesRef.current((prev) =>
@@ -186,4 +186,6 @@ export function useAgentChannelMultiplayer({
       hasInitialConnectRef.current = true;
     }
   }, [selectedAgent, socketConnectionStatus, agentConversationId]);
+
+  return { rejoinActiveStreams };
 }
