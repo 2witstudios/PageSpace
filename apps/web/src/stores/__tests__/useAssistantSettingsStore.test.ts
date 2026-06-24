@@ -44,6 +44,8 @@ describe('useAssistantSettingsStore', () => {
       isAnyProviderConfigured: false,
       isLoading: false,
       isInitialized: false,
+      webSearchEnabled: false,
+      writeMode: true,
     });
 
     // Clear all mocks
@@ -208,6 +210,57 @@ describe('useAssistantSettingsStore', () => {
       expect(result.current.isInitialized).toBe(true);
       expect(result.current.currentProvider).toBe('openai');
       expect(result.current.currentModel).toBe('gpt-4');
+    });
+  });
+
+  // ============================================
+  // Toggle action tests
+  // ============================================
+  describe('toggleWebSearch', () => {
+    it('should flip webSearchEnabled from false to true', () => {
+      const { result } = renderHook(() => useAssistantSettingsStore());
+      act(() => { result.current.toggleWebSearch(); });
+      expect(result.current.webSearchEnabled).toBe(true);
+    });
+
+    it('should flip webSearchEnabled from true to false', () => {
+      useAssistantSettingsStore.setState({ webSearchEnabled: true });
+      const { result } = renderHook(() => useAssistantSettingsStore());
+      act(() => { result.current.toggleWebSearch(); });
+      expect(result.current.webSearchEnabled).toBe(false);
+    });
+
+    it('should persist to localStorage', () => {
+      const { result } = renderHook(() => useAssistantSettingsStore());
+      act(() => { result.current.toggleWebSearch(); });
+      expect(localStorageMock.setItem).toHaveBeenCalledWith(
+        'pagespace:assistant:webSearchEnabled',
+        'true'
+      );
+    });
+  });
+
+  describe('toggleWriteMode', () => {
+    it('should flip writeMode from true to false', () => {
+      const { result } = renderHook(() => useAssistantSettingsStore());
+      act(() => { result.current.toggleWriteMode(); });
+      expect(result.current.writeMode).toBe(false);
+    });
+
+    it('should flip writeMode from false to true', () => {
+      useAssistantSettingsStore.setState({ writeMode: false });
+      const { result } = renderHook(() => useAssistantSettingsStore());
+      act(() => { result.current.toggleWriteMode(); });
+      expect(result.current.writeMode).toBe(true);
+    });
+
+    it('should persist to localStorage', () => {
+      const { result } = renderHook(() => useAssistantSettingsStore());
+      act(() => { result.current.toggleWriteMode(); });
+      expect(localStorageMock.setItem).toHaveBeenCalledWith(
+        'pagespace:assistant:writeMode',
+        'false'
+      );
     });
   });
 
@@ -407,6 +460,69 @@ describe('useAssistantSettingsStore', () => {
       expect(result.current.isInitialized).toBe(true);
       expect(result.current.isLoading).toBe(false);
       expect(result.current.currentProvider).toBeNull();
+    });
+
+    // ============================================
+    // Race condition tests
+    // ============================================
+    it('should apply webSearchEnabled from localStorage before fetch resolves', async () => {
+      localStorageMock.store['pagespace:assistant:webSearchEnabled'] = 'true';
+
+      let resolvePromise!: (value: unknown) => void;
+      const pendingPromise = new Promise((resolve) => {
+        resolvePromise = resolve;
+      });
+      mockFetchWithAuth.mockReturnValue(pendingPromise);
+
+      const { result } = renderHook(() => useAssistantSettingsStore());
+
+      // Start loading but don't await it — fetch is still in-flight
+      act(() => {
+        result.current.loadSettings();
+      });
+
+      // localStorage value must be applied immediately, before the fetch resolves
+      expect(result.current.webSearchEnabled).toBe(true);
+
+      // Clean up: resolve the fetch
+      await act(async () => {
+        resolvePromise({ ok: false, status: 500 });
+        await pendingPromise;
+      });
+    });
+
+    it('should set currentProvider and currentModel after fetch resolves', async () => {
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          currentProvider: 'anthropic',
+          currentModel: 'claude-3-opus',
+          isAnyProviderConfigured: true,
+        }),
+      });
+
+      const { result } = renderHook(() => useAssistantSettingsStore());
+
+      await act(async () => {
+        await result.current.loadSettings();
+      });
+
+      expect(result.current.currentProvider).toBe('anthropic');
+      expect(result.current.currentModel).toBe('claude-3-opus');
+      expect(result.current.isAnyProviderConfigured).toBe(true);
+      expect(result.current.isInitialized).toBe(true);
+    });
+
+    it('should default webSearchEnabled to false when localStorage has no value', async () => {
+      // localStorage has no entry for webSearchEnabled
+
+      const { result } = renderHook(() => useAssistantSettingsStore());
+
+      await act(async () => {
+        await result.current.loadSettings();
+      });
+
+      expect(result.current.webSearchEnabled).toBe(false);
     });
   });
 });
