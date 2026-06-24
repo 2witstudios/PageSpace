@@ -18,12 +18,14 @@ export const pageReadTools = {
    * Explore the folder structure and find content within a workspace
    */
   list_pages: tool({
-    description: 'List all pages in a workspace with their paths and types. Returns hierarchical structure showing folders, documents, AI chats, channels, canvas pages, sheets, and task lists. Pages marked with (Task) suffix are linked to task items.',
+    description: 'List pages at a location in a workspace. Defaults to direct children of the drive root (ls-style). Pass parentId to navigate into a folder. Set recursive: true to return the full subtree. Each result includes hasChildren so you know whether to drill in further.',
     inputSchema: z.object({
       driveSlug: z.string().optional().describe('The human-readable slug of the drive (for semantic understanding)'),
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
+      parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
+      recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
     }),
-    execute: async ({ driveSlug, driveId }, { experimental_context: context }) => {
+    execute: async ({ driveSlug, driveId, parentId, recursive = false }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -38,51 +40,104 @@ export const pageReadTools = {
         // Sort by position to maintain order
         visiblePages.sort((a, b) => a.position - b.position);
 
+        const pageMap = new Map(visiblePages.map(p => [p.id, p]));
+
+        if (parentId && !pageMap.has(parentId)) {
+          return { success: false, error: `Page "${parentId}" not found or not accessible in this workspace` };
+        }
+
         // Get task-linked page IDs to mark them
         const taskLinkedPageIds = await db.selectDistinct({ pageId: taskItems.pageId })
           .from(taskItems)
           .where(isNotNull(taskItems.pageId));
         const taskLinkedSet = new Set(taskLinkedPageIds.map(t => t.pageId));
 
-        // Build flat list of paths with type indicators
-        const buildPageList = (parentId: string | null = null, parentPath: string = `/${driveSlug || driveId}`): string[] => {
-          const pages: string[] = [];
-          const currentPages = visiblePages.filter(page => page.parentId === parentId);
-
-          for (const page of currentPages) {
-            const currentPath = `${parentPath}/${page.title}`;
-            // Add type indicator emoji
-            const typeIndicator = getPageTypeEmoji(page.type as PageType);
-            // Add (Task) suffix for task-linked pages
-            const taskSuffix = taskLinkedSet.has(page.id) ? ' (Task)' : '';
-
-            pages.push(`${typeIndicator} [${page.type}]${taskSuffix} ID: ${page.id} Path: ${currentPath}`);
-
-            // Recursively add children
-            pages.push(...buildPageList(page.id, currentPath));
-          }
-
-          return pages;
+        // Build full path for a page by walking up through the map
+        const buildPath = (pageId: string | null): string => {
+          if (!pageId) return `/${driveSlug || driveId}`;
+          const page = pageMap.get(pageId);
+          if (!page) return `/${driveSlug || driveId}`;
+          return `${buildPath(page.parentId)}/${page.title}`;
         };
 
-        const paths = buildPageList();
+        // Build breadcrumb from drive root down to a given page
+        const buildBreadcrumb = (id: string | undefined): { id: string; title: string }[] => {
+          if (!id) return [];
+          const crumbs: { id: string; title: string }[] = [];
+          let current = pageMap.get(id);
+          while (current) {
+            crumbs.unshift({ id: current.id, title: current.title });
+            current = current.parentId ? pageMap.get(current.parentId) : undefined;
+          }
+          return crumbs;
+        };
+
+        interface PageEntry {
+          id: string;
+          title: string;
+          type: string;
+          emoji: string;
+          hasChildren: boolean;
+          isTaskLinked: boolean;
+          path: string;
+        }
+
+        let resultPages: PageEntry[];
+
+        if (!recursive) {
+          const target = parentId ?? null;
+          const children = visiblePages.filter(p => p.parentId === target);
+          resultPages = children.map(p => ({
+            id: p.id,
+            title: p.title,
+            type: p.type,
+            emoji: getPageTypeEmoji(p.type as PageType),
+            hasChildren: visiblePages.some(c => c.parentId === p.id),
+            isTaskLinked: taskLinkedSet.has(p.id),
+            path: buildPath(p.id),
+          }));
+        } else {
+          const collectSubtree = (startParentId: string | null): PageEntry[] => {
+            const result: PageEntry[] = [];
+            const children = visiblePages.filter(p => p.parentId === startParentId);
+            for (const p of children) {
+              result.push({
+                id: p.id,
+                title: p.title,
+                type: p.type,
+                emoji: getPageTypeEmoji(p.type as PageType),
+                hasChildren: visiblePages.some(c => c.parentId === p.id),
+                isTaskLinked: taskLinkedSet.has(p.id),
+                path: buildPath(p.id),
+              });
+              result.push(...collectSubtree(p.id));
+            }
+            return result;
+          };
+          resultPages = collectSubtree(parentId ?? null);
+        }
+
+        const driveLabel = driveSlug || driveId;
+        const breadcrumb = buildBreadcrumb(parentId);
+        const location = parentId ? buildPath(parentId) : `/${driveLabel}`;
+        const locationLabel = breadcrumb.length > 0 ? breadcrumb.map(c => c.title).join(' / ') : driveLabel;
 
         return {
           success: true,
-          driveSlug: driveSlug || driveId,
-          paths,
-          count: paths.length,
-          summary: `Explored ${driveSlug || driveId} workspace and found ${paths.length} page${paths.length === 1 ? '' : 's'}`,
-          stats: {
-            totalPages: paths.length,
-            folderCount: paths.filter(p => p.includes('📁')).length,
-            documentCount: paths.filter(p => p.includes('📄')).length,
-            workspace: driveSlug || driveId
-          },
-          nextSteps: paths.length > 0 ? [
-            'Use read_page to examine specific documents',
-            'Use create_page to add new content to this workspace'
-          ] : ['This workspace is empty - consider creating some initial content']
+          driveSlug: driveLabel,
+          location,
+          breadcrumb,
+          pages: resultPages,
+          count: resultPages.length,
+          totalInDrive: visiblePages.length,
+          summary: recursive
+            ? `Found ${resultPages.length} page${resultPages.length === 1 ? '' : 's'} in "${driveLabel}" (full tree)`
+            : `Found ${resultPages.length} page${resultPages.length === 1 ? '' : 's'} in "${locationLabel}"`,
+          nextSteps: resultPages.length > 0 ? [
+            'Use read_page with a page ID to read its content',
+            'Pass parentId with a folder ID to navigate into it',
+            'Use create_page to add new content',
+          ] : [`"${locationLabel}" is empty — use create_page to add content`],
         };
       } catch (error) {
         console.error('Error reading drive tree:', error);
