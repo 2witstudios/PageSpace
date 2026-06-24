@@ -289,6 +289,32 @@ describe('buildTerminalHandlers', () => {
       expect(() => onDisconnect()).not.toThrow();
     });
 
+    it('given a shell that exits while the session is detached, should clean up immediately and cancel the idle timer', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth.mockResolvedValue(auth);
+      const { onConnect, onDisconnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      // Get the onExit callback that was registered with openShell
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+
+      onDisconnect();
+      // Idle timer is now running
+
+      // Shell exits while detached (e.g., the user's script finished)
+      onExitArg(0);
+
+      // Session should be cleaned up immediately
+      expect(sessionMap.getByKey('key1')).toBeUndefined();
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
+      // kill() should NOT be called — the shell already exited naturally
+      expect(shell.kill).not.toHaveBeenCalled();
+
+      // Advance past the idle timeout — idle timer was cancelled by onExit, so no second releaseSlot
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
+    });
+
     it('given a reconnect before the idle timer fires, should cancel the timer and not kill the shell', async () => {
       const auth = makeAuthSuccess();
       checkAuth.mockResolvedValue(auth);
