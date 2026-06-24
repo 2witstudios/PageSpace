@@ -58,6 +58,11 @@ vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
   clearCustomHost: (...args: unknown[]) => clearCustomHost(...args),
 }));
 
+const regeneratePublishedSiteFiles = vi.fn().mockResolvedValue(undefined);
+vi.mock('@/lib/canvas/publish-page', () => ({
+  regeneratePublishedSiteFiles: (...args: unknown[]) => regeneratePublishedSiteFiles(...args),
+}));
+
 const DRIVE_ID = 'drive-1';
 const DOMAIN_ID = 'dom-1';
 const USER_ID = 'user-1';
@@ -306,6 +311,15 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
       await POST(makeReq(), ctx());
 
       expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+    });
+
+    it('regenerates site files before mirroring when domain becomes active', async () => {
+      setupSelectReturning([VERIFIED_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+      await POST(makeReq(), ctx());
+
+      expect(regeneratePublishedSiteFiles).toHaveBeenCalledWith(DRIVE_ID);
     });
 
     it('triggers mirrorDriveToCustomHost when provisioning domain becomes active', async () => {

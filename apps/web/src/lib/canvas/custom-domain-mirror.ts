@@ -11,11 +11,17 @@ import { publishedPages } from '@pagespace/db/schema/published-pages';
 import {
   buildPublishedKey,
   copyPublishedArtifact,
+  copyPublishedSiteFileArtifact,
   deletePublishedArtifact,
   clearPublishedPrefix,
   publishedArtifactExists,
   isPublishConfigured,
 } from './published-storage';
+
+/** True for the three drive-level site files that must preserve their content type on copy. */
+function isSiteFileKey(key: string): boolean {
+  return key.endsWith('/robots.txt') || key.endsWith('/sitemap.xml') || key.endsWith('/404.html');
+}
 
 /**
  * Return all active custom domain records for a drive. Only domains with
@@ -110,15 +116,16 @@ export async function mirror404ToHosts(driveId: string, subdomain: string): Prom
     });
 
     await Promise.allSettled(
-      copies.map(({ from, to }) =>
-        copyPublishedArtifact(from, to).catch((err) => {
+      copies.map(({ from, to }) => {
+        const copy = isSiteFileKey(to) ? copyPublishedSiteFileArtifact(from, to) : copyPublishedArtifact(from, to);
+        return copy.catch((err) => {
           loggers.api.warn('Failed to mirror site file to custom host', {
             from,
             to,
             error: err instanceof Error ? err.message : String(err),
           });
-        }),
-      ),
+        });
+      }),
     );
   } catch (err) {
     loggers.api.warn('Failed to mirror site files to custom hosts', {
@@ -225,8 +232,9 @@ export async function mirrorDriveToCustomHost(driveId: string, host: string): Pr
   });
 
   await Promise.allSettled(
-    copies.map(({ from, to }) =>
-      copyPublishedArtifact(from, to).catch((err) => {
+    copies.map(({ from, to }) => {
+      const copy = isSiteFileKey(to) ? copyPublishedSiteFileArtifact(from, to) : copyPublishedArtifact(from, to);
+      return copy.catch((err) => {
         loggers.api.warn('Failed to copy artifact during drive mirror to custom host', {
           driveId,
           host,
@@ -234,8 +242,8 @@ export async function mirrorDriveToCustomHost(driveId: string, host: string): Pr
           to,
           error: err instanceof Error ? err.message : String(err),
         });
-      }),
-    ),
+      });
+    }),
   );
 }
 

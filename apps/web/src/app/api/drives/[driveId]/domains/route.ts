@@ -99,11 +99,9 @@ export async function POST(
       return NextResponse.json({ error: validation.reason }, { status: 400 });
     }
 
-    // Enforce tier cap: check the drive owner's plan limit and the current domain count.
-    const [maxAllowed, existingCount] = await Promise.all([
-      getMaxCustomDomainsForDrive(driveId),
-      db.select({ n: count() }).from(customDomains).where(eq(customDomains.driveId, driveId)).then((rows) => rows[0]?.n ?? 0),
-    ]);
+    // Enforce tier cap: check the drive owner's plan limit outside the transaction
+    // (subscription tier doesn't change mid-request).
+    const maxAllowed = await getMaxCustomDomainsForDrive(driveId);
 
     if (maxAllowed === 0) {
       return NextResponse.json(
@@ -112,31 +110,48 @@ export async function POST(
       );
     }
 
-    if (existingCount >= maxAllowed) {
-      return NextResponse.json(
-        { error: `Your plan allows a maximum of ${maxAllowed} custom domain${maxAllowed === 1 ? '' : 's'} per drive.` },
-        { status: 403 },
-      );
-    }
-
+    // Atomic count-check + insert. Lock the drive row first to serialize
+    // concurrent requests on the same drive and prevent over-the-cap inserts.
+    let inserted: { id: string; driveId: string; hostname: string; status: string; createdAt: Date };
     try {
-      const [inserted] = await db.insert(customDomains).values({ driveId, hostname }).returning();
+      const rows = await db.transaction(async (tx) => {
+        await tx.select({ id: drives.id }).from(drives).where(eq(drives.id, driveId)).for('update');
 
-      auditRequest(request, {
-        eventType: 'data.write',
-        userId: auth.userId,
-        resourceType: 'drive',
-        resourceId: driveId,
-        details: { operation: 'add-custom-domain', hostname },
+        const [countRow] = await tx.select({ n: count() }).from(customDomains).where(eq(customDomains.driveId, driveId));
+        const existingCount = countRow?.n ?? 0;
+
+        if (existingCount >= maxAllowed) {
+          const e = Object.assign(new Error('at cap'), { code: 'cap_exceeded', maxAllowed });
+          throw e;
+        }
+
+        return tx.insert(customDomains).values({ driveId, hostname }).returning();
       });
-
-      return NextResponse.json({ domain: inserted }, { status: 201 });
+      inserted = rows[0];
     } catch (err) {
-      if ((err as { code?: string }).code === '23505') {
+      const anyErr = err as { code?: string; maxAllowed?: number };
+      if (anyErr.code === 'cap_exceeded') {
+        const max = anyErr.maxAllowed!;
+        return NextResponse.json(
+          { error: `Your plan allows a maximum of ${max} custom domain${max === 1 ? '' : 's'} per drive.` },
+          { status: 403 },
+        );
+      }
+      if (anyErr.code === '23505') {
         return NextResponse.json({ error: 'Domain is already registered' }, { status: 409 });
       }
       throw err;
     }
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: auth.userId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { operation: 'add-custom-domain', hostname },
+    });
+
+    return NextResponse.json({ domain: inserted }, { status: 201 });
   } catch (error) {
     loggers.api.error('Error adding custom domain:', error as Error);
     return NextResponse.json({ error: 'Failed to add domain' }, { status: 500 });

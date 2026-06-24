@@ -9,8 +9,10 @@
  *
  * Primary-host selection rule (deterministic — no DB flag needed):
  *   - If the drive has ≥1 active custom domain, the PRIMARY is the active domain
- *     with the earliest `createdAt`. Ties (same timestamp) are broken by
- *     hostname lexicographic order so the result is always predictable.
+ *     with the earliest `createdAt` (earliest-registered, not earliest-activated,
+ *     because the schema has no separate activation timestamp). Ties (same
+ *     timestamp) are broken by hostname lexicographic order so the result is
+ *     always predictable.
  *   - Otherwise fall back to `<subdomain>.<publishHost>` (the pagespace.site
  *     subdomain, which is always authoritative when no custom domain is active).
  *
@@ -19,7 +21,12 @@
  * The thin shell that fetches the active domains from the DB calls this.
  */
 
-/** Minimal shape of an active custom domain needed for primary-host resolution. */
+/**
+ * Minimal shape of an active custom domain needed for primary-host resolution.
+ * `createdAt` is the row creation timestamp (earliest-registered), used as a
+ * stable deterministic tie-breaker. There is no separate activation timestamp
+ * in the schema.
+ */
 export interface ActiveDomainRecord {
   hostname: string;
   createdAt: Date;

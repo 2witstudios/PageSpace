@@ -26,10 +26,12 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const dbSelect = vi.fn();
 const dbInsert = vi.fn();
+const dbTransaction = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: (...args: unknown[]) => dbSelect(...args),
     insert: (...args: unknown[]) => dbInsert(...args),
+    transaction: (...args: unknown[]) => dbTransaction(...args),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -70,12 +72,18 @@ const makeReq = (body?: unknown): Request =>
   } as unknown as Request);
 const ctx = (driveId = DRIVE_ID) => ({ params: Promise.resolve({ driveId }) });
 
-/** Mock for POST: owner tier + count in separate selects. */
+/**
+ * Mock for POST: three sequential dbSelect calls inside the handler.
+ *  1. Tier lookup (outside transaction): drives JOIN users → [{tier}]
+ *  2. Drive row lock (inside transaction): SELECT drives.id FOR UPDATE
+ *  3. Count query (inside transaction): SELECT count() FROM customDomains
+ */
 function mockPostSelects({ ownerTier = 'pro', domainCount = 0 } = {}) {
   let callIndex = 0;
   dbSelect.mockImplementation(() => {
     callIndex++;
     if (callIndex === 1) {
+      // Tier lookup
       return {
         from: vi.fn().mockReturnThis(),
         innerJoin: vi.fn().mockReturnThis(),
@@ -83,13 +91,18 @@ function mockPostSelects({ ownerTier = 'pro', domainCount = 0 } = {}) {
         limit: vi.fn().mockResolvedValue([{ tier: ownerTier }]),
       };
     }
-    // Count query
+    if (callIndex === 2) {
+      // Drive row lock: tx.select({id}).from(drives).where().for('update')
+      return {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        for: vi.fn().mockResolvedValue([{ id: DRIVE_ID }]),
+      };
+    }
+    // Count query: tx.select({n}).from(customDomains).where()
     return {
       from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis().mockImplementation(function (this: unknown) {
-        return Promise.resolve([{ n: domainCount }]);
-      }),
-      then: vi.fn((cb: (v: unknown) => unknown) => Promise.resolve(cb([{ n: domainCount }]))),
+      where: vi.fn().mockResolvedValue([{ n: domainCount }]),
     };
   });
 }
@@ -99,6 +112,13 @@ beforeEach(() => {
   authenticateRequestWithOptions.mockResolvedValue(mockAuth);
   checkMCPDriveScope.mockReturnValue(null);
   isPrincipalDriveOwnerOrAdmin.mockResolvedValue(true);
+  // Default transaction: pass a tx stub that delegates to the same dbSelect/dbInsert mocks.
+  dbTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) =>
+    cb({
+      select: (...args: unknown[]) => dbSelect(...args),
+      insert: (...args: unknown[]) => dbInsert(...args),
+    }),
+  );
 });
 
 // ── GET ──────────────────────────────────────────────────────────────────────

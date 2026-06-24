@@ -333,10 +333,14 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // prefix so Caddy can serve them there immediately.
   await mirrorPublishedPageToHosts({ driveId, subdomain, path, isHomePage });
 
-  // The home page's primary public URL is the subdomain root (matching the
-  // canonical tag baked above); it is also reachable at its slug. Other pages
-  // live only at their slug.
-  return { url: isHomePage ? rootUrl : publishedUrl, subdomain, path, isHomePage };
+  // Return the subdomain URL (guaranteed write target, always available) so the
+  // caller gets a reliable link. The canonical/OG/sitemap URLs still point at
+  // the primary host (custom domain when active), but those are baked into the
+  // rendered HTML — the response URL is for the UI to display/copy.
+  const responseUrl = isHomePage
+    ? `https://${subdomain}.${PUBLISH_HOST}/`
+    : `https://${subdomain}.${PUBLISH_HOST}/${path}`;
+  return { url: responseUrl, subdomain, path, isHomePage };
 }
 
 /**

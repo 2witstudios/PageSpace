@@ -283,7 +283,7 @@ describe('publishCanvasPage', () => {
     expect(PublishError).toBeDefined();
   });
 
-  it('uses the active custom domain as the canonical host when one exists', async () => {
+  it('response url is always the subdomain (not the custom domain) regardless of active custom domains', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'CANVAS', title: 'About', content: '<div/>', driveId: 'drive-1',
     }));
@@ -297,11 +297,12 @@ describe('publishCanvasPage', () => {
 
     const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
 
-    // The returned URL still reflects the primary public address (custom domain)
-    expect(result.url).toBe('https://www.acme.com/about');
+    // Response URL uses the subdomain (guaranteed write) so the caller always gets a working link.
+    // The canonical/OG tags baked into the HTML still use the custom domain.
+    expect(result.url).toBe('https://acme.pagespace.site/about');
   });
 
-  it('uses the subdomain as canonical host when no active custom domain exists', async () => {
+  it('uses the subdomain as response URL when no active custom domain exists', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'CANVAS', title: 'About', content: '<div/>', driveId: 'drive-1',
     }));
@@ -309,7 +310,6 @@ describe('publishCanvasPage', () => {
       id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
     }));
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
-    // Default mock already returns []
     vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
 
     const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
@@ -317,7 +317,7 @@ describe('publishCanvasPage', () => {
     expect(result.url).toBe('https://acme.pagespace.site/about');
   });
 
-  it('home page canonical is the custom domain root when active custom domain exists', async () => {
+  it('home page response URL is the subdomain root even when a custom domain is active', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'CANVAS', title: 'Home', content: '<div/>', driveId: 'drive-1',
     }));
@@ -332,7 +332,7 @@ describe('publishCanvasPage', () => {
     const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
 
     expect(result.isHomePage).toBe(true);
-    expect(result.url).toBe('https://www.acme.com/');
+    expect(result.url).toBe('https://acme.pagespace.site/');
   });
 });
 
