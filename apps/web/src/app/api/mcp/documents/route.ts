@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, asc, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
+import { taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
+import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpers';
+import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
 import { z } from 'zod/v4';
@@ -173,10 +176,85 @@ export async function POST(req: NextRequest) {
     
     switch (operation) {
       case 'read': {
-        const numberedLines = getNumberedLines(currentContent);
-
         auditRequest(req, { eventType: 'data.read', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation: 'read' } });
 
+        if (page.type === PageType.TASK_LIST) {
+          let taskList = await db.query.taskLists.findFirst({
+            where: eq(taskLists.pageId, pageId),
+          });
+
+          if (!taskList) {
+            const [newTaskList] = await db.insert(taskLists).values({
+              userId,
+              pageId,
+              title: page.title,
+              status: 'pending',
+              metadata: {
+                createdAt: new Date().toISOString(),
+                autoCreated: true,
+              },
+            }).returning();
+            taskList = newTaskList;
+          }
+
+          // Self-heal: ensure every child TASK_LIST page has a task_items row.
+          // Mirrors the same call in /api/pages/[pageId]/tasks/route.ts:143.
+          const childPages = await db
+            .select({ id: pages.id })
+            .from(pages)
+            .where(and(
+              eq(pages.parentId, pageId),
+              eq(pages.type, PageType.TASK_LIST),
+              eq(pages.isTrashed, false),
+            ));
+          const childPageIds = childPages.map(p => p.id);
+          if (childPageIds.length > 0) {
+            await backfillMissingTaskItems(db, { parentId: pageId, childPageIds, userId });
+          }
+
+          const [tasks, statusConfigs] = await Promise.all([
+            fetchEnrichedTasks(pageId),
+            db.query.taskStatusConfigs.findMany({
+              where: eq(taskStatusConfigs.taskListId, taskList.id),
+              orderBy: [asc(taskStatusConfigs.position)],
+            }),
+          ]);
+
+          const availableStatuses = statusConfigs.length > 0
+            ? statusConfigs.map(c => ({ slug: c.slug, label: c.name, group: c.group, position: c.position, color: c.color }))
+            : DEFAULT_TASK_STATUSES.map(s => ({ slug: s.slug, label: s.name, group: s.group, position: s.position, color: s.color }));
+
+          const slugToGroup = new Map(availableStatuses.map(s => [s.slug, s.group]));
+
+          const totalTasks = tasks.length;
+          const byGroup: Record<string, number> = { todo: 0, in_progress: 0, done: 0 };
+          const bySlug: Record<string, number> = {};
+          for (const t of tasks) {
+            bySlug[t.status] = (bySlug[t.status] || 0) + 1;
+            const group = slugToGroup.get(t.status)
+              || (t.completedAt ? 'done' : t.status === 'in_progress' || t.status === 'blocked' ? 'in_progress' : 'todo');
+            byGroup[group] = (byGroup[group] || 0) + 1;
+          }
+          const completedCount = byGroup.done || 0;
+          const progressPercentage = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0;
+
+          return NextResponse.json({
+            pageId,
+            pageTitle: page.title,
+            pageType: 'TASK_LIST',
+            taskListId: taskList.id,
+            tasks: tasks.map(t => serializeTaskItem(t)),
+            availableStatuses,
+            progress: {
+              total: totalTasks,
+              percentage: progressPercentage,
+              byGroup,
+              bySlug,
+            },
+          });
+        }
+
+        const numberedLines = getNumberedLines(currentContent);
         return NextResponse.json({
           pageId,
           pageTitle: page.title,

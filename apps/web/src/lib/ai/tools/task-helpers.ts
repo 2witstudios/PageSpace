@@ -171,7 +171,7 @@ export async function syncTaskAssignees(
   }
 }
 
-async function fetchEnrichedTasks(parentPageId: string) {
+export async function fetchEnrichedTasks(parentPageId: string) {
   return db.query.taskItems.findMany({
     where: inArray(taskItems.pageId, db.select({ id: pages.id }).from(pages).where(and(
       eq(pages.parentId, parentPageId),
