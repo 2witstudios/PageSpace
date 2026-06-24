@@ -80,6 +80,11 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Tracks the last conversation ID prepended via socket to prevent re-firing
+  // on remount or when selectedAgent flips back to global mode (sticky context state).
+  const lastHandledGlobalConversationIdRef = useRef<string | null>(
+    latestGlobalConversationAdded?.conversation.id ?? null,
+  );
 
   // Determine active conversation ID based on context
   const activeConversationId = useMemo(() => {
@@ -146,6 +151,8 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   useEffect(() => {
     if (!latestGlobalConversationAdded || selectedAgent) return;
     const { conversation } = latestGlobalConversationAdded;
+    if (lastHandledGlobalConversationIdRef.current === conversation.id) return;
+    lastHandledGlobalConversationIdRef.current = conversation.id;
     setConversations((prev) => {
       if (prev.some((c) => c.id === conversation.id)) return prev;
       return [

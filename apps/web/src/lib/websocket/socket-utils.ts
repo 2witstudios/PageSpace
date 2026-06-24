@@ -1020,12 +1020,15 @@ export async function broadcastGlobalConversationAdded(
       payload,
     });
 
-    await fetch(`${realtimeUrl}/api/broadcast`, {
+    const response = await fetch(`${realtimeUrl}/api/broadcast`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
       signal: AbortSignal.timeout(5000),
     });
+    if (!response.ok) {
+      throw new Error(`Broadcast failed with status ${response.status}`);
+    }
   } catch (error) {
     realtimeLogger.error(
       'Failed to broadcast global conversation-added',

@@ -110,7 +110,11 @@ export async function GET(
     if (!conversation) {
       // Conversation not yet persisted (lazy creation) — return empty rather than 404
       // so browsers don't log a network error for brand-new conversations.
-      return NextResponse.json({ messages: [], hasMore: false });
+      // Use the same { messages, pagination } shape as the persisted-conversation path.
+      return NextResponse.json({
+        messages: [],
+        pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 50, direction: 'before' },
+      });
     }
 
     // Parse pagination parameters
@@ -367,6 +371,10 @@ export async function POST(
     // token, if present. Resolution degrades, never fails.
     let commandPlan: CommandExecutionPlan | null = null;
     let commandSystemPrompt = '';
+    // Title resolved at save time (auto-generated from first user message when null).
+    // Used in the broadcastGlobalConversationAdded call below so the sidebar
+    // shows the real title rather than an empty string.
+    let resolvedConversationTitle = conversation.title ?? '';
 
     // Save user's message immediately to database
     const userMessage = requestMessages[requestMessages.length - 1];
@@ -437,6 +445,7 @@ export async function POST(
           // Auto-generate title from first user message
           const title = messageContent.slice(0, 50) + (messageContent.length > 50 ? '...' : '');
           updateData.title = title;
+          resolvedConversationTitle = title;
         }
 
         await db
@@ -962,7 +971,7 @@ MENTION PROCESSING:
       broadcastGlobalConversationAdded(channelId, {
         conversation: {
           id: conversation.id,
-          title: conversation.title ?? '',
+          title: resolvedConversationTitle,
           type: conversation.type,
           createdAt: conversation.createdAt.toISOString(),
         },
