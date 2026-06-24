@@ -455,6 +455,7 @@ function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRem
                 onVerify={onVerify}
                 isRemoving={removingId === domain.id}
                 isVerifying={verifyingId === domain.id}
+                anyVerifying={verifyingId !== null}
                 verifyReason={verifyReasons[domain.id]}
               />
             ))}
@@ -473,6 +474,7 @@ function DomainRow({
   onVerify,
   isRemoving,
   isVerifying,
+  anyVerifying,
   verifyReason,
 }: {
   domain: CustomDomain;
@@ -480,6 +482,7 @@ function DomainRow({
   onVerify: (id: string) => void;
   isRemoving: boolean;
   isVerifying: boolean;
+  anyVerifying: boolean;
   verifyReason: string | undefined;
 }) {
   const [showDns, setShowDns] = useState(false);
@@ -529,7 +532,7 @@ function DomainRow({
               size="sm"
               className="text-xs h-7"
               onClick={() => onVerify(domain.id)}
-              disabled={isVerifying}
+              disabled={anyVerifying}
               aria-label={`Verify domain ${domain.hostname}`}
             >
               {isVerifying ? (
