@@ -16,7 +16,13 @@ export type OpenPtyShellArgs = {
 };
 
 export function openPtyShell({ sprite, cols, rows, onOutput, onExit }: OpenPtyShellArgs): PtyShell {
-  const cmd = sprite.spawn('bash', [], { tty: true, cols, rows, cwd: SANDBOX_ROOT });
+  const cmd = sprite.spawn('bash', [], {
+    tty: true,
+    cols,
+    rows,
+    cwd: SANDBOX_ROOT,
+    env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
+  });
 
   const toStr = (chunk: unknown) => (typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8'));
   cmd.stdout.on('data', (chunk) => onOutput(toStr(chunk)));

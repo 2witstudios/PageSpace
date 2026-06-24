@@ -41,7 +41,7 @@ function buildFakeSprite(cmd: SpriteCommandLike): SpriteInstanceLike & { spawnCa
 }
 
 describe('openPtyShell', () => {
-  it('given a sprite and dimensions, should call spawn with bash + tty:true + correct dims', () => {
+  it('given a sprite and dimensions, should call spawn with bash + tty:true + correct dims + cwd + terminal env', () => {
     const cmd = buildFakeCommand();
     const sprite = buildFakeSprite(cmd);
     const onOutput = vi.fn();
@@ -49,7 +49,13 @@ describe('openPtyShell', () => {
 
     openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
 
-    expect(sprite.spawn).toHaveBeenCalledWith('bash', [], { tty: true, cols: 80, rows: 24, cwd: '/workspace' });
+    expect(sprite.spawn).toHaveBeenCalledWith('bash', [], {
+      tty: true,
+      cols: 80,
+      rows: 24,
+      cwd: '/workspace',
+      env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
+    });
   });
 
   it('given sprite emits stdout data, should call onOutput with the string', () => {

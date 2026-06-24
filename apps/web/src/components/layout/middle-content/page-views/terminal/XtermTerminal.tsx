@@ -28,7 +28,7 @@ export default function XtermTerminal({ socket, pageId, onReady, onError }: Xter
 
         if (cancelled || !containerRef.current) return;
 
-        const terminal = new Terminal({ cursorBlink: true, convertEol: true });
+        const terminal = new Terminal({ cursorBlink: true });
         const fitAddon = new FitAddon();
         terminal.loadAddon(fitAddon);
         terminal.open(containerRef.current);
