@@ -1,4 +1,5 @@
-import type { TerminalSessionMap } from './terminal-session-map';
+import type { TerminalSessionMap, TerminalSession } from './terminal-session-map';
+import { MAX_SCROLLBACK_BYTES, DETACHED_IDLE_MS } from './terminal-session-map';
 import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { validateTerminalConnectPayload, clampTerminalDimensions } from './validation';
@@ -7,7 +8,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 export const MAX_INPUT_BYTES = 4096;
 
 export type CheckAuthResult =
-  | { ok: true; sandboxId: string; sprite: SpriteInstanceLike; releaseSlot: () => void }
+  | { ok: true; sandboxId: string; sessionKey: string; sprite: SpriteInstanceLike; releaseSlot: () => void }
   | { ok: false; reason: string };
 
 export type CheckAuthFn = (args: { userId: string; pageId: string }) => Promise<CheckAuthResult>;
@@ -34,6 +35,16 @@ export type TerminalHandlers = {
   onDisconnect(): void;
 };
 
+function appendScrollback(session: Pick<TerminalSession, 'scrollback' | 'scrollbackBytes'>, data: string): void {
+  const bytes = Buffer.byteLength(data, 'utf8');
+  session.scrollback.push(data);
+  session.scrollbackBytes += bytes;
+  while (session.scrollbackBytes > MAX_SCROLLBACK_BYTES && session.scrollback.length > 0) {
+    const removed = session.scrollback.shift()!;
+    session.scrollbackBytes -= Buffer.byteLength(removed, 'utf8');
+  }
+}
+
 export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket }: TerminalHandlerDeps): TerminalHandlers {
   return {
     async onConnect(payload: unknown) {
@@ -52,16 +63,39 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
         return;
       }
 
-      // Kill any existing session for this socket (reconnect scenario)
-      const existing = sessionMap.get(socket.id);
-      if (existing) {
-        if (existing.reAuthInterval !== undefined) clearInterval(existing.reAuthInterval);
-        existing.releaseSlot();
-        existing.command.kill('SIGKILL');
-        sessionMap.delete(socket.id);
+      const { sessionKey } = authResult;
+
+      // Reattach to a live session that survived a previous navigation away.
+      const existingSession = sessionMap.getByKey(sessionKey);
+      if (existingSession) {
+        if (existingSession.idleTimer !== undefined) {
+          clearTimeout(existingSession.idleTimer);
+          existingSession.idleTimer = undefined;
+        }
+        existingSession.outputFn = (data) => socket.emit('terminal:output', { data });
+        existingSession.closedFn = (exitCode) => socket.emit('terminal:closed', { exitCode });
+        sessionMap.reattach(sessionKey, socket.id);
+        // Release the extra concurrency slot acquired by the re-auth check above.
+        authResult.releaseSlot();
+        socket.emit('terminal:ready', { scrollback: existingSession.scrollback.join('') });
+        return;
       }
 
+      // New session: spawn a fresh shell.
       const { sandboxId } = authResult;
+
+      const session: TerminalSession = {
+        command: null as unknown as PtyShell, // assigned below before any async
+        sandboxId,
+        sessionKey,
+        releaseSlot: authResult.releaseSlot,
+        outputFn: (data) => socket.emit('terminal:output', { data }),
+        closedFn: (exitCode) => socket.emit('terminal:closed', { exitCode }),
+        scrollback: [],
+        scrollbackBytes: 0,
+        reAuthInterval: undefined,
+        idleTimer: undefined,
+      };
 
       let shell: PtyShell;
       try {
@@ -69,14 +103,17 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
           sprite: authResult.sprite,
           cols: clampedCols,
           rows: clampedRows,
-          onOutput: (data) => socket.emit('terminal:output', { data }),
+          onOutput: (data) => {
+            appendScrollback(session, data);
+            session.outputFn(data);
+          },
           onExit: (exitCode) => {
-            const session = sessionMap.get(socket.id);
-            if (session?.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
-            session?.releaseSlot();
-            loggers.realtime.info('Terminal session closed', { exitCode, sandboxId, socketId: socket.id });
-            socket.emit('terminal:closed', { exitCode });
-            sessionMap.delete(socket.id);
+            if (session.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
+            if (session.idleTimer !== undefined) clearTimeout(session.idleTimer);
+            session.releaseSlot();
+            loggers.realtime.info('Terminal session closed', { exitCode, sandboxId, sessionKey });
+            session.closedFn(exitCode);
+            sessionMap.deleteByKey(sessionKey);
           },
         });
       } catch {
@@ -85,35 +122,34 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
         return;
       }
 
-      sessionMap.set(socket.id, { command: shell, sandboxId: authResult.sandboxId, releaseSlot: authResult.releaseSlot });
+      session.command = shell;
+      sessionMap.setNew(sessionKey, socket.id, session);
 
       // Periodically re-check authorization while the session is alive.
-      // If access is revoked, kill the shell and close the terminal.
+      // Routes closed notification through closedFn so it reaches the current socket.
       const reAuthInterval = setInterval(async () => {
-        const liveSession = sessionMap.get(socket.id);
+        const liveSession = sessionMap.getByKey(sessionKey);
         if (!liveSession) { clearInterval(reAuthInterval); return; }
         const result = await checkAuth({ userId, pageId });
         if (!result.ok) {
           clearInterval(reAuthInterval);
+          if (liveSession.idleTimer !== undefined) clearTimeout(liveSession.idleTimer);
           liveSession.releaseSlot();
           liveSession.command.kill('SIGKILL');
-          sessionMap.delete(socket.id);
-          socket.emit('terminal:closed', { exitCode: -2 });
+          sessionMap.deleteByKey(sessionKey);
+          liveSession.closedFn(-2);
         } else {
-          // Re-auth check succeeded; release the slot acquired by re-auth (we already hold one).
           result.releaseSlot();
         }
       }, 60_000);
 
-      // Store the interval on the session so onDisconnect can clear it.
-      const session = sessionMap.get(socket.id);
-      if (session) session.reAuthInterval = reAuthInterval;
+      session.reAuthInterval = reAuthInterval;
 
-      socket.emit('terminal:ready');
+      socket.emit('terminal:ready', {});
     },
 
     onInput(payload: unknown) {
-      const session = sessionMap.get(socket.id);
+      const session = sessionMap.getBySocket(socket.id);
       if (!session) return;
       const p = payload as { data?: string };
       if (typeof p?.data === 'string' && p.data.length <= MAX_INPUT_BYTES) {
@@ -122,7 +158,7 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
     },
 
     onResize(payload: unknown) {
-      const session = sessionMap.get(socket.id);
+      const session = sessionMap.getBySocket(socket.id);
       if (!session) return;
       const p = payload as { cols?: number; rows?: number };
       if (typeof p?.cols === 'number' && typeof p?.rows === 'number' &&
@@ -133,12 +169,21 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
     },
 
     onDisconnect() {
-      const session = sessionMap.get(socket.id);
+      const session = sessionMap.getBySocket(socket.id);
       if (!session) return;
-      if (session.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
-      session.releaseSlot();
-      session.command.kill('SIGKILL');
-      sessionMap.delete(socket.id);
+      const { sessionKey } = session;
+      // Silence output and detach from socket routing — shell keeps running.
+      session.outputFn = () => {};
+      session.closedFn = () => {};
+      sessionMap.detach(socket.id);
+      // Kill and release resources after idle timeout.
+      session.idleTimer = setTimeout(() => {
+        if (session.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
+        session.releaseSlot();
+        session.command.kill('SIGKILL');
+        sessionMap.deleteByKey(sessionKey);
+        loggers.realtime.info('Terminal session reaped (idle)', { sessionKey, sandboxId: session.sandboxId });
+      }, DETACHED_IDLE_MS);
     },
   };
 }

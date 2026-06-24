@@ -1,66 +1,137 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTerminalSessionMap, type TerminalSession } from '../terminal-session-map';
 
-function fakeSession(sandboxId = 'sbx1'): TerminalSession {
+function fakeSession(sessionKey = 'key1', sandboxId = 'sbx1'): TerminalSession {
   return {
     command: { write: vi.fn(), kill: vi.fn(), resize: vi.fn() },
     sandboxId,
+    sessionKey,
+    releaseSlot: vi.fn(),
+    outputFn: vi.fn(),
+    closedFn: vi.fn(),
+    scrollback: [],
+    scrollbackBytes: 0,
+    reAuthInterval: undefined,
+    idleTimer: undefined,
   };
 }
 
 describe('createTerminalSessionMap', () => {
-  it('given a new map, has() should return false for an unknown key', () => {
-    const map = createTerminalSessionMap();
-    expect(map.has('unknown')).toBe(false);
+  describe('getBySocket / setNew', () => {
+    it('given setNew, getBySocket returns the session for that socket', () => {
+      const map = createTerminalSessionMap();
+      const session = fakeSession();
+      map.setNew('key1', 'sock1', session);
+      expect(map.getBySocket('sock1')).toBe(session);
+    });
+
+    it('given an unknown socketId, getBySocket returns undefined', () => {
+      const map = createTerminalSessionMap();
+      expect(map.getBySocket('unknown')).toBeUndefined();
+    });
+
+    it('given setNew twice with same sessionKey but different sockets, getByKey returns the last set session', () => {
+      const map = createTerminalSessionMap();
+      const a = fakeSession('key1', 'sbx1');
+      const b = fakeSession('key1', 'sbx2');
+      map.setNew('key1', 'sock1', a);
+      map.setNew('key1', 'sock2', b);
+      expect(map.getByKey('key1')).toBe(b);
+    });
   });
 
-  it('given set(id, session), get(id) should return that session', () => {
-    const map = createTerminalSessionMap();
-    const session = fakeSession();
-    map.set('sock1', session);
-    expect(map.get('sock1')).toBe(session);
+  describe('getByKey', () => {
+    it('given setNew, getByKey returns the session for that sessionKey', () => {
+      const map = createTerminalSessionMap();
+      const session = fakeSession();
+      map.setNew('key1', 'sock1', session);
+      expect(map.getByKey('key1')).toBe(session);
+    });
+
+    it('given an unknown sessionKey, getByKey returns undefined', () => {
+      const map = createTerminalSessionMap();
+      expect(map.getByKey('unknown')).toBeUndefined();
+    });
   });
 
-  it('given an unknown key, get() should return undefined', () => {
-    const map = createTerminalSessionMap();
-    expect(map.get('missing')).toBeUndefined();
+  describe('reattach', () => {
+    it('given reattach with a new socketId, getBySocket returns session for the new socket', () => {
+      const map = createTerminalSessionMap();
+      const session = fakeSession();
+      map.setNew('key1', 'sock1', session);
+      map.reattach('key1', 'sock2');
+      expect(map.getBySocket('sock2')).toBe(session);
+    });
+
+    it('given reattach, getBySocket for the old socketId returns undefined', () => {
+      const map = createTerminalSessionMap();
+      const session = fakeSession();
+      map.setNew('key1', 'sock1', session);
+      map.reattach('key1', 'sock2');
+      expect(map.getBySocket('sock1')).toBeUndefined();
+    });
+
+    it('given reattach, getByKey still returns the same session', () => {
+      const map = createTerminalSessionMap();
+      const session = fakeSession();
+      map.setNew('key1', 'sock1', session);
+      map.reattach('key1', 'sock2');
+      expect(map.getByKey('key1')).toBe(session);
+    });
   });
 
-  it('given set then delete, has() should return false', () => {
-    const map = createTerminalSessionMap();
-    map.set('sock1', fakeSession());
-    map.delete('sock1');
-    expect(map.has('sock1')).toBe(false);
+  describe('detach', () => {
+    it('given detach, getBySocket returns undefined for that socket', () => {
+      const map = createTerminalSessionMap();
+      const session = fakeSession();
+      map.setNew('key1', 'sock1', session);
+      map.detach('sock1');
+      expect(map.getBySocket('sock1')).toBeUndefined();
+    });
+
+    it('given detach, getByKey still returns the session (shell survives)', () => {
+      const map = createTerminalSessionMap();
+      const session = fakeSession();
+      map.setNew('key1', 'sock1', session);
+      map.detach('sock1');
+      expect(map.getByKey('key1')).toBe(session);
+    });
+
+    it('given detach on unknown socketId, should be a no-op', () => {
+      const map = createTerminalSessionMap();
+      expect(() => map.detach('nope')).not.toThrow();
+    });
   });
 
-  it('given set then delete, get() should return undefined', () => {
-    const map = createTerminalSessionMap();
-    map.set('sock1', fakeSession());
-    map.delete('sock1');
-    expect(map.get('sock1')).toBeUndefined();
-  });
+  describe('deleteByKey', () => {
+    it('given deleteByKey, getByKey returns undefined', () => {
+      const map = createTerminalSessionMap();
+      map.setNew('key1', 'sock1', fakeSession());
+      map.deleteByKey('key1');
+      expect(map.getByKey('key1')).toBeUndefined();
+    });
 
-  it('given two sessions, deleting one should not affect the other', () => {
-    const map = createTerminalSessionMap();
-    const a = fakeSession('a');
-    const b = fakeSession('b');
-    map.set('sock1', a);
-    map.set('sock2', b);
-    map.delete('sock1');
-    expect(map.get('sock2')).toBe(b);
-  });
+    it('given deleteByKey, getBySocket for the associated socket returns undefined', () => {
+      const map = createTerminalSessionMap();
+      map.setNew('key1', 'sock1', fakeSession());
+      map.deleteByKey('key1');
+      expect(map.getBySocket('sock1')).toBeUndefined();
+    });
 
-  it('given delete on a non-existent key, should be a no-op', () => {
-    const map = createTerminalSessionMap();
-    expect(() => map.delete('nope')).not.toThrow();
-  });
+    it('given deleteByKey on unknown key, should be a no-op', () => {
+      const map = createTerminalSessionMap();
+      expect(() => map.deleteByKey('nope')).not.toThrow();
+    });
 
-  it('given set twice with same key, get() should return the latest session', () => {
-    const map = createTerminalSessionMap();
-    const a = fakeSession('a');
-    const b = fakeSession('b');
-    map.set('sock1', a);
-    map.set('sock1', b);
-    expect(map.get('sock1')).toBe(b);
+    it('given two sessions, deleteByKey for one should not affect the other', () => {
+      const map = createTerminalSessionMap();
+      const a = fakeSession('key1', 'sbx1');
+      const b = fakeSession('key2', 'sbx2');
+      map.setNew('key1', 'sock1', a);
+      map.setNew('key2', 'sock2', b);
+      map.deleteByKey('key1');
+      expect(map.getByKey('key2')).toBe(b);
+      expect(map.getBySocket('sock2')).toBe(b);
+    });
   });
 });

@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { buildTerminalHandlers, MAX_INPUT_BYTES } from '../terminal-handler';
-import { createTerminalSessionMap } from '../terminal-session-map';
+import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { CheckAuthFn, OpenShellFn, SocketLike } from '../terminal-handler';
 import type { PtyShell } from '../sprites-shell';
 
-function makeSocket(userId = 'user1'): SocketLike & { emit: ReturnType<typeof vi.fn> } {
-  return { id: 'sock1', data: { user: { id: userId } }, emit: vi.fn() };
+function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: ReturnType<typeof vi.fn> } {
+  return { id, data: { user: { id: userId } }, emit: vi.fn() };
 }
 
 function makeShell(): PtyShell & { write: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> } {
@@ -16,8 +16,8 @@ function makeSprite() {
   return { name: 'sbx1', spawn: vi.fn(), filesystem: vi.fn(), updateNetworkPolicy: vi.fn(), destroy: vi.fn() };
 }
 
-function makeAuthSuccess() {
-  return { ok: true as const, sandboxId: 'sbx1', sprite: makeSprite(), releaseSlot: vi.fn() };
+function makeAuthSuccess(sessionKey = 'key1') {
+  return { ok: true as const, sandboxId: 'sbx1', sessionKey, sprite: makeSprite(), releaseSlot: vi.fn() };
 }
 
 const validPayload = { pageId: 'page1', cols: 80, rows: 24 };
@@ -48,23 +48,24 @@ describe('buildTerminalHandlers', () => {
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ cols: 80, rows: 24 }));
-      expect(socket.emit).toHaveBeenCalledWith('terminal:ready');
+      expect(socket.emit).toHaveBeenCalledWith('terminal:ready', {});
     });
 
     it('given valid payload and auth succeeds, should store session in sessionMap', async () => {
       const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       await onConnect(validPayload);
 
-      expect(sessionMap.has('sock1')).toBe(true);
+      expect(sessionMap.getBySocket('sock1')).toBeDefined();
+      expect(sessionMap.getByKey('key1')).toBeDefined();
     });
 
-    it('given auth fails with not_admin, should emit terminal:error and not store session', async () => {
+    it('given auth fails, should emit terminal:error and not store session', async () => {
       checkAuth = vi.fn().mockResolvedValue({ ok: false, reason: 'not_admin' }) as unknown as ReturnType<typeof vi.fn> & CheckAuthFn;
       const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('terminal:error', expect.objectContaining({ message: expect.any(String) }));
-      expect(sessionMap.has('sock1')).toBe(false);
+      expect(sessionMap.getBySocket('sock1')).toBeUndefined();
       expect(openShell).not.toHaveBeenCalled();
     });
 
@@ -82,23 +83,7 @@ describe('buildTerminalHandlers', () => {
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('terminal:error', expect.objectContaining({ message: expect.any(String) }));
-      expect(sessionMap.has('sock1')).toBe(false);
-    });
-
-    it('given terminal:connect called twice, should kill the existing session before opening a new one', async () => {
-      const firstAuth = makeAuthSuccess();
-      checkAuth.mockResolvedValueOnce(firstAuth);
-      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
-      await onConnect(validPayload);
-      const firstShell = shell;
-
-      const secondShell = makeShell();
-      openShell.mockReturnValue(secondShell);
-      await onConnect(validPayload);
-
-      expect(firstShell.kill).toHaveBeenCalled();
-      expect(firstAuth.releaseSlot).toHaveBeenCalled();
-      expect(sessionMap.has('sock1')).toBe(true);
+      expect(sessionMap.getBySocket('sock1')).toBeUndefined();
     });
 
     it('given openShell throws, should release the concurrency slot', async () => {
@@ -117,7 +102,7 @@ describe('buildTerminalHandlers', () => {
       await onConnect(validPayload);
 
       expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
-      const session = sessionMap.get('sock1');
+      const session = sessionMap.getByKey('key1');
       expect(session?.reAuthInterval).toBeDefined();
     });
 
@@ -125,24 +110,65 @@ describe('buildTerminalHandlers', () => {
       const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       await onConnect(validPayload);
 
-      // Advance time to trigger the re-auth interval
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(shell.kill).not.toHaveBeenCalled();
-      expect(sessionMap.has('sock1')).toBe(true);
+      expect(sessionMap.getByKey('key1')).toBeDefined();
     });
 
     it('given re-auth fires and checkAuth now fails, should kill shell, remove session, and emit terminal:closed with exitCode -2', async () => {
       const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       await onConnect(validPayload);
 
-      // Revoke access
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(shell.kill).toHaveBeenCalledWith('SIGKILL');
-      expect(sessionMap.has('sock1')).toBe(false);
+      expect(sessionMap.getByKey('key1')).toBeUndefined();
       expect(socket.emit).toHaveBeenCalledWith('terminal:closed', { exitCode: -2 });
+    });
+
+    it('given an existing live session for the same pageId, should reattach rather than spawn a new shell', async () => {
+      // First connect from sock1
+      const { onConnect: connect1 } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await connect1(validPayload);
+      expect(openShell).toHaveBeenCalledTimes(1);
+
+      // Second connect from a different socket (e.g., page reload) with same sessionKey
+      const socket2 = makeSocket('sock2');
+      const auth2 = makeAuthSuccess('key1'); // same sessionKey → same page
+      checkAuth.mockResolvedValue(auth2);
+      const { onConnect: connect2 } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2 });
+      await connect2(validPayload);
+
+      // Shell should not be re-spawned — reattach path
+      expect(openShell).toHaveBeenCalledTimes(1);
+      // The extra concurrency slot from re-auth should be released
+      expect(auth2.releaseSlot).toHaveBeenCalled();
+      // terminal:ready is emitted with a scrollback field
+      expect(socket2.emit).toHaveBeenCalledWith('terminal:ready', expect.objectContaining({ scrollback: expect.any(String) }));
+      // New socket is now routed to the session
+      expect(sessionMap.getBySocket('sock2')).toBeDefined();
+    });
+
+    it('given reattach, output is routed to the new socket, not the old one', async () => {
+      // First connect
+      const { onConnect: connect1 } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await connect1(validPayload);
+
+      // Get the onOutput callback that was passed to openShell
+      const onOutputArg = openShell.mock.calls[0][0].onOutput as (data: string) => void;
+
+      // Reattach with a second socket
+      const socket2 = makeSocket('sock2');
+      checkAuth.mockResolvedValue(makeAuthSuccess('key1'));
+      const { onConnect: connect2 } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2 });
+      await connect2(validPayload);
+
+      // Now fire output — should go to socket2, not socket1
+      onOutputArg('hello');
+      expect(socket2.emit).toHaveBeenCalledWith('terminal:output', { data: 'hello' });
+      expect(socket.emit).not.toHaveBeenCalledWith('terminal:output', { data: 'hello' });
     });
   });
 
@@ -217,7 +243,7 @@ describe('buildTerminalHandlers', () => {
   });
 
   describe('onDisconnect', () => {
-    it('given a connected session, should kill the shell, release the slot, and remove from sessionMap', async () => {
+    it('given a connected session, should detach the socket but keep the shell alive', async () => {
       const auth = makeAuthSuccess();
       checkAuth.mockResolvedValue(auth);
       const { onConnect, onDisconnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
@@ -225,9 +251,37 @@ describe('buildTerminalHandlers', () => {
 
       onDisconnect();
 
-      expect(shell.kill).toHaveBeenCalled();
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(auth.releaseSlot).not.toHaveBeenCalled();
+      expect(sessionMap.getBySocket('sock1')).toBeUndefined();
+      expect(sessionMap.getByKey('key1')).toBeDefined();
+    });
+
+    it('given a connected session, should kill the shell and release the slot after the idle timeout', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth.mockResolvedValue(auth);
+      const { onConnect, onDisconnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      onDisconnect();
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+      expect(shell.kill).toHaveBeenCalledWith('SIGKILL');
       expect(auth.releaseSlot).toHaveBeenCalled();
-      expect(sessionMap.has('sock1')).toBe(false);
+      expect(sessionMap.getByKey('key1')).toBeUndefined();
+    });
+
+    it('given a connected session, should NOT clear the re-auth interval on disconnect (keeps running for detached shell)', async () => {
+      const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+      const { onConnect, onDisconnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      const session = sessionMap.getByKey('key1');
+      const storedInterval = session?.reAuthInterval;
+
+      onDisconnect();
+
+      expect(clearIntervalSpy).not.toHaveBeenCalledWith(storedInterval);
     });
 
     it('given no active session, should be a silent no-op', () => {
@@ -235,17 +289,28 @@ describe('buildTerminalHandlers', () => {
       expect(() => onDisconnect()).not.toThrow();
     });
 
-    it('given a connected session, should clear the re-auth interval on disconnect', async () => {
-      const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    it('given a reconnect before the idle timer fires, should cancel the timer and not kill the shell', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth.mockResolvedValue(auth);
       const { onConnect, onDisconnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
       await onConnect(validPayload);
 
-      const session = sessionMap.get('sock1');
-      const storedInterval = session?.reAuthInterval;
-
       onDisconnect();
+      // Advance partway through idle timeout (but not all the way)
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS / 2);
 
-      expect(clearIntervalSpy).toHaveBeenCalledWith(storedInterval);
+      // Reconnect from a new socket
+      const socket2 = makeSocket('sock2');
+      const auth2 = makeAuthSuccess('key1');
+      checkAuth.mockResolvedValue(auth2);
+      const { onConnect: connect2 } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2 });
+      await connect2(validPayload);
+
+      // Advance past original idle timeout — shell should still be alive
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('key1')).toBeDefined();
     });
   });
 });
