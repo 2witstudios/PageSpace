@@ -4,7 +4,9 @@ import {
   validateCustomDomain,
   buildDnsInstructions,
   isApexDomain,
+  verifyDnsRecords,
 } from '../custom-domain';
+import type { DnsInstructions, ResolvedRecords } from '../custom-domain';
 
 describe('normalizeHostname', () => {
   it('lowercases the input', () => {
@@ -132,6 +134,121 @@ describe('isApexDomain', () => {
     expect(isApexDomain('www.acme.com')).toBe(false);
     expect(isApexDomain('blog.acme.com')).toBe(false);
     expect(isApexDomain('a.b.c.com')).toBe(false);
+  });
+});
+
+describe('verifyDnsRecords', () => {
+  const apexExpected: DnsInstructions = {
+    isApex: true,
+    records: [
+      { type: 'A', name: '@', value: '1.2.3.4' },
+      { type: 'AAAA', name: '@', value: '2001:db8::1' },
+    ],
+  };
+
+  const subExpected: DnsInstructions = {
+    isApex: false,
+    records: [{ type: 'CNAME', name: 'www', value: 'proxy.pagespace.site' }],
+  };
+
+  const emptyResolved: ResolvedRecords = { a: [], aaaa: [], cname: [] };
+
+  // Apex A record tests
+  it('verifies apex when A record matches expected IPv4', () => {
+    const result = verifyDnsRecords({
+      hostname: 'acme.com',
+      expected: apexExpected,
+      resolved: { ...emptyResolved, a: ['1.2.3.4'] },
+    });
+    expect(result.verified).toBe(true);
+  });
+
+  it('verifies apex when A record is in a multi-record set', () => {
+    const result = verifyDnsRecords({
+      hostname: 'acme.com',
+      expected: apexExpected,
+      resolved: { ...emptyResolved, a: ['9.9.9.9', '1.2.3.4'] },
+    });
+    expect(result.verified).toBe(true);
+  });
+
+  it('fails apex when A record does not match expected IP', () => {
+    const result = verifyDnsRecords({
+      hostname: 'acme.com',
+      expected: apexExpected,
+      resolved: { ...emptyResolved, a: ['5.5.5.5'] },
+    });
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/1\.2\.3\.4/);
+  });
+
+  it('fails apex when no A records are resolved (NXDOMAIN / not yet set)', () => {
+    const result = verifyDnsRecords({
+      hostname: 'acme.com',
+      expected: apexExpected,
+      resolved: emptyResolved,
+    });
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/No A records/);
+  });
+
+  // AAAA record tests
+  it('verifies apex when AAAA record also resolves (A still required)', () => {
+    // AAAA alone is not sufficient; A is the required check
+    const resultWithOnlyAAAA = verifyDnsRecords({
+      hostname: 'acme.com',
+      expected: apexExpected,
+      resolved: { ...emptyResolved, aaaa: ['2001:db8::1'] },
+    });
+    expect(resultWithOnlyAAAA.verified).toBe(false);
+  });
+
+  // CNAME tests
+  it('verifies subdomain when CNAME matches expected target', () => {
+    const result = verifyDnsRecords({
+      hostname: 'www.acme.com',
+      expected: subExpected,
+      resolved: { ...emptyResolved, cname: ['proxy.pagespace.site'] },
+    });
+    expect(result.verified).toBe(true);
+  });
+
+  it('verifies subdomain with trailing-dot CNAME value', () => {
+    const result = verifyDnsRecords({
+      hostname: 'www.acme.com',
+      expected: subExpected,
+      resolved: { ...emptyResolved, cname: ['proxy.pagespace.site.'] },
+    });
+    expect(result.verified).toBe(true);
+  });
+
+  it('verifies subdomain with uppercase CNAME value (case-insensitive)', () => {
+    const result = verifyDnsRecords({
+      hostname: 'www.acme.com',
+      expected: subExpected,
+      resolved: { ...emptyResolved, cname: ['PROXY.PAGESPACE.SITE'] },
+    });
+    expect(result.verified).toBe(true);
+  });
+
+  it('fails subdomain when CNAME points elsewhere', () => {
+    const result = verifyDnsRecords({
+      hostname: 'www.acme.com',
+      expected: subExpected,
+      resolved: { ...emptyResolved, cname: ['other.example.com'] },
+    });
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/proxy\.pagespace\.site/);
+  });
+
+  it('fails subdomain when no CNAME is resolved (not yet set)', () => {
+    const result = verifyDnsRecords({
+      hostname: 'www.acme.com',
+      expected: subExpected,
+      resolved: emptyResolved,
+    });
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/No CNAME/);
   });
 });
 
