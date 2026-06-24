@@ -153,3 +153,72 @@ export function buildDnsInstructions({
     records: [{ type: 'CNAME', name, value: cnameTarget }],
   };
 }
+
+// ── DNS Verification ─────────────────────────────────────────────────────────
+
+export interface ResolvedRecords {
+  a: string[];
+  aaaa: string[];
+  cname: string[];
+}
+
+export interface DnsVerificationInput {
+  hostname: string;
+  expected: DnsInstructions;
+  resolved: ResolvedRecords;
+}
+
+export interface DnsVerificationResult {
+  verified: boolean;
+  reason?: string;
+}
+
+/** Strip a trailing dot from a DNS value for case-insensitive comparison. */
+function normalizeValue(v: string): string {
+  return v.replace(/\.$/, '').toLowerCase();
+}
+
+/**
+ * Pure function: given expected DNS instructions and resolved records,
+ * decide whether the domain is verified.
+ *
+ * - Apex domain: at least one resolved A record must match the expected IPv4.
+ * - Subdomain: at least one resolved CNAME must match the expected target
+ *   (case-insensitive, trailing-dot-tolerant).
+ */
+export function verifyDnsRecords({ hostname, expected, resolved }: DnsVerificationInput): DnsVerificationResult {
+  if (expected.isApex) {
+    const expectedA = expected.records.find((r) => r.type === 'A')?.value ?? '';
+    if (!expectedA) {
+      return { verified: false, reason: 'No expected A record configured' };
+    }
+    if (!resolved.a || resolved.a.length === 0) {
+      return { verified: false, reason: `No A records found for ${hostname}` };
+    }
+    const matches = resolved.a.some((ip) => normalizeValue(ip) === normalizeValue(expectedA));
+    if (!matches) {
+      return {
+        verified: false,
+        reason: `A record for ${hostname} does not point to ${expectedA} (found: ${resolved.a.join(', ')})`,
+      };
+    }
+    return { verified: true };
+  }
+
+  // Subdomain: check CNAME
+  const expectedCname = expected.records.find((r) => r.type === 'CNAME')?.value ?? '';
+  if (!expectedCname) {
+    return { verified: false, reason: 'No expected CNAME target configured' };
+  }
+  if (!resolved.cname || resolved.cname.length === 0) {
+    return { verified: false, reason: `No CNAME record found for ${hostname}` };
+  }
+  const matches = resolved.cname.some((target) => normalizeValue(target) === normalizeValue(expectedCname));
+  if (!matches) {
+    return {
+      verified: false,
+      reason: `CNAME for ${hostname} does not point to ${expectedCname} (found: ${resolved.cname.join(', ')})`,
+    };
+  }
+  return { verified: true };
+}

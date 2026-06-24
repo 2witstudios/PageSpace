@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home, Globe, Trash2, Plus } from 'lucide-react';
+import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
 import { usePageTree } from '@/hooks/usePageTree';
@@ -69,6 +69,8 @@ export default function GeneralSettingsPage() {
   const [newDomain, setNewDomain] = useState('');
   const [isAddingDomain, setIsAddingDomain] = useState(false);
   const [removingDomainId, setRemovingDomainId] = useState<string | null>(null);
+  const [verifyingDomainId, setVerifyingDomainId] = useState<string | null>(null);
+  const [verifyReasons, setVerifyReasons] = useState<Record<string, string | undefined>>({});
   const startEditing = useEditingStore((s) => s.startEditing);
   const endEditing = useEditingStore((s) => s.endEditing);
 
@@ -143,6 +145,32 @@ export default function GeneralSettingsPage() {
       toast.error('Failed to add domain');
     } finally {
       setIsAddingDomain(false);
+    }
+  };
+
+  const handleVerifyDomain = async (domainId: string) => {
+    if (verifyingDomainId) return;
+    setVerifyingDomainId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({})) as { verified?: boolean; reason?: string; error?: string };
+      if (!res.ok) {
+        toast.error(data.error ?? 'Verification failed');
+        return;
+      }
+      setVerifyReasons((prev) => ({ ...prev, [domainId]: data.reason }));
+      await mutateDomains();
+      if (data.verified) {
+        toast.success('Domain verified');
+      } else {
+        toast.error(data.reason ?? 'DNS records not yet propagated');
+      }
+    } catch {
+      toast.error('Failed to verify domain');
+    } finally {
+      setVerifyingDomainId(null);
     }
   };
 
@@ -359,8 +387,11 @@ export default function GeneralSettingsPage() {
         onNewDomainChange={setNewDomain}
         onAdd={handleAddDomain}
         onRemove={handleRemoveDomain}
+        onVerify={handleVerifyDomain}
         isAdding={isAddingDomain}
         removingId={removingDomainId}
+        verifyingId={verifyingDomainId}
+        verifyReasons={verifyReasons}
       />
     </div>
   );
@@ -374,15 +405,18 @@ interface CustomDomainsCardProps {
   onNewDomainChange: (v: string) => void;
   onAdd: () => void;
   onRemove: (id: string) => void;
+  onVerify: (id: string) => void;
   isAdding: boolean;
   removingId: string | null;
+  verifyingId: string | null;
+  verifyReasons: Record<string, string | undefined>;
 }
 
 const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
 const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
 const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
 
-function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRemove, isAdding, removingId }: CustomDomainsCardProps) {
+function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, isAdding, removingId, verifyingId, verifyReasons }: CustomDomainsCardProps) {
   return (
     <Card>
       <CardHeader>
@@ -418,7 +452,10 @@ function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRem
                 key={domain.id}
                 domain={domain}
                 onRemove={onRemove}
+                onVerify={onVerify}
                 isRemoving={removingId === domain.id}
+                isVerifying={verifyingId === domain.id}
+                verifyReason={verifyReasons[domain.id]}
               />
             ))}
           </div>
@@ -433,11 +470,17 @@ function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRem
 function DomainRow({
   domain,
   onRemove,
+  onVerify,
   isRemoving,
+  isVerifying,
+  verifyReason,
 }: {
   domain: CustomDomain;
   onRemove: (id: string) => void;
+  onVerify: (id: string) => void;
   isRemoving: boolean;
+  isVerifying: boolean;
+  verifyReason: string | undefined;
 }) {
   const [showDns, setShowDns] = useState(false);
   const instructions = buildDnsInstructions({
@@ -447,17 +490,56 @@ function DomainRow({
     cnameTarget: CNAME_TARGET,
   });
 
+  const statusBadge = () => {
+    if (domain.status === 'verified') {
+      return (
+        <Badge variant="secondary" className="text-xs text-green-600 gap-1">
+          <CheckCircle2 className="h-3 w-3" />
+          Verified
+        </Badge>
+      );
+    }
+    if (domain.status === 'failed') {
+      return (
+        <Badge variant="secondary" className="text-xs text-destructive gap-1">
+          <XCircle className="h-3 w-3" />
+          Failed
+        </Badge>
+      );
+    }
+    return (
+      <Badge variant="secondary" className="text-xs">
+        Pending DNS
+      </Badge>
+    );
+  };
+
   return (
     <div className="border rounded-md p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <Globe className="h-4 w-4 text-muted-foreground flex-shrink-0" />
           <span className="text-sm font-medium truncate">{domain.hostname}</span>
-          <Badge variant="secondary" className="text-xs">
-            {domain.status === 'pending' ? 'Pending DNS' : domain.status}
-          </Badge>
+          {statusBadge()}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
+          {domain.status !== 'verified' && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => onVerify(domain.id)}
+              disabled={isVerifying}
+              aria-label={`Verify domain ${domain.hostname}`}
+            >
+              {isVerifying ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              ) : (
+                <RefreshCw className="h-3 w-3 mr-1" />
+              )}
+              {domain.status === 'failed' ? 'Re-check' : 'Verify'}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -479,6 +561,10 @@ function DomainRow({
         </div>
       </div>
 
+      {domain.status === 'failed' && verifyReason && (
+        <p className="text-xs text-destructive bg-destructive/5 rounded px-2 py-1">{verifyReason}</p>
+      )}
+
       {showDns && (
         <div className="bg-muted rounded p-3 space-y-2">
           <p className="text-xs text-muted-foreground">
@@ -496,7 +582,7 @@ function DomainRow({
             ))}
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            DNS verification and SSL provisioning will happen automatically once records propagate.
+            Once records propagate, click Verify to confirm setup and proceed to SSL provisioning.
           </p>
         </div>
       )}
