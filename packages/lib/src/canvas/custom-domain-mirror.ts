@@ -45,6 +45,14 @@ export interface PlanCustomDomainMirrorInput {
    * paths under each custom host render the branded not-found page.
    */
   include404?: boolean;
+  /**
+   * When true, plan copies for `robots.txt` and `sitemap.xml` so every
+   * custom-domain host serves the same canonical site-file inventory. When
+   * the primary published host is a custom domain, the URLs in these files
+   * already point at the custom domain, so the files are identical across
+   * all copies and can be mirrored byte-for-byte without re-generation.
+   */
+  includeSiteFiles?: boolean;
 }
 
 /**
@@ -69,7 +77,7 @@ function pageKey(prefix: string, path: string): string {
  * Returns an empty copy set when `hosts` is empty (no-op).
  */
 export function planCustomDomainMirror(input: PlanCustomDomainMirrorInput): { copies: CopyOp[] } {
-  const { subdomain, paths, hosts, includeRoot = false, include404 = false } = input;
+  const { subdomain, paths, hosts, includeRoot = false, include404 = false, includeSiteFiles = false } = input;
 
   if (hosts.length === 0) {
     return { copies: [] };
@@ -90,6 +98,17 @@ export function planCustomDomainMirror(input: PlanCustomDomainMirrorInput): { co
       copies.push({
         from: `published/${subdomain}/404.html`,
         to: `published/${host}/404.html`,
+      });
+    }
+
+    if (includeSiteFiles) {
+      copies.push({
+        from: `published/${subdomain}/robots.txt`,
+        to: `published/${host}/robots.txt`,
+      });
+      copies.push({
+        from: `published/${subdomain}/sitemap.xml`,
+        to: `published/${host}/sitemap.xml`,
       });
     }
   }

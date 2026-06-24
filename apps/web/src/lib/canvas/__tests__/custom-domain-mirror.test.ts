@@ -13,7 +13,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 
 vi.mock('@pagespace/db/schema/custom-domains', () => ({
-  customDomains: { driveId: 'customDomains.driveId', hostname: 'customDomains.hostname', status: 'customDomains.status' },
+  customDomains: { driveId: 'customDomains.driveId', hostname: 'customDomains.hostname', status: 'customDomains.status', createdAt: 'customDomains.createdAt' },
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -53,6 +53,7 @@ import {
   deletePageFromCustomHosts,
   mirrorDriveToCustomHost,
   clearCustomHost,
+  getActiveDomainRecords,
 } from '../custom-domain-mirror';
 
 // Cast helpers (same approach as publish-page.test.ts)
@@ -200,23 +201,28 @@ describe('mirror404ToHosts', () => {
     vi.mocked(isPublishConfigured).mockReturnValue(true);
   });
 
-  it('copies 404.html to each active host', async () => {
+  it('copies 404.html, robots.txt, and sitemap.xml to each active host', async () => {
     mockSelect([
-      { hostname: 'a.example.com', status: 'active' },
-      { hostname: 'b.example.com', status: 'active' },
+      { hostname: 'a.example.com', status: 'active', createdAt: new Date() },
+      { hostname: 'b.example.com', status: 'active', createdAt: new Date() },
     ]);
 
     await mirror404ToHosts('drive-1', 'acme');
 
+    // 3 site files × 2 hosts = 6
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(6);
     expect(copyPublishedArtifact).toHaveBeenCalledWith(
       'published/acme/404.html',
       'published/a.example.com/404.html',
     );
     expect(copyPublishedArtifact).toHaveBeenCalledWith(
-      'published/acme/404.html',
-      'published/b.example.com/404.html',
+      'published/acme/robots.txt',
+      'published/a.example.com/robots.txt',
     );
-    expect(copyPublishedArtifact).toHaveBeenCalledTimes(2);
+    expect(copyPublishedArtifact).toHaveBeenCalledWith(
+      'published/acme/sitemap.xml',
+      'published/a.example.com/sitemap.xml',
+    );
   });
 
   it('is a no-op when no active hosts', async () => {
@@ -236,7 +242,7 @@ describe('mirror404ToHosts', () => {
   });
 
   it('swallows failures (best-effort)', async () => {
-    mockSelect([{ hostname: 'a.example.com', status: 'active' }]);
+    mockSelect([{ hostname: 'a.example.com', status: 'active', createdAt: new Date() }]);
     vi.mocked(copyPublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
 
     await expect(mirror404ToHosts('drive-1', 'acme')).resolves.toBeUndefined();
@@ -321,7 +327,7 @@ describe('mirrorDriveToCustomHost', () => {
     vi.mocked(publishedArtifactExists).mockResolvedValue(false);
   });
 
-  it('copies every published page + 404.html to the host', async () => {
+  it('copies every published page + 404.html + robots.txt + sitemap.xml to the host', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       publishSubdomain: 'acme',
       homePageId: null,
@@ -333,8 +339,8 @@ describe('mirrorDriveToCustomHost', () => {
 
     await mirrorDriveToCustomHost('drive-1', 'www.example.com');
 
-    // 2 page artifacts + 404.html = 3 copies
-    expect(copyPublishedArtifact).toHaveBeenCalledTimes(3);
+    // 2 page artifacts + 404.html + robots.txt + sitemap.xml = 5 copies
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(5);
     expect(copyPublishedArtifact).toHaveBeenCalledWith(
       'published/acme/about/index.html',
       'published/www.example.com/about/index.html',
@@ -346,6 +352,14 @@ describe('mirrorDriveToCustomHost', () => {
     expect(copyPublishedArtifact).toHaveBeenCalledWith(
       'published/acme/404.html',
       'published/www.example.com/404.html',
+    );
+    expect(copyPublishedArtifact).toHaveBeenCalledWith(
+      'published/acme/robots.txt',
+      'published/www.example.com/robots.txt',
+    );
+    expect(copyPublishedArtifact).toHaveBeenCalledWith(
+      'published/acme/sitemap.xml',
+      'published/www.example.com/sitemap.xml',
     );
   });
 
@@ -361,8 +375,8 @@ describe('mirrorDriveToCustomHost', () => {
 
     await mirrorDriveToCustomHost('drive-1', 'www.example.com');
 
-    // 1 page + root + 404 = 3 copies
-    expect(copyPublishedArtifact).toHaveBeenCalledTimes(3);
+    // 1 page + root + 404 + robots.txt + sitemap.xml = 5 copies
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(5);
     expect(copyPublishedArtifact).toHaveBeenCalledWith(
       'published/acme/index.html',
       'published/www.example.com/index.html',
@@ -381,13 +395,13 @@ describe('mirrorDriveToCustomHost', () => {
 
     await mirrorDriveToCustomHost('drive-1', 'www.example.com');
 
-    // 1 page + 404 only (no root) = 2
-    expect(copyPublishedArtifact).toHaveBeenCalledTimes(2);
+    // 1 page + 404 + robots.txt + sitemap.xml (no root) = 4
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(4);
     const calls = vi.mocked(copyPublishedArtifact).mock.calls.map(([, to]) => to);
     expect(calls).not.toContain('published/www.example.com/index.html');
   });
 
-  it('copies only 404.html when the drive has no published pages', async () => {
+  it('copies only site files (404.html + robots.txt + sitemap.xml) when the drive has no published pages', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       publishSubdomain: 'acme',
       homePageId: null,
@@ -396,10 +410,18 @@ describe('mirrorDriveToCustomHost', () => {
 
     await mirrorDriveToCustomHost('drive-1', 'www.example.com');
 
-    expect(copyPublishedArtifact).toHaveBeenCalledTimes(1);
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(3);
     expect(copyPublishedArtifact).toHaveBeenCalledWith(
       'published/acme/404.html',
       'published/www.example.com/404.html',
+    );
+    expect(copyPublishedArtifact).toHaveBeenCalledWith(
+      'published/acme/robots.txt',
+      'published/www.example.com/robots.txt',
+    );
+    expect(copyPublishedArtifact).toHaveBeenCalledWith(
+      'published/acme/sitemap.xml',
+      'published/www.example.com/sitemap.xml',
     );
   });
 
@@ -436,7 +458,36 @@ describe('mirrorDriveToCustomHost', () => {
 
     await expect(mirrorDriveToCustomHost('drive-1', 'www.example.com')).resolves.toBeUndefined();
     // Despite the failure, the remaining copies were still attempted
-    expect(copyPublishedArtifact).toHaveBeenCalledTimes(3); // 2 pages + 404
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(5); // 2 pages + 404 + robots.txt + sitemap.xml
+  });
+});
+
+describe('getActiveDomainRecords', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isPublishConfigured).mockReturnValue(true);
+  });
+
+  it('returns hostname and createdAt for active domains only', async () => {
+    const createdAt = new Date('2026-01-01T00:00:00.000Z');
+    mockSelect([
+      { hostname: 'active.example.com', status: 'active', createdAt },
+      { hostname: 'pending.example.com', status: 'pending', createdAt },
+    ]);
+
+    const records = await getActiveDomainRecords('drive-1');
+
+    expect(records).toHaveLength(1);
+    expect(records[0].hostname).toBe('active.example.com');
+    expect(records[0].createdAt).toEqual(createdAt);
+  });
+
+  it('returns empty array when no active domains', async () => {
+    mockSelect([{ hostname: 'pending.example.com', status: 'pending', createdAt: new Date() }]);
+
+    const records = await getActiveDomainRecords('drive-1');
+
+    expect(records).toHaveLength(0);
   });
 });
 

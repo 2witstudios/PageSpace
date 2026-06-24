@@ -49,6 +49,8 @@ interface CustomDomain {
 
 interface DomainsResponse {
   domains: CustomDomain[];
+  /** Maximum custom domains allowed by the drive owner's plan (0 = not available). */
+  limit: number;
 }
 
 const fetcher = (url: string) => fetchWithAuth(url).then((r) => r.json());
@@ -134,6 +136,8 @@ export default function GeneralSettingsPage() {
         const data = await res.json().catch(() => ({})) as { error?: string };
         if (res.status === 409) {
           toast.error('That domain is already registered');
+        } else if (res.status === 403) {
+          toast.error(data.error ?? 'Custom domains are not available on your current plan');
         } else {
           toast.error(data.error ?? 'Failed to add domain');
         }
@@ -416,6 +420,7 @@ export default function GeneralSettingsPage() {
 
       <CustomDomainsCard
         domains={domainsData?.domains ?? []}
+        limit={domainsData?.limit ?? null}
         newDomain={newDomain}
         onNewDomainChange={setNewDomain}
         onAdd={handleAddDomain}
@@ -436,6 +441,8 @@ export default function GeneralSettingsPage() {
 
 interface CustomDomainsCardProps {
   domains: CustomDomain[];
+  /** null = still loading; 0 = not available on plan; N = max allowed */
+  limit: number | null;
   newDomain: string;
   onNewDomainChange: (v: string) => void;
   onAdd: () => void;
@@ -453,34 +460,60 @@ const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
 const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
 const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
 
-function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, isAdding, removingId, verifyingId, refreshingCertId, verifyReasons }: CustomDomainsCardProps) {
+function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, isAdding, removingId, verifyingId, refreshingCertId, verifyReasons }: CustomDomainsCardProps) {
+  const atCap = limit !== null && limit > 0 && domains.length >= limit;
+  const notAvailable = limit === 0;
+  const addDisabled = isAdding || !newDomain.trim() || atCap || notAvailable;
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Globe className="h-4 w-4" />
-          Custom Domains
-        </CardTitle>
-        <CardDescription>
-          Point your own domain at this drive&apos;s published canvas site
-        </CardDescription>
+        <div className="flex items-start justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Globe className="h-4 w-4" />
+              Custom Domains
+            </CardTitle>
+            <CardDescription>
+              Point your own domain at this drive&apos;s published canvas site
+            </CardDescription>
+          </div>
+          {limit !== null && limit > 0 && (
+            <span className="text-xs text-muted-foreground tabular-nums mt-1">
+              {domains.length} / {limit}
+            </span>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex gap-2">
-          <Label htmlFor="new-custom-domain" className="sr-only">Custom domain</Label>
-          <Input
-            id="new-custom-domain"
-            placeholder="e.g. docs.acme.com or acme.com"
-            value={newDomain}
-            onChange={(e) => onNewDomainChange(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && onAdd()}
-            className="flex-1"
-          />
-          <Button onClick={onAdd} disabled={isAdding || !newDomain.trim()}>
-            {isAdding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Add
-          </Button>
-        </div>
+        {notAvailable ? (
+          <p className="text-sm text-muted-foreground">
+            Custom domains are not available on your current plan. Upgrade to Pro or higher to add a custom domain.
+          </p>
+        ) : (
+          <div className="flex gap-2">
+            <Label htmlFor="new-custom-domain" className="sr-only">Custom domain</Label>
+            <Input
+              id="new-custom-domain"
+              placeholder="e.g. docs.acme.com or acme.com"
+              value={newDomain}
+              onChange={(e) => onNewDomainChange(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !addDisabled && onAdd()}
+              className="flex-1"
+              disabled={atCap}
+            />
+            <Button onClick={onAdd} disabled={addDisabled}>
+              {isAdding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              Add
+            </Button>
+          </div>
+        )}
+
+        {atCap && !notAvailable && (
+          <p className="text-xs text-muted-foreground">
+            Domain limit reached ({domains.length} / {limit}). Remove a domain to add another, or upgrade your plan.
+          </p>
+        )}
 
         {domains.length > 0 ? (
           <div className="space-y-3">
@@ -500,7 +533,7 @@ function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRem
             ))}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">No custom domains yet</p>
+          !notAvailable && <p className="text-sm text-muted-foreground">No custom domains yet</p>
         )}
       </CardContent>
     </Card>

@@ -49,6 +49,11 @@ export interface PlanDefinition {
       bytes: number;
       formatted: string;
     };
+    /**
+     * Maximum custom domains per drive. 0 = custom domains not available on
+     * this tier. The add-domain endpoint enforces this at request time.
+     */
+    maxCustomDomains: number;
   };
   features: PlanFeature[];
   highlighted?: boolean;
@@ -90,6 +95,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         bytes: 50 * 1024 * 1024, // 50MB
         formatted: '50MB',
       },
+      maxCustomDomains: 0,
     },
     features: [
       { name: monthlyCreditsPhrase('free'), included: true },
@@ -136,6 +142,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         bytes: 250 * 1024 * 1024, // 250MB
         formatted: '250MB',
       },
+      maxCustomDomains: 1,
     },
     features: [
       { name: monthlyCreditsPhrase('pro'), included: true, description: '3x more than Free' },
@@ -179,6 +186,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         bytes: 500 * 1024 * 1024, // 500MB
         formatted: '500MB',
       },
+      maxCustomDomains: 3,
     },
     features: [
       { name: monthlyCreditsPhrase('founder'), included: true, description: '10x more than Free' },
@@ -217,6 +225,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         bytes: 1024 * 1024 * 1024, // 1GB
         formatted: '1GB',
       },
+      maxCustomDomains: 10,
     },
     features: [
       { name: monthlyCreditsPhrase('business'), included: true, description: '20x more than Free' },

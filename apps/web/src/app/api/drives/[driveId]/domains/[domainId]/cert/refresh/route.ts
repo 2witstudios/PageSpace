@@ -13,7 +13,7 @@ import { addCertificate } from '@/lib/fly/certs';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
-import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
+import { mirrorDriveToCustomHost, clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -74,6 +74,17 @@ export async function POST(
       mirrorDriveToCustomHost(driveId, domain.hostname).catch((err) => {
         loggers.api.warn('Failed to backfill artifacts after cert activation', {
           driveId,
+          hostname: domain.hostname,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
+    // When an active domain transitions to cert_failed, purge its mirrored
+    // prefix so stale content is not served until the cert is recovered.
+    if (domain.status === 'active' && nextStatus === 'cert_failed') {
+      clearCustomHost(domain.hostname).catch((err) => {
+        loggers.api.warn('Failed to clear custom host artifacts after cert failure', {
           hostname: domain.hostname,
           error: err instanceof Error ? err.message : String(err),
         });

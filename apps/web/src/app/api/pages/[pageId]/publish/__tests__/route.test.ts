@@ -74,6 +74,13 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
+  mirrorPublishedPageToHosts: vi.fn().mockResolvedValue(undefined),
+  mirror404ToHosts: vi.fn().mockResolvedValue(undefined),
+  deletePageFromCustomHosts: vi.fn().mockResolvedValue(undefined),
+  getActiveDomainRecords: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
   and: vi.fn((...args: unknown[]) => ({ and: args })),

@@ -23,7 +23,8 @@ import {
 } from './published-storage';
 import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMeta } from './asset-pipeline';
 import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml } from '@pagespace/lib/canvas/site-files';
-import { mirrorPublishedPageToHosts, mirror404ToHosts } from './custom-domain-mirror';
+import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
+import { mirrorPublishedPageToHosts, mirror404ToHosts, getActiveDomainRecords } from './custom-domain-mirror';
 
 export const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
@@ -212,10 +213,19 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   });
   const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
   const assetBaseUrl = getPublishAssetBaseUrl();
-  const rootUrl = `https://${subdomain}.${PUBLISH_HOST}/`;
-  const publishedUrl = `https://${subdomain}.${PUBLISH_HOST}/${path}`;
+
+  // Resolve the drive's primary published host. When an active custom domain
+  // exists it is the primary; otherwise we fall back to the subdomain. All
+  // copies (subdomain + every custom host mirror) embed the same canonical URL
+  // pointing at the primary host, so search-engine ranking signals converge on
+  // the customer's own domain.
+  const activeDomains = await getActiveDomainRecords(driveId);
+  const primaryHost = resolvePrimaryPublishedHost({ subdomain, publishHost: PUBLISH_HOST, activeDomains });
+
+  const rootUrl = `https://${primaryHost}/`;
+  const publishedUrl = `https://${primaryHost}/${path}`;
   // The canonical/OG/JSON-LD URL is the page's PRIMARY public URL. For the home
-  // page that is the subdomain root (the same artifact is also mirrored there),
+  // page that is the site root (the same artifact is also mirrored there),
   // not the secondary slug path — using the slug would make the root page
   // canonicalize itself away to `/<slug>`. Other pages are canonical at their
   // slug. The SEO description prefers the author's og:description, falling back
@@ -355,7 +365,12 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
     const subdomain = drive?.publishSubdomain;
     if (!subdomain) return;
 
-    const origin = `https://${subdomain}.${PUBLISH_HOST}`;
+    // Resolve primary host: custom domain (if active) or subdomain fallback.
+    // Loading domains here means sitemap/robots URLs point at the customer's
+    // domain on every copy — subdomain and custom-host alike.
+    const activeDomains = await getActiveDomainRecords(driveId);
+    const primaryHost = resolvePrimaryPublishedHost({ subdomain, publishHost: PUBLISH_HOST, activeDomains });
+    const origin = `https://${primaryHost}`;
 
     const published = await db.query.publishedPages.findMany({
       where: eq(publishedPages.driveId, driveId),

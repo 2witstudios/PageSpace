@@ -2,6 +2,7 @@ import 'server-only';
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { planCustomDomainMirror } from '@pagespace/lib/canvas/custom-domain-mirror';
+import type { ActiveDomainRecord } from '@pagespace/lib/canvas/primary-host';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
@@ -17,16 +18,24 @@ import {
 } from './published-storage';
 
 /**
- * Return the active custom hostnames for a drive. Only domains with
- * `status = 'active'` (DNS-verified + cert provisioned) are mirrored.
+ * Return all active custom domain records for a drive. Only domains with
+ * `status = 'active'` (DNS-verified + cert provisioned) are included.
+ * Exported so publish-page.ts can resolve the primary host without a
+ * duplicate DB query.
  */
-async function getActiveDriveHosts(driveId: string): Promise<string[]> {
+export async function getActiveDomainRecords(driveId: string): Promise<ActiveDomainRecord[]> {
   const rows = await db
-    .select({ hostname: customDomains.hostname, status: customDomains.status })
+    .select({ hostname: customDomains.hostname, status: customDomains.status, createdAt: customDomains.createdAt })
     .from(customDomains)
     .where(eq(customDomains.driveId, driveId));
 
-  return rows.filter((r) => r.status === 'active').map((r) => r.hostname);
+  return rows.filter((r) => r.status === 'active').map((r) => ({ hostname: r.hostname, createdAt: r.createdAt }));
+}
+
+/** Return only the active custom hostnames for a drive (legacy internal helper). */
+async function getActiveDriveHosts(driveId: string): Promise<string[]> {
+  const records = await getActiveDomainRecords(driveId);
+  return records.map((r) => r.hostname);
 }
 
 /**
@@ -80,9 +89,9 @@ export async function mirrorPublishedPageToHosts(params: {
 }
 
 /**
- * Mirror the drive's 404.html site file to every active custom-domain host.
- * Called after `regeneratePublishedSiteFiles` writes the 404 to the subdomain
- * prefix so the branded not-found page is always in sync across hosts.
+ * Mirror all drive site files (robots.txt, sitemap.xml, 404.html) to every
+ * active custom-domain host. Called after `regeneratePublishedSiteFiles` so
+ * every copy of the site carries the same canonical site-level documents.
  * Best-effort.
  */
 export async function mirror404ToHosts(driveId: string, subdomain: string): Promise<void> {
@@ -97,12 +106,13 @@ export async function mirror404ToHosts(driveId: string, subdomain: string): Prom
       paths: [],
       hosts,
       include404: true,
+      includeSiteFiles: true,
     });
 
     await Promise.allSettled(
       copies.map(({ from, to }) =>
         copyPublishedArtifact(from, to).catch((err) => {
-          loggers.api.warn('Failed to mirror 404.html to custom host', {
+          loggers.api.warn('Failed to mirror site file to custom host', {
             from,
             to,
             error: err instanceof Error ? err.message : String(err),
@@ -111,7 +121,7 @@ export async function mirror404ToHosts(driveId: string, subdomain: string): Prom
       ),
     );
   } catch (err) {
-    loggers.api.warn('Failed to mirror 404.html to custom hosts', {
+    loggers.api.warn('Failed to mirror site files to custom hosts', {
       driveId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -211,6 +221,7 @@ export async function mirrorDriveToCustomHost(driveId: string, host: string): Pr
     hosts: [host],
     includeRoot: rootExists,
     include404: true,
+    includeSiteFiles: true,
   });
 
   await Promise.allSettled(

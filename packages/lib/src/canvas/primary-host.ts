@@ -1,0 +1,56 @@
+/**
+ * Pure resolver for a drive's "primary published host".
+ *
+ * Every custom-domain mirror is byte-for-byte identical to the subdomain copy
+ * (no re-render). To consolidate SEO we pick ONE host as canonical — the same
+ * value baked into `<link rel=canonical>`, `og:url`, `sitemap.xml <loc>`, and
+ * `robots.txt Sitemap:` across ALL copies. When multiple copies point at the
+ * same primary host, search engines consolidate ranking signals on that one URL.
+ *
+ * Primary-host selection rule (deterministic — no DB flag needed):
+ *   - If the drive has ≥1 active custom domain, the PRIMARY is the active domain
+ *     with the earliest `createdAt`. Ties (same timestamp) are broken by
+ *     hostname lexicographic order so the result is always predictable.
+ *   - Otherwise fall back to `<subdomain>.<publishHost>` (the pagespace.site
+ *     subdomain, which is always authoritative when no custom domain is active).
+ *
+ * Keeping this function pure (no I/O, no env reads) means the non-trivial part
+ * — sorting + fallback — is fully unit-testable without a DB or network call.
+ * The thin shell that fetches the active domains from the DB calls this.
+ */
+
+/** Minimal shape of an active custom domain needed for primary-host resolution. */
+export interface ActiveDomainRecord {
+  hostname: string;
+  createdAt: Date;
+}
+
+/**
+ * Resolve the primary published host for a drive.
+ *
+ * @param subdomain    - Drive's allocated pagespace.site subdomain.
+ * @param publishHost  - The root publish hostname (e.g. `pagespace.site`).
+ * @param activeDomains - Active custom domains for the drive (any order).
+ * @returns The hostname that should be used for canonical/og:url/sitemap URLs.
+ */
+export function resolvePrimaryPublishedHost({
+  subdomain,
+  publishHost,
+  activeDomains,
+}: {
+  subdomain: string;
+  publishHost: string;
+  activeDomains: ActiveDomainRecord[];
+}): string {
+  if (activeDomains.length === 0) {
+    return `${subdomain}.${publishHost}`;
+  }
+
+  const sorted = [...activeDomains].sort((a, b) => {
+    const dt = a.createdAt.getTime() - b.createdAt.getTime();
+    if (dt !== 0) return dt;
+    return a.hostname < b.hostname ? -1 : a.hostname > b.hostname ? 1 : 0;
+  });
+
+  return sorted[0].hostname;
+}

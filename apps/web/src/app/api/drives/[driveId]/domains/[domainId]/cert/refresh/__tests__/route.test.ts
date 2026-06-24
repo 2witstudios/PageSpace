@@ -52,8 +52,10 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
 }));
 
 const mirrorDriveToCustomHost = vi.fn().mockResolvedValue(undefined);
+const clearCustomHost = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
   mirrorDriveToCustomHost: (...args: unknown[]) => mirrorDriveToCustomHost(...args),
+  clearCustomHost: (...args: unknown[]) => clearCustomHost(...args),
 }));
 
 const DRIVE_ID = 'drive-1';
@@ -331,6 +333,35 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
       await POST(makeReq(), ctx());
 
       expect(mirrorDriveToCustomHost).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('mirror cleanup on deactivation (active → cert_failed)', () => {
+    it('calls clearCustomHost when an active domain transitions to cert_failed', async () => {
+      setupSelectReturning([ACTIVE_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: false, error: 'Fly cert revoked' });
+
+      await POST(makeReq(), ctx());
+
+      expect(clearCustomHost).toHaveBeenCalledWith('docs.acme.com');
+    });
+
+    it('does NOT call clearCustomHost when a non-active domain transitions to cert_failed', async () => {
+      setupSelectReturning([VERIFIED_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: false, error: 'Fly error' });
+
+      await POST(makeReq(), ctx());
+
+      expect(clearCustomHost).not.toHaveBeenCalled();
+    });
+
+    it('does NOT call clearCustomHost when an active domain stays active (re-check succeeds)', async () => {
+      setupSelectReturning([ACTIVE_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+      await POST(makeReq(), ctx());
+
+      expect(clearCustomHost).not.toHaveBeenCalled();
     });
   });
 });

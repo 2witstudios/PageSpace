@@ -133,6 +133,75 @@ describe('planCustomDomainMirror', () => {
     expect(copies).toHaveLength(8);
   });
 
+  it('includeSiteFiles adds robots.txt and sitemap.xml for each host', () => {
+    const { copies } = planCustomDomainMirror({
+      subdomain: 'acme',
+      paths: [],
+      hosts: ['www.example.com'],
+      includeSiteFiles: true,
+    });
+
+    expect(copies).toHaveLength(2);
+    expect(copies).toContainEqual({
+      from: 'published/acme/robots.txt',
+      to: 'published/www.example.com/robots.txt',
+    });
+    expect(copies).toContainEqual({
+      from: 'published/acme/sitemap.xml',
+      to: 'published/www.example.com/sitemap.xml',
+    });
+  });
+
+  it('includeSiteFiles × M hosts → 2×M copies', () => {
+    const { copies } = planCustomDomainMirror({
+      subdomain: 'acme',
+      paths: [],
+      hosts: ['a.example.com', 'b.example.com'],
+      includeSiteFiles: true,
+    });
+
+    // 2 site files × 2 hosts = 4
+    expect(copies).toHaveLength(4);
+  });
+
+  it('includeSiteFiles does NOT include 404.html (that is include404)', () => {
+    const { copies } = planCustomDomainMirror({
+      subdomain: 'acme',
+      paths: [],
+      hosts: ['www.example.com'],
+      includeSiteFiles: true,
+    });
+
+    const tos = copies.map((c) => c.to);
+    expect(tos).not.toContain('published/www.example.com/404.html');
+  });
+
+  it('includeRoot + include404 + includeSiteFiles + N paths × M hosts → correct total', () => {
+    const { copies } = planCustomDomainMirror({
+      subdomain: 'acme',
+      paths: ['about', 'team'],
+      hosts: ['a.example.com', 'b.example.com'],
+      includeRoot: true,
+      include404: true,
+      includeSiteFiles: true,
+    });
+
+    // (2 paths + 1 root + 1 404 + 2 site files) × 2 hosts = 12
+    expect(copies).toHaveLength(12);
+  });
+
+  it('does not include site files by default', () => {
+    const { copies } = planCustomDomainMirror({
+      subdomain: 'acme',
+      paths: ['about'],
+      hosts: ['www.example.com'],
+    });
+
+    const tos = copies.map((c) => c.to);
+    expect(tos).not.toContain('published/www.example.com/robots.txt');
+    expect(tos).not.toContain('published/www.example.com/sitemap.xml');
+  });
+
   it('page key uses subdomain as source prefix verbatim', () => {
     const { copies } = planCustomDomainMirror({
       subdomain: 'my-drive',
