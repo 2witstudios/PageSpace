@@ -516,6 +516,12 @@ const SidebarChatTab: React.FC = () => {
     fetchWithAuth(`/api/ai/global/${conversationId}/messages`)
       .then(async (res) => {
         if (!shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) return;
+        if (res.status === 404) {
+          // Conversation not yet persisted (lazy creation) — treat as empty, not an error.
+          setGlobalMessages([]);
+          setGlobalMessagesLoadError(null);
+          return;
+        }
         if (!res.ok) throw new Error(`Failed to load messages (${res.status})`);
         const data = await res.json();
         if (!shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) return;
