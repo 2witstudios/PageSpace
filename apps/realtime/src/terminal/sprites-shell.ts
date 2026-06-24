@@ -1,4 +1,5 @@
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 
 export type PtyShell = {
   write(data: string): void;
@@ -15,7 +16,7 @@ export type OpenPtyShellArgs = {
 };
 
 export function openPtyShell({ sprite, cols, rows, onOutput, onExit }: OpenPtyShellArgs): PtyShell {
-  const cmd = sprite.spawn('bash', [], { tty: true, cols, rows });
+  const cmd = sprite.spawn('bash', [], { tty: true, cols, rows, cwd: SANDBOX_ROOT });
 
   const toStr = (chunk: unknown) => (typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8'));
   cmd.stdout.on('data', (chunk) => onOutput(toStr(chunk)));
