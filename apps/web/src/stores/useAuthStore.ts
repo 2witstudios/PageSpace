@@ -718,10 +718,10 @@ export const authStoreHelpers = {
       import('@/stores/useEditingStore').then(({ useEditingStore, getEditingDebugInfo }) => {
         const editingState = useEditingStore.getState();
 
-        // Check if any editing or streaming is active
-        if (editingState.isAnyActive()) {
+        // Check if document/form editing is active (AI streaming no longer defers auth logging)
+        if (editingState.isAnyEditing()) {
           const debugInfo = getEditingDebugInfo();
-          console.log('[AUTH_STORE] Token refreshed during active editing/streaming', {
+          console.log('[AUTH_STORE] Token refreshed during active editing', {
             sessionCount: debugInfo.sessionCount,
             isEditing: debugInfo.isAnyEditing,
             isStreaming: debugInfo.isAnyStreaming,

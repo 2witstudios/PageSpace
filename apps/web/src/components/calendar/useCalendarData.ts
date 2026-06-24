@@ -45,7 +45,7 @@ export function useCalendarData({
   includeTasks = true,
 }: UseCalendarDataOptions) {
   const hasLoadedRef = useRef(false);
-  const isAnyActive = useEditingStore((state) => state.isAnyActive());
+  const isAnyEditing = useEditingStore((state) => state.isAnyEditing());
 
   // Calculate date range for the current view (include buffer for multi-day events)
   const dateRange = useMemo(() => {
@@ -78,7 +78,7 @@ export function useCalendarData({
     isLoading: eventsLoading,
   } = useSWR<CalendarEventsResponse>(eventsUrl, fetcher, {
     revalidateOnFocus: false,
-    isPaused: () => hasLoadedRef.current && isAnyActive,
+    isPaused: () => hasLoadedRef.current && isAnyEditing,
     onSuccess: () => {
       hasLoadedRef.current = true;
     },
@@ -105,7 +105,7 @@ export function useCalendarData({
     tasksUrl ? fetcher : null,
     {
       revalidateOnFocus: false,
-      isPaused: () => hasLoadedRef.current && isAnyActive,
+      isPaused: () => hasLoadedRef.current && isAnyEditing,
       refreshInterval: 60000,
     }
   );

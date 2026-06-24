@@ -78,11 +78,11 @@ function PageLabel({ pageId }: { pageId: string }) {
   // Pause background revalidation while any editing session is active so a remote
   // task_updated broadcast cannot refetch and clobber the chip label mid-edit.
   // Initial load is unaffected because pageLoadedRef gates the pause until first success.
-  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const isAnyEditing = useEditingStore((s) => s.isAnyEditing());
   const pageLoadedRef = useRef(false);
   const { data, error } = useSWR(`/api/pages/${pageId}`, pageFetcher, {
     revalidateOnFocus: false,
-    isPaused: () => pageLoadedRef.current && isAnyActive,
+    isPaused: () => pageLoadedRef.current && isAnyEditing,
     onSuccess: () => {
       pageLoadedRef.current = true;
     },

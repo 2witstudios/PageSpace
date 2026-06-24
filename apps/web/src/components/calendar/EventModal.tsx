@@ -279,7 +279,7 @@ export function EventModal({
     componentName: 'EventModal',
   });
 
-  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const isAnyEditing = useEditingStore((s) => s.isAnyEditing());
   const triggerLoadedRef = useRef(false);
   const agentsLoadedRef = useRef(false);
 
@@ -296,7 +296,7 @@ export function EventModal({
     triggerFetcher,
     {
       revalidateOnFocus: false,
-      isPaused: () => triggerLoadedRef.current && isAnyActive,
+      isPaused: () => triggerLoadedRef.current && isAnyEditing,
       onSuccess: () => {
         triggerLoadedRef.current = true;
       },
@@ -308,7 +308,7 @@ export function EventModal({
     agentsFetcher,
     {
       revalidateOnFocus: false,
-      isPaused: () => agentsLoadedRef.current && isAnyActive,
+      isPaused: () => agentsLoadedRef.current && isAnyEditing,
       onSuccess: () => {
         agentsLoadedRef.current = true;
       },
