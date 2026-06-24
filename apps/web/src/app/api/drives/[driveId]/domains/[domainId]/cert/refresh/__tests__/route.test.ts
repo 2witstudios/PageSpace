@@ -350,7 +350,7 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
     });
   });
 
-  describe('mirror cleanup on deactivation (active → cert_failed)', () => {
+  describe('mirror cleanup on cert_failed (any status → cert_failed)', () => {
     it('calls clearCustomHost when an active domain transitions to cert_failed', async () => {
       setupSelectReturning([ACTIVE_DOMAIN]);
       addCertificate.mockResolvedValue({ ok: false, error: 'Fly cert revoked' });
@@ -360,13 +360,13 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
       expect(clearCustomHost).toHaveBeenCalledWith('docs.acme.com');
     });
 
-    it('does NOT call clearCustomHost when a non-active domain transitions to cert_failed', async () => {
+    it('calls clearCustomHost even when a non-active domain transitions to cert_failed (idempotent retry)', async () => {
       setupSelectReturning([VERIFIED_DOMAIN]);
       addCertificate.mockResolvedValue({ ok: false, error: 'Fly error' });
 
       await POST(makeReq(), ctx());
 
-      expect(clearCustomHost).not.toHaveBeenCalled();
+      expect(clearCustomHost).toHaveBeenCalledWith('docs.acme.com');
     });
 
     it('does NOT call clearCustomHost when an active domain stays active (re-check succeeds)', async () => {
