@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
-import { isEditingActive } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { ThreadUnreadBadge } from '@/components/inbox/ThreadUnreadBadge';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 
@@ -39,7 +39,7 @@ export default function DMCenterList() {
 
   const { data, error, isLoading } = useSWR<InboxResponse>(API_URL, fetcher, {
     refreshInterval: 0,
-    isPaused: () => hasLoadedRef.current && isEditingActive(),
+    isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
     onSuccess: () => { hasLoadedRef.current = true; },
     revalidateOnFocus: false,
   });

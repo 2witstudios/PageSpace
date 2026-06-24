@@ -9,7 +9,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import type { UIMessage } from 'ai';
-import { isEditingActive } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { useOptimisticConversationsStore } from '@/stores/useOptimisticConversationsStore';
 import {
   ConversationData,
@@ -116,7 +116,7 @@ export function useConversations({
     },
     {
       // Only pause revalidation after initial load - never block the first fetch
-      isPaused: () => hasLoadedRef.current && isEditingActive(),
+      isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
       onSuccess: () => {
         hasLoadedRef.current = true;
       },

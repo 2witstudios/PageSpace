@@ -39,7 +39,7 @@ import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
-import { isEditingActive } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
 import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
@@ -651,7 +651,7 @@ const SidebarChatTab: React.FC = () => {
   useAppStateRecovery({
     onResume: handleAppResume,
     // Block recovery if streaming OR pending send OR any editing active
-    enabled: !isStreaming && currentConversationId !== null && !isEditingActive(),
+    enabled: !isStreaming && currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
   });
 
   // Clean up stream tracking on unmount or conversation change
