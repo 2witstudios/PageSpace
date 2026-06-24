@@ -38,18 +38,18 @@ const makeDb = (selectResult: object[], insertResult: object[] = []) => ({
 const CONV = { id: 'conv1', userId: 'user1', isActive: true, type: 'global' };
 
 describe('resolveOrCreateConversation', () => {
-  it('given existing conversation owned by the user, returns it without inserting', async () => {
+  it('given existing conversation owned by the user, returns it without inserting and isNew=false', async () => {
     const db = makeDb([CONV]);
     const result = await resolveOrCreateConversation('user1', 'conv1', db as never);
-    expect(result).toEqual(CONV);
+    expect(result).toEqual({ conversation: CONV, isNew: false });
     expect(db.insert).not.toHaveBeenCalled();
   });
 
-  it('given no existing conversation, creates one with the correct fields', async () => {
+  it('given no existing conversation, creates one with the correct fields and isNew=true', async () => {
     const created = { id: 'conv1', userId: 'user1', type: 'global', isActive: true };
     const db = makeDb([], [created]);
     const result = await resolveOrCreateConversation('user1', 'conv1', db as never);
-    expect(result).toEqual(created);
+    expect(result).toEqual({ conversation: created, isNew: true });
     expect(db.insert).toHaveBeenCalled();
   });
 
@@ -73,8 +73,10 @@ describe('resolveOrCreateConversation', () => {
 
   it('given idempotent call (conversation already exists), does not insert a second row', async () => {
     const db = makeDb([CONV]);
-    await resolveOrCreateConversation('user1', 'conv1', db as never);
-    await resolveOrCreateConversation('user1', 'conv1', db as never);
+    const first = await resolveOrCreateConversation('user1', 'conv1', db as never);
+    const second = await resolveOrCreateConversation('user1', 'conv1', db as never);
+    expect(first.isNew).toBe(false);
+    expect(second.isNew).toBe(false);
     expect(db.insert).not.toHaveBeenCalled();
   });
 
@@ -95,7 +97,7 @@ describe('resolveOrCreateConversation', () => {
     expect(db.insert).not.toHaveBeenCalled();
   });
 
-  it('given a concurrent insert race (ON CONFLICT returns no row), falls back to select and returns winner', async () => {
+  it('given a concurrent insert race (ON CONFLICT returns no row), falls back to select and returns winner with isNew=true', async () => {
     // insert returns [] (another writer won the race), then fallback select finds the winner
     const winner = { ...CONV };
     const db = {
@@ -121,7 +123,7 @@ describe('resolveOrCreateConversation', () => {
       }),
     };
     const result = await resolveOrCreateConversation('user1', 'conv1', db as never);
-    expect(result).toEqual(winner);
+    expect(result).toEqual({ conversation: winner, isNew: true });
     expect(db.insert).toHaveBeenCalledTimes(1);
   });
 });

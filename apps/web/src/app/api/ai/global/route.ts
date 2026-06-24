@@ -4,6 +4,9 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -97,6 +100,18 @@ export async function POST(request: Request) {
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'global_chat', resourceId: newConversation.id, details: {
       action: 'create_conversation',
     } });
+
+    void resolveTriggeredBy(userId, request).then((triggeredBy) =>
+      broadcastGlobalConversationAdded(globalChannelId(userId), {
+        conversation: {
+          id: newConversation.id,
+          title: newConversation.title ?? '',
+          type: newConversation.type,
+          createdAt: new Date(newConversation.createdAt).toISOString(),
+        },
+        triggeredBy,
+      })
+    ).catch(() => {});
 
     return NextResponse.json(newConversation);
   } catch (error) {

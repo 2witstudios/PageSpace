@@ -40,6 +40,18 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/ai/global-channel-id', () => ({
+  globalChannelId: vi.fn((userId: string) => `user:${userId}:global`),
+}));
+
+vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
+  resolveTriggeredBy: vi.fn().mockResolvedValue({ userId: 'user_123', displayName: 'Test User', browserSessionId: '' }),
+}));
+
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';

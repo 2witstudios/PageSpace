@@ -15,6 +15,12 @@ const CUID2_RE = /^[a-z][a-z0-9]{1,31}$/;
 type ConversationRow = typeof conversations.$inferSelect;
 type Db = typeof defaultDb;
 
+export interface ResolveOrCreateResult {
+  conversation: ConversationRow;
+  /** True when the DB row was just inserted (lazy first-message creation). */
+  isNew: boolean;
+}
+
 /**
  * Pure-ish function: resolve an existing global conversation or create it on first message.
  * Throws ConversationOwnershipError if the conversation exists but belongs to a different user.
@@ -29,7 +35,7 @@ export async function resolveOrCreateConversation(
   userId: string,
   conversationId: string,
   db: Db = defaultDb,
-): Promise<ConversationRow> {
+): Promise<ResolveOrCreateResult> {
   if (!CUID2_RE.test(conversationId)) {
     throw new ConversationOwnershipError();
   }
@@ -46,7 +52,7 @@ export async function resolveOrCreateConversation(
   if (existing) {
     if (existing.userId !== userId) throw new ConversationOwnershipError();
     if (existing.type !== 'global') throw new ConversationOwnershipError();
-    return existing;
+    return { conversation: existing, isNew: false };
   }
 
   // Idempotent insert: ON CONFLICT DO NOTHING handles concurrent first-writes.
@@ -61,7 +67,7 @@ export async function resolveOrCreateConversation(
     .onConflictDoNothing()
     .returning();
 
-  if (created) return created;
+  if (created) return { conversation: created, isNew: true };
 
   // A concurrent insert won the race — select the winner.
   const [winner] = await db
@@ -72,5 +78,5 @@ export async function resolveOrCreateConversation(
 
   if (!winner) throw new Error(`Failed to resolve conversation ${conversationId}`);
   if (winner.userId !== userId) throw new ConversationOwnershipError();
-  return winner;
+  return { conversation: winner, isNew: true };
 }

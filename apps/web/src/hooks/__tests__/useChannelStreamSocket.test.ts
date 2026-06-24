@@ -102,6 +102,7 @@ import type {
   ChatMessageDeletedPayload,
   ChatUndoAppliedPayload,
   ChatConversationAddedPayload,
+  ChatGlobalConversationAddedPayload,
 } from '@/lib/websocket/socket-utils';
 
 const START_PAYLOAD: AiStreamStartPayload = {
@@ -156,6 +157,16 @@ const CONVERSATION_ADDED_PAYLOAD: ChatConversationAddedPayload = {
     createdAt: '2026-05-01T00:00:00.000Z',
   },
   triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+};
+
+const GLOBAL_CONVERSATION_ADDED_PAYLOAD: ChatGlobalConversationAddedPayload = {
+  conversation: {
+    id: 'conv-global-1',
+    title: 'My first chat',
+    type: 'global',
+    createdAt: '2026-05-01T00:00:00.000Z',
+  },
+  triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_REMOTE },
 };
 
 describe('useChannelStreamSocket', () => {
@@ -509,6 +520,32 @@ describe('useChannelStreamSocket', () => {
       });
 
       expect(onConversationAdded).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('chat:global_conversation_added', () => {
+    it('given a chat:global_conversation_added event, should call onGlobalConversationAdded with the payload', () => {
+      const onGlobalConversationAdded = vi.fn();
+      renderHook(() => useChannelStreamSocket('user:u1:global', { onGlobalConversationAdded }));
+
+      act(() => { mockSocket._trigger('chat:global_conversation_added', GLOBAL_CONVERSATION_ADDED_PAYLOAD); });
+
+      expect(onGlobalConversationAdded).toHaveBeenCalledTimes(1);
+      expect(onGlobalConversationAdded).toHaveBeenCalledWith(GLOBAL_CONVERSATION_ADDED_PAYLOAD);
+    });
+
+    it('given own-session triggeredBy, should STILL call onGlobalConversationAdded (no own-tab dedup)', () => {
+      const onGlobalConversationAdded = vi.fn();
+      renderHook(() => useChannelStreamSocket('user:u1:global', { onGlobalConversationAdded }));
+
+      act(() => {
+        mockSocket._trigger('chat:global_conversation_added', {
+          ...GLOBAL_CONVERSATION_ADDED_PAYLOAD,
+          triggeredBy: { ...GLOBAL_CONVERSATION_ADDED_PAYLOAD.triggeredBy, browserSessionId: SESSION_ID_LOCAL },
+        });
+      });
+
+      expect(onGlobalConversationAdded).toHaveBeenCalledTimes(1);
     });
   });
 

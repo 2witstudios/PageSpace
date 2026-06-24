@@ -48,6 +48,10 @@ vi.mock('@/lib/websocket', () => ({
   broadcastChatUserMessage: mockBroadcastChatUserMessage,
 }));
 
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
@@ -105,7 +109,8 @@ vi.mock('@pagespace/db/operators', () => ({
 
 vi.mock('../resolve-or-create-conversation', () => ({
   resolveOrCreateConversation: vi.fn().mockResolvedValue({
-    id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true,
+    conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
+    isNew: false,
   }),
   ConversationOwnershipError: class ConversationOwnershipError extends Error {},
 }));

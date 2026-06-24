@@ -58,6 +58,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     loadConversation: loadGlobalConversation,
     createNewConversation: createNewGlobalConversation,
     currentConversationId: globalConversationId,
+    latestGlobalConversationAdded,
   } = useGlobalChatConversation();
 
   // Use sidebar agent state for agent conversation management (page context)
@@ -140,6 +141,25 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
 
     loadConversations();
   }, [selectedAgent, globalConversationId, activeConversationId, pathname]); // Refetch when agent, conversation, or navigation changes
+
+  // Prepend a new global conversation when the socket signals one was created.
+  useEffect(() => {
+    if (!latestGlobalConversationAdded || selectedAgent) return;
+    const { conversation } = latestGlobalConversationAdded;
+    setConversations((prev) => {
+      if (prev.some((c) => c.id === conversation.id)) return prev;
+      return [
+        {
+          id: conversation.id,
+          title: conversation.title,
+          type: conversation.type,
+          lastMessageAt: conversation.createdAt,
+          createdAt: conversation.createdAt,
+        },
+        ...prev,
+      ];
+    });
+  }, [latestGlobalConversationAdded, selectedAgent]);
 
   // Load more conversations (for pagination)
   const handleLoadMore = useCallback(async () => {
