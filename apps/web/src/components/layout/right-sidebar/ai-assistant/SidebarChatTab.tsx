@@ -409,14 +409,14 @@ const SidebarChatTab: React.FC = () => {
       try {
         const pageResponse = await fetchWithAuth(`/api/pages/${pageId}`);
         if (!pageResponse.ok) return null;
-        const pageData = await pageResponse.json();
+        const pageData = (await pageResponse.json()) as { id: string; title: string; type: string };
 
         let path = `/${currentDrive?.slug}/${pageData.title}`;
         try {
           const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
           if (breadcrumbsResponse.ok) {
-            const breadcrumbsData = await breadcrumbsResponse.json();
-            const pathSegments = breadcrumbsData.map((crumb: { title: string }) => crumb.title);
+            const breadcrumbsData = (await breadcrumbsResponse.json()) as Array<{ title: string }>;
+            const pathSegments = breadcrumbsData.map((crumb) => crumb.title);
             path = `/${currentDrive?.slug}/${pathSegments.join('/')}`;
           }
         } catch {
@@ -467,7 +467,9 @@ const SidebarChatTab: React.FC = () => {
               try {
                 const res = await fetchWithAuth(`/api/messages/conversations/${parsed.conversationId}`);
                 if (res.ok) {
-                  const data = await res.json();
+                  const data = (await res.json()) as {
+                    conversation?: { otherUser?: { displayName?: string | null; name?: string | null } };
+                  };
                   const otherUser = data?.conversation?.otherUser;
                   label = otherUser?.displayName || otherUser?.name || null;
                 }
