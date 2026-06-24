@@ -380,6 +380,9 @@ const SidebarChatTab: React.FC = () => {
   // Effects: Drive Loading
   // ============================================
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  // Subscribe to drives so the location-context effect re-runs once the store
+  // populates (drive labels would otherwise stay null until the next nav).
+  const drives = useDriveStore((state) => state.drives);
 
   useEffect(() => {
     fetchDrives();
@@ -396,7 +399,7 @@ const SidebarChatTab: React.FC = () => {
 
     const resolveDrive = (driveId: string | undefined) => {
       if (!driveId) return null;
-      const driveData = useDriveStore.getState().drives.find(d => d.id === driveId);
+      const driveData = drives.find(d => d.id === driveId);
       return driveData
         ? { id: driveData.id, slug: driveData.slug, name: driveData.name }
         : null;
@@ -411,13 +414,17 @@ const SidebarChatTab: React.FC = () => {
         if (!pageResponse.ok) return null;
         const pageData = (await pageResponse.json()) as { id: string; title: string; type: string };
 
-        let path = `/${currentDrive?.slug}/${pageData.title}`;
+        // Only prefix the drive slug when we actually have one — channel routes
+        // resolve no drive, so a bare `/${slug}` would bake "/undefined/..." into
+        // the path that gets sent to the AI.
+        const slugPrefix = currentDrive?.slug ? `/${currentDrive.slug}` : '';
+        let path = `${slugPrefix}/${pageData.title}`;
         try {
           const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
           if (breadcrumbsResponse.ok) {
             const breadcrumbsData = (await breadcrumbsResponse.json()) as Array<{ title: string }>;
             const pathSegments = breadcrumbsData.map((crumb) => crumb.title);
-            path = `/${currentDrive?.slug}/${pathSegments.join('/')}`;
+            path = `${slugPrefix}/${pathSegments.join('/')}`;
           }
         } catch {
           // Keep the simple path fallback.
@@ -513,7 +520,7 @@ const SidebarChatTab: React.FC = () => {
     return () => {
       ignore = true;
     };
-  }, [pathname]);
+  }, [pathname, drives]);
 
   // ============================================
   // Effects: Global Mode Sync to Context
