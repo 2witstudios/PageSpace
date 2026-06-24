@@ -7,17 +7,16 @@ import {
 } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { buildDnsInstructions, verifyDnsRecords } from '@pagespace/lib/validators/custom-domain';
-import { resolveHostname } from '@/lib/publish/dns-resolver';
+import { nextCertAction, certActionToDbStatus, isCertEligible } from '@pagespace/lib/canvas/cert-action';
+import type { CertEligibleStatus } from '@pagespace/lib/canvas/cert-action';
+import { addCertificate } from '@/lib/fly/certs';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
-const EDGE_IPV4 = process.env.PUBLISH_EDGE_IPV4 ?? '';
-const EDGE_IPV6 = process.env.PUBLISH_EDGE_IPV6 ?? '';
-const CNAME_TARGET = process.env.PUBLISH_EDGE_CNAME_TARGET ?? '';
+const FLY_APP_NAME = process.env.FLY_PROXY_APP_NAME ?? 'pagespace-proxy';
 
 export async function POST(
   request: Request,
@@ -32,7 +31,7 @@ export async function POST(
     if (scopeError) return scopeError;
 
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json({ error: 'Only drive owners and admins can verify custom domains' }, { status: 403 });
+      return NextResponse.json({ error: 'Only drive owners and admins can manage domain certs' }, { status: 403 });
     }
 
     const [domain] = await db
@@ -44,17 +43,23 @@ export async function POST(
       return NextResponse.json({ error: 'Domain not found' }, { status: 404 });
     }
 
-    const expected = buildDnsInstructions({
-      hostname: domain.hostname,
-      edgeIpv4: EDGE_IPV4,
-      edgeIpv6: EDGE_IPV6,
-      cnameTarget: CNAME_TARGET,
-    });
+    if (!isCertEligible(domain.status)) {
+      return NextResponse.json(
+        { error: 'Domain must be DNS-verified before provisioning a cert (verify DNS first)' },
+        { status: 409 },
+      );
+    }
 
-    const resolved = await resolveHostname(domain.hostname);
-    const result = verifyDnsRecords({ hostname: domain.hostname, expected, resolved });
+    if (!process.env.FLY_API_TOKEN) {
+      loggers.api.error('FLY_API_TOKEN not set — cert provisioning unavailable');
+      return NextResponse.json({ error: 'SSL provisioning is not configured (ops: set FLY_API_TOKEN)' }, { status: 503 });
+    }
 
-    const nextStatus = result.verified ? 'verified' : 'dns_failed';
+    const flyCert = await addCertificate(FLY_APP_NAME, domain.hostname);
+
+    const action = nextCertAction(domain.status as CertEligibleStatus, flyCert);
+    const nextStatus = certActionToDbStatus(action);
+
     await db
       .update(customDomains)
       .set({ status: nextStatus })
@@ -65,12 +70,17 @@ export async function POST(
       userId: auth.userId,
       resourceType: 'drive',
       resourceId: driveId,
-      details: { operation: 'verify-custom-domain', hostname: domain.hostname, status: nextStatus },
+      details: {
+        operation: 'cert-refresh',
+        hostname: domain.hostname,
+        action: action.action,
+        status: nextStatus,
+      },
     });
 
-    return NextResponse.json({ verified: result.verified, status: nextStatus, reason: result.reason });
+    return NextResponse.json({ status: nextStatus, action: action.action });
   } catch (error) {
-    loggers.api.error('Error verifying custom domain:', error as Error);
-    return NextResponse.json({ error: 'Failed to verify domain' }, { status: 500 });
+    loggers.api.error('Error refreshing cert:', error as Error);
+    return NextResponse.json({ error: 'Failed to refresh cert' }, { status: 500 });
   }
 }

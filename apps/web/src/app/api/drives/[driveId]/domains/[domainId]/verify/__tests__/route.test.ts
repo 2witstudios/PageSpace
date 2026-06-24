@@ -139,7 +139,7 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/verify', () => {
     expect(body.status).toBe('verified');
   });
 
-  it('returns verified:false and status:failed when DNS does not match', async () => {
+  it('returns verified:false and status:dns_failed when DNS does not match', async () => {
     setupSelectReturning([APEX_DOMAIN]);
     verifyDnsRecords.mockReturnValue({ verified: false, reason: 'No A records found for acme.com' });
 
@@ -147,7 +147,7 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/verify', () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.verified).toBe(false);
-    expect(body.status).toBe('failed');
+    expect(body.status).toBe('dns_failed');
     expect(body.reason).toMatch(/No A records/);
   });
 
@@ -161,14 +161,14 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/verify', () => {
     expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'verified' }));
   });
 
-  it('updates status to failed in the DB on mismatch', async () => {
+  it('updates status to dns_failed in the DB on mismatch', async () => {
     setupSelectReturning([APEX_DOMAIN]);
     verifyDnsRecords.mockReturnValue({ verified: false, reason: 'No A records' });
     const setMock = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) });
     dbUpdate.mockReturnValue({ set: setMock });
 
     await POST(makeReq(), ctx());
-    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }));
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'dns_failed' }));
   });
 
   it('calls auditRequest on verify', async () => {
