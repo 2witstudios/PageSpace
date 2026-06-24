@@ -53,14 +53,18 @@ vi.mock('@pagespace/lib/sheets/sheet', () => ({
   updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),
 }));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-    api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
-    security: { warn: vi.fn() },
-  },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
-}));
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  const childLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  const namedLogger = { ...childLogger, child: vi.fn(() => childLogger) };
+  return {
+    loggers: {
+      api: namedLogger,
+      security: { warn: vi.fn() },
+      ai: namedLogger,
+    },
+    logger: { child: vi.fn(() => childLogger) },
+  };
+});
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
@@ -86,9 +90,23 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  asc: vi.fn(),
+  and: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskLists: { pageId: 'taskLists.pageId' },
+  taskStatusConfigs: { taskListId: 'taskStatusConfigs.taskListId', position: 'taskStatusConfigs.position' },
+  DEFAULT_TASK_STATUSES: [],
+}));
+vi.mock('@/lib/ai/tools/task-helpers', () => ({
+  fetchEnrichedTasks: vi.fn().mockResolvedValue([]),
+  serializeTaskItem: vi.fn((t: unknown) => t),
+}));
+vi.mock('@/services/api/task-sync-service', () => ({
+  backfillMissingTaskItems: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@/lib/websocket', () => ({

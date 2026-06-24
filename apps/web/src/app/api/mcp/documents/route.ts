@@ -243,7 +243,7 @@ export async function POST(req: NextRequest) {
             pageTitle: page.title,
             pageType: 'TASK_LIST',
             taskListId: taskList.id,
-            tasks: tasks.map(serializeTaskItem),
+            tasks: tasks.map(t => serializeTaskItem(t)),
             availableStatuses,
             progress: {
               total: totalTasks,
