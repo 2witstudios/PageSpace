@@ -14,7 +14,7 @@ const MAX_LABEL_LENGTH = 63;
 const MAX_HOSTNAME_LENGTH = 253;
 
 /** Valid DNS label pattern: alphanumeric, may contain hyphens (not leading/trailing). */
-const LABEL_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$|^[a-z0-9]$/;
+const LABEL_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 
 /** Platform-owned domains that may never be used as custom domains. */
 const BLOCKED_SUFFIXES = ['pagespace.ai', 'pagespace.site'];

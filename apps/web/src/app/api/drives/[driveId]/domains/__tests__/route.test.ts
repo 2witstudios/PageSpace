@@ -168,9 +168,10 @@ describe('POST /api/drives/[driveId]/domains', () => {
   });
 
   it('returns 409 when hostname is already registered', async () => {
+    const uniqueErr = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
     dbInsert.mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockRejectedValue(new Error('unique constraint violation')),
+        returning: vi.fn().mockRejectedValue(uniqueErr),
       }),
     });
     const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());

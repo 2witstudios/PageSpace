@@ -91,16 +91,12 @@ export async function POST(
 
       return NextResponse.json({ domain: inserted }, { status: 201 });
     } catch (err) {
-      // Unique constraint violation → duplicate hostname
-      if (err instanceof Error && err.message.includes('unique')) {
+      if ((err as { code?: string }).code === '23505') {
         return NextResponse.json({ error: 'Domain is already registered' }, { status: 409 });
       }
       throw err;
     }
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
-    }
     loggers.api.error('Error adding custom domain:', error as Error);
     return NextResponse.json({ error: 'Failed to add domain' }, { status: 500 });
   }

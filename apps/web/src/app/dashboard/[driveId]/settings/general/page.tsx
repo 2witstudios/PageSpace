@@ -354,7 +354,6 @@ export default function GeneralSettingsPage() {
       </Card>
 
       <CustomDomainsCard
-        driveId={driveId}
         domains={domainsData?.domains ?? []}
         newDomain={newDomain}
         onNewDomainChange={setNewDomain}
@@ -370,7 +369,6 @@ export default function GeneralSettingsPage() {
 // ── Custom Domains Card ───────────────────────────────────────────────────────
 
 interface CustomDomainsCardProps {
-  driveId: string;
   domains: CustomDomain[];
   newDomain: string;
   onNewDomainChange: (v: string) => void;
@@ -384,15 +382,7 @@ const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
 const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
 const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
 
-function CustomDomainsCard({
-  domains,
-  newDomain,
-  onNewDomainChange,
-  onAdd,
-  onRemove,
-  isAdding,
-  removingId,
-}: CustomDomainsCardProps) {
+function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRemove, isAdding, removingId }: CustomDomainsCardProps) {
   return (
     <Card>
       <CardHeader>
