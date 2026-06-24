@@ -105,6 +105,12 @@ export async function GET(
 
   const userId = auth.userId;
 
+  // ls-mode query params
+  const { searchParams } = new URL(request.url);
+  const lsMode = searchParams.get('ls') === 'true';
+  const lsParentId = searchParams.get('parentId') ?? null;
+  const lsRecursive = searchParams.get('recursive') === 'true';
+
   try {
     // Find drive by id, but don't scope to owner yet
     const drive = await db.query.drives.findFirst({
@@ -174,6 +180,98 @@ export async function GET(
         eq(pages.driveId, drive.id)
       ));
     const taskLinkedSet = new Set(taskLinkedPageIds.map(t => t.pageId));
+
+    // ── ls-mode: flat list of direct children (or full subtree) ──────────────
+    if (lsMode) {
+      const pageMap = new Map(pageResults.map(p => [p.id, p]));
+
+      // Use !== null so empty-string parentId (from ?parentId=) is caught, not treated as root
+      if (lsParentId !== null && !pageMap.has(lsParentId)) {
+        return NextResponse.json({ error: 'parentId not found or not accessible' }, { status: 404 });
+      }
+
+      // Walk parent chain to build breadcrumb — visited set guards against corrupt cycles
+      const buildBreadcrumb = (id: string | null): { id: string; title: string }[] => {
+        if (!id) return [];
+        const crumbs: { id: string; title: string }[] = [];
+        const visited = new Set<string>();
+        let current = pageMap.get(id);
+        while (current) {
+          if (visited.has(current.id)) break;
+          visited.add(current.id);
+          crumbs.unshift({ id: current.id, title: current.title });
+          current = current.parentId ? pageMap.get(current.parentId) : undefined;
+        }
+        return crumbs;
+      };
+
+      const buildLocation = (id: string | null, visited = new Set<string>()): string => {
+        if (!id) return `/${drive.slug}`;
+        if (visited.has(id)) return `/${drive.slug}`;
+        visited.add(id);
+        const page = pageMap.get(id);
+        if (!page) return `/${drive.slug}`;
+        return `${buildLocation(page.parentId, visited)}/${page.title}`;
+      };
+
+      interface LsPage {
+        id: string;
+        title: string;
+        type: string;
+        hasChildren: boolean;
+        isTaskLinked: boolean;
+      }
+
+      let resultPages: LsPage[];
+
+      if (!lsRecursive) {
+        const children = pageResults.filter(p => p.parentId === lsParentId);
+        resultPages = children.map(p => ({
+          id: p.id,
+          title: p.title,
+          type: p.type,
+          hasChildren: pageResults.some(c => c.parentId === p.id),
+          isTaskLinked: taskLinkedSet.has(p.id),
+        }));
+      } else {
+        const collectSubtree = (startParentId: string | null, visited = new Set<string>()): LsPage[] => {
+          const result: LsPage[] = [];
+          if (startParentId !== null) {
+            if (visited.has(startParentId)) return result;
+            visited.add(startParentId);
+          }
+          const children = pageResults.filter(p => p.parentId === startParentId);
+          for (const p of children) {
+            result.push({
+              id: p.id,
+              title: p.title,
+              type: p.type,
+              hasChildren: pageResults.some(c => c.parentId === p.id),
+              isTaskLinked: taskLinkedSet.has(p.id),
+            });
+            result.push(...collectSubtree(p.id, visited));
+          }
+          return result;
+        };
+        resultPages = collectSubtree(lsParentId);
+      }
+
+      const breadcrumb = buildBreadcrumb(lsParentId);
+      const location = lsParentId ? buildLocation(lsParentId) : `/${drive.slug}`;
+
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_page_tree', resourceId: driveId, details: { action: 'list_pages_ls', count: resultPages.length } });
+      return jsonResponse({
+        mode: 'ls',
+        driveName: drive.name,
+        driveSlug: drive.slug,
+        location,
+        breadcrumb,
+        pages: resultPages,
+        count: resultPages.length,
+        totalInDrive: pageResults.length,
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // Query activity logs to find pages with changes by OTHER users or AI since last view
     // This is more accurate than comparing updatedAt because:
