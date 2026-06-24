@@ -92,7 +92,6 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   asc: vi.fn(),
   and: vi.fn(),
-  inArray: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, asc, and, inArray } from '@pagespace/db/operators'
+import { eq, asc, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpers';
