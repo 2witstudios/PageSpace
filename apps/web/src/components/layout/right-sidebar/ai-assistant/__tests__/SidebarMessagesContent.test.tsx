@@ -87,7 +87,7 @@ const noopHandlers = {
 const baseProps = {
   ...noopHandlers,
   assistantName: 'Global Assistant',
-  locationContext: null,
+  contextLabel: null,
   lastAssistantMessageId: undefined,
   lastUserMessageId: undefined,
   displayIsStreaming: false,

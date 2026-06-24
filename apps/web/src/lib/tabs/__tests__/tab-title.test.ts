@@ -70,6 +70,22 @@ describe('tab-title', () => {
       expect(result.driveId).toBe('drive-123');
     });
 
+    it('given drive files path, should return drive-files type', () => {
+      const result = parseTabPath('/dashboard/drive-123/files');
+
+      expect(result.type).toBe('drive-files');
+      expect(result.driveId).toBe('drive-123');
+      expect(result.pageId).toBeUndefined();
+    });
+
+    it('given drive workflows path, should return drive-workflows type', () => {
+      const result = parseTabPath('/dashboard/drive-123/workflows');
+
+      expect(result.type).toBe('drive-workflows');
+      expect(result.driveId).toBe('drive-123');
+      expect(result.pageId).toBeUndefined();
+    });
+
     it('given dms root, should return dms type', () => {
       const result = parseTabPath('/dashboard/dms');
 
@@ -432,6 +448,20 @@ describe('tab-title', () => {
 
       expect(meta!.title).toBe('Channels');
       expect(meta!.iconName).toBe('Hash');
+    });
+
+    it('given drive-files type, should return Files title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-files', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Files');
+      expect(meta!.iconName).toBe('Folder');
+    });
+
+    it('given drive-workflows type, should return Workflows title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-workflows', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Workflows');
+      expect(meta!.iconName).toBe('Workflow');
     });
 
     // Members sub-routes

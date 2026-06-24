@@ -18,6 +18,8 @@ export type PathType =
   | 'drive-trash'
   | 'drive-calendar'
   | 'drive-channels'
+  | 'drive-files'
+  | 'drive-workflows'
   // Global dashboard routes
   | 'dashboard-tasks'
   | 'dashboard-activity'
@@ -68,7 +70,7 @@ export interface TabMeta {
 const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'dms', 'channels', 'drives'] as const;
 
 // Drive-specific special routes
-const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'channels'] as const;
+const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'channels', 'files', 'workflows'] as const;
 
 export const parseTabPath = (path: string): ParsedPath => {
   const segments = path.split('/').filter(Boolean);
@@ -221,6 +223,8 @@ export const parseTabPath = (path: string): ParsedPath => {
       trash: 'drive-trash',
       calendar: 'drive-calendar',
       channels: 'drive-channels',
+      files: 'drive-files',
+      workflows: 'drive-workflows',
     };
     return {
       type: typeMap[thirdSegment],
@@ -311,6 +315,12 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
 
     case 'drive-channels':
       return { title: 'Channels', iconName: 'Hash' };
+
+    case 'drive-files':
+      return { title: 'Files', iconName: 'Folder' };
+
+    case 'drive-workflows':
+      return { title: 'Workflows', iconName: 'Workflow' };
 
     // Direct Messages + Channels routes
     case 'dms':

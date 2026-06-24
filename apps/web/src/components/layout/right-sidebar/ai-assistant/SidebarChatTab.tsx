@@ -32,6 +32,7 @@ import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
+import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
 import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery } from '@/lib/ai/shared';
@@ -56,7 +57,8 @@ const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
 export interface SidebarMessagesContentProps {
   messages: UIMessage[];
   assistantName: string;
-  locationContext: LocationContext | null;
+  /** Human-readable label for the current location, shown in the empty state. */
+  contextLabel: string | null;
   handleEdit: (messageId: string, newContent: string) => Promise<void>;
   handleDelete: (messageId: string) => Promise<void>;
   handleRetry: () => Promise<void>;
@@ -71,7 +73,7 @@ export interface SidebarMessagesContentProps {
 export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
   messages,
   assistantName,
-  locationContext,
+  contextLabel,
   handleEdit,
   handleDelete,
   handleRetry,
@@ -122,8 +124,8 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
           <div className="max-w-full px-2">
             <p className="font-medium truncate">{assistantName}</p>
             <p className="text-xs truncate">
-              {locationContext
-                ? `Context-aware help for ${locationContext.currentPage?.title || locationContext.currentDrive?.name}`
+              {contextLabel
+                ? `Context-aware help for ${contextLabel}`
                 : 'Ask me anything about your workspace'}
             </p>
           </div>
@@ -337,6 +339,7 @@ const SidebarChatTab: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [showError, setShowError] = useState(true);
   const [locationContext, setLocationContext] = useState<LocationContext | null>(null);
+  const [contextLabel, setContextLabel] = useState<string | null>(null);
   const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
   // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
@@ -386,102 +389,126 @@ const SidebarChatTab: React.FC = () => {
   // Effects: Location Context Extraction
   // ============================================
   useEffect(() => {
-    const extractLocationContext = async () => {
-      const pathParts = pathname.split('/').filter(Boolean);
+    // Capture the pathname this run is resolving for, so async branches can
+    // bail if the user navigated away before they completed.
+    const activePathname = pathname;
+    let ignore = false;
 
-      if (pathParts.length >= 2 && pathParts[0] === 'dashboard') {
-        const driveId = pathParts[1];
+    const resolveDrive = (driveId: string | undefined) => {
+      if (!driveId) return null;
+      const driveData = useDriveStore.getState().drives.find(d => d.id === driveId);
+      return driveData
+        ? { id: driveData.id, slug: driveData.slug, name: driveData.name }
+        : null;
+    };
 
+    const fetchPageContext = async (
+      pageId: string,
+      currentDrive: { id: string; slug: string; name: string } | null
+    ) => {
+      try {
+        const pageResponse = await fetchWithAuth(`/api/pages/${pageId}`);
+        if (!pageResponse.ok) return null;
+        const pageData = await pageResponse.json();
+
+        let path = `/${currentDrive?.slug}/${pageData.title}`;
         try {
-          let currentPage = null;
-          let currentDrive = null;
-
-          if (driveId) {
-            const currentDrives = useDriveStore.getState().drives;
-            const driveData = currentDrives.find(d => d.id === driveId);
-            if (driveData) {
-              currentDrive = {
-                id: driveData.id,
-                slug: driveData.slug,
-                name: driveData.name
-              };
-            }
+          const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
+          if (breadcrumbsResponse.ok) {
+            const breadcrumbsData = await breadcrumbsResponse.json();
+            const pathSegments = breadcrumbsData.map((crumb: { title: string }) => crumb.title);
+            path = `/${currentDrive?.slug}/${pathSegments.join('/')}`;
           }
-
-          if (pathParts.length > 2) {
-            const pageId = pathParts[2];
-
-            try {
-              const pageResponse = await fetchWithAuth(`/api/pages/${pageId}`);
-              if (pageResponse.ok) {
-                const pageData = await pageResponse.json();
-
-                try {
-                  const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
-                  if (breadcrumbsResponse.ok) {
-                    const breadcrumbsData = await breadcrumbsResponse.json();
-                    const pathSegments = breadcrumbsData.map((crumb: { title: string }) => crumb.title);
-                    const fullPath = `/${currentDrive?.slug}/${pathSegments.join('/')}`;
-
-                    currentPage = {
-                      id: pageData.id,
-                      title: pageData.title,
-                      type: pageData.type,
-                      path: fullPath
-                    };
-                  } else {
-                    currentPage = {
-                      id: pageData.id,
-                      title: pageData.title,
-                      type: pageData.type,
-                      path: `/${currentDrive?.slug}/${pageData.title}`
-                    };
-                  }
-                } catch {
-                  currentPage = {
-                    id: pageData.id,
-                    title: pageData.title,
-                    type: pageData.type,
-                    path: `/${currentDrive?.slug}/${pageData.title}`
-                  };
-                }
-              } else {
-                currentPage = {
-                  id: pageId,
-                  title: pathParts[pathParts.length - 1].replace(/-/g, ' '),
-                  type: 'DOCUMENT',
-                  path: `/${currentDrive?.slug}/${pathParts[pathParts.length - 1].replace(/-/g, ' ')}`
-                };
-              }
-            } catch {
-              currentPage = {
-                id: pageId,
-                title: pathParts[pathParts.length - 1].replace(/-/g, ' '),
-                type: 'DOCUMENT',
-                path: `/${currentDrive?.slug}/${pathParts[pathParts.length - 1].replace(/-/g, ' ')}`
-              };
-            }
-          }
-
-          const breadcrumbs = [];
-          if (currentDrive) {
-            breadcrumbs.push(currentDrive.name);
-          }
-          if (currentPage && currentPage.path) {
-            const pathParts = currentPage.path.split('/').filter(Boolean);
-            breadcrumbs.push(...pathParts.slice(1));
-          }
-
-          setLocationContext({ currentPage, currentDrive, breadcrumbs });
         } catch {
-          setLocationContext(null);
+          // Keep the simple path fallback.
         }
-      } else {
-        setLocationContext(null);
+
+        return {
+          id: pageData.id,
+          title: pageData.title,
+          type: pageData.type,
+          path,
+        };
+      } catch {
+        return null;
       }
     };
 
+    const extractLocationContext = async () => {
+      const parsed = parseTabPath(activePathname);
+
+      let label: string | null = null;
+      let currentPage: LocationContext['currentPage'] = null;
+      let currentDrive: LocationContext['currentDrive'] = null;
+
+      try {
+        switch (parsed.type) {
+          // Real page routes — fetch the page so the AI keeps page context.
+          case 'page':
+          case 'channel': {
+            currentDrive = parsed.type === 'page' ? resolveDrive(parsed.driveId) : null;
+            if (parsed.pageId) {
+              currentPage = await fetchPageContext(parsed.pageId, currentDrive);
+            }
+            label = currentPage?.title ?? getStaticTabMeta(parsed)?.title ?? null;
+            break;
+          }
+
+          // A whole drive — use the drive name from the store.
+          case 'drive': {
+            currentDrive = resolveDrive(parsed.driveId);
+            label = currentDrive?.name ?? null;
+            break;
+          }
+
+          // A specific DM — show the other person's name (DMs are not pages).
+          case 'dm': {
+            if (parsed.conversationId) {
+              try {
+                const res = await fetchWithAuth(`/api/messages/conversations/${parsed.conversationId}`);
+                if (res.ok) {
+                  const data = await res.json();
+                  const otherUser = data?.conversation?.otherUser;
+                  label = otherUser?.displayName || otherUser?.name || null;
+                }
+              } catch {
+                // Fall through to the generic DM label below.
+              }
+            }
+            if (!label) label = 'Direct Message';
+            break;
+          }
+
+          // Everything else with a known static title (dms, channels, tasks,
+          // calendar, files/drives, activity, drive-scoped variants, …).
+          default: {
+            label = getStaticTabMeta(parsed)?.title ?? null;
+            break;
+          }
+        }
+      } catch {
+        label = null;
+      }
+
+      if (ignore) return;
+
+      const breadcrumbs: string[] = [];
+      if (currentDrive) breadcrumbs.push(currentDrive.name);
+      if (currentPage?.path) {
+        breadcrumbs.push(...currentPage.path.split('/').filter(Boolean).slice(1));
+      }
+
+      setContextLabel(label);
+      setLocationContext(
+        currentPage || currentDrive ? { currentPage, currentDrive, breadcrumbs } : null
+      );
+    };
+
     extractLocationContext();
+
+    return () => {
+      ignore = true;
+    };
   }, [pathname]);
 
   // ============================================
@@ -1050,7 +1077,7 @@ const SidebarChatTab: React.FC = () => {
             <SidebarMessagesContent
               messages={displayMessages}
               assistantName={assistantName}
-              locationContext={locationContext}
+              contextLabel={contextLabel}
               handleEdit={handleEdit}
               handleDelete={handleDelete}
               handleRetry={handleRetry}
@@ -1106,9 +1133,7 @@ const SidebarChatTab: React.FC = () => {
           onSend={handleSendMessage}
           onStop={handleStop}
           isStreaming={displayIsStreaming}
-          placeholder={locationContext
-            ? `Ask about ${locationContext.currentPage?.title || 'this page'}...`
-            : 'Ask about your workspace...'}
+          placeholder={`Ask about ${contextLabel ?? 'your workspace'}...`}
           driveId={locationContext?.currentDrive?.id}
           crossDrive={true}
           hideModelSelector={true}
