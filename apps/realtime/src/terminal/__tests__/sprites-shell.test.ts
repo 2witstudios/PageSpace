@@ -49,7 +49,7 @@ describe('openPtyShell', () => {
 
     openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
 
-    expect(sprite.spawn).toHaveBeenCalledWith('bash', [], { tty: true, cols: 80, rows: 24 });
+    expect(sprite.spawn).toHaveBeenCalledWith('bash', [], { tty: true, cols: 80, rows: 24, cwd: '/workspace' });
   });
 
   it('given sprite emits stdout data, should call onOutput with the string', () => {
