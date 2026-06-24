@@ -526,6 +526,16 @@ describe('GET /api/drives/[driveId]/pages', () => {
       expect(body.error).toContain('parentId');
     });
 
+    it('should return 404 for empty-string parentId (not treated as root)', async () => {
+      const url = new URL(`https://example.com/api/drives/${mockDriveId}/pages`);
+      url.searchParams.set('ls', 'true');
+      url.searchParams.set('parentId', '');
+      const response = await GET(new Request(url.toString()) as never, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+    });
+
     it('should return full subtree when recursive=true', async () => {
       const response = await GET(
         createLsRequest(mockDriveId, { recursive: 'true' }) as never,

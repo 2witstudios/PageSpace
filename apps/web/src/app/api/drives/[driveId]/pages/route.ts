@@ -185,27 +185,33 @@ export async function GET(
     if (lsMode) {
       const pageMap = new Map(pageResults.map(p => [p.id, p]));
 
-      if (lsParentId && !pageMap.has(lsParentId)) {
+      // Use !== null so empty-string parentId (from ?parentId=) is caught, not treated as root
+      if (lsParentId !== null && !pageMap.has(lsParentId)) {
         return NextResponse.json({ error: 'parentId not found or not accessible' }, { status: 404 });
       }
 
-      // Walk parent chain to build breadcrumb and location string
+      // Walk parent chain to build breadcrumb — visited set guards against corrupt cycles
       const buildBreadcrumb = (id: string | null): { id: string; title: string }[] => {
         if (!id) return [];
         const crumbs: { id: string; title: string }[] = [];
+        const visited = new Set<string>();
         let current = pageMap.get(id);
         while (current) {
+          if (visited.has(current.id)) break;
+          visited.add(current.id);
           crumbs.unshift({ id: current.id, title: current.title });
           current = current.parentId ? pageMap.get(current.parentId) : undefined;
         }
         return crumbs;
       };
 
-      const buildLocation = (id: string | null): string => {
+      const buildLocation = (id: string | null, visited = new Set<string>()): string => {
         if (!id) return `/${drive.slug}`;
+        if (visited.has(id)) return `/${drive.slug}`;
+        visited.add(id);
         const page = pageMap.get(id);
         if (!page) return `/${drive.slug}`;
-        return `${buildLocation(page.parentId)}/${page.title}`;
+        return `${buildLocation(page.parentId, visited)}/${page.title}`;
       };
 
       interface LsPage {
@@ -219,8 +225,7 @@ export async function GET(
       let resultPages: LsPage[];
 
       if (!lsRecursive) {
-        const target = lsParentId ?? null;
-        const children = pageResults.filter(p => p.parentId === target);
+        const children = pageResults.filter(p => p.parentId === lsParentId);
         resultPages = children.map(p => ({
           id: p.id,
           title: p.title,
@@ -229,8 +234,12 @@ export async function GET(
           isTaskLinked: taskLinkedSet.has(p.id),
         }));
       } else {
-        const collectSubtree = (startParentId: string | null): LsPage[] => {
+        const collectSubtree = (startParentId: string | null, visited = new Set<string>()): LsPage[] => {
           const result: LsPage[] = [];
+          if (startParentId !== null) {
+            if (visited.has(startParentId)) return result;
+            visited.add(startParentId);
+          }
           const children = pageResults.filter(p => p.parentId === startParentId);
           for (const p of children) {
             result.push({
@@ -240,11 +249,11 @@ export async function GET(
               hasChildren: pageResults.some(c => c.parentId === p.id),
               isTaskLinked: taskLinkedSet.has(p.id),
             });
-            result.push(...collectSubtree(p.id));
+            result.push(...collectSubtree(p.id, visited));
           }
           return result;
         };
-        resultPages = collectSubtree(lsParentId ?? null);
+        resultPages = collectSubtree(lsParentId);
       }
 
       const breadcrumb = buildBreadcrumb(lsParentId);
