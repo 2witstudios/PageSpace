@@ -10,6 +10,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
+import { clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -36,6 +37,18 @@ export async function DELETE(
 
     if (!deleted) {
       return NextResponse.json({ error: 'Domain not found' }, { status: 404 });
+    }
+
+    // Wipe all artifacts under this host's prefix so stale content is not
+    // served if the domain is re-added later or pointed elsewhere. Best-effort:
+    // a storage failure does not block the successful domain removal.
+    if (deleted.status === 'active') {
+      clearCustomHost(deleted.hostname).catch((err) => {
+        loggers.api.warn('Failed to clear custom host artifacts after domain removal', {
+          hostname: deleted.hostname,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
 
     auditRequest(request, {

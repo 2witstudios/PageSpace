@@ -23,6 +23,7 @@ import {
 } from './published-storage';
 import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMeta } from './asset-pipeline';
 import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml } from '@pagespace/lib/canvas/site-files';
+import { mirrorPublishedPageToHosts, mirror404ToHosts } from './custom-domain-mirror';
 
 export const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
@@ -314,6 +315,14 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // The next publish/unpublish regenerates them.
   await regeneratePublishedSiteFiles(driveId);
 
+  // ------------------------------------------------------------------
+  // 11. Mirror artifacts to active custom-domain host prefixes (best-effort)
+  // ------------------------------------------------------------------
+  // For every active custom domain on this drive, copy the newly-written
+  // subdomain artifacts (slug + root when home page) to the matching host
+  // prefix so Caddy can serve them there immediately.
+  await mirrorPublishedPageToHosts({ driveId, subdomain, path, isHomePage });
+
   // The home page's primary public URL is the subdomain root (matching the
   // canonical tag baked above); it is also reachable at its slug. Other pages
   // live only at their slug.
@@ -402,6 +411,11 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
       putPublishedSiteFile({ subdomain, file: 'sitemap.xml', body: sitemapXml }),
       putPublishedSiteFile({ subdomain, file: '404.html', body: notFoundHtml }),
     ]);
+
+    // Mirror the 404.html to every active custom-domain host so unknown paths
+    // render the branded not-found page there too. Best-effort (errors logged
+    // internally by mirror404ToHosts).
+    await mirror404ToHosts(driveId, subdomain);
   } catch (err) {
     loggers.api.warn('Failed to regenerate published site files', {
       driveId,

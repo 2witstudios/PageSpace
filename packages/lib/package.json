@@ -647,6 +647,11 @@
       "import": "./dist/canvas/site-files.js",
       "require": "./dist/canvas/site-files.js"
     },
+    "./canvas/custom-domain-mirror": {
+      "types": "./dist/canvas/custom-domain-mirror.d.ts",
+      "import": "./dist/canvas/custom-domain-mirror.js",
+      "require": "./dist/canvas/custom-domain-mirror.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -1340,6 +1345,9 @@
       ],
       "canvas/site-files": [
         "./dist/canvas/site-files.d.ts"
+      ],
+      "canvas/custom-domain-mirror": [
+        "./dist/canvas/custom-domain-mirror.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"

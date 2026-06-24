@@ -13,6 +13,7 @@ import { addCertificate } from '@/lib/fly/certs';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
+import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -64,6 +65,20 @@ export async function POST(
       .update(customDomains)
       .set({ status: nextStatus })
       .where(eq(customDomains.id, domainId));
+
+    // When the cert is freshly provisioned and the domain just became active,
+    // backfill all currently-published artifacts to the custom-host prefix so
+    // the site is immediately ready to serve. Best-effort: failure does not
+    // roll back the status update.
+    if (nextStatus === 'active' && domain.status !== 'active') {
+      mirrorDriveToCustomHost(driveId, domain.hostname).catch((err) => {
+        loggers.api.warn('Failed to backfill artifacts after cert activation', {
+          driveId,
+          hostname: domain.hostname,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
 
     auditRequest(request, {
       eventType: 'data.write',
