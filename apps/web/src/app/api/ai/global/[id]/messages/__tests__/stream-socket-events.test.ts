@@ -529,10 +529,11 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
 
       await POST(makeRequest(), makeContext());
 
+      // extractMessageContent is mocked to return 'test content'; title is sliced from it.
       expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          conversation: expect.objectContaining({ title: 'Hello' }),
+          conversation: expect.objectContaining({ title: 'test content' }),
         }),
       );
     });
