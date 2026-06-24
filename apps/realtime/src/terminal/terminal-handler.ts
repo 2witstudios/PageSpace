@@ -135,7 +135,7 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
           clearInterval(reAuthInterval);
           if (liveSession.idleTimer !== undefined) clearTimeout(liveSession.idleTimer);
           liveSession.releaseSlot();
-          liveSession.command.kill('SIGKILL');
+          liveSession.command.kill();
           sessionMap.deleteByKey(sessionKey);
           liveSession.closedFn(-2);
         } else {
@@ -180,7 +180,7 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
       session.idleTimer = setTimeout(() => {
         if (session.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
         session.releaseSlot();
-        session.command.kill('SIGKILL');
+        session.command.kill();
         sessionMap.deleteByKey(sessionKey);
         loggers.realtime.info('Terminal session reaped (idle)', { sessionKey, sandboxId: session.sandboxId });
       }, DETACHED_IDLE_MS);

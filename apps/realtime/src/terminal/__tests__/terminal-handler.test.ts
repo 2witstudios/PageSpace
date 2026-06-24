@@ -123,7 +123,7 @@ describe('buildTerminalHandlers', () => {
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(shell.kill).toHaveBeenCalledWith();
       expect(sessionMap.getByKey('key1')).toBeUndefined();
       expect(socket.emit).toHaveBeenCalledWith('terminal:closed', { exitCode: -2 });
     });
@@ -266,7 +266,7 @@ describe('buildTerminalHandlers', () => {
       onDisconnect();
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
 
-      expect(shell.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(shell.kill).toHaveBeenCalledWith();
       expect(auth.releaseSlot).toHaveBeenCalled();
       expect(sessionMap.getByKey('key1')).toBeUndefined();
     });
