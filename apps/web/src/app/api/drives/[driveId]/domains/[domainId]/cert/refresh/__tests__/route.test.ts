@@ -87,7 +87,9 @@ const VERIFIED_DOMAIN = {
 const PROVISIONING_DOMAIN = { ...VERIFIED_DOMAIN, status: 'provisioning' };
 const ACTIVE_DOMAIN = { ...VERIFIED_DOMAIN, status: 'active' };
 const PENDING_DOMAIN = { ...VERIFIED_DOMAIN, status: 'pending' };
-const FAILED_DOMAIN = { ...VERIFIED_DOMAIN, status: 'failed' };
+const DNS_FAILED_DOMAIN = { ...VERIFIED_DOMAIN, status: 'dns_failed' };
+const CERT_FAILED_DOMAIN = { ...VERIFIED_DOMAIN, status: 'cert_failed' };
+const LEGACY_FAILED_DOMAIN = { ...VERIFIED_DOMAIN, status: 'failed' };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -132,8 +134,14 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
     expect(body.error).toMatch(/DNS/i);
   });
 
-  it('returns 409 when domain status is failed (DNS not verified)', async () => {
-    setupSelectReturning([FAILED_DOMAIN]);
+  it('returns 409 when domain status is dns_failed (DNS not verified)', async () => {
+    setupSelectReturning([DNS_FAILED_DOMAIN]);
+    const res = await POST(makeReq(), ctx());
+    expect(res.status).toBe(409);
+  });
+
+  it('returns 409 when domain status is failed (legacy DNS failure)', async () => {
+    setupSelectReturning([LEGACY_FAILED_DOMAIN]);
     const res = await POST(makeReq(), ctx());
     expect(res.status).toBe(409);
   });
@@ -182,7 +190,7 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
       expect(body.status).toBe('active');
     });
 
-    it('sets status to failed when Fly returns an error', async () => {
+    it('sets status to cert_failed when Fly returns an error', async () => {
       setupSelectReturning([VERIFIED_DOMAIN]);
       addCertificate.mockResolvedValue({ ok: false, error: 'Fly API timeout' });
       const setMock = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) });
@@ -191,7 +199,7 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
       const res = await POST(makeReq(), ctx());
       expect(res.status).toBe(200);
       const body = await res.json() as { status: string };
-      expect(body.status).toBe('failed');
+      expect(body.status).toBe('cert_failed');
     });
   });
 
@@ -214,6 +222,28 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
       expect(res.status).toBe(200);
       const body = await res.json() as { status: string };
       expect(body.status).toBe('provisioning');
+    });
+  });
+
+  describe('cert_failed domain → retry provision', () => {
+    it('allows retry from cert_failed status (eligible for cert provisioning)', async () => {
+      setupSelectReturning([CERT_FAILED_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: false });
+
+      const res = await POST(makeReq(), ctx());
+      expect(res.status).toBe(200);
+      const body = await res.json() as { status: string };
+      expect(body.status).toBe('provisioning');
+    });
+
+    it('sets status to active when cert is now configured on retry', async () => {
+      setupSelectReturning([CERT_FAILED_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+      const res = await POST(makeReq(), ctx());
+      expect(res.status).toBe(200);
+      const body = await res.json() as { status: string };
+      expect(body.status).toBe('active');
     });
   });
 

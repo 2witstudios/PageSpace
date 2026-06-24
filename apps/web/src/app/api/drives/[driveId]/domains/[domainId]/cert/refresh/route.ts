@@ -7,7 +7,7 @@ import {
 } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { nextCertAction, certActionToDbStatus } from '@pagespace/lib/canvas/cert-action';
+import { nextCertAction, certActionToDbStatus, isCertEligible } from '@pagespace/lib/canvas/cert-action';
 import type { CertEligibleStatus } from '@pagespace/lib/canvas/cert-action';
 import { addCertificate } from '@/lib/fly/certs';
 import { db } from '@pagespace/db/db';
@@ -17,8 +17,6 @@ import { customDomains } from '@pagespace/db/schema/custom-domains';
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 const FLY_APP_NAME = process.env.FLY_PROXY_APP_NAME ?? 'pagespace-proxy';
-
-const CERT_ELIGIBLE: ReadonlySet<string> = new Set(['verified', 'provisioning', 'active']);
 
 export async function POST(
   request: Request,
@@ -45,7 +43,7 @@ export async function POST(
       return NextResponse.json({ error: 'Domain not found' }, { status: 404 });
     }
 
-    if (!CERT_ELIGIBLE.has(domain.status)) {
+    if (!isCertEligible(domain.status)) {
       return NextResponse.json(
         { error: 'Domain must be DNS-verified before provisioning a cert (verify DNS first)' },
         { status: 409 },

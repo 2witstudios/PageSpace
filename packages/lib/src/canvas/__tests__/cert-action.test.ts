@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { nextCertAction } from '../cert-action';
-import type { FlyCertResponse, CertActionStatus } from '../cert-action';
+import { nextCertAction, certActionToDbStatus, isCertEligible } from '../cert-action';
+import type { FlyCertResponse } from '../cert-action';
 
 const ok = (configured: boolean): FlyCertResponse => ({ ok: true, configured });
 const err = (error: string): FlyCertResponse => ({ ok: false, error });
@@ -14,6 +14,18 @@ describe('nextCertAction', () => {
 
     it('returns mark-active when domain is verified and cert already configured', () => {
       const action = nextCertAction('verified', ok(true));
+      expect(action.action).toBe('mark-active');
+    });
+  });
+
+  describe('cert_failed → retry provision', () => {
+    it('returns provision when domain is cert_failed and cert not yet configured', () => {
+      const action = nextCertAction('cert_failed', ok(false));
+      expect(action.action).toBe('provision');
+    });
+
+    it('returns mark-active when domain is cert_failed and cert is now configured', () => {
+      const action = nextCertAction('cert_failed', ok(true));
       expect(action.action).toBe('mark-active');
     });
   });
@@ -69,40 +81,30 @@ describe('nextCertAction', () => {
   });
 });
 
-describe('nextCertAction DB status mapping', () => {
+describe('certActionToDbStatus', () => {
   it('provision action maps to provisioning DB status', () => {
-    const action = nextCertAction('verified', ok(false));
-    expect(action.action).toBe('provision');
-    // The caller is responsible for mapping provision → 'provisioning' in the DB
-    // But let's verify the nextDbStatus helper works correctly
-    const status = certActionToStatus(action.action);
-    expect(status).toBe('provisioning');
-  });
-
-  it('mark-active action maps to active DB status', () => {
-    const action = nextCertAction('verified', ok(true));
-    expect(certActionToStatus(action.action)).toBe('active');
-  });
-
-  it('mark-failed action maps to failed DB status', () => {
-    const action = nextCertAction('verified', err('boom'));
-    expect(certActionToStatus(action.action)).toBe('failed');
+    expect(certActionToDbStatus({ action: 'provision' })).toBe('provisioning');
   });
 
   it('poll-again action maps to provisioning DB status', () => {
-    const action = nextCertAction('provisioning', ok(false));
-    expect(certActionToStatus(action.action)).toBe('provisioning');
+    expect(certActionToDbStatus({ action: 'poll-again' })).toBe('provisioning');
+  });
+
+  it('mark-active action maps to active DB status', () => {
+    expect(certActionToDbStatus({ action: 'mark-active' })).toBe('active');
+  });
+
+  it('mark-failed action maps to cert_failed DB status', () => {
+    expect(certActionToDbStatus({ action: 'mark-failed', reason: 'boom' })).toBe('cert_failed');
   });
 });
 
-function certActionToStatus(action: CertActionStatus): 'provisioning' | 'active' | 'failed' {
-  switch (action) {
-    case 'provision':
-    case 'poll-again':
-      return 'provisioning';
-    case 'mark-active':
-      return 'active';
-    case 'mark-failed':
-      return 'failed';
-  }
-}
+describe('isCertEligible', () => {
+  it('returns true for verified', () => expect(isCertEligible('verified')).toBe(true));
+  it('returns true for provisioning', () => expect(isCertEligible('provisioning')).toBe(true));
+  it('returns true for active', () => expect(isCertEligible('active')).toBe(true));
+  it('returns true for cert_failed', () => expect(isCertEligible('cert_failed')).toBe(true));
+  it('returns false for pending', () => expect(isCertEligible('pending')).toBe(false));
+  it('returns false for dns_failed', () => expect(isCertEligible('dns_failed')).toBe(false));
+  it('returns false for failed (legacy)', () => expect(isCertEligible('failed')).toBe(false));
+});

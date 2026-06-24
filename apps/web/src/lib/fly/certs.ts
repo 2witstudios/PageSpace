@@ -24,15 +24,11 @@ const GET_CERTIFICATE_QUERY = `
   }
 `;
 
-function getToken(): string | null {
-  return process.env.FLY_API_TOKEN ?? null;
-}
-
 async function flyGraphQL<T>(
   query: string,
   variables: Record<string, string>,
 ): Promise<{ data: T } | { error: string }> {
-  const token = getToken();
+  const token = process.env.FLY_API_TOKEN ?? null;
   if (!token) {
     return { error: 'FLY_API_TOKEN is not configured' };
   }

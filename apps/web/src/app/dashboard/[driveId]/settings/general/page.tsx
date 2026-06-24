@@ -43,7 +43,7 @@ interface CustomDomain {
   id: string;
   driveId: string;
   hostname: string;
-  status: 'pending' | 'verified' | 'failed' | 'provisioning' | 'active';
+  status: 'pending' | 'verified' | 'failed' | 'dns_failed' | 'provisioning' | 'active' | 'cert_failed';
   createdAt: string;
 }
 
@@ -197,8 +197,8 @@ export default function GeneralSettingsPage() {
         toast.success('SSL certificate is active');
       } else if (data.status === 'provisioning') {
         toast.success('SSL cert provisioned — check back in a few minutes');
-      } else if (data.status === 'failed') {
-        toast.error('SSL provisioning failed — re-verify DNS or try again');
+      } else if (data.status === 'cert_failed') {
+        toast.error('SSL provisioning failed — click Retry SSL to try again');
       }
     } catch {
       toast.error('Failed to refresh cert status');
@@ -561,11 +561,27 @@ function DomainRow({
         </Badge>
       );
     }
+    if (domain.status === 'dns_failed') {
+      return (
+        <Badge variant="secondary" className="text-xs text-destructive gap-1">
+          <XCircle className="h-3 w-3" />
+          DNS Failed
+        </Badge>
+      );
+    }
+    if (domain.status === 'cert_failed') {
+      return (
+        <Badge variant="secondary" className="text-xs text-orange-600 gap-1">
+          <XCircle className="h-3 w-3" />
+          SSL Failed
+        </Badge>
+      );
+    }
     if (domain.status === 'failed') {
       return (
         <Badge variant="secondary" className="text-xs text-destructive gap-1">
           <XCircle className="h-3 w-3" />
-          Failed
+          DNS Failed
         </Badge>
       );
     }
@@ -576,8 +592,8 @@ function DomainRow({
     );
   };
 
-  const showVerifyButton = domain.status === 'pending' || domain.status === 'failed';
-  const showCertButton = domain.status === 'verified' || domain.status === 'provisioning';
+  const showVerifyButton = domain.status === 'pending' || domain.status === 'failed' || domain.status === 'dns_failed';
+  const showCertButton = domain.status === 'verified' || domain.status === 'provisioning' || domain.status === 'cert_failed';
 
   return (
     <div className="border rounded-md p-3 space-y-2">
@@ -602,7 +618,7 @@ function DomainRow({
               ) : (
                 <RefreshCw className="h-3 w-3 mr-1" />
               )}
-              {domain.status === 'failed' ? 'Re-check DNS' : 'Verify DNS'}
+              {(domain.status === 'failed' || domain.status === 'dns_failed') ? 'Re-check DNS' : 'Verify DNS'}
             </Button>
           )}
           {showCertButton && (
@@ -619,7 +635,7 @@ function DomainRow({
               ) : (
                 <Lock className="h-3 w-3 mr-1" />
               )}
-              {domain.status === 'provisioning' ? 'Check SSL' : 'Provision SSL'}
+              {domain.status === 'provisioning' ? 'Check SSL' : domain.status === 'cert_failed' ? 'Retry SSL' : 'Provision SSL'}
             </Button>
           )}
           <Button
@@ -643,7 +659,7 @@ function DomainRow({
         </div>
       </div>
 
-      {domain.status === 'failed' && verifyReason && (
+      {(domain.status === 'failed' || domain.status === 'dns_failed') && verifyReason && (
         <p className="text-xs text-destructive bg-destructive/5 rounded px-2 py-1">{verifyReason}</p>
       )}
 

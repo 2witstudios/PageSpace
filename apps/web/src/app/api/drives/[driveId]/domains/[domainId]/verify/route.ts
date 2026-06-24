@@ -54,7 +54,7 @@ export async function POST(
     const resolved = await resolveHostname(domain.hostname);
     const result = verifyDnsRecords({ hostname: domain.hostname, expected, resolved });
 
-    const nextStatus = result.verified ? 'verified' : 'failed';
+    const nextStatus = result.verified ? 'verified' : 'dns_failed';
     await db
       .update(customDomains)
       .set({ status: nextStatus })
