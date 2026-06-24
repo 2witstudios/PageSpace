@@ -112,7 +112,6 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/verify', () => {
 
   it('returns 403 when caller is not owner/admin', async () => {
     isPrincipalDriveOwnerOrAdmin.mockResolvedValue(false);
-    setupSelectReturning([APEX_DOMAIN]);
     const res = await POST(makeReq(), ctx());
     expect(res.status).toBe(403);
   });
