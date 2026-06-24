@@ -17,6 +17,7 @@ import type {
   ChatConversationAddedPayload,
   ChatConversationRenamedPayload,
   ChatConversationDeletedPayload,
+  ChatGlobalConversationAddedPayload,
 } from '@/lib/websocket/socket-utils';
 import type { UIMessage } from 'ai';
 
@@ -89,6 +90,12 @@ export interface UseChannelStreamSocketOptions {
    * `onConversationAdded`.
    */
   onConversationDeleted?: (payload: ChatConversationDeletedPayload) => void;
+  /**
+   * Fires when a new global (non-agent) conversation is created on the user's
+   * personal channel. No own-tab dedup — the history tab has no other signal
+   * and needs to update even when the conversation originated in this tab.
+   */
+  onGlobalConversationAdded?: (payload: ChatGlobalConversationAddedPayload) => void;
 }
 
 /** Subscribes a component to a channel's AI streaming lifecycle: DB-replay on mount, live socket events, SSE join, store cleanup on unmount. Pass `undefined` channelId to no-op. */
@@ -111,6 +118,7 @@ export function useChannelStreamSocket(
   const onConversationAddedRef = useRef(options?.onConversationAdded);
   const onConversationRenamedRef = useRef(options?.onConversationRenamed);
   const onConversationDeletedRef = useRef(options?.onConversationDeleted);
+  const onGlobalConversationAddedRef = useRef(options?.onGlobalConversationAdded);
   onStreamCompleteRef.current = options?.onStreamComplete;
   onOwnStreamBootstrapRef.current = options?.onOwnStreamBootstrap;
   onOwnStreamFinalizeRef.current = options?.onOwnStreamFinalize;
@@ -121,6 +129,7 @@ export function useChannelStreamSocket(
   onConversationAddedRef.current = options?.onConversationAdded;
   onConversationRenamedRef.current = options?.onConversationRenamed;
   onConversationDeletedRef.current = options?.onConversationDeleted;
+  onGlobalConversationAddedRef.current = options?.onGlobalConversationAdded;
 
   useEffect(() => {
     if (!socket || !channelId) return;
@@ -303,6 +312,12 @@ export function useChannelStreamSocket(
       onConversationDeletedRef.current?.(payload);
     };
 
+    const handleGlobalConversationAdded = (payload: ChatGlobalConversationAddedPayload) => {
+      // No own-session filter: the history tab must update even when the conversation
+      // was created in the current tab (it has no other signal).
+      onGlobalConversationAddedRef.current?.(payload);
+    };
+
     socket.on('chat:stream_start', handleStreamStart);
     socket.on('chat:stream_complete', handleStreamComplete);
     socket.on('chat:user_message', handleUserMessage);
@@ -312,6 +327,7 @@ export function useChannelStreamSocket(
     socket.on('chat:conversation_added', handleConversationAdded);
     socket.on('chat:conversation_renamed', handleConversationRenamed);
     socket.on('chat:conversation_deleted', handleConversationDeleted);
+    socket.on('chat:global_conversation_added', handleGlobalConversationAdded);
 
     return () => {
       cancelled = true;
@@ -324,6 +340,7 @@ export function useChannelStreamSocket(
       socket.off('chat:conversation_added', handleConversationAdded);
       socket.off('chat:conversation_renamed', handleConversationRenamed);
       socket.off('chat:conversation_deleted', handleConversationDeleted);
+      socket.off('chat:global_conversation_added', handleGlobalConversationAdded);
       for (const [msgId, controller] of controllers.entries()) {
         controller.abort();
         releaseBootstrapConsumer(msgId);

@@ -13,12 +13,14 @@ const {
   mockLifecyclePushPart,
   mockLifecycleFinish,
   mockBroadcastChatUserMessage,
+  mockBroadcastGlobalConversationAdded,
   mockSaveGlobalAssistantMessageToDatabase,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
+  mockBroadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
   mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -44,6 +46,10 @@ vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
 vi.mock('@/lib/websocket', () => ({
   broadcastCreditsEvent: vi.fn().mockResolvedValue(undefined),
   broadcastChatUserMessage: mockBroadcastChatUserMessage,
+}));
+
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastGlobalConversationAdded: mockBroadcastGlobalConversationAdded,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -123,7 +129,8 @@ vi.mock('@pagespace/db/operators', () => ({
 // the route tests don't have to wire up the conversations db mock for it.
 vi.mock('../resolve-or-create-conversation', () => ({
   resolveOrCreateConversation: vi.fn().mockResolvedValue({
-    id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true,
+    conversation: { id: 'conv-1', userId: 'user-1', title: 'Test Conversation', type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
+    isNew: false,
   }),
   ConversationOwnershipError: class ConversationOwnershipError extends Error {},
 }));
@@ -490,6 +497,52 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       mockBroadcastChatUserMessage.mockRejectedValueOnce(new Error('socket dead'));
 
       await expect(POST(makeRequest(), makeContext())).resolves.toBeDefined();
+    });
+  });
+
+  const newConv = {
+    id: 'conv-1', userId: 'user-1', title: null, type: 'global',
+    contextId: null, isActive: true, isShared: false,
+    createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
+  };
+
+  describe('global conversation-added broadcast', () => {
+    it('given isNew=true, should broadcast chat:global_conversation_added to the user channel', async () => {
+      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
+
+      await POST(makeRequest({ browserSessionId: 'session-z' }), makeContext());
+
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledTimes(1);
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledWith(
+        'user:user-1:global',
+        expect.objectContaining({
+          conversation: expect.objectContaining({ id: 'conv-1', type: 'global' }),
+          triggeredBy: expect.objectContaining({ userId: 'user-1', browserSessionId: 'session-z' }),
+        }),
+      );
+    });
+
+    it('given isNew=true and no prior title, broadcast carries the auto-generated title', async () => {
+      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
+
+      await POST(makeRequest(), makeContext());
+
+      // extractMessageContent is mocked to return 'test content'; title is sliced from it.
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          conversation: expect.objectContaining({ title: 'test content' }),
+        }),
+      );
+    });
+
+    it('given isNew=false, should NOT broadcast chat:global_conversation_added', async () => {
+      // default resolveOrCreateConversation mock returns isNew: false
+      await POST(makeRequest(), makeContext());
+
+      expect(mockBroadcastGlobalConversationAdded).not.toHaveBeenCalled();
     });
   });
 

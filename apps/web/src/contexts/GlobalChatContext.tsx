@@ -12,6 +12,7 @@ import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
+import type { ChatGlobalConversationAddedPayload } from '@/lib/websocket/socket-utils';
 import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
@@ -46,6 +47,8 @@ interface GlobalChatConversationContextValue {
   createNewConversation: () => Promise<void>;
   /** Re-runs the global channel bootstrap to rejoin any still-live own stream. */
   rejoinGlobalStream: () => void;
+  /** Most-recently received global conversation-added event (own-tab included). History surfaces watch this to prepend without a refresh. */
+  latestGlobalConversationAdded: ChatGlobalConversationAddedPayload | null;
 }
 
 interface GlobalChatStreamContextValue {
@@ -83,6 +86,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
+  const [latestGlobalConversationAdded, setLatestGlobalConversationAdded] = useState<ChatGlobalConversationAddedPayload | null>(null);
 
   // Protects bootstrap-replayed own streams from SWR clobbers while useChat
   // on the surface is still at idle (before it re-engages after a refresh).
@@ -100,12 +104,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         const messageData = await messagesResponse.json();
         const loadedMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
         setInitialMessages(loadedMessages);
-        setCurrentConversationId(conversationId);
-        conversationState.setActiveConversationId(conversationId);
-        setIsInitialized(true);
-      } else if (messagesResponse.status === 404) {
-        // Conversation not yet persisted (lazy creation) — treat as empty
-        setInitialMessages([]);
         setCurrentConversationId(conversationId);
         conversationState.setActiveConversationId(conversationId);
         setIsInitialized(true);
@@ -262,6 +260,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       setIsStreamingRef.current(false);
       setStopStreamingRef.current(null);
     },
+    onGlobalConversationAdded: (payload) => {
+      setLatestGlobalConversationAdded(payload);
+    },
   });
 
   const prevConversationIdRef = useRef<string | null>(null);
@@ -303,6 +304,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     loadConversation,
     createNewConversation,
     rejoinGlobalStream,
+    latestGlobalConversationAdded,
   }), [
     currentConversationId,
     initialMessages,
@@ -311,6 +313,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     loadConversation,
     createNewConversation,
     rejoinGlobalStream,
+    latestGlobalConversationAdded,
   ]);
 
   const streamContextValue: GlobalChatStreamContextValue = useMemo(() => ({

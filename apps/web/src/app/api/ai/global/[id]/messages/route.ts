@@ -13,6 +13,7 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
+import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
@@ -107,9 +108,13 @@ export async function GET(
       ));
 
     if (!conversation) {
-      return NextResponse.json({ 
-        error: 'Conversation not found' 
-      }, { status: 404 });
+      // Conversation not yet persisted (lazy creation) — return empty rather than 404
+      // so browsers don't log a network error for brand-new conversations.
+      // Use the same { messages, pagination } shape as the persisted-conversation path.
+      return NextResponse.json({
+        messages: [],
+        pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 50, direction: 'before' },
+      });
     }
 
     // Parse pagination parameters
@@ -248,8 +253,9 @@ export async function POST(
     // Resolve existing conversation or auto-create on first message (lazy creation).
     // Clients generate the ID locally; this is the point where the DB row is guaranteed.
     let conversation: typeof conversations.$inferSelect;
+    let conversationIsNew = false;
     try {
-      conversation = await resolveOrCreateConversation(userId, conversationId);
+      ({ conversation, isNew: conversationIsNew } = await resolveOrCreateConversation(userId, conversationId));
     } catch (e) {
       if (e instanceof ConversationOwnershipError) {
         return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
@@ -365,6 +371,10 @@ export async function POST(
     // token, if present. Resolution degrades, never fails.
     let commandPlan: CommandExecutionPlan | null = null;
     let commandSystemPrompt = '';
+    // Title resolved at save time (auto-generated from first user message when null).
+    // Used in the broadcastGlobalConversationAdded call below so the sidebar
+    // shows the real title rather than an empty string.
+    let resolvedConversationTitle = conversation.title ?? '';
 
     // Save user's message immediately to database
     const userMessage = requestMessages[requestMessages.length - 1];
@@ -435,6 +445,7 @@ export async function POST(
           // Auto-generate title from first user message
           const title = messageContent.slice(0, 50) + (messageContent.length > 50 ? '...' : '');
           updateData.title = title;
+          resolvedConversationTitle = title;
         }
 
         await db
@@ -955,6 +966,18 @@ MENTION PROCESSING:
     const authUserName = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
     const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
     const displayName = profileDisplayName ?? authUserName ?? 'Someone';
+
+    if (conversationIsNew) {
+      broadcastGlobalConversationAdded(channelId, {
+        conversation: {
+          id: conversation.id,
+          title: resolvedConversationTitle,
+          type: conversation.type,
+          createdAt: conversation.createdAt.toISOString(),
+        },
+        triggeredBy: { userId, displayName, browserSessionId },
+      }).catch(() => {});
+    }
 
     if (userMessage && userMessage.role === 'user') {
       broadcastChatUserMessage({

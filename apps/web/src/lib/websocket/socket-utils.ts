@@ -735,6 +735,16 @@ export interface ChatConversationAddedPayload {
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
+export interface ChatGlobalConversationAddedPayload {
+  conversation: {
+    id: string;
+    title: string;
+    type: string;
+    createdAt: string;
+  };
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+}
+
 export interface ChatConversationRenamedPayload {
   agentId: string;
   conversationId: string;
@@ -986,6 +996,46 @@ export async function broadcastAiConversationAdded(payload: ChatConversationAdde
       {
         event: 'chat:conversation_added',
         channel: maskIdentifier(payload.agentId),
+      }
+    );
+  }
+}
+
+export async function broadcastGlobalConversationAdded(
+  channelId: string,
+  payload: ChatGlobalConversationAddedPayload,
+): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping global conversation-added broadcast', {
+      event: 'chat:global_conversation_added',
+    });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({
+      channelId,
+      event: 'chat:global_conversation_added',
+      payload,
+    });
+
+    const response = await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      throw new Error(`Broadcast failed with status ${response.status}`);
+    }
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to broadcast global conversation-added',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'chat:global_conversation_added',
+        channel: maskIdentifier(channelId),
       }
     );
   }
