@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
+import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock } from 'lucide-react';
 import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
 import { usePageTree } from '@/hooks/usePageTree';
@@ -43,7 +43,7 @@ interface CustomDomain {
   id: string;
   driveId: string;
   hostname: string;
-  status: 'pending' | 'verified' | 'failed';
+  status: 'pending' | 'verified' | 'failed' | 'provisioning' | 'active';
   createdAt: string;
 }
 
@@ -71,6 +71,7 @@ export default function GeneralSettingsPage() {
   const [removingDomainId, setRemovingDomainId] = useState<string | null>(null);
   const [verifyingDomainId, setVerifyingDomainId] = useState<string | null>(null);
   const [verifyReasons, setVerifyReasons] = useState<Record<string, string | undefined>>({});
+  const [refreshingCertId, setRefreshingCertId] = useState<string | null>(null);
   const startEditing = useEditingStore((s) => s.startEditing);
   const endEditing = useEditingStore((s) => s.endEditing);
 
@@ -163,7 +164,8 @@ export default function GeneralSettingsPage() {
       setVerifyReasons((prev) => ({ ...prev, [domainId]: data.reason }));
       await mutateDomains();
       if (data.verified) {
-        toast.success('Domain verified');
+        toast.success('Domain verified — provisioning SSL cert…');
+        await handleRefreshCert(domainId);
       } else {
         toast.error(data.reason ?? 'DNS records not yet propagated');
       }
@@ -171,6 +173,37 @@ export default function GeneralSettingsPage() {
       toast.error('Failed to verify domain');
     } finally {
       setVerifyingDomainId(null);
+    }
+  };
+
+  const handleRefreshCert = async (domainId: string) => {
+    if (refreshingCertId) return;
+    setRefreshingCertId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}/cert/refresh`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({})) as { status?: string; error?: string };
+      if (!res.ok) {
+        if (res.status === 503) {
+          toast.error('SSL provisioning is not yet configured');
+        } else {
+          toast.error(data.error ?? 'Failed to refresh cert status');
+        }
+        return;
+      }
+      await mutateDomains();
+      if (data.status === 'active') {
+        toast.success('SSL certificate is active');
+      } else if (data.status === 'provisioning') {
+        toast.success('SSL cert provisioned — check back in a few minutes');
+      } else if (data.status === 'failed') {
+        toast.error('SSL provisioning failed — re-verify DNS or try again');
+      }
+    } catch {
+      toast.error('Failed to refresh cert status');
+    } finally {
+      setRefreshingCertId(null);
     }
   };
 
@@ -388,9 +421,11 @@ export default function GeneralSettingsPage() {
         onAdd={handleAddDomain}
         onRemove={handleRemoveDomain}
         onVerify={handleVerifyDomain}
+        onRefreshCert={handleRefreshCert}
         isAdding={isAddingDomain}
         removingId={removingDomainId}
         verifyingId={verifyingDomainId}
+        refreshingCertId={refreshingCertId}
         verifyReasons={verifyReasons}
       />
     </div>
@@ -406,9 +441,11 @@ interface CustomDomainsCardProps {
   onAdd: () => void;
   onRemove: (id: string) => void;
   onVerify: (id: string) => void;
+  onRefreshCert: (id: string) => void;
   isAdding: boolean;
   removingId: string | null;
   verifyingId: string | null;
+  refreshingCertId: string | null;
   verifyReasons: Record<string, string | undefined>;
 }
 
@@ -416,7 +453,7 @@ const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
 const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
 const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
 
-function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, isAdding, removingId, verifyingId, verifyReasons }: CustomDomainsCardProps) {
+function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, isAdding, removingId, verifyingId, refreshingCertId, verifyReasons }: CustomDomainsCardProps) {
   return (
     <Card>
       <CardHeader>
@@ -453,9 +490,11 @@ function CustomDomainsCard({ domains, newDomain, onNewDomainChange, onAdd, onRem
                 domain={domain}
                 onRemove={onRemove}
                 onVerify={onVerify}
+                onRefreshCert={onRefreshCert}
                 isRemoving={removingId === domain.id}
                 isVerifying={verifyingId === domain.id}
-                anyVerifying={verifyingId !== null}
+                isRefreshingCert={refreshingCertId === domain.id}
+                anyBusy={verifyingId !== null || refreshingCertId !== null}
                 verifyReason={verifyReasons[domain.id]}
               />
             ))}
@@ -472,17 +511,21 @@ function DomainRow({
   domain,
   onRemove,
   onVerify,
+  onRefreshCert,
   isRemoving,
   isVerifying,
-  anyVerifying,
+  isRefreshingCert,
+  anyBusy,
   verifyReason,
 }: {
   domain: CustomDomain;
   onRemove: (id: string) => void;
   onVerify: (id: string) => void;
+  onRefreshCert: (id: string) => void;
   isRemoving: boolean;
   isVerifying: boolean;
-  anyVerifying: boolean;
+  isRefreshingCert: boolean;
+  anyBusy: boolean;
   verifyReason: string | undefined;
 }) {
   const [showDns, setShowDns] = useState(false);
@@ -494,11 +537,27 @@ function DomainRow({
   });
 
   const statusBadge = () => {
+    if (domain.status === 'active') {
+      return (
+        <Badge variant="secondary" className="text-xs text-green-600 gap-1">
+          <Lock className="h-3 w-3" />
+          Active
+        </Badge>
+      );
+    }
+    if (domain.status === 'provisioning') {
+      return (
+        <Badge variant="secondary" className="text-xs gap-1">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Provisioning SSL
+        </Badge>
+      );
+    }
     if (domain.status === 'verified') {
       return (
         <Badge variant="secondary" className="text-xs text-green-600 gap-1">
           <CheckCircle2 className="h-3 w-3" />
-          Verified
+          DNS Verified
         </Badge>
       );
     }
@@ -517,6 +576,9 @@ function DomainRow({
     );
   };
 
+  const showVerifyButton = domain.status === 'pending' || domain.status === 'failed';
+  const showCertButton = domain.status === 'verified' || domain.status === 'provisioning';
+
   return (
     <div className="border rounded-md p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
@@ -526,13 +588,13 @@ function DomainRow({
           {statusBadge()}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          {domain.status !== 'verified' && (
+          {showVerifyButton && (
             <Button
               variant="outline"
               size="sm"
               className="text-xs h-7"
               onClick={() => onVerify(domain.id)}
-              disabled={anyVerifying}
+              disabled={anyBusy}
               aria-label={`Verify domain ${domain.hostname}`}
             >
               {isVerifying ? (
@@ -540,7 +602,24 @@ function DomainRow({
               ) : (
                 <RefreshCw className="h-3 w-3 mr-1" />
               )}
-              {domain.status === 'failed' ? 'Re-check' : 'Verify'}
+              {domain.status === 'failed' ? 'Re-check DNS' : 'Verify DNS'}
+            </Button>
+          )}
+          {showCertButton && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => onRefreshCert(domain.id)}
+              disabled={anyBusy}
+              aria-label={`Check SSL cert for ${domain.hostname}`}
+            >
+              {isRefreshingCert ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              ) : (
+                <Lock className="h-3 w-3 mr-1" />
+              )}
+              {domain.status === 'provisioning' ? 'Check SSL' : 'Provision SSL'}
             </Button>
           )}
           <Button
@@ -585,7 +664,7 @@ function DomainRow({
             ))}
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            Once records propagate, click Verify to confirm setup and proceed to SSL provisioning.
+            Once records propagate, click Verify DNS to confirm setup and automatically provision SSL.
           </p>
         </div>
       )}

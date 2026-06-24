@@ -3,7 +3,7 @@ import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { drives } from './core';
 
-export const customDomainStatus = pgEnum('custom_domain_status', ['pending', 'verified', 'failed']);
+export const customDomainStatus = pgEnum('custom_domain_status', ['pending', 'verified', 'failed', 'provisioning', 'active']);
 
 export const customDomains = pgTable('custom_domains', {
   id: text('id').primaryKey().$defaultFn(() => createId()),

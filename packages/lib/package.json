@@ -996,6 +996,11 @@
       "types": "./dist/compliance/erasure/revoke-integration-tokens.d.ts",
       "import": "./dist/compliance/erasure/revoke-integration-tokens.js",
       "require": "./dist/compliance/erasure/revoke-integration-tokens.js"
+    },
+    "./canvas/cert-action": {
+      "types": "./dist/canvas/cert-action.d.ts",
+      "import": "./dist/canvas/cert-action.js",
+      "require": "./dist/canvas/cert-action.js"
     }
   },
   "typesVersions": {
@@ -1548,6 +1553,9 @@
       ],
       "commands/command-core": [
         "./dist/commands/command-core.d.ts"
+      ],
+      "canvas/cert-action": [
+        "./dist/canvas/cert-action.d.ts"
       ]
     }
   },
