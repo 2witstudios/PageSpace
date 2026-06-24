@@ -44,6 +44,11 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
   },
 }));
 
+const clearCustomHost = vi.fn().mockResolvedValue(undefined);
+vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
+  clearCustomHost: (...args: unknown[]) => clearCustomHost(...args),
+}));
+
 const DRIVE_ID = 'drive-1';
 const DOMAIN_ID = 'dom-1';
 const USER_ID = 'user-1';
@@ -110,5 +115,27 @@ describe('DELETE /api/drives/[driveId]/domains/[domainId]', () => {
     dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockRejectedValue(new Error('db down')) }) });
     const res = await DELETE(makeReq(), ctx());
     expect(res.status).toBe(500);
+  });
+
+  it('triggers clearCustomHost (fire-and-forget) when deleted domain is active', async () => {
+    const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', status: 'active', createdAt: new Date() };
+    dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([deleted]) }) });
+
+    const res = await DELETE(makeReq(), ctx());
+    // Wait for microtasks so the fire-and-forget .catch() can run
+    await Promise.resolve();
+
+    expect(res.status).toBe(200);
+    expect(clearCustomHost).toHaveBeenCalledWith('acme.com');
+  });
+
+  it('does NOT trigger clearCustomHost for a non-active domain', async () => {
+    const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'pending.com', status: 'pending', createdAt: new Date() };
+    dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([deleted]) }) });
+
+    await DELETE(makeReq(), ctx());
+    await Promise.resolve();
+
+    expect(clearCustomHost).not.toHaveBeenCalled();
   });
 });

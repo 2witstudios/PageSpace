@@ -1,6 +1,15 @@
 import 'server-only';
 
-import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
+  HeadObjectCommand,
+  GetObjectCommand,
+  CopyObjectCommand,
+  ListObjectsV2Command,
+} from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 
 const CONTENT_HASH_RE = /^[0-9a-f]{64}$/i;
@@ -389,4 +398,48 @@ export async function copyAssetToPublishBucket(params: {
     assetKey: buildAssetKey(contentHash),
     contentType: mimeType,
   });
+}
+
+/**
+ * Delete every object whose key starts with `published/<hostPrefix>/` from the
+ * public publish bucket. Used to wipe a custom-domain host's artifacts when the
+ * domain is removed or deactivated.
+ *
+ * Uses paginated ListObjectsV2 followed by batched DeleteObjects (up to 1000
+ * objects per request) to handle drives with many published pages without
+ * hitting API limits.
+ *
+ * No-op when the prefix contains no objects (idempotent).
+ */
+export async function clearPublishedPrefix(hostPrefix: string): Promise<void> {
+  const bucket = getPublishBucket();
+  const client = getPublishClient();
+  const prefix = `published/${hostPrefix}/`;
+
+  let continuationToken: string | undefined;
+
+  do {
+    const listResult = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    );
+
+    const objects = listResult.Contents ?? [];
+    if (objects.length > 0) {
+      await client.send(
+        new DeleteObjectsCommand({
+          Bucket: bucket,
+          Delete: {
+            Objects: objects.map((obj) => ({ Key: obj.Key! })),
+            Quiet: true,
+          },
+        }),
+      );
+    }
+
+    continuationToken = listResult.IsTruncated ? listResult.NextContinuationToken : undefined;
+  } while (continuationToken);
 }

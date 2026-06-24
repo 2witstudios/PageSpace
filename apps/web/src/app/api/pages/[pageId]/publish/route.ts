@@ -5,6 +5,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { publishCanvasPage, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
+import { deletePageFromCustomHosts } from '@/lib/canvas/custom-domain-mirror';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
@@ -199,7 +200,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
   try {
     const row = await db.query.publishedPages.findFirst({
       where: eq(publishedPages.pageId, pageId),
-      columns: { id: true, artifactKey: true, driveId: true },
+      columns: { id: true, artifactKey: true, driveId: true, path: true },
     });
 
     if (!row) {
@@ -216,11 +217,16 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       columns: { homePageId: true },
     });
 
+    const isHomePage = drv?.homePageId === pageId;
     const { deletePublishedArtifact } = await import('@/lib/canvas/published-storage');
     await deletePublishedArtifact(row.artifactKey);
-    if (drv?.homePageId === pageId) {
+    if (isHomePage) {
       await clearPublishedHomeRoot(row.driveId);
     }
+    // Remove the page artifact (and root mirror) from every active custom-domain
+    // host prefix before deleting the DB row. Best-effort: failures are logged
+    // internally and do not block the unpublish.
+    await deletePageFromCustomHosts({ driveId: row.driveId, path: row.path, isHomePage });
     await db.delete(publishedPages).where(eq(publishedPages.pageId, pageId));
 
     // Rebuild the drive's sitemap so it no longer advertises the route we just

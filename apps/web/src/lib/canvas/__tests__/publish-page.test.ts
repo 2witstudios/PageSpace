@@ -66,6 +66,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { warn: vi.fn(), error: vi.fn() } },
 }));
 
+vi.mock('../custom-domain-mirror', () => ({
+  mirrorPublishedPageToHosts: vi.fn().mockResolvedValue(undefined),
+  mirror404ToHosts: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('@pagespace/lib/services/drive-guards', () => ({
   isHomeDrive: vi.fn().mockReturnValue(false),
 }));
