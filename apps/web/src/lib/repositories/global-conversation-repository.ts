@@ -324,7 +324,8 @@ export const globalConversationRepository = {
       .where(and(
         eq(conversations.userId, userId),
         eq(conversations.type, 'global'),
-        eq(conversations.isActive, true)
+        eq(conversations.isActive, true),
+        hasMessages,
       ))
       .orderBy(sql`${conversations.lastMessageAt} DESC NULLS LAST`, desc(conversations.createdAt))
       .limit(1);
