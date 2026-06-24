@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, asc } from '@pagespace/db/operators'
+import { eq, asc, and, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpers';
+import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
 import { z } from 'zod/v4';
@@ -194,6 +195,21 @@ export async function POST(req: NextRequest) {
               },
             }).returning();
             taskList = newTaskList;
+          }
+
+          // Self-heal: ensure every child TASK_LIST page has a task_items row.
+          // Mirrors the same call in /api/pages/[pageId]/tasks/route.ts:143.
+          const childPages = await db
+            .select({ id: pages.id })
+            .from(pages)
+            .where(and(
+              eq(pages.parentId, pageId),
+              eq(pages.type, PageType.TASK_LIST),
+              eq(pages.isTrashed, false),
+            ));
+          const childPageIds = childPages.map(p => p.id);
+          if (childPageIds.length > 0) {
+            await backfillMissingTaskItems(db, { parentId: pageId, childPageIds, userId });
           }
 
           const [tasks, statusConfigs] = await Promise.all([

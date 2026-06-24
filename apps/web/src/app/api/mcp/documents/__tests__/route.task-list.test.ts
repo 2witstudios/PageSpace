@@ -7,6 +7,8 @@ const mockFindFirstPage = vi.fn();
 const mockFindFirstTaskList = vi.fn();
 const mockFindManyStatusConfigs = vi.fn();
 const mockInsertReturning = vi.fn();
+const mockSelectChildPages = vi.fn();
+const mockBackfillMissingTaskItems = vi.fn();
 const mockFetchEnrichedTasks = vi.fn();
 const mockSerializeTaskItem = vi.fn();
 
@@ -74,12 +76,23 @@ vi.mock('@pagespace/db/db', () => ({
         returning: (...args: unknown[]) => mockInsertReturning(...args),
       }),
     }),
+    select: () => ({
+      from: () => ({
+        where: (..._args: unknown[]) => mockSelectChildPages(),
+      }),
+    }),
   },
+}));
+
+vi.mock('@/services/api/task-sync-service', () => ({
+  backfillMissingTaskItems: (...args: unknown[]) => mockBackfillMissingTaskItems(...args),
 }));
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   asc: vi.fn(),
+  and: vi.fn(),
+  inArray: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -156,6 +169,8 @@ describe('MCP Documents API — TASK_LIST read', () => {
     mockFindFirstPage.mockResolvedValue(TASK_LIST_PAGE);
     mockFindFirstTaskList.mockResolvedValue(EXISTING_TASK_LIST);
     mockFindManyStatusConfigs.mockResolvedValue([]);
+    mockSelectChildPages.mockResolvedValue([{ id: 'child_1' }, { id: 'child_2' }]);
+    mockBackfillMissingTaskItems.mockResolvedValue(undefined);
     mockFetchEnrichedTasks.mockResolvedValue([]);
     mockSerializeTaskItem.mockImplementation((t: unknown) => t);
   });
@@ -286,6 +301,27 @@ describe('MCP Documents API — TASK_LIST read', () => {
     await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
 
     expect(mockFetchEnrichedTasks).toHaveBeenCalledWith('page_tl');
+  });
+
+  it('calls backfillMissingTaskItems with child page ids before fetching tasks', async () => {
+    mockSelectChildPages.mockResolvedValue([{ id: 'cp_1' }, { id: 'cp_2' }]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockBackfillMissingTaskItems).toHaveBeenCalledWith(
+      expect.anything(), // db
+      { parentId: 'page_tl', childPageIds: ['cp_1', 'cp_2'], userId: 'user_123' },
+    );
+  });
+
+  it('skips backfill when task list has no child pages', async () => {
+    mockSelectChildPages.mockResolvedValue([]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockBackfillMissingTaskItems).not.toHaveBeenCalled();
   });
 
   it('maps enriched tasks through serializeTaskItem', async () => {
