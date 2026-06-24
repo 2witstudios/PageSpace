@@ -13,17 +13,6 @@ const ADD_CERTIFICATE_MUTATION = `
   }
 `;
 
-const GET_CERTIFICATE_QUERY = `
-  query GetCertificate($appName: String!, $hostname: String!) {
-    app(name: $appName) {
-      certificate(hostname: $hostname) {
-        configured
-        hostname
-      }
-    }
-  }
-`;
-
 async function flyGraphQL<T>(
   query: string,
   variables: Record<string, string>,
@@ -69,10 +58,6 @@ type AddCertData = {
   addCertificate: { certificate: { configured: boolean; hostname: string } };
 };
 
-type GetCertData = {
-  app: { certificate: { configured: boolean; hostname: string } | null };
-};
-
 /** Request a TLS certificate from Fly for the given hostname on the given app. Idempotent. */
 export async function addCertificate(appName: string, hostname: string): Promise<FlyCertResponse> {
   const result = await flyGraphQL<AddCertData>(ADD_CERTIFICATE_MUTATION, { appName, hostname });
@@ -82,11 +67,3 @@ export async function addCertificate(appName: string, hostname: string): Promise
   return { ok: true, configured: cert.configured };
 }
 
-/** Fetch the current status of a Fly TLS certificate for the given hostname. */
-export async function getCertificate(appName: string, hostname: string): Promise<FlyCertResponse> {
-  const result = await flyGraphQL<GetCertData>(GET_CERTIFICATE_QUERY, { appName, hostname });
-  if ('error' in result) return { ok: false, error: result.error };
-  const cert = result.data.app?.certificate;
-  if (!cert) return { ok: false, error: `Certificate not found for ${hostname}` };
-  return { ok: true, configured: cert.configured };
-}

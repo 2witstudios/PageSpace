@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.stubGlobal('fetch', vi.fn());
 
-import { addCertificate, getCertificate } from '../certs';
+import { addCertificate } from '../certs';
 
 const FLY_API_URL = 'https://api.fly.io/graphql';
 const TOKEN = 'fly-test-token';
@@ -112,57 +112,3 @@ describe('addCertificate', () => {
   });
 });
 
-describe('getCertificate', () => {
-  it('sends query with appName and hostname variables', async () => {
-    mockFetchOk({
-      data: { app: { certificate: { configured: true, hostname: HOSTNAME } } },
-    });
-
-    await getCertificate(APP_NAME, HOSTNAME);
-
-    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(init.body as string) as { variables: Record<string, string> };
-    expect(body.variables.appName).toBe(APP_NAME);
-    expect(body.variables.hostname).toBe(HOSTNAME);
-  });
-
-  it('returns ok:true with configured:true when cert exists and is configured', async () => {
-    mockFetchOk({
-      data: { app: { certificate: { configured: true, hostname: HOSTNAME } } },
-    });
-
-    const result = await getCertificate(APP_NAME, HOSTNAME);
-    expect(result).toEqual({ ok: true, configured: true });
-  });
-
-  it('returns ok:true with configured:false when cert exists but not ready', async () => {
-    mockFetchOk({
-      data: { app: { certificate: { configured: false, hostname: HOSTNAME } } },
-    });
-
-    const result = await getCertificate(APP_NAME, HOSTNAME);
-    expect(result).toEqual({ ok: true, configured: false });
-  });
-
-  it('returns ok:false when certificate is null (not found)', async () => {
-    mockFetchOk({
-      data: { app: { certificate: null } },
-    });
-
-    const result = await getCertificate(APP_NAME, HOSTNAME);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/not found/i);
-  });
-
-  it('returns ok:false when FLY_API_TOKEN is absent', async () => {
-    delete process.env.FLY_API_TOKEN;
-    const result = await getCertificate(APP_NAME, HOSTNAME);
-    expect(result.ok).toBe(false);
-  });
-
-  it('returns ok:false on network error', async () => {
-    mockFetchNetworkError();
-    const result = await getCertificate(APP_NAME, HOSTNAME);
-    expect(result.ok).toBe(false);
-  });
-});
