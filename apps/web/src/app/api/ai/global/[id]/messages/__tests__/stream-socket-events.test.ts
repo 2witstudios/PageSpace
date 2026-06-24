@@ -13,12 +13,14 @@ const {
   mockLifecyclePushPart,
   mockLifecycleFinish,
   mockBroadcastChatUserMessage,
+  mockBroadcastGlobalConversationAdded,
   mockSaveGlobalAssistantMessageToDatabase,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
+  mockBroadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
   mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -47,7 +49,7 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 vi.mock('@/lib/websocket/socket-utils', () => ({
-  broadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
+  broadcastGlobalConversationAdded: mockBroadcastGlobalConversationAdded,
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -495,6 +497,51 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       mockBroadcastChatUserMessage.mockRejectedValueOnce(new Error('socket dead'));
 
       await expect(POST(makeRequest(), makeContext())).resolves.toBeDefined();
+    });
+  });
+
+  describe('global conversation-added broadcast', () => {
+    it('given isNew=true, should broadcast chat:global_conversation_added to the user channel', async () => {
+      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({
+        conversation: { id: 'conv-1', userId: 'user-1', title: null, type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
+        isNew: true,
+      });
+
+      await POST(makeRequest({ browserSessionId: 'session-z' }), makeContext());
+
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledTimes(1);
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledWith(
+        'user:user-1:global',
+        expect.objectContaining({
+          conversation: expect.objectContaining({ id: 'conv-1', type: 'global' }),
+          triggeredBy: expect.objectContaining({ userId: 'user-1', browserSessionId: 'session-z' }),
+        }),
+      );
+    });
+
+    it('given isNew=true and no prior title, broadcast carries the auto-generated title', async () => {
+      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({
+        conversation: { id: 'conv-1', userId: 'user-1', title: null, type: 'global', contextId: null, isActive: true, createdAt: new Date('2024-01-01') },
+        isNew: true,
+      });
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          conversation: expect.objectContaining({ title: 'Hello' }),
+        }),
+      );
+    });
+
+    it('given isNew=false, should NOT broadcast chat:global_conversation_added', async () => {
+      // default resolveOrCreateConversation mock returns isNew: false
+      await POST(makeRequest(), makeContext());
+
+      expect(mockBroadcastGlobalConversationAdded).not.toHaveBeenCalled();
     });
   });
 
