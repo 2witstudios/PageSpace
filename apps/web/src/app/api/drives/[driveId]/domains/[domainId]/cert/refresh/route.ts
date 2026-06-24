@@ -52,12 +52,12 @@ export async function POST(
       );
     }
 
-    const flyCert = await addCertificate(FLY_APP_NAME, domain.hostname);
-
-    if (!flyCert.ok && flyCert.error === 'FLY_API_TOKEN is not configured') {
+    if (!process.env.FLY_API_TOKEN) {
       loggers.api.error('FLY_API_TOKEN not set — cert provisioning unavailable');
       return NextResponse.json({ error: 'SSL provisioning is not configured (ops: set FLY_API_TOKEN)' }, { status: 503 });
     }
+
+    const flyCert = await addCertificate(FLY_APP_NAME, domain.hostname);
 
     const action = nextCertAction(domain.status as CertEligibleStatus, flyCert);
     const nextStatus = certActionToDbStatus(action);

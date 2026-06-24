@@ -141,9 +141,9 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
   it('returns 503 when FLY_API_TOKEN is not configured', async () => {
     delete process.env.FLY_API_TOKEN;
     setupSelectReturning([VERIFIED_DOMAIN]);
-    addCertificate.mockResolvedValue({ ok: false, error: 'FLY_API_TOKEN is not configured' });
     const res = await POST(makeReq(), ctx());
     expect(res.status).toBe(503);
+    expect(addCertificate).not.toHaveBeenCalled();
   });
 
   describe('verified domain → provision', () => {
