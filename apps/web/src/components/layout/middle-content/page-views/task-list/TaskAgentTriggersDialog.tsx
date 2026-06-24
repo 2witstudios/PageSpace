@@ -116,11 +116,11 @@ export function TaskAgentTriggersDialog({
   const triggersKey = open ? `/api/tasks/${taskId}/triggers` : null;
   const agentsKey = open && driveId ? `/api/drives/${driveId}/agents` : null;
 
-  // Pause background revalidation while any editing session is active so a remote
+  // Pause background revalidation during document/form editing so a remote
   // task_updated broadcast cannot refetch this dialog and clobber in-progress prompt
   // typing. Initial load and explicit mutate() (e.g. refetchTriggers after save) are
   // unaffected because *LoadedRef gates the pause until first success.
-  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const isAnyEditing = useEditingStore((s) => s.isAnyEditing());
   const triggersLoadedRef = useRef(false);
   const agentsLoadedRef = useRef(false);
 
@@ -129,7 +129,7 @@ export function TaskAgentTriggersDialog({
     triggersFetcher,
     {
       revalidateOnFocus: false,
-      isPaused: () => triggersLoadedRef.current && isAnyActive,
+      isPaused: () => triggersLoadedRef.current && isAnyEditing,
       onSuccess: () => {
         triggersLoadedRef.current = true;
       },
@@ -140,7 +140,7 @@ export function TaskAgentTriggersDialog({
     agentsFetcher,
     {
       revalidateOnFocus: false,
-      isPaused: () => agentsLoadedRef.current && isAnyActive,
+      isPaused: () => agentsLoadedRef.current && isAnyEditing,
       onSuccess: () => {
         agentsLoadedRef.current = true;
       },

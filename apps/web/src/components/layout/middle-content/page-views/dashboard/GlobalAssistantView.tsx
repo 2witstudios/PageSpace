@@ -69,7 +69,7 @@ import {
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { isEditingActive } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
@@ -566,7 +566,7 @@ const GlobalAssistantView: React.FC = () => {
   useAppStateRecovery({
     onResume: handlePullUpRefresh,
     // Block recovery if streaming OR pending send OR any editing active
-    enabled: !isStreaming && currentConversationId !== null && !isEditingActive(),
+    enabled: !isStreaming && currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
   });
 
   // Clean up stream tracking on unmount

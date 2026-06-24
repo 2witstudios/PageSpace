@@ -1,6 +1,6 @@
 import { useRef, useCallback, useEffect } from 'react';
 import useSWR from 'swr';
-import { isEditingActive } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import type { Workflow } from '@/components/workflows/types';
 import { useSocket } from './useSocket';
@@ -19,7 +19,7 @@ export function useWorkflows(driveId: string) {
     driveId ? `/api/workflows?driveId=${driveId}` : null,
     fetcher,
     {
-      isPaused: () => hasLoadedRef.current && isEditingActive(),
+      isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
       onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval: 300000,
       revalidateOnFocus: false,

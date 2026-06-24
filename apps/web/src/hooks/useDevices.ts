@@ -30,13 +30,13 @@ const fetcher = async (url: string): Promise<Device[]> => {
 
 export function useDevices() {
   const hasLoadedRef = useRef(false);
-  const isAnyActive = useEditingStore((state) => state.isAnyActive());
+  const isAnyEditing = useEditingStore((state) => state.isAnyEditing());
 
   const { data, error, mutate } = useSWR<Device[]>(
     '/api/account/devices',
     fetcher,
     {
-      isPaused: () => hasLoadedRef.current && isAnyActive,
+      isPaused: () => hasLoadedRef.current && isAnyEditing,
       onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval: 60000,
       revalidateOnFocus: true,

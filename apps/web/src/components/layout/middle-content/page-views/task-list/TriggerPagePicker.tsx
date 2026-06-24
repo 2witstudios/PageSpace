@@ -69,20 +69,20 @@ type Props = SingleProps | MultiProps;
 // are read-only display: they fetch search results and chip titles, but neither writes
 // back to selection. PageLabel retains the hasLoadedRef + isPaused guard so the chip
 // label doesn't flicker mid-edit. The search SWR intentionally omits it: revalidateOnFocus:
-// false already blocks background refetch, and pausing on isAnyActive() froze results
-// whenever EventModal's long-lived 'form' session was open.
+// false already blocks background refetch, and pausing on isAnyEditing() during EventModal's
+// long-lived 'form' session is correct — label chips should stay frozen mid-form-edit.
 // No dedicated "remote refetch must not clobber selection" test is added because the
 // data flow makes that property structural rather than behavioural.
 
 function PageLabel({ pageId }: { pageId: string }) {
-  // Pause background revalidation while any editing session is active so a remote
+  // Pause background revalidation during document/form editing so a remote
   // task_updated broadcast cannot refetch and clobber the chip label mid-edit.
   // Initial load is unaffected because pageLoadedRef gates the pause until first success.
-  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const isAnyEditing = useEditingStore((s) => s.isAnyEditing());
   const pageLoadedRef = useRef(false);
   const { data, error } = useSWR(`/api/pages/${pageId}`, pageFetcher, {
     revalidateOnFocus: false,
-    isPaused: () => pageLoadedRef.current && isAnyActive,
+    isPaused: () => pageLoadedRef.current && isAnyEditing,
     onSuccess: () => {
       pageLoadedRef.current = true;
     },

@@ -79,8 +79,8 @@ describe('useDevices', () => {
       expect(swrConfig.isPaused!()).toBe(true);
     });
 
-    it('given user is not editing or streaming, should allow device revalidation', () => {
-      // Arrange: No active editing/streaming
+    it('given user is not document or form editing, should allow device revalidation', () => {
+      // Arrange: No active document/form editing (AI streaming no longer blocks)
       vi.mocked(useEditingStore).mockReturnValue(false);
 
       vi.mocked(useSWR).mockReturnValue({
@@ -100,7 +100,7 @@ describe('useDevices', () => {
       // Simulate onSuccess
       swrConfig.onSuccess!();
 
-      // Assert: isPaused returns false because isAnyActive is false
+      // Assert: isPaused returns false because isAnyEditing is false
       expect(swrConfig.isPaused).toBeDefined();
       expect(swrConfig.isPaused!()).toBe(false);
     });

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useSWRConfig } from 'swr';
 import { useSocket } from './useSocket';
-import { isEditingActive } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { useThreadInboxStore } from '@/stores/useThreadInboxStore';
 import type { InboxEventPayload } from '@/lib/websocket/socket-utils';
 import type { InboxResponse } from '@pagespace/lib/types';
@@ -39,7 +39,7 @@ export function useInboxSocket({ driveId, hasLoadedRef: externalRef }: UseInboxS
 
     const handleInboxUpdate = (payload: InboxEventPayload) => {
       // Skip updates if we haven't loaded yet or if editing is active
-      if (!hasLoadedRef.current || isEditingActive()) {
+      if (!hasLoadedRef.current || useEditingStore.getState().isAnyEditing()) {
         return;
       }
 

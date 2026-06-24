@@ -19,7 +19,7 @@ import PrimaryNavigation from './PrimaryNavigation';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
-import { isEditingActive } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
@@ -59,7 +59,7 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
 
   const { data, error } = useSWR<InboxResponse>(apiUrl, fetcher, {
     refreshInterval: 0,
-    isPaused: () => hasLoadedRef.current && isEditingActive(),
+    isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
     onSuccess: () => { hasLoadedRef.current = true; },
     revalidateOnFocus: false,
   });

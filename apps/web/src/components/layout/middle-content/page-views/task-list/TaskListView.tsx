@@ -418,7 +418,7 @@ function TaskListView({ page }: TaskListViewProps) {
   const canEdit = permissions?.canEdit || false;
   const drive = useDriveStore((s) => s.drives.find((d) => d.id === page.driveId));
   const canManageWorkflows = canManageDrive(drive);
-  const isAnyActive = useEditingStore(state => state.isAnyActive());
+  const isAnyEditing = useEditingStore(state => state.isAnyEditing());
 
   const [filter, setFilter] = useTaskListPageFilter(page.id);
   const [search, setSearch] = useState('');
@@ -474,7 +474,7 @@ function TaskListView({ page }: TaskListViewProps) {
     fetcher,
     {
       revalidateOnFocus: false,
-      isPaused: () => hasLoadedRef.current && isAnyActive,
+      isPaused: () => hasLoadedRef.current && isAnyEditing,
       onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval: 300000, // 5 minutes
     }

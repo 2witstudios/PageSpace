@@ -73,7 +73,7 @@ export function usePageAgents(
 ) {
   const { includeSystemPrompt = false, refreshInterval = 60000 } = options;
   const hasLoadedRef = useRef(false);
-  const isAnyActive = useEditingStore(state => state.isAnyActive());
+  const isAnyEditing = useEditingStore(state => state.isAnyEditing());
 
   // Build the API URL with query params
   const swrKey = useMemo(() => {
@@ -94,7 +94,7 @@ export function usePageAgents(
     swrKey,
     fetcher,
     {
-      isPaused: () => hasLoadedRef.current && isAnyActive,
+      isPaused: () => hasLoadedRef.current && isAnyEditing,
       onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval,
       revalidateOnFocus: false,

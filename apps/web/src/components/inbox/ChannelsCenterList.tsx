@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
-import { isEditingActive } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { ThreadUnreadBadge } from '@/components/inbox/ThreadUnreadBadge';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 
@@ -43,7 +43,7 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
 
   const { data, error, isLoading } = useSWR<InboxResponse>(apiUrl, fetcher, {
     refreshInterval: 0,
-    isPaused: () => hasLoadedRef.current && isEditingActive(),
+    isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
     onSuccess: () => { hasLoadedRef.current = true; },
     revalidateOnFocus: false,
   });
