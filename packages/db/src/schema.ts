@@ -46,6 +46,7 @@ export * from './schema/published-pages';
 export * from './schema/credits';
 export * from './schema/commands';
 export * from './schema/ai-compaction';
+export * from './schema/custom-domains';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -95,6 +96,7 @@ import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
 import * as commands from './schema/commands';
 import * as aiCompaction from './schema/ai-compaction';
+import * as customDomains from './schema/custom-domains';
 
 export const schema = {
   ...auth,
@@ -145,4 +147,5 @@ export const schema = {
   ...credits,
   ...commands,
   ...aiCompaction,
+  ...customDomains,
 };
