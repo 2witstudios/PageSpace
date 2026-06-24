@@ -73,8 +73,13 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
   },
 
   toggleShowPageTree: () => {
-    const current = get().showPageTree;
-    get().setShowPageTree(!current);
+    set((state) => {
+      const next = !state.showPageTree;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(SHOW_PAGE_TREE_KEY, String(next));
+      }
+      return { showPageTree: next };
+    });
   },
 
   setProviderSettings: (provider: string, model: string) => {
@@ -128,8 +133,6 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
     // Prevent duplicate loads
     if (get().isLoading || get().isInitialized) return;
 
-    set({ isLoading: true });
-
     // Apply localStorage values immediately (synchronously) so components
     // that read the store before the API responds see the correct toggle state.
     let showPageTree = false;
@@ -145,7 +148,7 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
       if (storedWriteMode !== null) writeMode = storedWriteMode === 'true';
     }
 
-    set({ showPageTree, webSearchEnabled, writeMode });
+    set({ isLoading: true, showPageTree, webSearchEnabled, writeMode });
 
     try {
       const response = await fetchWithAuth('/api/ai/settings');
