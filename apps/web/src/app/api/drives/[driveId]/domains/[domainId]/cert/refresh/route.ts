@@ -84,8 +84,18 @@ export async function POST(
 
     // When an active domain transitions to cert_failed, purge its mirrored
     // prefix so stale content is not served until the cert is recovered.
+    // Awaited so the response reflects completion, but failures are caught and
+    // logged rather than thrown — the DB status is already committed and the
+    // caller should not get a 500 for a best-effort storage cleanup.
     if (domain.status === 'active' && nextStatus === 'cert_failed') {
-      await clearCustomHost(domain.hostname);
+      try {
+        await clearCustomHost(domain.hostname);
+      } catch (err) {
+        loggers.api.warn('Failed to clear custom host artifacts after cert failure', {
+          hostname: domain.hostname,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     auditRequest(request, {

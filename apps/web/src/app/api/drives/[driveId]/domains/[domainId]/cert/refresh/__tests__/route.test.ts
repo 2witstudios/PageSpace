@@ -377,5 +377,17 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
 
       expect(clearCustomHost).not.toHaveBeenCalled();
     });
+
+    it('returns 200 (not 500) when clearCustomHost throws — status already committed to DB', async () => {
+      setupSelectReturning([ACTIVE_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: false, error: 'Fly cert revoked' });
+      clearCustomHost.mockRejectedValueOnce(new Error('S3 down'));
+
+      const res = await POST(makeReq(), ctx());
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as { status: string };
+      expect(body.status).toBe('cert_failed');
+    });
   });
 });
