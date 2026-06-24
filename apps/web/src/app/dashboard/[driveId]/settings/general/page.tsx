@@ -152,7 +152,7 @@ export default function GeneralSettingsPage() {
     if (verifyingDomainId) return;
     setVerifyingDomainId(domainId);
     try {
-      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}/verify`, {
         method: 'POST',
       });
       const data = await res.json().catch(() => ({})) as { verified?: boolean; reason?: string; error?: string };
