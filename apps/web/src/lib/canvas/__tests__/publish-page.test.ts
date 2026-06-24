@@ -69,6 +69,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('../custom-domain-mirror', () => ({
   mirrorPublishedPageToHosts: vi.fn().mockResolvedValue(undefined),
   mirror404ToHosts: vi.fn().mockResolvedValue(undefined),
+  getActiveDomainRecords: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@pagespace/lib/services/drive-guards', () => ({
@@ -100,6 +101,7 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 import { db } from '@pagespace/db/db';
 import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, copyPublishedArtifact, isPublishConfigured } from '../published-storage';
 import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, PublishError } from '../publish-page';
+import { getActiveDomainRecords } from '../custom-domain-mirror';
 
 // The mocked `db` keeps the real relational-query return types, so partial test
 // fixtures are cast through `unknown` to the row shape (never `any`).
@@ -280,12 +282,65 @@ describe('publishCanvasPage', () => {
       .rejects.toMatchObject({ statusCode: 400 });
     expect(PublishError).toBeDefined();
   });
+
+  it('response url is always the subdomain (not the custom domain) regardless of active custom domains', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'About', content: '<div/>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([
+      { hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
+    ]);
+
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    // Response URL uses the subdomain (guaranteed write) so the caller always gets a working link.
+    // The canonical/OG tags baked into the HTML still use the custom domain.
+    expect(result.url).toBe('https://acme.pagespace.site/about');
+  });
+
+  it('uses the subdomain as response URL when no active custom domain exists', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'About', content: '<div/>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
+
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(result.url).toBe('https://acme.pagespace.site/about');
+  });
+
+  it('home page response URL is the subdomain root even when a custom domain is active', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Home', content: '<div/>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: 'page-1',
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([
+      { hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
+    ]);
+
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(result.isHomePage).toBe(true);
+    expect(result.url).toBe('https://acme.pagespace.site/');
+  });
 });
 
 describe('publishHomePageAtRoot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isPublishConfigured).mockReturnValue(true);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
   });
 
   it('returns null when the drive has no home page', async () => {
@@ -334,6 +389,7 @@ describe('clearPublishedHomeRoot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isPublishConfigured).mockReturnValue(true);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
   });
 
   it('deletes the root mirror artifact for the drive subdomain', async () => {
@@ -405,6 +461,44 @@ describe('regeneratePublishedSiteFiles', () => {
     vi.mocked(isPublishConfigured).mockReturnValue(true);
     vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([]));
     vi.mocked(publishedArtifactExists).mockResolvedValue(true);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
+  });
+
+  it('uses the active custom domain as origin for sitemap/robots URLs', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'p1', path: 'about', updatedAt: new Date('2026-06-22T00:00:00.000Z') },
+    ]));
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([
+      { hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
+    ]);
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    const sitemapCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === 'sitemap.xml');
+    // Sitemap <loc> uses the custom domain, not the subdomain
+    expect(sitemapCall?.[0].body).toContain('https://www.acme.com/about');
+    expect(sitemapCall?.[0].body).not.toContain('pagespace.site');
+
+    const robotsCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === 'robots.txt');
+    expect(robotsCall?.[0].body).toContain('https://www.acme.com/sitemap.xml');
+  });
+
+  it('falls back to subdomain origin when no active custom domain', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'p1', path: 'about', updatedAt: new Date('2026-06-22T00:00:00.000Z') },
+    ]));
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    const sitemapCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === 'sitemap.xml');
+    expect(sitemapCall?.[0].body).toContain('https://acme.pagespace.site/about');
   });
 
   it('canonicalizes the home page to root when its root mirror exists', async () => {
@@ -507,6 +601,7 @@ describe('syncPublishedHomeRoot', () => {
     vi.clearAllMocks();
     vi.mocked(isPublishConfigured).mockReturnValue(true);
     vi.mocked(db.query.publishedPages.findMany).mockResolvedValue([]);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
   });
 
   it('is a no-op when publishing is not configured', async () => {

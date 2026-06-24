@@ -277,6 +277,25 @@ export async function copyPublishedArtifact(fromKey: string, toKey: string): Pro
   );
 }
 
+/**
+ * Copy a site-level file artifact (robots.txt, sitemap.xml, 404.html) to
+ * another key within the same publish bucket. Unlike `copyPublishedArtifact`,
+ * this uses `MetadataDirective=COPY` so the source object's stored ContentType
+ * is preserved — robots.txt must be `text/plain`, sitemap.xml must be
+ * `application/xml`, and 404.html must be `text/html`.
+ */
+export async function copyPublishedSiteFileArtifact(fromKey: string, toKey: string): Promise<void> {
+  const bucket = getPublishBucket();
+  await getPublishClient().send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: `${bucket}/${fromKey}`,
+      Key: toKey,
+      MetadataDirective: 'COPY',
+    }),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Asset pipeline helpers (CDN copy of embedded PageSpace files)
 // ---------------------------------------------------------------------------

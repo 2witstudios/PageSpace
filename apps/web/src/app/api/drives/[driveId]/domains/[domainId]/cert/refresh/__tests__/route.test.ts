@@ -52,8 +52,15 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
 }));
 
 const mirrorDriveToCustomHost = vi.fn().mockResolvedValue(undefined);
+const clearCustomHost = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
   mirrorDriveToCustomHost: (...args: unknown[]) => mirrorDriveToCustomHost(...args),
+  clearCustomHost: (...args: unknown[]) => clearCustomHost(...args),
+}));
+
+const regeneratePublishedSiteFiles = vi.fn().mockResolvedValue(undefined);
+vi.mock('@/lib/canvas/publish-page', () => ({
+  regeneratePublishedSiteFiles: (...args: unknown[]) => regeneratePublishedSiteFiles(...args),
 }));
 
 const DRIVE_ID = 'drive-1';
@@ -306,6 +313,15 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
       expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
     });
 
+    it('regenerates site files before mirroring when domain becomes active', async () => {
+      setupSelectReturning([VERIFIED_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+      await POST(makeReq(), ctx());
+
+      expect(regeneratePublishedSiteFiles).toHaveBeenCalledWith(DRIVE_ID);
+    });
+
     it('triggers mirrorDriveToCustomHost when provisioning domain becomes active', async () => {
       setupSelectReturning([PROVISIONING_DOMAIN]);
       addCertificate.mockResolvedValue({ ok: true, configured: true });
@@ -331,6 +347,47 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
       await POST(makeReq(), ctx());
 
       expect(mirrorDriveToCustomHost).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('mirror cleanup on cert_failed (any status → cert_failed)', () => {
+    it('calls clearCustomHost when an active domain transitions to cert_failed', async () => {
+      setupSelectReturning([ACTIVE_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: false, error: 'Fly cert revoked' });
+
+      await POST(makeReq(), ctx());
+
+      expect(clearCustomHost).toHaveBeenCalledWith('docs.acme.com');
+    });
+
+    it('calls clearCustomHost even when a non-active domain transitions to cert_failed (idempotent retry)', async () => {
+      setupSelectReturning([VERIFIED_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: false, error: 'Fly error' });
+
+      await POST(makeReq(), ctx());
+
+      expect(clearCustomHost).toHaveBeenCalledWith('docs.acme.com');
+    });
+
+    it('does NOT call clearCustomHost when an active domain stays active (re-check succeeds)', async () => {
+      setupSelectReturning([ACTIVE_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+      await POST(makeReq(), ctx());
+
+      expect(clearCustomHost).not.toHaveBeenCalled();
+    });
+
+    it('returns 200 (not 500) when clearCustomHost throws — status already committed to DB', async () => {
+      setupSelectReturning([ACTIVE_DOMAIN]);
+      addCertificate.mockResolvedValue({ ok: false, error: 'Fly cert revoked' });
+      clearCustomHost.mockRejectedValueOnce(new Error('S3 down'));
+
+      const res = await POST(makeReq(), ctx());
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as { status: string };
+      expect(body.status).toBe('cert_failed');
     });
   });
 });

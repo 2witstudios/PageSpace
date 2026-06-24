@@ -26,15 +26,18 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const dbSelect = vi.fn();
 const dbInsert = vi.fn();
+const dbTransaction = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: (...args: unknown[]) => dbSelect(...args),
     insert: (...args: unknown[]) => dbInsert(...args),
+    transaction: (...args: unknown[]) => dbTransaction(...args),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ _eq: [a, b] })),
   and: vi.fn((...args: unknown[]) => ({ _and: args })),
+  count: vi.fn(() => ({ _count: true })),
 }));
 vi.mock('@pagespace/db/schema/custom-domains', () => ({
   customDomains: {
@@ -44,6 +47,20 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
     status: 'col_status',
     createdAt: 'col_createdAt',
   },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'col_drives_id', ownerId: 'col_drives_ownerId' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'col_users_id', subscriptionTier: 'col_subscriptionTier' },
+}));
+
+vi.mock('@/lib/subscription/plans', () => ({
+  getPlan: vi.fn((tier: string) => ({
+    limits: {
+      maxCustomDomains: tier === 'free' ? 0 : tier === 'pro' ? 1 : tier === 'founder' ? 3 : 10,
+    },
+  })),
 }));
 
 const DRIVE_ID = 'drive-1';
@@ -55,11 +72,53 @@ const makeReq = (body?: unknown): Request =>
   } as unknown as Request);
 const ctx = (driveId = DRIVE_ID) => ({ params: Promise.resolve({ driveId }) });
 
+/**
+ * Mock for POST: three sequential dbSelect calls inside the handler.
+ *  1. Tier lookup (outside transaction): drives JOIN users → [{tier}]
+ *  2. Drive row lock (inside transaction): SELECT drives.id FOR UPDATE
+ *  3. Count query (inside transaction): SELECT count() FROM customDomains
+ */
+function mockPostSelects({ ownerTier = 'pro', domainCount = 0 } = {}) {
+  let callIndex = 0;
+  dbSelect.mockImplementation(() => {
+    callIndex++;
+    if (callIndex === 1) {
+      // Tier lookup
+      return {
+        from: vi.fn().mockReturnThis(),
+        innerJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([{ tier: ownerTier }]),
+      };
+    }
+    if (callIndex === 2) {
+      // Drive row lock: tx.select({id}).from(drives).where().for('update')
+      return {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        for: vi.fn().mockResolvedValue([{ id: DRIVE_ID }]),
+      };
+    }
+    // Count query: tx.select({n}).from(customDomains).where()
+    return {
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockResolvedValue([{ n: domainCount }]),
+    };
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   authenticateRequestWithOptions.mockResolvedValue(mockAuth);
   checkMCPDriveScope.mockReturnValue(null);
   isPrincipalDriveOwnerOrAdmin.mockResolvedValue(true);
+  // Default transaction: pass a tx stub that delegates to the same dbSelect/dbInsert mocks.
+  dbTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) =>
+    cb({
+      select: (...args: unknown[]) => dbSelect(...args),
+      insert: (...args: unknown[]) => dbInsert(...args),
+    }),
+  );
 });
 
 // ── GET ──────────────────────────────────────────────────────────────────────
@@ -83,10 +142,19 @@ describe('GET /api/drives/[driveId]/domains', () => {
     expect(res.status).toBe(403);
   });
 
-  it('returns domains list on success', async () => {
+  it('returns domains list and limit on success', async () => {
     const fakeDomains = [{ id: 'd1', driveId: DRIVE_ID, hostname: 'acme.com', status: 'pending', createdAt: new Date() }];
-    dbSelect.mockReturnValue({
-      from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(fakeDomains) }),
+    // Promise.all([domains_select, getMaxCustomDomainsForDrive()]) evaluates synchronously:
+    // call 1 = domain list (first item in the array); call 2 = tier lookup (inside helper)
+    let callIndex = 0;
+    dbSelect.mockImplementation(() => {
+      callIndex++;
+      if (callIndex === 1) {
+        // domain list
+        return { from: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue(fakeDomains) };
+      }
+      // owner tier lookup
+      return { from: vi.fn().mockReturnThis(), innerJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue([{ tier: 'pro' }]) };
     });
 
     const res = await GET(makeReq(), ctx());
@@ -94,12 +162,16 @@ describe('GET /api/drives/[driveId]/domains', () => {
     expect(res.status).toBe(200);
     expect(body.domains).toHaveLength(1);
     expect(body.domains[0].hostname).toBe('acme.com');
+    expect(body.limit).toBe(1); // pro tier = 1
   });
 
   it('returns 500 on unexpected db error', async () => {
-    dbSelect.mockReturnValue({
-      from: vi.fn().mockReturnValue({ where: vi.fn().mockRejectedValue(new Error('db down')) }),
-    });
+    dbSelect.mockImplementation(() => ({
+      from: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
+      where: vi.fn().mockRejectedValue(new Error('db down')),
+      limit: vi.fn().mockRejectedValue(new Error('db down')),
+    }));
     const res = await GET(makeReq(), ctx());
     expect(res.status).toBe(500);
   });
@@ -135,7 +207,35 @@ describe('POST /api/drives/[driveId]/domains', () => {
     expect(res.status).toBe(400);
   });
 
+  it('returns 403 when the free tier tries to add a domain', async () => {
+    mockPostSelects({ ownerTier: 'free', domainCount: 0 });
+
+    const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toMatch(/not available on your current plan/i);
+  });
+
+  it('returns 403 when the drive is at the pro tier cap (1 domain)', async () => {
+    mockPostSelects({ ownerTier: 'pro', domainCount: 1 });
+
+    const res = await POST(makeReq({ hostname: 'newdomain.com' }), ctx());
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toMatch(/maximum of 1 custom domain/i);
+  });
+
+  it('returns 403 when the drive is at the founder tier cap (3 domains)', async () => {
+    mockPostSelects({ ownerTier: 'founder', domainCount: 3 });
+
+    const res = await POST(makeReq({ hostname: 'fourth.com' }), ctx());
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toMatch(/maximum of 3 custom domains/i);
+  });
+
   it('normalizes the hostname before insert (strips scheme/path)', async () => {
+    mockPostSelects({ ownerTier: 'pro', domainCount: 0 });
     const inserted = { id: 'dom-1', driveId: DRIVE_ID, hostname: 'acme.com', status: 'pending', createdAt: new Date() };
     const returningMock = vi.fn().mockResolvedValue([inserted]);
     const valuesMock = vi.fn().mockReturnValue({ returning: returningMock });
@@ -145,7 +245,8 @@ describe('POST /api/drives/[driveId]/domains', () => {
     expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ hostname: 'acme.com' }));
   });
 
-  it('returns 201 + domain on success', async () => {
+  it('returns 201 + domain on success (pro tier, 0 existing)', async () => {
+    mockPostSelects({ ownerTier: 'pro', domainCount: 0 });
     const inserted = { id: 'dom-1', driveId: DRIVE_ID, hostname: 'acme.com', status: 'pending', createdAt: new Date() };
     const returningMock = vi.fn().mockResolvedValue([inserted]);
     dbInsert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: returningMock }) });
@@ -157,6 +258,7 @@ describe('POST /api/drives/[driveId]/domains', () => {
   });
 
   it('calls auditRequest on success', async () => {
+    mockPostSelects({ ownerTier: 'business', domainCount: 0 });
     const inserted = { id: 'dom-1', driveId: DRIVE_ID, hostname: 'acme.com', status: 'pending', createdAt: new Date() };
     dbInsert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([inserted]) }) });
 
@@ -167,7 +269,8 @@ describe('POST /api/drives/[driveId]/domains', () => {
     }));
   });
 
-  it('returns 409 when hostname is already registered', async () => {
+  it('returns 409 when hostname is already registered (cross-drive duplicate)', async () => {
+    mockPostSelects({ ownerTier: 'pro', domainCount: 0 });
     const uniqueErr = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
     dbInsert.mockReturnValue({
       values: vi.fn().mockReturnValue({

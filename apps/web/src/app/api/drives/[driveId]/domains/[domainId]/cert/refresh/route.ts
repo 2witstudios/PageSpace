@@ -13,7 +13,8 @@ import { addCertificate } from '@/lib/fly/certs';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
-import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
+import { mirrorDriveToCustomHost, clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
+import { regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -67,10 +68,11 @@ export async function POST(
       .where(eq(customDomains.id, domainId));
 
     // When the cert is freshly provisioned and the domain just became active,
-    // backfill all currently-published artifacts to the custom-host prefix so
-    // the site is immediately ready to serve. Best-effort: failure does not
-    // roll back the status update.
+    // regenerate site files first (so sitemap/robots embed the custom domain as
+    // primary host), then backfill all currently-published artifacts to the
+    // custom-host prefix. Best-effort: failure does not roll back the status update.
     if (nextStatus === 'active' && domain.status !== 'active') {
+      await regeneratePublishedSiteFiles(driveId);
       mirrorDriveToCustomHost(driveId, domain.hostname).catch((err) => {
         loggers.api.warn('Failed to backfill artifacts after cert activation', {
           driveId,
@@ -78,6 +80,24 @@ export async function POST(
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    }
+
+    // When a domain transitions to cert_failed, purge its mirrored prefix so
+    // stale content is not served until the cert is recovered. Run on every
+    // cert_failed outcome (not just active → cert_failed) so that retries
+    // after a failed clearCustomHost() still clean up — the delete is
+    // idempotent/no-op when nothing remains.
+    // Awaited with errors caught and logged so a storage failure doesn't return
+    // 500 when the DB status has already been committed.
+    if (nextStatus === 'cert_failed') {
+      try {
+        await clearCustomHost(domain.hostname);
+      } catch (err) {
+        loggers.api.warn('Failed to clear custom host artifacts after cert failure', {
+          hostname: domain.hostname,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     auditRequest(request, {
