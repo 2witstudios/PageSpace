@@ -300,6 +300,12 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   // 6. Upsert published_pages row
   // ------------------------------------------------------------------
+  // Reserve the (driveId, path) row + artifact key BEFORE the upload so a path
+  // collision is detected before any storage write. The SEO overrides are NOT
+  // written here: they are committed in step 9 only after the artifact upload
+  // succeeds, so a failed upload never leaves the DB advertising metadata the
+  // live artifact doesn't yet carry. (On first insert the override columns take
+  // their defaults — null / noindex=false — until step 9 sets the real values.)
   try {
     await db
       .insert(publishedPages)
@@ -308,10 +314,6 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
         pageId,
         path,
         artifactKey: key,
-        publishTitle: effectiveTitle,
-        publishDescription: effectiveDescription,
-        publishOgImageUrl: effectiveOgImageUrl,
-        noindex: effectiveNoindex,
         publishedBy: userId,
         updatedAt: new Date(),
       })
@@ -320,10 +322,6 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
         set: {
           path,
           artifactKey: key,
-          publishTitle: effectiveTitle,
-          publishDescription: effectiveDescription,
-          publishOgImageUrl: effectiveOgImageUrl,
-          noindex: effectiveNoindex,
           publishedBy: userId,
         },
       });
@@ -351,11 +349,21 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   }
 
   // ------------------------------------------------------------------
-  // 9. Advance updatedAt + cleanup stale artifact
+  // 9. Commit SEO overrides + advance updatedAt + cleanup stale artifact
   // ------------------------------------------------------------------
+  // The artifact carrying this metadata is now live, so persist the resolved
+  // SEO overrides together with the updatedAt advance. Doing it here (post-upload)
+  // keeps the DB consistent with what is actually served: a failed upload above
+  // returns before this line, leaving the row's previous overrides intact.
   await db
     .update(publishedPages)
-    .set({ updatedAt: new Date() })
+    .set({
+      publishTitle: effectiveTitle,
+      publishDescription: effectiveDescription,
+      publishOgImageUrl: effectiveOgImageUrl,
+      noindex: effectiveNoindex,
+      updatedAt: new Date(),
+    })
     .where(eq(publishedPages.pageId, pageId));
 
   if (existing?.artifactKey && existing.artifactKey !== key) {
