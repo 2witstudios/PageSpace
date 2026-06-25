@@ -136,8 +136,11 @@ describe('GET /api/users/find', () => {
       const request = new Request('https://example.com/api/users/find?email=test@example.com');
       await GET(request);
 
+      // The email lookup now flows through the encryption-aware dual-lookup edge
+      // (`userEmailMatch`), so `where` is an opaque Drizzle SQL condition rather
+      // than a raw `eq`. Assert the columns contract and that a condition was passed.
       expect(mockFindFirst).toHaveBeenCalledWith({
-        where: { col: 'email-column', val: 'test@example.com' },
+        where: expect.anything(),
         columns: { id: true, name: true, email: true, image: true },
       });
     });

@@ -7,6 +7,7 @@ import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers } from '@pagespace/db/schema/members';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import {
   groupActivitiesForDiff,
@@ -417,7 +418,8 @@ When summarizing multiple changes, group them thematically and describe the over
           .from(users)
           .where(eq(users.id, userId))
           .limit(1);
-        const currentUserEmail = currentUserRow?.email ?? null;
+        // Decrypt the stored email so it compares to the plaintext actorEmail.
+        const currentUserEmail = currentUserRow ? await decryptField(currentUserRow.email) : null;
         // Get last visit time if needed
         let lastVisitTime: Date | undefined;
         if (since === 'last_visit') {
