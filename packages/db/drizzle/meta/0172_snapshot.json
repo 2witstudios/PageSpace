@@ -1,6 +1,6 @@
 {
-  "id": "1258f90e-3531-430c-a889-a2f1acae0741",
-  "prevId": "82871112-08d2-428c-8a32-2ac0eaee35c3",
+  "id": "59e84afc-d866-4f30-a8b6-381c0d2de0a3",
+  "prevId": "1258f90e-3531-430c-a889-a2f1acae0741",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1614,6 +1614,12 @@
         },
         "homePageId": {
           "name": "homePageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_default_og_image_url": {
+          "name": "publish_default_og_image_url",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -16056,6 +16062,31 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "publish_title": {
+          "name": "publish_title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_description": {
+          "name": "publish_description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_og_image_url": {
+          "name": "publish_og_image_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "noindex": {
+          "name": "noindex",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "published_by": {
           "name": "published_by",

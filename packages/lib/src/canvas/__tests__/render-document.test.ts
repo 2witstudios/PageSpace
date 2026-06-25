@@ -289,8 +289,27 @@ describe('renderCanvasDocument — og:description', () => {
     expect(head).toContain('<meta property="og:description" content="Published on PageSpace"');
   });
 
-  it('given pageUrl but no ogDescription, should omit og:description', () => {
-    const out = renderCanvasDocument({ html: '<p>x</p>', pageUrl: 'https://acme.pagespace.site/p' });
+  it('given pageUrl but no ogDescription, should fall back to the derived meta description', () => {
+    const out = renderCanvasDocument({
+      html: '<p>The quick brown fox.</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta property="og:description" content="The quick brown fox."');
+  });
+
+  it('given pageUrl + explicit description but no ogDescription, should use that description for og:description', () => {
+    const out = renderCanvasDocument({
+      html: '<p>body text</p>',
+      pageUrl: 'https://acme.pagespace.site/p',
+      description: 'Author meta description',
+    });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('<meta property="og:description" content="Author meta description"');
+  });
+
+  it('given pageUrl but no description anywhere, should omit og:description', () => {
+    const out = renderCanvasDocument({ html: '', pageUrl: 'https://acme.pagespace.site/p' });
     expect(out).not.toContain('og:description');
   });
 
