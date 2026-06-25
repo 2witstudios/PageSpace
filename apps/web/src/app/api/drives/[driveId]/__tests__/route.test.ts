@@ -109,6 +109,7 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
   kind: (overrides.kind ?? 'STANDARD') as 'STANDARD' | 'HOME',
   publishSubdomain: null,
   homePageId: overrides.homePageId ?? null,
+  publishDefaultOgImageUrl: null,
 });
 
 // Drive with access info fixture
