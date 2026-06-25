@@ -36,6 +36,13 @@ vi.mock('@/lib/publish/dns-resolver', () => ({
   resolveHostname: (...args: unknown[]) => resolveHostname(...args),
 }));
 
+const mirrorDriveToCustomHost = vi.fn().mockResolvedValue(undefined);
+const clearCustomHost = vi.fn().mockResolvedValue(undefined);
+vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
+  mirrorDriveToCustomHost: (...args: unknown[]) => mirrorDriveToCustomHost(...args),
+  clearCustomHost: (...args: unknown[]) => clearCustomHost(...args),
+}));
+
 const dbSelect = vi.fn();
 const dbUpdate = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
@@ -193,5 +200,49 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/verify', () => {
     });
     const res = await POST(makeReq(), ctx());
     expect(res.status).toBe(500);
+  });
+
+  describe('content mirror decoupled from cert (mirror at verify)', () => {
+    it('mirrors the drive to the host when DNS verifies (→ verified)', async () => {
+      setupSelectReturning([APEX_DOMAIN]);
+      verifyDnsRecords.mockReturnValue({ verified: true });
+
+      await POST(makeReq(), ctx());
+
+      expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'acme.com');
+      expect(clearCustomHost).not.toHaveBeenCalled();
+    });
+
+    it('clears the host when DNS fails (→ dns_failed)', async () => {
+      setupSelectReturning([APEX_DOMAIN]);
+      verifyDnsRecords.mockReturnValue({ verified: false, reason: 'No A records' });
+
+      await POST(makeReq(), ctx());
+
+      expect(clearCustomHost).toHaveBeenCalledWith('acme.com');
+      expect(mirrorDriveToCustomHost).not.toHaveBeenCalled();
+    });
+
+    it('still returns 200 when the verify-time mirror throws (best-effort)', async () => {
+      setupSelectReturning([APEX_DOMAIN]);
+      verifyDnsRecords.mockReturnValue({ verified: true });
+      mirrorDriveToCustomHost.mockRejectedValueOnce(new Error('S3 down'));
+
+      const res = await POST(makeReq(), ctx());
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe('verified');
+    });
+
+    it('still returns 200 when the DNS-failure clear throws (best-effort)', async () => {
+      setupSelectReturning([APEX_DOMAIN]);
+      verifyDnsRecords.mockReturnValue({ verified: false, reason: 'No A records' });
+      clearCustomHost.mockRejectedValueOnce(new Error('S3 down'));
+
+      const res = await POST(makeReq(), ctx());
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe('dns_failed');
+    });
   });
 });
