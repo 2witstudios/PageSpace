@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { nextCertAction, certActionToDbStatus, isCertEligible } from '../cert-action';
+import { nextCertAction, certActionToDbStatus, isCertEligible, isServingStatus } from '../cert-action';
 import type { FlyCertResponse } from '../cert-action';
 
 const ok = (configured: boolean): FlyCertResponse => ({ ok: true, configured });
@@ -107,4 +107,17 @@ describe('isCertEligible', () => {
   it('returns false for pending', () => expect(isCertEligible('pending')).toBe(false));
   it('returns false for dns_failed', () => expect(isCertEligible('dns_failed')).toBe(false));
   it('returns false for failed (legacy)', () => expect(isCertEligible('failed')).toBe(false));
+});
+
+describe('isServingStatus', () => {
+  // Serving = DNS-confirmed host that should hold mirrored content, independent
+  // of cert state. Asserted for EVERY status value in the enum.
+  it('returns true for verified', () => expect(isServingStatus('verified')).toBe(true));
+  it('returns true for provisioning', () => expect(isServingStatus('provisioning')).toBe(true));
+  it('returns true for active', () => expect(isServingStatus('active')).toBe(true));
+  it('returns false for pending', () => expect(isServingStatus('pending')).toBe(false));
+  it('returns false for dns_failed', () => expect(isServingStatus('dns_failed')).toBe(false));
+  it('returns false for cert_failed', () => expect(isServingStatus('cert_failed')).toBe(false));
+  it('returns false for failed (legacy)', () => expect(isServingStatus('failed')).toBe(false));
+  it('returns false for an unknown status', () => expect(isServingStatus('bogus')).toBe(false));
 });

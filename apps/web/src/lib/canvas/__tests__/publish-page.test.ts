@@ -100,8 +100,10 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 
 import { db } from '@pagespace/db/db';
 import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, copyPublishedArtifact, isPublishConfigured } from '../published-storage';
-import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, PublishError } from '../publish-page';
+import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, republishDriveCanonical, PublishError } from '../publish-page';
 import { getActiveDomainRecords } from '../custom-domain-mirror';
+import { renderPublishedPage } from '../render-published';
+import { extractAndStripOgMeta } from '../asset-pipeline';
 
 // The mocked `db` keeps the real relational-query return types, so partial test
 // fixtures are cast through `unknown` to the row shape (never `any`).
@@ -283,7 +285,7 @@ describe('publishCanvasPage', () => {
     expect(PublishError).toBeDefined();
   });
 
-  it('response url is always the subdomain (not the custom domain) regardless of active custom domains', async () => {
+  it('response url is the primary host (custom domain) when an active custom domain exists', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'CANVAS', title: 'About', content: '<div/>', driveId: 'drive-1',
     }));
@@ -297,9 +299,28 @@ describe('publishCanvasPage', () => {
 
     const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
 
-    // Response URL uses the subdomain (guaranteed write) so the caller always gets a working link.
-    // The canonical/OG tags baked into the HTML still use the custom domain.
-    expect(result.url).toBe('https://acme.pagespace.site/about');
+    // Response URL is the branded primary host — the same canonical host baked
+    // into the HTML — so the publish control shows/copies the link visitors should land on.
+    expect(result.url).toBe('https://www.acme.com/about');
+  });
+
+  it('response url honors an explicitly-selected primary custom domain', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'About', content: '<div/>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([
+      { hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
+      { hostname: 'docs.acme.com', createdAt: new Date('2026-03-01T00:00:00.000Z'), isPrimary: true },
+    ]);
+
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    // docs is newer but flagged primary, so it wins over the earliest-created www.
+    expect(result.url).toBe('https://docs.acme.com/about');
   });
 
   it('uses the subdomain as response URL when no active custom domain exists', async () => {
@@ -317,7 +338,7 @@ describe('publishCanvasPage', () => {
     expect(result.url).toBe('https://acme.pagespace.site/about');
   });
 
-  it('home page response URL is the subdomain root even when a custom domain is active', async () => {
+  it('home page response URL is the primary host root when a custom domain is active', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
       id: 'page-1', type: 'CANVAS', title: 'Home', content: '<div/>', driveId: 'drive-1',
     }));
@@ -332,7 +353,158 @@ describe('publishCanvasPage', () => {
     const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
 
     expect(result.isHomePage).toBe(true);
-    expect(result.url).toBe('https://acme.pagespace.site/');
+    expect(result.url).toBe('https://www.acme.com/');
+  });
+});
+
+describe('publishCanvasPage — SEO overrides', () => {
+  // Capture the values passed to the published_pages upsert (path reservation)…
+  let valuesSpy: ReturnType<typeof vi.fn>;
+  // …and the payloads of every `db.update(...).set(...)` call. The SEO overrides
+  // are committed in the POST-UPLOAD update (step 9), not the pre-upload upsert,
+  // so a failed artifact write never persists metadata the artifact lacks.
+  let updateSetCalls: Array<Record<string, unknown>>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isPublishConfigured).mockReturnValue(true);
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue([]);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
+    vi.mocked(extractAndStripOgMeta).mockReturnValue({
+      meta: { faviconHref: undefined, ogImageUrl: undefined, ogDescription: undefined },
+      html: '<div>hi</div>',
+    });
+    valuesSpy = vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) }));
+    vi.mocked(db.insert).mockReturnValue({ values: valuesSpy } as never);
+    updateSetCalls = [];
+    vi.mocked(db.update).mockReturnValue({
+      set: (payload: Record<string, unknown>) => {
+        updateSetCalls.push(payload);
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      },
+    } as never);
+  });
+
+  // The SEO-bearing update is the one that also advances updatedAt (step 9).
+  const seoUpdate = () => updateSetCalls.find((p) => 'updatedAt' in p && 'noindex' in p);
+
+  const setupPage = (driveOverrides: Record<string, unknown> = {}) => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Page Title', content: '<div>hi</div>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null, publishDefaultOgImageUrl: null, ...driveOverrides,
+    }));
+  };
+
+  it('persists the author overrides only after the artifact upload (post-upload update)', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1',
+      title: 'Custom Title', description: 'Custom desc', ogImageUrl: 'https://img.example/og.png', noindex: true,
+    });
+
+    // The reservation upsert never carries SEO columns…
+    expect(valuesSpy).not.toHaveBeenCalledWith(expect.objectContaining({ publishTitle: 'Custom Title' }));
+    // …the post-upload commit does.
+    expect(seoUpdate()).toMatchObject({
+      publishTitle: 'Custom Title',
+      publishDescription: 'Custom desc',
+      publishOgImageUrl: 'https://img.example/og.png',
+      noindex: true,
+    });
+  });
+
+  it('does not persist SEO metadata when the artifact upload fails', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+    vi.mocked(putPublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
+
+    await expect(publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', title: 'Custom Title', noindex: true,
+    })).rejects.toThrow('S3 down');
+
+    // Upload failed before step 9, so no SEO-bearing update ran.
+    expect(seoUpdate()).toBeUndefined();
+  });
+
+  it('threads the title override and noindex into the rendered page', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1',
+      title: 'Custom Title', noindex: true,
+    });
+
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.title).toBe('Custom Title');
+    expect(renderInput?.robots).toBe('noindex');
+  });
+
+  it('falls back to the drive default OG image when neither override nor canvas set one', async () => {
+    setupPage({ publishDefaultOgImageUrl: 'https://drive-default.example/og.png' });
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.ogImageUrl).toBe('https://drive-default.example/og.png');
+  });
+
+  it('prefers an explicit override image over the drive default', async () => {
+    setupPage({ publishDefaultOgImageUrl: 'https://drive-default.example/og.png' });
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', ogImageUrl: 'https://override.example/og.png',
+    });
+
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.ogImageUrl).toBe('https://override.example/og.png');
+  });
+
+  it('preserves persisted overrides when a republish passes no override fields', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(publishedPageRow({
+      artifactKey: 'published/acme/page/index.html',
+      publishTitle: 'Sticky Title',
+      publishDescription: 'Sticky desc',
+      publishOgImageUrl: 'https://sticky.example/og.png',
+      noindex: true,
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(seoUpdate()).toMatchObject({
+      publishTitle: 'Sticky Title',
+      publishDescription: 'Sticky desc',
+      publishOgImageUrl: 'https://sticky.example/og.png',
+      noindex: true,
+    });
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.title).toBe('Sticky Title');
+    expect(renderInput?.robots).toBe('noindex');
+  });
+
+  it('clears a persisted override when an empty string is passed', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(publishedPageRow({
+      artifactKey: 'published/acme/page/index.html',
+      publishTitle: 'Old Title',
+      publishDescription: null,
+      publishOgImageUrl: null,
+      noindex: false,
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', title: '' });
+
+    expect(seoUpdate()).toMatchObject({ publishTitle: null });
+    // Title falls back to the live page title once the override is cleared.
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.title).toBe('Page Title');
   });
 });
 
@@ -553,6 +725,22 @@ describe('regeneratePublishedSiteFiles', () => {
     expect(publishedArtifactExists).not.toHaveBeenCalled();
   });
 
+  it('excludes noindex pages from the sitemap', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      name: 'Acme', publishSubdomain: 'acme', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'p1', path: 'public', updatedAt: new Date('2026-06-22T00:00:00.000Z'), noindex: false },
+      { pageId: 'p2', path: 'secret', updatedAt: new Date('2026-06-21T00:00:00.000Z'), noindex: true },
+    ]));
+
+    await regeneratePublishedSiteFiles('drive-1');
+
+    const sitemapCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === 'sitemap.xml');
+    expect(sitemapCall?.[0].body).toContain('https://acme.pagespace.site/public');
+    expect(sitemapCall?.[0].body).not.toContain('/secret');
+  });
+
   it('regenerates the sitemap even with zero published pages (unpublish to empty)', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       name: 'Acme', publishSubdomain: 'acme', homePageId: null,
@@ -693,5 +881,58 @@ describe('syncPublishedHomeRoot', () => {
     vi.mocked(copyPublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
 
     await expect(syncPublishedHomeRoot('drive-1')).resolves.toBeUndefined();
+  });
+});
+
+describe('republishDriveCanonical', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isPublishConfigured).mockReturnValue(true);
+  });
+
+  it('re-renders every published page at its existing path and returns the count', async () => {
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue([
+      { pageId: 'page-1', path: 'about' },
+      { pageId: 'page-2', path: 'team/leadership' },
+    ] as unknown as Awaited<ReturnType<typeof db.query.publishedPages.findMany>>);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(
+      pageRow({ id: 'page-x', type: 'CANVAS', title: 'Ignored Title', content: '<div/>', driveId: 'drive-1' }),
+    );
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
+    }));
+
+    const count = await republishDriveCanonical('drive-1', 'user-1');
+
+    expect(count).toBe(2);
+    // Each page is re-published at its STORED path, not re-derived from the title.
+    const paths = vi.mocked(putPublishedArtifact).mock.calls.map(([arg]) => (arg as { path: string }).path);
+    expect(paths).toContain('about');
+    expect(paths).toContain('team/leadership');
+  });
+
+  it('isolates per-page failures and counts only the successes', async () => {
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue([
+      { pageId: 'missing', path: 'gone' },
+      { pageId: 'page-2', path: 'ok' },
+    ] as unknown as Awaited<ReturnType<typeof db.query.publishedPages.findMany>>);
+    // First page is missing → publishCanvasPage throws; second succeeds.
+    vi.mocked(db.query.pages.findFirst)
+      .mockResolvedValueOnce(undefined as unknown as PageRow)
+      .mockResolvedValue(pageRow({ id: 'page-2', type: 'CANVAS', title: 'OK', content: '<div/>', driveId: 'drive-1' }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
+    }));
+
+    const count = await republishDriveCanonical('drive-1', 'user-1');
+
+    expect(count).toBe(1);
+  });
+
+  it('is a no-op returning 0 when publishing is not configured', async () => {
+    vi.mocked(isPublishConfigured).mockReturnValue(false);
+    const count = await republishDriveCanonical('drive-1', 'user-1');
+    expect(count).toBe(0);
+    expect(db.query.publishedPages.findMany).not.toHaveBeenCalled();
   });
 });

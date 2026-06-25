@@ -93,6 +93,9 @@ export interface Drive {
   lastAccessedAt?: string | null; // ISO8601 date string from API
   // Optional: zustand-persisted Drive objects in localStorage predate this field
   homePageId?: string | null;
+  // Drive-wide default social share image for published pages lacking their own.
+  // Optional: predates the field on zustand-persisted Drive objects.
+  publishDefaultOgImageUrl?: string | null;
 }
 
 // Inbox types for unified DM/Channel inbox

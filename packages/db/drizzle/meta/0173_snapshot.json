@@ -1,6 +1,6 @@
 {
-  "id": "1258f90e-3531-430c-a889-a2f1acae0741",
-  "prevId": "82871112-08d2-428c-8a32-2ac0eaee35c3",
+  "id": "8e800110-e99a-4a49-9334-6cdd3c5cfc18",
+  "prevId": "59e84afc-d866-4f30-a8b6-381c0d2de0a3",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1614,6 +1614,12 @@
         },
         "homePageId": {
           "name": "homePageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_default_og_image_url": {
+          "name": "publish_default_og_image_url",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -5522,6 +5528,30 @@
         "stateHashAfter": {
           "name": "stateHashAfter",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dataCategory": {
+          "name": "dataCategory",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "legalBasis": {
+          "name": "legalBasis",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "retentionPolicy": {
+          "name": "retentionPolicy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recipients": {
+          "name": "recipients",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -16057,6 +16087,31 @@
           "primaryKey": false,
           "notNull": true
         },
+        "publish_title": {
+          "name": "publish_title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_description": {
+          "name": "publish_description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_og_image_url": {
+          "name": "publish_og_image_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "noindex": {
+          "name": "noindex",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "published_by": {
           "name": "published_by",
           "type": "text",
@@ -16965,6 +17020,200 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.incidents": {
+      "name": "incidents",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "severity": {
+          "name": "severity",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'detected'"
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "detectedAt": {
+          "name": "detectedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "reportedBy": {
+          "name": "reportedBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "affectedUserCount": {
+          "name": "affectedUserCount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "affectedScope": {
+          "name": "affectedScope",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "riskLevel": {
+          "name": "riskLevel",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "requiresAuthorityNotification": {
+          "name": "requiresAuthorityNotification",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "authorityNotificationDeadline": {
+          "name": "authorityNotificationDeadline",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "authorityNotifiedAt": {
+          "name": "authorityNotifiedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "requiresSubjectNotification": {
+          "name": "requiresSubjectNotification",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subjectsNotifiedAt": {
+          "name": "subjectsNotifiedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "closedAt": {
+          "name": "closedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "idx_incidents_status": {
+          "name": "idx_incidents_status",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_incidents_detected_at": {
+          "name": "idx_incidents_detected_at",
+          "columns": [
+            {
+              "expression": "detectedAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_incidents_authority_deadline": {
+          "name": "idx_incidents_authority_deadline",
+          "columns": [
+            {
+              "expression": "authorityNotificationDeadline",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "incidents_reportedBy_users_id_fk": {
+          "name": "incidents_reportedBy_users_id_fk",
+          "tableFrom": "incidents",
+          "tableTo": "users",
+          "columnsFrom": [
+            "reportedBy"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

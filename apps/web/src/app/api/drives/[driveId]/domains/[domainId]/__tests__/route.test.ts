@@ -1,8 +1,8 @@
 /**
- * Contract tests for DELETE /api/drives/[driveId]/domains/[domainId]
+ * Contract tests for DELETE and PATCH /api/drives/[driveId]/domains/[domainId]
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { DELETE } from '../route';
+import { DELETE, PATCH } from '../route';
 
 vi.mock('server-only', () => ({}));
 
@@ -25,9 +25,13 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 const dbDelete = vi.fn();
+const findFirst = vi.fn();
+const dbTransaction = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: {
     delete: (...args: unknown[]) => dbDelete(...args),
+    query: { customDomains: { findFirst: (...args: unknown[]) => findFirst(...args) } },
+    transaction: (...args: unknown[]) => dbTransaction(...args),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -40,13 +44,20 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
     driveId: 'col_driveId',
     hostname: 'col_hostname',
     status: 'col_status',
+    isPrimary: 'col_isPrimary',
     createdAt: 'col_createdAt',
   },
 }));
 
 const clearCustomHost = vi.fn().mockResolvedValue(undefined);
+const regeneratePublishedSiteFiles = vi.fn().mockResolvedValue(undefined);
+const republishDriveCanonical = vi.fn().mockResolvedValue(0);
 vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
   clearCustomHost: (...args: unknown[]) => clearCustomHost(...args),
+}));
+vi.mock('@/lib/canvas/publish-page', () => ({
+  regeneratePublishedSiteFiles: (...args: unknown[]) => regeneratePublishedSiteFiles(...args),
+  republishDriveCanonical: (...args: unknown[]) => republishDriveCanonical(...args),
 }));
 
 const DRIVE_ID = 'drive-1';
@@ -129,13 +140,129 @@ describe('DELETE /api/drives/[driveId]/domains/[domainId]', () => {
     expect(clearCustomHost).toHaveBeenCalledWith('acme.com');
   });
 
-  it('does NOT trigger clearCustomHost for a non-active domain', async () => {
-    const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'pending.com', status: 'pending', createdAt: new Date() };
+  it('triggers clearCustomHost when deleted domain is verified (serving, mirrored at verify time)', async () => {
+    const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'verified.com', status: 'verified', createdAt: new Date() };
+    dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([deleted]) }) });
+
+    const res = await DELETE(makeReq(), ctx());
+    await Promise.resolve();
+
+    expect(res.status).toBe(200);
+    expect(clearCustomHost).toHaveBeenCalledWith('verified.com');
+  });
+
+  it('triggers clearCustomHost when deleted domain is provisioning (serving)', async () => {
+    const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'prov.com', status: 'provisioning', createdAt: new Date() };
     dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([deleted]) }) });
 
     await DELETE(makeReq(), ctx());
     await Promise.resolve();
 
-    expect(clearCustomHost).not.toHaveBeenCalled();
+    expect(clearCustomHost).toHaveBeenCalledWith('prov.com');
+  });
+
+  it('does NOT trigger clearCustomHost for a non-serving domain (pending/dns_failed)', async () => {
+    for (const status of ['pending', 'dns_failed', 'cert_failed']) {
+      clearCustomHost.mockClear();
+      const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: `${status}.com`, status, createdAt: new Date() };
+      dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([deleted]) }) });
+
+      await DELETE(makeReq(), ctx());
+      await Promise.resolve();
+
+      expect(clearCustomHost).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('PATCH /api/drives/[driveId]/domains/[domainId] (set primary)', () => {
+  const makePatchReq = (body: unknown = { isPrimary: true }): Request =>
+    ({ json: () => Promise.resolve(body) } as unknown as Request);
+
+  // A tx where `.update().set().where()` is awaitable AND exposes `.returning()`
+  // so both the clear-others update and the set-primary update work off one mock.
+  const wireTransaction = (updated: unknown) => {
+    const whereResult = Object.assign(Promise.resolve([updated]), {
+      returning: () => Promise.resolve([updated]),
+    });
+    const tx = { update: vi.fn(() => ({ set: () => ({ where: () => whereResult }) })) };
+    dbTransaction.mockImplementation((cb: (tx: unknown) => unknown) => cb(tx));
+    return tx;
+  };
+
+  it('returns 401 when not authenticated', async () => {
+    authenticateRequestWithOptions.mockResolvedValue({ error: new Response(null, { status: 401 }) });
+    const res = await PATCH(makePatchReq(), ctx());
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 when caller is not owner/admin', async () => {
+    isPrincipalDriveOwnerOrAdmin.mockResolvedValue(false);
+    const res = await PATCH(makePatchReq(), ctx());
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 400 on an invalid body (isPrimary !== true)', async () => {
+    const res = await PATCH(makePatchReq({ isPrimary: false }), ctx());
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when the domain is not in the drive', async () => {
+    findFirst.mockResolvedValue(undefined);
+    const res = await PATCH(makePatchReq(), ctx());
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 when the target domain is not active', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'pending' });
+    const res = await PATCH(makePatchReq(), ctx());
+    expect(res.status).toBe(400);
+    expect(dbTransaction).not.toHaveBeenCalled();
+  });
+
+  it('sets the active domain primary and returns the updated row', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    const updated = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', status: 'active', isPrimary: true };
+    wireTransaction(updated);
+
+    const res = await PATCH(makePatchReq(), ctx());
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.domain.isPrimary).toBe(true);
+  });
+
+  it('re-renders published pages and audits on success', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireTransaction({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', status: 'active', isPrimary: true });
+    // Two pages were re-rendered (each refreshes site files internally), so the
+    // route must NOT redundantly regenerate them again.
+    republishDriveCanonical.mockResolvedValueOnce(2);
+
+    await PATCH(makePatchReq(), ctx());
+    await Promise.resolve();
+
+    expect(republishDriveCanonical).toHaveBeenCalledWith(DRIVE_ID, USER_ID);
+    expect(regeneratePublishedSiteFiles).not.toHaveBeenCalled();
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      eventType: 'data.write',
+      details: expect.objectContaining({ operation: 'set-primary-custom-domain', hostname: 'acme.com' }),
+    }));
+  });
+
+  it('still refreshes site files when the drive has no published pages to re-render', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireTransaction({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', status: 'active', isPrimary: true });
+    republishDriveCanonical.mockResolvedValueOnce(0);
+
+    await PATCH(makePatchReq(), ctx());
+    await Promise.resolve();
+
+    expect(regeneratePublishedSiteFiles).toHaveBeenCalledWith(DRIVE_ID);
+  });
+
+  it('returns 500 on unexpected db error', async () => {
+    findFirst.mockRejectedValue(new Error('db down'));
+    const res = await PATCH(makePatchReq(), ctx());
+    expect(res.status).toBe(500);
   });
 });

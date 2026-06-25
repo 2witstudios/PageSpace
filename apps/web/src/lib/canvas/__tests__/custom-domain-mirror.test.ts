@@ -134,11 +134,13 @@ describe('mirrorPublishedPageToHosts', () => {
     expect(copyPublishedArtifact).toHaveBeenCalledTimes(2);
   });
 
-  it('does NOT mirror to pending or verified (not-active) domains', async () => {
+  it('mirrors to serving (verified/provisioning/active) hosts but NOT pending/dns_failed', async () => {
     mockSelect([
       { hostname: 'pending.example.com', status: 'pending' },
       { hostname: 'verified.example.com', status: 'verified' },
+      { hostname: 'provisioning.example.com', status: 'provisioning' },
       { hostname: 'active.example.com', status: 'active' },
+      { hostname: 'dnsfailed.example.com', status: 'dns_failed' },
     ]);
 
     await mirrorPublishedPageToHosts({
@@ -148,16 +150,25 @@ describe('mirrorPublishedPageToHosts', () => {
       isHomePage: false,
     });
 
-    // Only the active domain receives a copy
-    expect(copyPublishedArtifact).toHaveBeenCalledTimes(1);
-    expect(copyPublishedArtifact).toHaveBeenCalledWith(
-      'published/acme/about/index.html',
-      'published/active.example.com/about/index.html',
+    // verified + provisioning + active each receive a copy; pending/dns_failed do not.
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(3);
+    const targets = vi.mocked(copyPublishedArtifact).mock.calls.map(([, to]) => to);
+    expect(targets).toEqual(
+      expect.arrayContaining([
+        'published/verified.example.com/about/index.html',
+        'published/provisioning.example.com/about/index.html',
+        'published/active.example.com/about/index.html',
+      ]),
     );
+    expect(targets).not.toContain('published/pending.example.com/about/index.html');
+    expect(targets).not.toContain('published/dnsfailed.example.com/about/index.html');
   });
 
-  it('is a no-op when there are no active custom domains', async () => {
-    mockSelect([{ hostname: 'pending.example.com', status: 'pending' }]);
+  it('is a no-op when there are no serving custom domains', async () => {
+    mockSelect([
+      { hostname: 'pending.example.com', status: 'pending' },
+      { hostname: 'dnsfailed.example.com', status: 'dns_failed' },
+    ]);
 
     await mirrorPublishedPageToHosts({
       driveId: 'drive-1',
@@ -285,21 +296,29 @@ describe('deletePageFromCustomHosts', () => {
     );
   });
 
-  it('does NOT delete from pending/verified domains', async () => {
+  it('deletes from serving (verified/active) hosts but NOT pending/dns_failed', async () => {
     mockSelect([
       { hostname: 'pending.example.com', status: 'pending' },
+      { hostname: 'verified.example.com', status: 'verified' },
       { hostname: 'active.example.com', status: 'active' },
+      { hostname: 'dnsfailed.example.com', status: 'dns_failed' },
     ]);
 
     await deletePageFromCustomHosts({ driveId: 'drive-1', path: 'about', isHomePage: false });
 
-    expect(deletePublishedArtifact).toHaveBeenCalledTimes(1);
-    expect(deletePublishedArtifact).toHaveBeenCalledWith(
-      'published/active.example.com/about/index.html',
+    expect(deletePublishedArtifact).toHaveBeenCalledTimes(2);
+    const targets = vi.mocked(deletePublishedArtifact).mock.calls.map(([key]) => key);
+    expect(targets).toEqual(
+      expect.arrayContaining([
+        'published/verified.example.com/about/index.html',
+        'published/active.example.com/about/index.html',
+      ]),
     );
+    expect(targets).not.toContain('published/pending.example.com/about/index.html');
+    expect(targets).not.toContain('published/dnsfailed.example.com/about/index.html');
   });
 
-  it('is a no-op when no active hosts', async () => {
+  it('is a no-op when no serving hosts', async () => {
     mockSelect([]);
 
     await deletePageFromCustomHosts({ driveId: 'drive-1', path: 'about', isHomePage: false });

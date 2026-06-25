@@ -22,6 +22,9 @@ const patchSchema = z.object({
   drivePrompt: z.string().max(10000).optional(),
   // min(1): "" must never reach the FK; null is the only clear signal
   homePageId: z.string().min(1).nullable().optional(),
+  // Drive-wide default OG/share image. "" or null clears it; a non-empty value
+  // must be a valid URL.
+  publishDefaultOgImageUrl: z.union([z.literal(''), z.string().url()]).nullable().optional(),
 });
 
 /**
@@ -149,11 +152,16 @@ export async function PATCH(
       }
     }
 
-    // Update the drive
+    // Update the drive. An empty-string default OG image is normalized to null
+    // (clear) so the column never holds a blank string.
     const updatedDrive = await updateDrive(driveId, {
       name: validatedBody.name,
       drivePrompt: validatedBody.drivePrompt,
       homePageId: validatedBody.homePageId,
+      publishDefaultOgImageUrl:
+        validatedBody.publishDefaultOgImageUrl === undefined
+          ? undefined
+          : validatedBody.publishDefaultOgImageUrl || null,
     });
 
     // Broadcast drive update event if name, drivePrompt, or homePageId changed

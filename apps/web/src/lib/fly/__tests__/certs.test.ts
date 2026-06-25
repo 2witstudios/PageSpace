@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.stubGlobal('fetch', vi.fn());
 
-import { addCertificate } from '../certs';
+import { addCertificate, getCertificate } from '../certs';
 
 const FLY_API_URL = 'https://api.fly.io/graphql';
 const TOKEN = 'fly-test-token';
@@ -28,6 +28,18 @@ function mockFetchHttpError(status: number) {
   } as unknown as Response);
 }
 
+function addCertOk(clientStatus: string) {
+  return {
+    data: { addCertificate: { certificate: { configured: true, clientStatus, hostname: HOSTNAME } } },
+  };
+}
+
+function getCertOk(clientStatus: string) {
+  return {
+    data: { app: { certificate: { configured: true, clientStatus, hostname: HOSTNAME } } },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.FLY_API_TOKEN = TOKEN;
@@ -39,9 +51,7 @@ afterEach(() => {
 
 describe('addCertificate', () => {
   it('sends POST to Fly GraphQL with correct Authorization header', async () => {
-    mockFetchOk({
-      data: { addCertificate: { certificate: { configured: false, hostname: HOSTNAME } } },
-    });
+    mockFetchOk(addCertOk('Awaiting certificates'));
 
     await addCertificate(APP_NAME, HOSTNAME);
 
@@ -53,35 +63,65 @@ describe('addCertificate', () => {
     expect(init.method).toBe('POST');
   });
 
-  it('sends mutation with appName and hostname variables', async () => {
-    mockFetchOk({
-      data: { addCertificate: { certificate: { configured: false, hostname: HOSTNAME } } },
-    });
+  it('passes a bounded AbortSignal (timeout) to fetch so a hung Fly response cannot block the caller', async () => {
+    mockFetchOk(addCertOk('Awaiting certificates'));
 
     await addCertificate(APP_NAME, HOSTNAME);
 
     const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(init.body as string) as { variables: Record<string, string> };
-    expect(body.variables.appName).toBe(APP_NAME);
-    expect(body.variables.hostname).toBe(HOSTNAME);
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it('returns ok:true with configured:false when cert is provisioning', async () => {
-    mockFetchOk({
-      data: { addCertificate: { certificate: { configured: false, hostname: HOSTNAME } } },
-    });
+  it('returns ok:false when the Fly request times out (aborted)', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' }),
+    );
 
+    const result = await addCertificate(APP_NAME, HOSTNAME);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/timed out/i);
+  });
+
+  it('sends the mutation with appId (not appName) and hostname variables', async () => {
+    mockFetchOk(addCertOk('Awaiting certificates'));
+
+    await addCertificate(APP_NAME, HOSTNAME);
+
+    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { query: string; variables: Record<string, string> };
+    expect(body.variables.appId).toBe(APP_NAME);
+    expect(body.variables.hostname).toBe(HOSTNAME);
+    expect(body.variables.appName).toBeUndefined();
+    expect(body.query).toContain('addCertificate(appId: $appId');
+  });
+
+  it('returns ok:true configured:false while the cert is not yet Ready', async () => {
+    mockFetchOk(addCertOk('Awaiting configuration'));
     const result = await addCertificate(APP_NAME, HOSTNAME);
     expect(result).toEqual({ ok: true, configured: false });
   });
 
-  it('returns ok:true with configured:true when cert is already ready', async () => {
-    mockFetchOk({
-      data: { addCertificate: { certificate: { configured: true, hostname: HOSTNAME } } },
-    });
-
+  it('returns ok:true configured:true when clientStatus is Ready', async () => {
+    mockFetchOk(addCertOk('Ready'));
     const result = await addCertificate(APP_NAME, HOSTNAME);
     expect(result).toEqual({ ok: true, configured: true });
+  });
+
+  it('treats "Hostname already exists" as non-fatal and reads the existing cert status', async () => {
+    // 1st call: addCertificate → "already exists" error
+    mockFetchOk({ data: null, errors: [{ message: 'Hostname already exists on app' }] });
+    // 2nd call: getCertificate → Ready
+    mockFetchOk(getCertOk('Ready'));
+
+    const result = await addCertificate(APP_NAME, HOSTNAME);
+
+    expect(result).toEqual({ ok: true, configured: true });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const [, secondInit] = (fetch as ReturnType<typeof vi.fn>).mock.calls[1] as [string, RequestInit];
+    const secondBody = JSON.parse(secondInit.body as string) as { query: string; variables: Record<string, string> };
+    expect(secondBody.query).toContain('app(name: $appName)');
+    expect(secondBody.variables.appName).toBe(APP_NAME);
   });
 
   it('returns ok:false when FLY_API_TOKEN is absent', async () => {
@@ -104,7 +144,7 @@ describe('addCertificate', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('returns ok:false when GraphQL response has errors', async () => {
+  it('returns ok:false on a non-"already exists" GraphQL error', async () => {
     mockFetchOk({ data: null, errors: [{ message: 'app not found' }] });
     const result = await addCertificate(APP_NAME, HOSTNAME);
     expect(result.ok).toBe(false);
@@ -112,3 +152,26 @@ describe('addCertificate', () => {
   });
 });
 
+describe('getCertificate', () => {
+  it('queries app(name:) and maps Ready → configured:true', async () => {
+    mockFetchOk(getCertOk('Ready'));
+    const result = await getCertificate(APP_NAME, HOSTNAME);
+    expect(result).toEqual({ ok: true, configured: true });
+    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { variables: Record<string, string> };
+    expect(body.variables.appName).toBe(APP_NAME);
+    expect(body.variables.hostname).toBe(HOSTNAME);
+  });
+
+  it('maps a non-Ready status to configured:false', async () => {
+    mockFetchOk(getCertOk('Awaiting configuration'));
+    const result = await getCertificate(APP_NAME, HOSTNAME);
+    expect(result).toEqual({ ok: true, configured: false });
+  });
+
+  it('returns ok:false when the app/cert is missing', async () => {
+    mockFetchOk({ data: { app: { certificate: null } } });
+    const result = await getCertificate(APP_NAME, HOSTNAME);
+    expect(result.ok).toBe(false);
+  });
+});
