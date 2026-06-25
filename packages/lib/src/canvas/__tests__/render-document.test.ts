@@ -44,20 +44,23 @@ describe('renderCanvasDocument', () => {
     expect(BASELINE_CSP).not.toContain('sandbox');
   });
 
-  it('should allowlist Google Fonts (stylesheet host in style-src, font host in font-src)', () => {
-    expect(BASELINE_CSP).toContain("style-src 'unsafe-inline' https://fonts.googleapis.com");
-    expect(BASELINE_CSP).toContain('font-src https://fonts.gstatic.com');
-    // No other external style/font host is allowed.
-    expect(BASELINE_CSP).not.toContain('https://fonts.googleapis.com https://');
+  it('should allowlist ONLY Google Fonts and nothing broader (exact baseline policy)', () => {
+    // Pin the whole policy: any broadening of style-src/font-src (e.g. an extra
+    // host or a wildcard) flips this test, not just the two intended additions.
+    expect(BASELINE_CSP).toBe(
+      "default-src 'none'; img-src data: https:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'",
+    );
   });
 
   it('should embed the Google Fonts hosts in the rendered CSP <meta> when the author links them', () => {
     const out = renderCanvasDocument({
       html: '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter&display=swap"><p>x</p>',
     });
-    expect(out).toContain('http-equiv="Content-Security-Policy"');
-    expect(out).toContain('https://fonts.googleapis.com');
-    expect(out).toContain('font-src https://fonts.gstatic.com');
+    // Assert against the CSP meta's content value specifically — not the whole
+    // HTML, which would also match the author-supplied <link> and give a false pass.
+    const csp = out.match(/<meta http-equiv="Content-Security-Policy" content="([^"]*)"/)?.[1] ?? '';
+    expect(csp).toContain("style-src 'unsafe-inline' https://fonts.googleapis.com");
+    expect(csp).toContain('font-src https://fonts.gstatic.com');
   });
 
   it('should emit a baseline reset that zeroes the body margin (no UA border/frame)', () => {
