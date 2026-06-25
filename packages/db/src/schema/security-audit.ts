@@ -62,10 +62,15 @@ export type SecurityEventType =
   | 'admin.user.reactivated'
   | 'admin.user.deleted'
   | 'admin.settings.changed'
+  // Privileged operator read of another subject's personal data (#954, Art 32(1)(b)).
+  // Distinct from data.read so DSAR/admin reads are separable in forensic queries.
+  | 'admin.data.read'
   | 'security.anomaly.detected'
   | 'security.rate.limited'
   | 'security.brute.force.detected'
-  | 'security.suspicious.activity';
+  | 'security.suspicious.activity'
+  // Personal-data breach / security incident recorded (#979, Art 33/34).
+  | 'security.incident.created';
 
 /**
  * Security Audit Log table - tamper-evident security event tracking.

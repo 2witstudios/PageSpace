@@ -222,6 +222,16 @@
       "import": "./dist/audit/mask-email.js",
       "require": "./dist/audit/mask-email.js"
     },
+    "./audit/sanitize-audit-details": {
+      "types": "./dist/audit/sanitize-audit-details.d.ts",
+      "import": "./dist/audit/sanitize-audit-details.js",
+      "require": "./dist/audit/sanitize-audit-details.js"
+    },
+    "./audit/admin-read-audit": {
+      "types": "./dist/audit/admin-read-audit.d.ts",
+      "import": "./dist/audit/admin-read-audit.js",
+      "require": "./dist/audit/admin-read-audit.js"
+    },
     "./auth/broadcast-auth": {
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",
@@ -742,6 +752,16 @@
       "import": "./dist/audit/security-audit-alerting.js",
       "require": "./dist/audit/security-audit-alerting.js"
     },
+    "./incidents/breach-assessment": {
+      "types": "./dist/incidents/breach-assessment.d.ts",
+      "import": "./dist/incidents/breach-assessment.js",
+      "require": "./dist/incidents/breach-assessment.js"
+    },
+    "./incidents/incident-service": {
+      "types": "./dist/incidents/incident-service.d.ts",
+      "import": "./dist/incidents/incident-service.js",
+      "require": "./dist/incidents/incident-service.js"
+    },
     "./monitoring/change-group": {
       "types": "./dist/monitoring/change-group.d.ts",
       "import": "./dist/monitoring/change-group.js",
@@ -816,6 +836,16 @@
       "types": "./dist/integrations/converter/openapi.d.ts",
       "import": "./dist/integrations/converter/openapi.js",
       "require": "./dist/integrations/converter/openapi.js"
+    },
+    "./security/auth-anomaly": {
+      "types": "./dist/security/auth-anomaly.d.ts",
+      "import": "./dist/security/auth-anomaly.js",
+      "require": "./dist/security/auth-anomaly.js"
+    },
+    "./security/auth-anomaly-reporter": {
+      "types": "./dist/security/auth-anomaly-reporter.d.ts",
+      "import": "./dist/security/auth-anomaly-reporter.js",
+      "require": "./dist/security/auth-anomaly-reporter.js"
     },
     "./security/jti-revocation": {
       "types": "./dist/security/jti-revocation.d.ts",
@@ -1198,6 +1228,12 @@
       "audit/security-audit": [
         "./dist/audit/security-audit.d.ts"
       ],
+      "audit/sanitize-audit-details": [
+        "./dist/audit/sanitize-audit-details.d.ts"
+      ],
+      "audit/admin-read-audit": [
+        "./dist/audit/admin-read-audit.d.ts"
+      ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
       ],
@@ -1483,6 +1519,12 @@
       "audit/security-audit-alerting": [
         "./dist/audit/security-audit-alerting.d.ts"
       ],
+      "incidents/breach-assessment": [
+        "./dist/incidents/breach-assessment.d.ts"
+      ],
+      "incidents/incident-service": [
+        "./dist/incidents/incident-service.d.ts"
+      ],
       "monitoring/change-group": [
         "./dist/monitoring/change-group.d.ts"
       ],
@@ -1527,6 +1569,12 @@
       ],
       "integrations/converter/openapi": [
         "./dist/integrations/converter/openapi.d.ts"
+      ],
+      "security/auth-anomaly": [
+        "./dist/security/auth-anomaly.d.ts"
+      ],
+      "security/auth-anomaly-reporter": [
+        "./dist/security/auth-anomaly-reporter.d.ts"
       ],
       "security/jti-revocation": [
         "./dist/security/jti-revocation.d.ts"

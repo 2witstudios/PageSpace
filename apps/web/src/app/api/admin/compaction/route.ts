@@ -3,8 +3,19 @@ import { db } from '@pagespace/db/db';
 import { conversationCompactions } from '@pagespace/db/schema/ai-compaction';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, desc, eq, gte, isNotNull, sql } from '@pagespace/db/operators';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { buildAdminReadAuditEvent } from '@pagespace/lib/audit/admin-read-audit';
 
-async function handleCompactionStats(): Promise<Response> {
+async function handleCompactionStats(adminUserId: string, request: Request): Promise<Response> {
+  // GDPR Art 32(1)(b) (#954): operator read of cross-user AI conversation /
+  // usage data — emit an immutable admin.data.read audit event. Aggregate read
+  // across subjects, so no single targetUserId.
+  auditRequest(request, buildAdminReadAuditEvent({
+    adminUserId,
+    resourceType: 'admin_compaction_stats',
+    accessedDataCategories: ['ai_usage', 'conversation_metadata'],
+  }));
+
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
@@ -89,5 +100,5 @@ async function handleCompactionStats(): Promise<Response> {
 }
 
 export async function GET(request: Request): Promise<Response> {
-  return withAdminAuth(async () => handleCompactionStats())(request);
+  return withAdminAuth(async (adminUser, req) => handleCompactionStats(adminUser.id, req))(request);
 }

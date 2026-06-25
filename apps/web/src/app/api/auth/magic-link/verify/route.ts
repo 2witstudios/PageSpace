@@ -14,6 +14,7 @@ import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { resetFailedLoginAttempts } from '@pagespace/lib/auth/account-lockout';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { reportAuthFailure } from '@pagespace/lib/security/auth-anomaly-reporter';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP } from '@/lib/auth';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
@@ -72,6 +73,19 @@ export async function GET(req: Request) {
         eventType: 'auth.login.failure',
         riskScore: 0.3,
         details: { reason: `magic_link_${result.error.code.toLowerCase()}` },
+      });
+
+      // IP-keyed anomaly alerting (#977) — distinct from account lockout. Counts
+      // failures per source IP (Postgres-backed) and emits a brute-force/anomaly
+      // audit event when one IP crosses the threshold. Fire-and-forget and
+      // IP-scoped, so (consistent with the no-self-lockout design above) it can
+      // never lock out a legitimate user; it only raises a monitoring signal.
+      void reportAuthFailure({
+        identifier: clientIP,
+        ipAddress: clientIP,
+        endpoint: 'magic-link/verify',
+      }).catch(() => {
+        /* monitoring must never break the auth path */
       });
 
       return redirectWithError(errorCode, req.url);

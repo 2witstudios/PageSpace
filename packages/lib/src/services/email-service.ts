@@ -1,5 +1,5 @@
 import { Resend } from 'resend';
-import { checkRateLimit, RATE_LIMIT_CONFIGS } from '../auth/rate-limit-utils';
+import { checkDistributedRateLimit } from '../security/distributed-rate-limit';
 import { isOnPrem } from '../deployment-mode';
 import type * as React from 'react';
 
@@ -61,8 +61,9 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
   const config = getResendConfig();
   const resend = getResend();
 
-  // Rate limit email sending (3 per hour per recipient)
-  const rateLimit = checkRateLimit(`email:${options.to}`, {
+  // Rate limit email sending (3 per hour per recipient).
+  // Postgres-backed so the limit survives restarts and spans replicas (#977).
+  const rateLimit = await checkDistributedRateLimit(`email:${options.to}`, {
     maxAttempts: 3,
     windowMs: 60 * 60 * 1000, // 1 hour
     blockDurationMs: 60 * 60 * 1000,

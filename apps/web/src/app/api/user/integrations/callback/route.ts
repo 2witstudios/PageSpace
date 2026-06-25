@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -25,6 +26,7 @@ type ConnectionVisibility = typeof visibilityValues[number];
  * OAuth callback handler for integration connections.
  */
 export async function GET(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
   const defaultReturn = '/settings/integrations';
 

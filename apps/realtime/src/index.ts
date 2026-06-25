@@ -33,6 +33,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
+import { authorizeBroadcastAudience } from './broadcast-audience';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 
@@ -441,25 +442,50 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                     return;
                 }
 
-                const { channelId, event, payload } = JSON.parse(body);
-                if (channelId && event && payload) {
-                    io.to(channelId).emit(event, payload);
-                    loggers.realtime.debug('Broadcast event sent successfully', {
-                        channelId,
-                        event,
-                        payloadKeys: Object.keys(payload)
-                    });
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true }));
-                } else {
-                    loggers.realtime.warn('Invalid broadcast payload structure', {
-                        hasChannelId: !!channelId,
-                        hasEvent: !!event,
-                        hasPayload: !!payload
-                    });
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Invalid broadcast payload' }));
+                const parsed = JSON.parse(body);
+
+                // #972 + CodeQL js/user-controlled-bypass: the emit is NOT gated on a
+                // raw user-controlled truthiness check (`if (channelId && event &&
+                // payload)`). The SOLE guard is the trusted, pure validator
+                // authorizeBroadcastAudience, which enforces field presence/type AND
+                // that channelId names a real room shape. A valid HMAC signature
+                // proves the SENDER (web backend); this proves the AUDIENCE target is
+                // legitimate, so a signed-but-malformed/forged request cannot fan a
+                // payload out to an arbitrary or wildcard room (GDPR Art 5(1)(c) + 32).
+                const audience = authorizeBroadcastAudience(parsed ?? {});
+                if (!audience.allowed) {
+                    // A disallowed room shape is an authorization failure (403); a
+                    // missing/mistyped field is a malformed payload (400).
+                    const isAudienceRejection =
+                        audience.reason === 'channelId does not match an allowed room shape';
+                    if (isAudienceRejection) {
+                        loggers.realtime.warn('Broadcast audience not authorized', {
+                            channelId: parsed?.channelId,
+                            event: parsed?.event,
+                            reason: audience.reason,
+                            ip: req.socket.remoteAddress,
+                        });
+                        res.writeHead(403, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Broadcast audience not authorized' }));
+                    } else {
+                        loggers.realtime.warn('Invalid broadcast payload structure', {
+                            reason: audience.reason,
+                        });
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Invalid broadcast payload' }));
+                    }
+                    return;
                 }
+
+                const { channelId, event, payload } = parsed;
+                io.to(channelId).emit(event, payload);
+                loggers.realtime.debug('Broadcast event sent successfully', {
+                    channelId,
+                    event,
+                    payloadKeys: Object.keys(payload)
+                });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
             } catch (error) {
                 loggers.realtime.error('Broadcast request processing error', error as Error);
                 res.writeHead(400, { 'Content-Type': 'application/json' });

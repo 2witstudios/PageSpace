@@ -9,9 +9,8 @@ vi.mock('resend', () => ({
   })),
 }));
 
-vi.mock('../../auth/rate-limit-utils', () => ({
-  checkRateLimit: vi.fn(() => ({ allowed: true, attemptsRemaining: 2 })),
-  RATE_LIMIT_CONFIGS: {},
+vi.mock('../../security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn(async () => ({ allowed: true, attemptsRemaining: 2 })),
 }));
 
 vi.mock('../../deployment-mode', () => ({
@@ -19,7 +18,7 @@ vi.mock('../../deployment-mode', () => ({
 }));
 
 import { sendEmail, resolveAppUrl } from '../email-service';
-import { checkRateLimit } from '../../auth/rate-limit-utils';
+import { checkDistributedRateLimit } from '../../security/distributed-rate-limit';
 
 describe('email-service', () => {
   const origApiKey = process.env.RESEND_API_KEY;
@@ -30,7 +29,7 @@ describe('email-service', () => {
     mockIsOnPrem.mockReturnValue(false);
     process.env.RESEND_API_KEY = 'test-api-key';
     process.env.FROM_EMAIL = 'test@example.com';
-    vi.mocked(checkRateLimit).mockReturnValue({ allowed: true, attemptsRemaining: 2 });
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 2 });
   });
 
   afterEach(() => {
@@ -46,7 +45,7 @@ describe('email-service', () => {
   });
 
   it('given cloud mode + rate limited recipient, should throw', async () => {
-    vi.mocked(checkRateLimit).mockReturnValue({ allowed: false, retryAfter: 60 });
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: false, retryAfter: 60 });
     await expect(
       sendEmail({ to: 'user@test.com', subject: 'Test', react: null })
     ).rejects.toThrow('Too many emails sent to user@test.com');
