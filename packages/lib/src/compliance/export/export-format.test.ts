@@ -136,6 +136,51 @@ describe('toPortableExport', () => {
     expect(portable.message).toEqual([]);
     expect(portable.owns).toEqual([]);
   });
+
+  it('given_files_mapsToMediaObject', () => {
+    const portable = toPortableExport(
+      makeData({
+        files: [
+          { id: 'f1', driveId: 'd1', sizeBytes: 1234, mimeType: 'image/png', storagePath: 'path/f1', createdAt: D1 },
+        ],
+      }),
+    );
+    const media = portable.subjectOf as Array<Record<string, unknown>>;
+    expect(media).toHaveLength(1);
+    expect(media[0]['@type']).toBe('MediaObject');
+    expect(media[0].encodingFormat).toBe('image/png');
+    expect(media[0].contentSize).toBe(1234);
+  });
+
+  it('is lossless: every native data category is represented (GDPR Art 20)', () => {
+    const full = makeData({
+      files: [{ id: 'f1', driveId: 'd1', sizeBytes: 1, mimeType: null, storagePath: null, createdAt: D1 }],
+      activity: [{ id: 'a1', operation: 'create', resourceType: 'page', resourceId: 'p1', timestamp: D1, metadata: null }],
+      aiUsage: [{ id: 'ai1', provider: 'openrouter', model: 'm', inputTokens: 1, outputTokens: 2, cost: 0.1, timestamp: D1 }],
+      tasks: [{ listId: 'l1', listTitle: 'L', items: [] }],
+      sessions: [{ id: 's1', type: 'session', deviceId: null, scopes: [], createdByIp: null, lastUsedAt: null, lastUsedIp: null, expiresAt: D2, revokedAt: null, revokedReason: null, createdAt: D1 }],
+      notifications: [{ id: 'n1', type: 't', title: 'T', message: 'M', metadata: null, isRead: false, createdAt: D1, readAt: null }],
+      displayPreferences: [{ preferenceType: 'theme', enabled: true, updatedAt: D2 }],
+      personalization: { bio: 'b', writingStyle: null, rules: null, enabled: true, createdAt: D1, updatedAt: D2 },
+    });
+    const portable = toPortableExport(full);
+
+    // schema.org-typed categories
+    expect((portable.owns as unknown[]).length).toBe(1);
+    expect((portable.creativeWork as unknown[]).length).toBe(2);
+    expect((portable.message as unknown[]).length).toBe(1);
+    expect((portable.subjectOf as unknown[]).length).toBe(1);
+
+    // everything else carried verbatim under additionalProperty
+    const props = portable.additionalProperty as Array<{ name: string; value: unknown }>;
+    const byName = Object.fromEntries(props.map((p) => [p.name, p.value]));
+    for (const key of ['activity', 'aiUsage', 'tasks', 'sessions', 'notifications', 'displayPreferences', 'personalization']) {
+      expect(byName).toHaveProperty(key);
+    }
+    expect((byName.activity as unknown[]).length).toBe(1);
+    expect((byName.sessions as unknown[]).length).toBe(1);
+    expect(byName.personalization).not.toBeNull();
+  });
 });
 
 describe('buildPortableExportFiles', () => {

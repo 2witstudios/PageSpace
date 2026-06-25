@@ -97,9 +97,14 @@ function toIso(value: Date | null | undefined): string | null {
 
 /**
  * Map the collected data onto a documented, interoperable schema.org structure
- * (https://schema.org): the data subject as a `Person`, pages as `CreativeWork`,
- * and messages as `Message`. Dates are ISO-8601 strings. Empty sections become
- * empty arrays rather than throwing.
+ * (https://schema.org): the data subject as a `Person`, with drives/pages as
+ * `CreativeWork`, messages as `Message`, and files as `MediaObject`. The
+ * remaining operational categories (activity, AI usage, tasks, sessions,
+ * notifications, display preferences, personalization) are carried verbatim as
+ * `PropertyValue` entries so the portable bundle is **complete** — no data
+ * category is dropped (GDPR Art 20). Dates are ISO-8601 strings (mapped fields
+ * explicitly; values inside `additionalProperty` serialize to ISO-8601 via
+ * JSON). Empty sections become empty arrays rather than throwing.
  */
 export function toPortableExport(data: AllUserData): Record<string, unknown> {
   return {
@@ -135,6 +140,26 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       messageAttachment: m.source,
       dateSent: toIso(m.createdAt),
     })),
+    subjectOf: data.files.map((f) => ({
+      '@type': 'MediaObject',
+      identifier: f.id,
+      encodingFormat: f.mimeType,
+      contentSize: f.sizeBytes,
+      contentUrl: f.storagePath,
+      isPartOf: f.driveId,
+      dateCreated: toIso(f.createdAt),
+    })),
+    // Complete-but-not-natively-typed categories, kept verbatim so the portable
+    // bundle loses nothing relative to the native export.
+    additionalProperty: [
+      { '@type': 'PropertyValue', name: 'activity', value: data.activity },
+      { '@type': 'PropertyValue', name: 'aiUsage', value: data.aiUsage },
+      { '@type': 'PropertyValue', name: 'tasks', value: data.tasks },
+      { '@type': 'PropertyValue', name: 'sessions', value: data.sessions },
+      { '@type': 'PropertyValue', name: 'notifications', value: data.notifications },
+      { '@type': 'PropertyValue', name: 'displayPreferences', value: data.displayPreferences },
+      { '@type': 'PropertyValue', name: 'personalization', value: data.personalization },
+    ],
   };
 }
 

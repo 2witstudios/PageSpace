@@ -56,6 +56,15 @@ it can be ingested by other tools without bespoke parsers:
   = page type, `isPartOf` = drive id, `dateCreated`/`dateModified`).
 - Messages → [`Message`](https://schema.org/Message) under `message` (`text`,
   `dateSent`, `messageAttachment` = source surface).
+- Files → [`MediaObject`](https://schema.org/MediaObject) under `subjectOf`
+  (`encodingFormat`, `contentSize`, `contentUrl`, `isPartOf`, `dateCreated`).
+
+The portable format is **lossless**: categories without a natural schema.org
+type (activity, AI usage, tasks, sessions, notifications, display preferences,
+personalization) are carried verbatim as
+[`PropertyValue`](https://schema.org/PropertyValue) entries under
+`additionalProperty`, so the portable bundle contains exactly the same data as
+the native export.
 
 All dates are ISO-8601 strings. Empty sections are emitted as empty arrays.
 
