@@ -52,6 +52,9 @@ jobs:
               NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=1024
               NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
               NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
+              NEXT_PUBLIC_PUBLISH_EDGE_IPV4=137.66.4.209
+              NEXT_PUBLIC_PUBLISH_EDGE_IPV6=2a09:8280:1::118:198f:0
+              NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=pagespace-proxy.fly.dev
           - service: migrate
             dockerfile: apps/web/Dockerfile.migrate
             context: .
