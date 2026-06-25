@@ -20,7 +20,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { buildPageContext } from '@/lib/ai/shared/buildPageContext';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
-import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
+import { PageAgentSettingsTab, PageAgentHistoryTab, ConversationShareToggle, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegrationsPanel';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -181,7 +181,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   } = useConversations({
     agentId: page.id,
     currentConversationId,
-    enabled: activeTab === 'history',
+    // Enabled on the chat tab too (not just history) so the header can show the
+    // active conversation's share state and let the owner toggle it in place.
+    enabled: activeTab === 'history' || activeTab === 'chat',
     onConversationLoad: (conversationId, messages) => {
       // Use the pre-fetched messages directly (no re-fetch) and suppress the
       // load-on-select effect for this id so we don't double-request the server.
@@ -228,6 +230,31 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       toast.error('Failed to update conversation sharing');
     }
   }, [page.id, refreshConversations]);
+
+  // The active conversation's metadata (share state, ownership), derived from the
+  // conversation list. Null for the page-scoped placeholder id (no persisted
+  // conversation yet) — the header toggle is hidden until the first message lands.
+  const currentConversation = useMemo(
+    () => conversations.find((c) => c.id === currentConversationId) ?? null,
+    [conversations, currentConversationId],
+  );
+
+  // A real conversation can become active without ever entering the cached list:
+  // the first message on a fresh page creates it, but private conversations are
+  // not broadcast and the stream-completion path doesn't refresh the list. Since
+  // the list is now fetched on the chat tab, a fresh page caches [] up-front;
+  // without this, the header share toggle never appears and opening History
+  // reuses that stale empty cache. Pull the list once per id that's missing from
+  // it so both the header and History reflect the just-created conversation.
+  const syncedConversationRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentConversationId) return;
+    if (currentConversationId === `${page.id}-default`) return;
+    if (conversations.some((c) => c.id === currentConversationId)) return;
+    if (syncedConversationRef.current === currentConversationId) return;
+    syncedConversationRef.current = currentConversationId;
+    refreshConversations();
+  }, [currentConversationId, conversations, page.id, refreshConversations]);
 
   // ============================================
   // CHAT CONFIGURATION
@@ -886,6 +913,19 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 )}
 
                 <TasksDropdown messages={messages} driveId={driveId} />
+
+                {currentConversation && (
+                  <ConversationShareToggle
+                    isShared={currentConversation.isShared}
+                    isOwner={currentConversation.isOwner}
+                    onToggle={() =>
+                      toggleConversationShare(
+                        currentConversation.id,
+                        !currentConversation.isShared,
+                      )
+                    }
+                  />
+                )}
 
                 <Button
                   variant="outline"

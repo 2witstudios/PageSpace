@@ -8,12 +8,11 @@ import {
   MessageSquare,
   Clock,
   Hash,
-  Lock,
-  Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { VirtualizedConversationList } from '@/components/ai/shared/chat';
+import { ConversationShareToggle } from './ConversationShareToggle';
 
 // Threshold for enabling virtualization
 const VIRTUALIZATION_THRESHOLD = 20;
@@ -90,28 +89,12 @@ const ConversationCard = memo(function ConversationCard({
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {conversation.isShared && !conversation.isOwner && (
-            <span className="flex items-center gap-1 text-xs text-muted-foreground px-1">
-              <Users className="h-3 w-3" />
-              Shared
-            </span>
-          )}
-          {conversation.isOwner && onToggleShare && (
-            <Button
-              variant={conversation.isShared ? 'secondary' : 'ghost'}
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleShare();
-              }}
-              title={conversation.isShared ? 'Make private' : 'Share with everyone on this page'}
-              className="h-7 px-2 gap-1 text-xs"
-            >
-              {conversation.isShared
-                ? <><Users className="h-3 w-3" />Shared</>
-                : <><Lock className="h-3 w-3" />Private</>
-              }
-            </Button>
+          {onToggleShare && (
+            <ConversationShareToggle
+              isShared={conversation.isShared ?? false}
+              isOwner={conversation.isOwner ?? false}
+              onToggle={onToggleShare}
+            />
           )}
           <Button
             variant="ghost"

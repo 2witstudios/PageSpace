@@ -102,8 +102,9 @@ vi.mock('@/lib/ai/core/stream-abort-client', () => ({
 }));
 vi.mock('@/lib/ai/core/vision-models', () => ({ hasVisionCapability: vi.fn(() => false) }));
 
-const { mockCreateConversation } = vi.hoisted(() => ({
+const { mockCreateConversation, mockRefreshConversations } = vi.hoisted(() => ({
   mockCreateConversation: vi.fn(),
+  mockRefreshConversations: vi.fn(),
 }));
 
 vi.mock('@/lib/ai/shared', () => ({
@@ -141,6 +142,8 @@ vi.mock('@/lib/ai/shared', () => ({
     loadConversation: vi.fn(),
     createConversation: mockCreateConversation,
     deleteConversation: vi.fn(),
+    refreshConversations: mockRefreshConversations,
+    prependConversationOptimistic: vi.fn(),
   })),
   useChatTransport: vi.fn(() => ({})),
   useStreamingRegistration: vi.fn(),
@@ -534,6 +537,56 @@ describe('AiChatView late-joiner conversation sync', () => {
         given: 'stream.conversationId matches the persisted conversation while holding page-scoped default',
         should: 'append the completed AI message',
         actual: mockSetMessages.mock.calls.some((args) => typeof args[0] === 'function'),
+        expected: true,
+      });
+    });
+  });
+
+  test('given the late-joiner sync resolves currentConversationId to a conversation absent from the cached list, should refresh the conversation list so the header toggle and History reflect the new conversation', async () => {
+    let capturedCallback: ((messageId: string) => void) | undefined;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      capturedCallback = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
+    });
+
+    setupNoConversationsInit();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with no existing conversations',
+        should: 'fetch conversations list',
+        actual: wasGetCalled(`${CONVERSATIONS_URL}?pageSize=1`),
+        expected: true,
+      });
+    });
+
+    // The page-scoped placeholder id must not trigger a refresh (nothing persisted yet).
+    assert({
+      given: 'only the page-scoped placeholder conversation is active',
+      should: 'not refresh the conversation list',
+      actual: mockRefreshConversations.mock.calls.length,
+      expected: 0,
+    });
+
+    (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url === `${CONVERSATIONS_URL}?pageSize=1`) {
+        return makeOkResponse({ conversations: [{ id: REAL_CONV_ID }] });
+      }
+      return makeErrorResponse();
+    });
+
+    capturedCallback?.(MESSAGE_ID);
+
+    await waitFor(() => {
+      assert({
+        given: 'a freshly-created conversation became active but is absent from the cached (empty) list',
+        should: 'refresh the conversation list',
+        actual: mockRefreshConversations.mock.calls.length > 0,
         expected: true,
       });
     });
