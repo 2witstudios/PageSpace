@@ -7,18 +7,13 @@ import {
 } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { nextCertAction, certActionToDbStatus, isCertEligible } from '@pagespace/lib/canvas/cert-action';
-import type { CertEligibleStatus } from '@pagespace/lib/canvas/cert-action';
-import { addCertificate } from '@/lib/fly/certs';
+import { isCertEligible } from '@pagespace/lib/canvas/cert-action';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
-import { mirrorDriveToCustomHost, clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
-import { regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
+import { reconcileCustomDomainCert } from '@/lib/canvas/reconcile-cert';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-
-const FLY_APP_NAME = process.env.FLY_PROXY_APP_NAME ?? 'pagespace-proxy';
 
 export async function POST(
   request: Request,
@@ -57,48 +52,15 @@ export async function POST(
       return NextResponse.json({ error: 'SSL provisioning is not configured (ops: set FLY_API_TOKEN)' }, { status: 503 });
     }
 
-    const flyCert = await addCertificate(FLY_APP_NAME, domain.hostname);
-
-    const action = nextCertAction(domain.status as CertEligibleStatus, flyCert);
-    const nextStatus = certActionToDbStatus(action);
-
-    await db
-      .update(customDomains)
-      .set({ status: nextStatus })
-      .where(eq(customDomains.id, domainId));
-
-    // When the cert is freshly provisioned and the domain just became active,
-    // regenerate site files first (so sitemap/robots embed the custom domain as
-    // primary host), then backfill all currently-published artifacts to the
-    // custom-host prefix. Best-effort: failure does not roll back the status update.
-    if (nextStatus === 'active' && domain.status !== 'active') {
-      await regeneratePublishedSiteFiles(driveId);
-      mirrorDriveToCustomHost(driveId, domain.hostname).catch((err) => {
-        loggers.api.warn('Failed to backfill artifacts after cert activation', {
-          driveId,
-          hostname: domain.hostname,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
-
-    // When a domain transitions to cert_failed, purge its mirrored prefix so
-    // stale content is not served until the cert is recovered. Run on every
-    // cert_failed outcome (not just active → cert_failed) so that retries
-    // after a failed clearCustomHost() still clean up — the delete is
-    // idempotent/no-op when nothing remains.
-    // Awaited with errors caught and logged so a storage failure doesn't return
-    // 500 when the DB status has already been committed.
-    if (nextStatus === 'cert_failed') {
-      try {
-        await clearCustomHost(domain.hostname);
-      } catch (err) {
-        loggers.api.warn('Failed to clear custom host artifacts after cert failure', {
-          hostname: domain.hostname,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+    // Advance the cert one step via the shared service (also used by the lazy
+    // reconcile on the domains-list GET). It commits the status, then runs the
+    // active/cert_failed side effects best-effort.
+    const { status: nextStatus, action } = await reconcileCustomDomainCert({
+      id: domain.id,
+      driveId,
+      hostname: domain.hostname,
+      status: domain.status,
+    });
 
     auditRequest(request, {
       eventType: 'data.write',
@@ -108,12 +70,12 @@ export async function POST(
       details: {
         operation: 'cert-refresh',
         hostname: domain.hostname,
-        action: action.action,
+        action,
         status: nextStatus,
       },
     });
 
-    return NextResponse.json({ status: nextStatus, action: action.action });
+    return NextResponse.json({ status: nextStatus, action });
   } catch (error) {
     loggers.api.error('Error refreshing cert:', error as Error);
     return NextResponse.json({ error: 'Failed to refresh cert' }, { status: 500 });

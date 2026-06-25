@@ -176,8 +176,10 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
   let ogTags = '';
   if (pageUrl) {
     const metaDescription = (description ?? deriveDescription(body)).trim();
+    // og:description falls back to the meta description so link unfurls always
+    // carry a description, even when the author supplied no explicit og blurb.
     const socialDescription = ogDescription ?? metaDescription;
-    ogTags = buildOgTags({ title: safeTitle, pageUrl, ogImageUrl, ogDescription });
+    ogTags = buildOgTags({ title: safeTitle, pageUrl, ogImageUrl, ogDescription: socialDescription });
     seoTags =
       buildSeoTags({ pageUrl, description: metaDescription, robots: robots ?? 'index, follow' }) +
       buildTwitterTags({ title: safeTitle, description: socialDescription, imageUrl: ogImageUrl }) +

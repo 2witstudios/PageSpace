@@ -85,6 +85,7 @@ const mockDrive = (overrides: { id: string; name: string }) => ({
   kind: 'STANDARD' as const,
   publishSubdomain: null,
   homePageId: null,
+  publishDefaultOgImageUrl: null,
 });
 
 describe('GET /api/account/drives-status', () => {

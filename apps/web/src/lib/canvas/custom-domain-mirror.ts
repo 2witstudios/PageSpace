@@ -2,6 +2,7 @@ import 'server-only';
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { planCustomDomainMirror } from '@pagespace/lib/canvas/custom-domain-mirror';
+import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
 import type { ActiveDomainRecord } from '@pagespace/lib/canvas/primary-host';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -31,23 +32,36 @@ function isSiteFileKey(key: string): boolean {
  */
 export async function getActiveDomainRecords(driveId: string): Promise<ActiveDomainRecord[]> {
   const rows = await db
-    .select({ hostname: customDomains.hostname, status: customDomains.status, createdAt: customDomains.createdAt })
+    .select({ hostname: customDomains.hostname, status: customDomains.status, createdAt: customDomains.createdAt, isPrimary: customDomains.isPrimary })
     .from(customDomains)
     .where(eq(customDomains.driveId, driveId));
 
-  return rows.filter((r) => r.status === 'active').map((r) => ({ hostname: r.hostname, createdAt: r.createdAt }));
-}
-
-/** Return only the active custom hostnames for a drive (legacy internal helper). */
-async function getActiveDriveHosts(driveId: string): Promise<string[]> {
-  const records = await getActiveDomainRecords(driveId);
-  return records.map((r) => r.hostname);
+  return rows.filter((r) => r.status === 'active').map((r) => ({ hostname: r.hostname, createdAt: r.createdAt, isPrimary: r.isPrimary }));
 }
 
 /**
- * Mirror a single published page artifact to every active custom-domain host
- * for the drive. When the page is the drive's home page the root mirror is
- * copied too (`published/<host>/index.html`).
+ * Return the custom hostnames for a drive that should hold mirrored content —
+ * the "serving" hosts (status verified | provisioning | active), independent of
+ * cert state. This is the CONTENT-mirror target: a host serves the drive's
+ * artifacts the moment DNS is verified, so content no longer waits on the
+ * async Fly cert.
+ *
+ * Distinct from `getActiveDomainRecords`, which stays ACTIVE-only because the
+ * canonical/primary host must never point at a not-yet-live host.
+ */
+async function getServingDriveHosts(driveId: string): Promise<string[]> {
+  const rows = await db
+    .select({ hostname: customDomains.hostname, status: customDomains.status })
+    .from(customDomains)
+    .where(eq(customDomains.driveId, driveId));
+
+  return rows.filter((r) => isServingStatus(r.status)).map((r) => r.hostname);
+}
+
+/**
+ * Mirror a single published page artifact to every serving custom-domain host
+ * for the drive (verified | provisioning | active). When the page is the drive's
+ * home page the root mirror is copied too (`published/<host>/index.html`).
  *
  * Best-effort: individual copy failures are logged but never thrown — the
  * primary publish has already succeeded and will be retried by the next
@@ -65,7 +79,7 @@ export async function mirrorPublishedPageToHosts(params: {
   try {
     if (!isPublishConfigured()) return;
 
-    const hosts = await getActiveDriveHosts(driveId);
+    const hosts = await getServingDriveHosts(driveId);
     if (hosts.length === 0) return;
 
     const { copies } = planCustomDomainMirror({
@@ -96,15 +110,15 @@ export async function mirrorPublishedPageToHosts(params: {
 
 /**
  * Mirror all drive site files (robots.txt, sitemap.xml, 404.html) to every
- * active custom-domain host. Called after `regeneratePublishedSiteFiles` so
- * every copy of the site carries the same canonical site-level documents.
- * Best-effort.
+ * serving custom-domain host (verified | provisioning | active). Called after
+ * `regeneratePublishedSiteFiles` so every copy of the site carries the same
+ * canonical site-level documents. Best-effort.
  */
 export async function mirror404ToHosts(driveId: string, subdomain: string): Promise<void> {
   try {
     if (!isPublishConfigured()) return;
 
-    const hosts = await getActiveDriveHosts(driveId);
+    const hosts = await getServingDriveHosts(driveId);
     if (hosts.length === 0) return;
 
     const { copies } = planCustomDomainMirror({
@@ -137,8 +151,9 @@ export async function mirror404ToHosts(driveId: string, subdomain: string): Prom
 
 /**
  * Delete a page's artifact (and its root mirror when it is the home page) from
- * every active custom-domain host for the drive. Called during unpublish so the
- * page stops being served at custom domains.
+ * every serving custom-domain host for the drive (verified | provisioning |
+ * active). Called during unpublish so the page stops being served at custom
+ * domains.
  *
  * Best-effort: individual delete failures are logged but never thrown.
  */
@@ -152,7 +167,7 @@ export async function deletePageFromCustomHosts(params: {
   try {
     if (!isPublishConfigured()) return;
 
-    const hosts = await getActiveDriveHosts(driveId);
+    const hosts = await getServingDriveHosts(driveId);
     if (hosts.length === 0) return;
 
     const deleteOps: Array<() => Promise<void>> = [];
@@ -184,8 +199,10 @@ export async function deletePageFromCustomHosts(params: {
 
 /**
  * Copy ALL currently-published artifacts for a drive to a single custom-domain
- * host prefix. Called when a domain transitions to `active` (cert provisioned +
- * DNS verified) so the host is immediately ready to serve the full published site.
+ * host prefix. Called when a domain transitions to `verified` (DNS confirmed) so
+ * the host prefix is populated the moment DNS is confirmed — serving no longer
+ * waits on the async Fly cert. Also re-run on `→ active` so site files adopt the
+ * now-active canonical host.
  *
  * Backfills:
  *  - every page artifact (`published_pages` rows)

@@ -16,6 +16,20 @@ export function isCertEligible(status: string): status is CertEligibleStatus {
 }
 
 /**
+ * "Serving" statuses = DNS-confirmed hosts that should hold mirrored content,
+ * independent of TLS cert state. A host serves content the moment DNS is
+ * verified; the cert only controls whether Fly TLS-terminates the host at the
+ * edge. Content mirroring keys off this predicate; canonical/primary-host
+ * resolution keys off `active` only.
+ *
+ * True for: verified | provisioning | active.
+ * False for: pending | failed | dns_failed | cert_failed (and anything else).
+ */
+export function isServingStatus(status: string): boolean {
+  return status === 'verified' || status === 'provisioning' || status === 'active';
+}
+
+/**
  * Pure decision function: given the domain's current status and a Fly cert API
  * response, return the next action to take.
  *

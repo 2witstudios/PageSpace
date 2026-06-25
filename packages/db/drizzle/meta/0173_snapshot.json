@@ -1,6 +1,6 @@
 {
-  "id": "1258f90e-3531-430c-a889-a2f1acae0741",
-  "prevId": "82871112-08d2-428c-8a32-2ac0eaee35c3",
+  "id": "cacec7f5-98cc-4017-84a4-0fa5a04c8658",
+  "prevId": "59e84afc-d866-4f30-a8b6-381c0d2de0a3",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -759,6 +759,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "emailBidx": {
+          "name": "emailBidx",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "emailVerified": {
           "name": "emailVerified",
           "type": "timestamp",
@@ -912,7 +918,23 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "users_email_bidx_idx": {
+          "name": "users_email_bidx_idx",
+          "columns": [
+            {
+              "expression": "emailBidx",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
@@ -1614,6 +1636,12 @@
         },
         "homePageId": {
           "name": "homePageId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_default_og_image_url": {
+          "name": "publish_default_og_image_url",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -10831,6 +10859,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "ip_bidx": {
+          "name": "ip_bidx",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "user_agent": {
           "name": "user_agent",
           "type": "text",
@@ -10977,6 +11011,27 @@
           "columns": [
             {
               "expression": "ip_address",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "timestamp",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_security_audit_ip_bidx": {
+          "name": "idx_security_audit_ip_bidx",
+          "columns": [
+            {
+              "expression": "ip_bidx",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -16056,6 +16111,31 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "publish_title": {
+          "name": "publish_title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_description": {
+          "name": "publish_description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_og_image_url": {
+          "name": "publish_og_image_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "noindex": {
+          "name": "noindex",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "published_by": {
           "name": "published_by",
