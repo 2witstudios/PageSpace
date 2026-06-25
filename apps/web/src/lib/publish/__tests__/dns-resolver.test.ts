@@ -140,9 +140,9 @@ describe('resolveHostname — authoritative DNS', () => {
       domain === 'example.com' ? ['ns1.example.com'] : [],
     );
     resolve4Impl.mockImplementation(async (servers, host) => {
-      if (host === 'ns1.example.com') return ['10.0.0.1']; // example.com authoritative NS
+      if (host === 'ns1.example.com') return ['93.184.216.34']; // example.com authoritative NS (public)
       if (host === 'app.example.com') {
-        const isParentZone = servers.includes('10.0.0.1');
+        const isParentZone = servers.includes('93.184.216.34');
         if (isParentZone) return []; // referral to the delegated sub-zone
         if (isPublic(servers)) return ['137.66.4.209']; // recursive resolver follows the delegation
       }
@@ -154,8 +154,31 @@ describe('resolveHostname — authoritative DNS', () => {
     const result = await resolveHostname('app.example.com');
 
     expect(result.a).toEqual(['137.66.4.209']);
-    expect(resolve4Impl).toHaveBeenCalledWith(['10.0.0.1'], 'app.example.com');
+    expect(resolve4Impl).toHaveBeenCalledWith(['93.184.216.34'], 'app.example.com');
     expect(resolve4Impl).toHaveBeenCalledWith(PUBLIC_DNS, 'app.example.com');
+  });
+
+  it('drops private/reserved nameserver IPs (SSRF guard) and falls back to the public resolver', async () => {
+    // A customer controls their domain's NS records; point them at internal IPs.
+    resolveNsImpl.mockResolvedValue(['ns1.attacker.example']);
+    resolve4Impl.mockImplementation(async (servers, host) => {
+      if (host === 'ns1.attacker.example') return ['169.254.169.254', '10.0.0.5']; // metadata + private
+      if (host === 'attacker.example' && isPublic(servers)) return ['137.66.4.209'];
+      return [];
+    });
+    resolve6Impl.mockResolvedValue([]);
+    resolveCnameImpl.mockResolvedValue([]);
+
+    const result = await resolveHostname('attacker.example');
+
+    // No resolver was ever pointed at the private/metadata IPs.
+    const queriedInternal = instances.some(
+      (r) => r.servers.includes('169.254.169.254') || r.servers.includes('10.0.0.5'),
+    );
+    expect(queriedInternal).toBe(false);
+    // Resolution came from the public resolver instead.
+    expect(result.a).toEqual(['137.66.4.209']);
+    expect(resolve4Impl).toHaveBeenCalledWith(PUBLIC_DNS, 'attacker.example');
   });
 
   it('derives the registrable domain for a subdomain when looking up nameservers', async () => {

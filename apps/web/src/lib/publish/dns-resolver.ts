@@ -1,6 +1,7 @@
 import { Resolver } from 'dns/promises';
 import { registrableDomain } from '@pagespace/lib/validators/custom-domain';
 import type { ResolvedRecords } from '@pagespace/lib/validators/custom-domain';
+import { isPublicIp } from '@/lib/ai/tools/web-fetch-ssrf';
 
 /**
  * Custom-domain DNS verification must reflect source-of-truth DNS immediately,
@@ -45,7 +46,16 @@ function makeResolver(servers: string[]): Resolver {
 /**
  * Resolve the authoritative nameserver IPs for a hostname's registrable domain,
  * using the public resolver. Returns `[]` if the NS lookup fails, finds no NS
- * records, or none of them resolve to an IP — the caller then falls back.
+ * records, or none of them resolve to a public IP — the caller then falls back.
+ *
+ * The registrable domain (and thus its NS records) is attacker-controlled — a
+ * customer registers any domain and points its NS wherever they like. So every
+ * resolved IP is filtered through {@link isPublicIp} before it reaches
+ * `setServers`: an NS record pointing at a private/loopback/link-local/reserved
+ * address (e.g. `169.254.169.254` cloud metadata, `127.0.0.1`, `10.0.0.0/8`)
+ * would otherwise turn this verifier into an SSRF vector that fires DNS queries
+ * at internal hosts. Filtered-out IPs simply drop us to the public-resolver
+ * fallback.
  */
 async function resolveAuthoritativeNsIps(hostname: string, publicResolver: Resolver): Promise<string[]> {
   const domain = registrableDomain(hostname);
@@ -57,8 +67,8 @@ async function resolveAuthoritativeNsIps(hostname: string, publicResolver: Resol
   const ipLists = await Promise.all(
     nsHosts.map((ns) => publicResolver.resolve4(ns).catch(() => [] as string[])),
   );
-  // De-dupe so we don't hand the same IP to setServers twice.
-  return [...new Set(ipLists.flat())];
+  // De-dupe, and only ever hand globally-routable public IPs to setServers.
+  return [...new Set(ipLists.flat())].filter(isPublicIp);
 }
 
 /**
