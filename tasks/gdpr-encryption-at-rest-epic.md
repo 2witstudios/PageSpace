@@ -1,7 +1,11 @@
 # GDPR Encryption (at rest + in transit) Epic
 
-**Status**: 📋 PLANNED
+**Status**: 🚧 IN REVIEW — PageSpace PR #1715, PageSpace-Deploy PR #10
 **Goal**: Close the encryption-at-rest and in-transit GDPR findings (#965, #966, #973, #956, #969, #971) so PageSpace passes enterprise/EU vendor security reviews.
+
+**Progress:** #971 ✅ #973 ✅ done · #966 ◐ #969 ◐ #956 ◐ #965 ◐ foundation shipped,
+gated follow-ups documented (file decrypt-proxy delivery, internal-traffic/cert-
+pinning, live auth call-site cutover). ~90 unit tests, all TDD RED→GREEN.
 
 ## Overview
 
