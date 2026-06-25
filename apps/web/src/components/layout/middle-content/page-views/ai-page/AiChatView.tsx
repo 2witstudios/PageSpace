@@ -20,7 +20,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { buildPageContext } from '@/lib/ai/shared/buildPageContext';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
-import { PageAgentSettingsTab, PageAgentHistoryTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
+import { PageAgentSettingsTab, PageAgentHistoryTab, ConversationShareToggle, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegrationsPanel';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -181,7 +181,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   } = useConversations({
     agentId: page.id,
     currentConversationId,
-    enabled: activeTab === 'history',
+    // Enabled on the chat tab too (not just history) so the header can show the
+    // active conversation's share state and let the owner toggle it in place.
+    enabled: activeTab === 'history' || activeTab === 'chat',
     onConversationLoad: (conversationId, messages) => {
       // Use the pre-fetched messages directly (no re-fetch) and suppress the
       // load-on-select effect for this id so we don't double-request the server.
@@ -228,6 +230,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       toast.error('Failed to update conversation sharing');
     }
   }, [page.id, refreshConversations]);
+
+  // The active conversation's metadata (share state, ownership), derived from the
+  // conversation list. Null for the page-scoped placeholder id (no persisted
+  // conversation yet) — the header toggle is hidden until the first message lands.
+  const currentConversation = useMemo(
+    () => conversations.find((c) => c.id === currentConversationId) ?? null,
+    [conversations, currentConversationId],
+  );
 
   // ============================================
   // CHAT CONFIGURATION
@@ -886,6 +896,19 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 )}
 
                 <TasksDropdown messages={messages} driveId={driveId} />
+
+                {currentConversation && (
+                  <ConversationShareToggle
+                    isShared={currentConversation.isShared}
+                    isOwner={currentConversation.isOwner}
+                    onToggle={() =>
+                      toggleConversationShare(
+                        currentConversation.id,
+                        !currentConversation.isShared,
+                      )
+                    }
+                  />
+                )}
 
                 <Button
                   variant="outline"
