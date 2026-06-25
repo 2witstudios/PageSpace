@@ -36,6 +36,7 @@ const mockUser: User = {
   id: 'test-user-id',
   name: 'Test User',
   email: 'test@example.com',
+  emailBidx: null,
   image: 'https://example.com/avatar.png',
   role: 'user',
   provider: 'email',
