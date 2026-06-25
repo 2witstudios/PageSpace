@@ -286,6 +286,21 @@ function PublishSettingsDialog({ open, onOpenChange, initial, isBusy, onSave }: 
     if (open) setForm(initial);
   }, [open, initial]);
 
+  // Validate the share-image URL client-side so the user gets a specific message
+  // instead of the server's generic rejection (the route also enforces this).
+  const handleSubmit = () => {
+    const ogImageUrl = form.ogImageUrl.trim();
+    if (ogImageUrl) {
+      try {
+        new URL(ogImageUrl);
+      } catch {
+        toast.error('Enter a valid share image URL, including https://');
+        return;
+      }
+    }
+    onSave(form);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
@@ -343,7 +358,7 @@ function PublishSettingsDialog({ open, onOpenChange, initial, isBusy, onSave }: 
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isBusy}>
             Cancel
           </Button>
-          <Button onClick={() => onSave(form)} disabled={isBusy}>
+          <Button onClick={handleSubmit} disabled={isBusy}>
             {isBusy ? 'Saving…' : 'Save & republish'}
           </Button>
         </DialogFooter>

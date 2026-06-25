@@ -44,6 +44,7 @@ export default function DomainsSettingsPage() {
 
   const [ogImage, setOgImage] = useState('');
   const [isSavingOgImage, setIsSavingOgImage] = useState(false);
+  const [previewError, setPreviewError] = useState(false);
   const [newDomain, setNewDomain] = useState('');
   const [isAddingDomain, setIsAddingDomain] = useState(false);
   const [removingDomainId, setRemovingDomainId] = useState<string | null>(null);
@@ -62,6 +63,12 @@ export default function DomainsSettingsPage() {
   useEffect(() => {
     if (drive) setOgImage(drive.publishDefaultOgImageUrl ?? '');
   }, [drive]);
+
+  // A corrected URL must be able to recover the preview, so clear the error flag
+  // whenever the value changes (the keyed <img> below also remounts on change).
+  useEffect(() => {
+    setPreviewError(false);
+  }, [ogImage]);
 
   const handleSaveOgImage = async (clear = false) => {
     if (isSavingOgImage) return;
@@ -299,13 +306,14 @@ export default function DomainsSettingsPage() {
               placeholder="https://…"
             />
           </div>
-          {ogImage.trim() && (
+          {ogImage.trim() && !previewError && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
+              key={ogImage.trim()}
               src={ogImage.trim()}
               alt="Default share image preview"
               className="max-h-40 w-full rounded-md border object-contain bg-muted"
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+              onError={() => setPreviewError(true)}
             />
           )}
           <div className="flex gap-2">
