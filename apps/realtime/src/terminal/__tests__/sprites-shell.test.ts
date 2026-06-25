@@ -288,5 +288,65 @@ describe('openPtyShell', () => {
       expect(onExit).not.toHaveBeenCalled();
       expect(sprite.attachSession.mock.calls.length).toBeGreaterThan(5);
     });
+
+    it('given the shell was killed, a trailing exit does not double-fire onExit', () => {
+      // kill() sets closed=true; a subsequent exit hits the `closed` guard in fatal().
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd);
+      const onExit = vi.fn();
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+      shell.kill();
+      cmd._emitter.emit('exit', 0);
+
+      expect(onExit).not.toHaveBeenCalled();
+    });
+
+    it('given a second error while a reconnect is already in flight, ignores the duplicate', async () => {
+      // The second error hits the `reconnecting` guard in reconnect() — only one reattach.
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd: buildFakeCommand() });
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('error', new Error('keepalive'));
+      cmd._emitter.emit('error', new Error('keepalive again'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.attachSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('given the shell is killed during the reconnect backoff, aborts the pending reattach', async () => {
+      // kill() sets closed=true mid-delay; reconnect resumes, sees `closed`, and bails before attaching.
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd: buildFakeCommand() });
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('error', new Error('keepalive'));
+      shell.kill();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.attachSession).not.toHaveBeenCalled();
+    });
+
+    it('given the session id is unknown at reconnect, resolves the live session via listSessions and attaches', async () => {
+      // Background id-capture returns [] (id stays undefined); reconnect's own
+      // listSessions returns the live session → the pickShellSession()?.id branch.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd);
+      sprite.listSessions
+        .mockResolvedValueOnce([])             // create-path background capture
+        .mockResolvedValueOnce([liveSession]); // reconnect resolution
+      sprite.attachSession.mockImplementation(() => attachCmd);
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+      await vi.advanceTimersByTimeAsync(0); // flush background listSessions ([])
+      cmd._emitter.emit('error', new Error('keepalive'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
+      expect(onExit).not.toHaveBeenCalled();
+    });
   });
 });
