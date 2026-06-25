@@ -5,6 +5,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { contentStore } from '../server';
 import type { TextExtractJobData, TextExtractResult } from '../types';
 import type { PDFLoadingTask, PDFTextItem, PDFInfo } from '../types/pdfjs';
+import { cleanExtractedText, shouldPersistExtractedText } from './extracted-text-policy';
 
 export async function extractText(data: TextExtractJobData): Promise<TextExtractResult> {
   const { contentHash, mimeType } = data;
@@ -53,9 +54,21 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
     }
 
     // Clean extracted text - remove null bytes and other invalid UTF-8 characters
-    extractedText = extractedText.replace(/\0/g, '').trim();
+    extractedText = cleanExtractedText(extractedText);
 
-    await contentStore.saveCache(contentHash, 'extracted-text.txt', Buffer.from(extractedText), 'text/plain');
+    // GDPR #973: the extracted text is PII. It is always returned to the caller
+    // (persisted to the DB for search). The redundant object-store cache copy is
+    // written ONLY when it can be encrypted at rest — never as plaintext.
+    const hasEncryptionKey = !!process.env.ENCRYPTION_KEY;
+    const persisted = shouldPersistExtractedText({ hasEncryptionKey });
+    if (persisted) {
+      await contentStore.saveCache(contentHash, 'extracted-text.txt', Buffer.from(extractedText), 'text/plain');
+    } else {
+      loggers.processor.warn(
+        'Skipping extracted-text cache write: no ENCRYPTION_KEY configured (would store PII unencrypted)',
+        { contentHash, mimeType },
+      );
+    }
 
     loggers.processor.info('Text extraction succeeded', {
       contentHash,
@@ -68,7 +81,7 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
       text: extractedText,
       textLength: extractedText.length,
       metadata,
-      cached: true
+      cached: persisted
     };
 
   } catch (error) {

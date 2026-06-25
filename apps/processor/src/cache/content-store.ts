@@ -1,6 +1,6 @@
 import { Readable } from 'stream';
 import { createReadStream, createWriteStream } from 'fs';
-import { stat, mkdir } from 'fs/promises';
+import { stat, mkdir, readFile } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -16,6 +16,31 @@ import {
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { CacheEntry } from '../types';
+import { maybeEncryptBuffer, maybeDecryptBuffer } from './envelope-crypto';
+
+/**
+ * At-rest encryption policy for stored objects (GDPR #966 / #973).
+ *
+ * `enabled` gates encryption of browser-served objects (originals + binary
+ * cache presets) — default OFF because those are delivered to the browser via
+ * presigned S3 URLs that cannot decrypt. Server-side-only text caches are
+ * encrypted whenever a key is present regardless of `enabled` (see
+ * TEXT_PRESETS), since they are consumed/served server-side and never presigned.
+ */
+export interface ContentEncryptionConfig {
+  enabled: boolean;
+  masterKey: string;
+}
+
+/** Cache presets consumed/served server-side only — safe to always encrypt. */
+const TEXT_PRESETS = new Set(['extracted-text.txt', 'ocr-text.txt']);
+
+export function resolveEncryptionConfigFromEnv(): ContentEncryptionConfig {
+  return {
+    enabled: process.env.FILE_ENCRYPTION_ENABLED === 'true',
+    masterKey: process.env.ENCRYPTION_KEY ?? '',
+  };
+}
 
 export const CONTENT_HASH_REGEX = /^[a-f0-9]{64}$/i;
 
@@ -103,10 +128,45 @@ function isS3NotFound(err: unknown): boolean {
 export class ContentStore {
   private s3: S3Client;
   private bucket: string;
+  private encryption: ContentEncryptionConfig;
 
-  constructor(s3: S3Client, bucket: string) {
+  constructor(s3: S3Client, bucket: string, encryption: ContentEncryptionConfig = resolveEncryptionConfigFromEnv()) {
     this.s3 = s3;
     this.bucket = bucket;
+    this.encryption = encryption;
+  }
+
+  private hasKey(): boolean {
+    return this.encryption.masterKey.length > 0;
+  }
+
+  /** Encrypt original bytes only when the file-encryption flag is on. */
+  private encryptOriginalBytes(buffer: Buffer): Buffer {
+    return maybeEncryptBuffer(buffer, {
+      enabled: this.encryption.enabled && this.hasKey(),
+      masterKey: this.encryption.masterKey,
+    });
+  }
+
+  /**
+   * Encrypt cache bytes. Server-side text presets are always encrypted when a
+   * key exists; browser-served binary presets only when the flag is on.
+   */
+  private encryptCacheBytes(preset: string, buffer: Buffer): Buffer {
+    const alwaysEncrypt = TEXT_PRESETS.has(preset);
+    const enabled = (this.encryption.enabled || alwaysEncrypt) && this.hasKey();
+    return maybeEncryptBuffer(buffer, { enabled, masterKey: this.encryption.masterKey });
+  }
+
+  /** Transparently decrypt envelope bytes; legacy plaintext passes through. */
+  private decryptBytes(buffer: Buffer): Buffer {
+    if (!this.hasKey()) return buffer;
+    return maybeDecryptBuffer(buffer, { masterKey: this.encryption.masterKey });
+  }
+
+  /** Whether original reads must buffer-and-decrypt rather than raw-stream. */
+  private originalsEncrypted(): boolean {
+    return this.encryption.enabled && this.hasKey();
   }
 
   private normalizeContentHash(contentHash: string): string {
@@ -287,7 +347,7 @@ export class ContentStore {
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
-        Body: buffer,
+        Body: this.encryptCacheBytes(preset, buffer),
         ContentType: mimeType,
       }),
     );
@@ -350,7 +410,7 @@ export class ContentStore {
       const resp = await this.s3.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: this.cacheKey(normalizedHash, preset) }),
       );
-      return streamToBuffer(resp.Body);
+      return this.decryptBytes(await streamToBuffer(resp.Body));
     } catch {
       return null;
     }
@@ -361,6 +421,9 @@ export class ContentStore {
     originalName: string,
     options: SaveOriginalOptions = {},
   ): Promise<{ contentHash: string; path: string }> {
+    // Hash is always computed over the PLAINTEXT bytes so the content-address
+    // (dedup key + integrity check) is stable whether or not the stored object
+    // is encrypted at rest.
     const rawHash = crypto.createHash('sha256').update(buffer).digest('hex');
     const normalizedHash = this.normalizeContentHash(rawHash);
     const key = this.originalKey(normalizedHash);
@@ -371,7 +434,7 @@ export class ContentStore {
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
-        Body: buffer,
+        Body: this.encryptOriginalBytes(buffer),
       }),
     );
 
@@ -398,20 +461,33 @@ export class ContentStore {
     const normalizedHash = this.normalizeContentHash(rawHash);
     const key = this.originalKey(normalizedHash);
 
+    const fileStat = await stat(tempFilePath);
+
     // ContentType omitted: presigned-URL delivery overrides via ResponseContentType.
     // If a direct-serve path is ever added, add a mimeType param here.
-    const fileStream = createReadStream(tempFilePath);
-    const upload = new Upload({
-      client: this.s3,
-      params: {
-        Bucket: this.bucket,
-        Key: key,
-        Body: fileStream,
-      },
-    });
-    await upload.done();
-
-    const fileStat = await stat(tempFilePath);
+    if (this.originalsEncrypted()) {
+      // Encryption buffers the (content-addressed, size-capped) file to wrap it
+      // in an envelope; streaming GCM is avoided for format simplicity.
+      const plain = await readFile(tempFilePath);
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          Body: this.encryptOriginalBytes(plain),
+        }),
+      );
+    } else {
+      const fileStream = createReadStream(tempFilePath);
+      const upload = new Upload({
+        client: this.s3,
+        params: {
+          Bucket: this.bucket,
+          Key: key,
+          Body: fileStream,
+        },
+      });
+      await upload.done();
+    }
 
     const metadata: OriginalFileMetadata = {
       originalName,
@@ -493,7 +569,7 @@ export class ContentStore {
       const resp = await this.s3.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: this.originalKey(normalizedHash) }),
       );
-      return streamToBuffer(resp.Body, ORIGINAL_MAX_BYTES);
+      return this.decryptBytes(await streamToBuffer(resp.Body, ORIGINAL_MAX_BYTES));
     } catch {
       return null;
     }
@@ -501,11 +577,22 @@ export class ContentStore {
 
   async streamOriginalToFile(contentHash: string, destPath: string): Promise<void> {
     const normalizedHash = this.normalizeContentHash(contentHash);
+    await mkdir(path.dirname(destPath), { recursive: true });
+
+    // When originals are encrypted at rest, buffer-and-decrypt (objects are
+    // content-addressed and size-capped) since the envelope cannot be raw-
+    // streamed. Otherwise stream straight through to disk as before.
+    if (this.originalsEncrypted()) {
+      const buf = await this.getOriginal(normalizedHash);
+      if (!buf) throw new Error(`File not found in S3: ${contentHash}`);
+      await pipeline(Readable.from(buf), createWriteStream(destPath));
+      return;
+    }
+
     const resp = await this.s3.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: this.originalKey(normalizedHash) }),
     );
     if (!resp.Body) throw new Error(`File not found in S3: ${contentHash}`);
-    await mkdir(path.dirname(destPath), { recursive: true });
     await pipeline(Readable.from(resp.Body as AsyncIterable<Uint8Array>), createWriteStream(destPath));
   }
 

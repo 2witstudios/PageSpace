@@ -33,6 +33,9 @@ const VALID_HASH = 'a'.repeat(64);
 describe('extractText', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Compliant config: an encryption key is present so the cache copy is
+    // persisted (encrypted at rest by ContentStore). See GDPR #973.
+    process.env.ENCRYPTION_KEY = 'text-extractor-test-key-at-least-32-chars!!';
     mockGetOriginal.mockResolvedValue(Buffer.from('file-content'));
     mockSaveCache.mockResolvedValue({ contentHash: VALID_HASH, preset: 'extracted-text.txt', path: `cache/${VALID_HASH}/extracted-text.txt`, size: 0, mimeType: 'text/plain', createdAt: new Date(), lastAccessed: new Date() });
   });
@@ -302,6 +305,24 @@ describe('extractText', () => {
       Buffer.from('Hello world'),
       'text/plain'
     );
+  });
+
+  it('does NOT write extracted text to cache when no ENCRYPTION_KEY (no plaintext PII at rest)', async () => {
+    delete process.env.ENCRYPTION_KEY;
+    mockGetOriginal.mockResolvedValue(Buffer.from('sensitive text'));
+
+    const result = await extractText({
+      contentHash: VALID_HASH,
+      fileId: 'page-1',
+      mimeType: 'text/plain',
+      originalName: 'test.txt',
+    });
+
+    expect(mockSaveCache).not.toHaveBeenCalled();
+    // Text is still returned so DB-backed search continues to work.
+    expect(result.success).toBe(true);
+    expect(result.text).toBe('sensitive text');
+    expect(result.cached).toBe(false);
   });
 
   it('includes textLength in result', async () => {
