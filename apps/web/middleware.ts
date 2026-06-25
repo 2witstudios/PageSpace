@@ -5,6 +5,7 @@ import {
   createSecureErrorResponse,
   isPublicPageRoute,
   isPublishedSiteHost,
+  isSecureRequest,
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
@@ -145,7 +146,7 @@ export async function middleware(req: NextRequest) {
       });
 
       if (isAPIRoute) {
-        return createSecureErrorResponse('Authentication required', 401, isProduction);
+        return createSecureErrorResponse('Authentication required', 401, isProduction, isSecureRequest(req));
       }
 
       return NextResponse.redirect(new URL('/auth/signin', req.url));

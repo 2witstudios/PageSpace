@@ -2,6 +2,40 @@ import { NextResponse } from 'next/server';
 
 export const NONCE_HEADER = 'x-nonce';
 
+const HSTS_VALUE = 'max-age=63072000; includeSubDomains; preload';
+
+/**
+ * Decide whether to emit HSTS (GDPR #969). Emitted for ANY HTTPS response so
+ * non-production-but-HTTPS environments (staging, tenant, preview) are not
+ * silently left without transit protection. `isProduction` is retained for
+ * back-compat — production always emits even if scheme detection is unavailable.
+ */
+export const shouldEmitHsts = ({
+  isProduction,
+  isSecure,
+}: {
+  isProduction: boolean;
+  isSecure?: boolean;
+}): boolean => isProduction || isSecure === true;
+
+/**
+ * Determine whether an inbound request arrived over HTTPS, honoring the
+ * `x-forwarded-proto` header set by upstream proxies (Caddy/Fly) ahead of the
+ * request URL's own protocol.
+ */
+export const isSecureRequest = (request: Request | undefined): boolean => {
+  if (!request) return false;
+  const forwarded = request.headers.get('x-forwarded-proto');
+  if (forwarded) {
+    return forwarded.split(',')[0].trim().toLowerCase() === 'https';
+  }
+  try {
+    return new URL(request.url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 const PERMISSIONS_POLICY =
   'geolocation=(), microphone=(self), camera=(), payment=(self "https://js.stripe.com")';
 
@@ -17,7 +51,8 @@ const ERROR_RESPONSE_HEADERS: Record<string, string> = {
 export const createSecureErrorResponse = (
   body: string | object,
   status: number,
-  isProduction: boolean = false
+  isProduction: boolean = false,
+  isSecure: boolean = false
 ): NextResponse => {
   const isJson = typeof body === 'object';
   const headers: Record<string, string> = {
@@ -25,9 +60,8 @@ export const createSecureErrorResponse = (
     'Content-Type': isJson ? 'application/json' : 'text/plain',
   };
 
-  if (isProduction) {
-    headers['Strict-Transport-Security'] =
-      'max-age=63072000; includeSubDomains; preload';
+  if (shouldEmitHsts({ isProduction, isSecure })) {
+    headers['Strict-Transport-Security'] = HSTS_VALUE;
   }
 
   return new NextResponse(isJson ? JSON.stringify(body) : body, {
@@ -102,13 +136,14 @@ export const buildAPICSPPolicy = (): string => {
 type SecurityHeadersOptions = {
   nonce: string;
   isProduction: boolean;
+  isSecure?: boolean;
   isAPIRoute?: boolean;
   disableCOEP?: boolean;
 };
 
 export const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isProduction, isAPIRoute = false, disableCOEP = false }: SecurityHeadersOptions
+  { nonce, isProduction, isSecure = false, isAPIRoute = false, disableCOEP = false }: SecurityHeadersOptions
 ): NextResponse => {
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
 
@@ -124,11 +159,8 @@ export const applySecurityHeaders = (
     response.headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
   }
 
-  if (isProduction) {
-    response.headers.set(
-      'Strict-Transport-Security',
-      'max-age=63072000; includeSubDomains; preload'
-    );
+  if (shouldEmitHsts({ isProduction, isSecure })) {
+    response.headers.set('Strict-Transport-Security', HSTS_VALUE);
   }
 
   return response;
@@ -171,6 +203,7 @@ export const createSecureResponse = (
 ): { response: NextResponse; nonce: string } => {
   const { isAPIRoute = false, disableCOEP = false } = options;
   const nonce = generateNonce();
+  const isSecure = isSecureRequest(request);
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
 
   // Clone request headers and add nonce + CSP
@@ -189,7 +222,7 @@ export const createSecureResponse = (
   });
 
   // Also set CSP on response headers for browser enforcement
-  applySecurityHeaders(response, { nonce, isProduction, isAPIRoute, disableCOEP });
+  applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute, disableCOEP });
 
   return { response, nonce };
 };
