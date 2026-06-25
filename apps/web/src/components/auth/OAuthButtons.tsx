@@ -2,7 +2,9 @@
 
 import { motion } from 'motion/react';
 import { Loader2 } from 'lucide-react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import { DEFAULT_MINIMUM_AGE } from '@pagespace/lib/consent';
 
 interface OAuthButtonsProps {
   onGoogleClick: () => void;
@@ -79,6 +81,21 @@ export function OAuthButtons({
           )}
         </Button>
       </motion.div>
+
+      {/* GDPR Art 8 + ToS attestation for OAuth: continuing past this disclosure is
+          the affirmative confirmation (OAuth has no form to collect a checkbox). */}
+      <p className="text-center text-xs text-muted-foreground">
+        By continuing with Google or Apple, you confirm you are at least {DEFAULT_MINIMUM_AGE} and
+        agree to our{' '}
+        <Link href="/terms" className="underline hover:text-foreground">
+          Terms
+        </Link>{' '}
+        and{' '}
+        <Link href="/privacy" className="underline hover:text-foreground">
+          Privacy Policy
+        </Link>
+        .
+      </p>
     </div>
   );
 }

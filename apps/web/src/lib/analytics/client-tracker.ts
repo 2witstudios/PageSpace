@@ -196,6 +196,13 @@ class ClientTracker {
   private flushQueue(): void {
     if (this.queue.length === 0) return;
 
+    // Re-check consent at flush time: the user may have withdrawn analytics consent
+    // (or this is onprem) while events sat queued offline. Drop them rather than send.
+    if (!analyticsAllowed()) {
+      this.queue = [];
+      return;
+    }
+
     const events = [...this.queue];
     this.queue = [];
 

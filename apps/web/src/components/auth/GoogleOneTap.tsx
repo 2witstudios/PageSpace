@@ -6,7 +6,7 @@ import type { CredentialResponse } from '@/types/google-identity';
 import { detectInAppBrowser } from '@/lib/auth/browser-detection';
 import { Button } from '@/components/ui/button';
 import { useConsentStore } from '@/stores/useConsentStore';
-import { shouldLoadThirdPartyScript } from '@pagespace/lib/consent';
+import { shouldLoadThirdPartyScript, DEFAULT_MINIMUM_AGE } from '@pagespace/lib/consent';
 
 /**
  * Platform eligibility for One Tap (desktop/native/mobile/in-app browsers are excluded).
@@ -294,7 +294,8 @@ export function GoogleOneTap({
       <div className="mb-4 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
         <p>
           Google One Tap lets you sign in with your Google account. Enabling it loads Google&apos;s
-          sign-in script and shares your sign-in request with Google.
+          sign-in script and shares your sign-in request with Google. By enabling it you confirm you
+          are at least {DEFAULT_MINIMUM_AGE} years old.
         </p>
         <Button
           type="button"

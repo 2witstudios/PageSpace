@@ -387,6 +387,7 @@ const baseMagicLinkInput = (
   now: new Date('2026-05-06T12:00:00.000Z'),
   expiryMinutes: 5,
   tosAccepted: true,
+  ageVerified: true,
   ...overrides,
 });
 
@@ -415,6 +416,7 @@ describe('requestMagicLink', () => {
     expect(ports.createUserAccount).toHaveBeenCalledWith({
       email: 'user@example.com',
       tosAcceptedAt: now,
+      ageVerifiedAt: now,
     });
     expect(ports.createTokenAndPersist).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u_new' }),
@@ -430,6 +432,19 @@ describe('requestMagicLink', () => {
       baseMagicLinkInput({ tosAccepted: false }),
     );
     expect(result).toEqual({ ok: false, error: 'TOS_REQUIRED' });
+    expect(ports.createUserAccount).not.toHaveBeenCalled();
+    expect(ports.createTokenAndPersist).not.toHaveBeenCalled();
+    expect(ports.sendMagicLinkEmail).not.toHaveBeenCalled();
+  });
+
+  it('given an unknown email + ageVerified=false, should return AGE_REQUIRED and never create user/token/email', async () => {
+    const ports = buildMagicLinkPorts({
+      loadUserByEmail: vi.fn().mockResolvedValue(null),
+    });
+    const result = await requestMagicLink(ports)(
+      baseMagicLinkInput({ ageVerified: false }),
+    );
+    expect(result).toEqual({ ok: false, error: 'AGE_REQUIRED' });
     expect(ports.createUserAccount).not.toHaveBeenCalled();
     expect(ports.createTokenAndPersist).not.toHaveBeenCalled();
     expect(ports.sendMagicLinkEmail).not.toHaveBeenCalled();

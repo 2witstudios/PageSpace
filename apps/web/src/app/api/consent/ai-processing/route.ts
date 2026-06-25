@@ -19,6 +19,7 @@ import {
 } from '@pagespace/lib/consent/ai-consent-service';
 import { hasValidAiConsent } from '@pagespace/lib/consent';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -49,6 +50,12 @@ export async function POST(request: Request) {
     // Idempotent: re-recording when already valid is a no-op write of a fresh row.
     if (!(await hasActiveAiConsent(auth.userId))) {
       await recordAiConsent(auth.userId);
+      auditRequest(request, {
+        eventType: 'data.write',
+        userId: auth.userId,
+        resourceType: 'ai_processing_consent',
+        details: { action: 'consent_granted', policyVersion: AI_CONSENT_POLICY_VERSION },
+      });
     }
     return NextResponse.json({ consented: true, policyVersion: AI_CONSENT_POLICY_VERSION });
   } catch (error) {
@@ -63,6 +70,12 @@ export async function DELETE(request: Request) {
     if (isAuthError(auth)) return auth.error;
 
     await revokeAiConsent(auth.userId);
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: auth.userId,
+      resourceType: 'ai_processing_consent',
+      details: { action: 'consent_revoked' },
+    });
     return NextResponse.json({ consented: false });
   } catch (error) {
     loggers.api.error('Error revoking AI processing consent:', error as Error);
