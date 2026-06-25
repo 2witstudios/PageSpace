@@ -1,7 +1,9 @@
 # GDPR Erasure Hardening Epic
 
-**Status**: 📋 PLANNED
+**Status**: ✅ COMPLETED (2026-06-24) — PR #1717
 **Goal**: Turn the synchronous, blocking, fire-and-forget account-erasure path into a durable, queued, SLA-tracked, force-deletable, fully-propagated Right-to-Erasure pipeline that produces legal evidence.
+
+All 7 phases shipped (#906 #908 #919 #913 #912 #985). ~100 unit tests; typecheck + lint green across db/lib/web/processor. CI security job runs targeted valid paths (not the stale local `test-security.sh` script, whose 7 "No test files found" results are unrelated to this work).
 
 ## Overview
 
