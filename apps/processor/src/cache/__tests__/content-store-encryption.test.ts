@@ -16,7 +16,7 @@ vi.mock('@aws-sdk/lib-storage', () => ({
   Upload: vi.fn().mockImplementation(() => ({ done: vi.fn().mockResolvedValue({}) })),
 }));
 
-import { ContentStore } from '../content-store';
+import { ContentStore, resolveEncryptionConfigFromEnv } from '../content-store';
 import { isEnvelope } from '../envelope-crypto';
 
 const BUCKET = 'test-bucket';
@@ -49,6 +49,27 @@ function createStore(encryption: { enabled: boolean; masterKey: string }) {
   const store = new ContentStore(s3, BUCKET, encryption);
   return { store, objects };
 }
+
+describe('resolveEncryptionConfigFromEnv', () => {
+  it('reads FILE_ENCRYPTION_ENABLED + ENCRYPTION_KEY from the environment', () => {
+    const prevFlag = process.env.FILE_ENCRYPTION_ENABLED;
+    const prevKey = process.env.ENCRYPTION_KEY;
+    try {
+      process.env.FILE_ENCRYPTION_ENABLED = 'true';
+      process.env.ENCRYPTION_KEY = KEY;
+      expect(resolveEncryptionConfigFromEnv()).toEqual({ enabled: true, masterKey: KEY });
+
+      delete process.env.FILE_ENCRYPTION_ENABLED;
+      delete process.env.ENCRYPTION_KEY;
+      expect(resolveEncryptionConfigFromEnv()).toEqual({ enabled: false, masterKey: '' });
+    } finally {
+      if (prevFlag === undefined) delete process.env.FILE_ENCRYPTION_ENABLED;
+      else process.env.FILE_ENCRYPTION_ENABLED = prevFlag;
+      if (prevKey === undefined) delete process.env.ENCRYPTION_KEY;
+      else process.env.ENCRYPTION_KEY = prevKey;
+    }
+  });
+});
 
 describe('ContentStore originals encryption (#966)', () => {
   it('given encryption enabled, should store an envelope and decrypt on read', async () => {

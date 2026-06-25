@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { deriveIndexKey } from './blind-index';
 import { looksEncrypted } from './field-crypto';
-import { encryptUserPii, decryptUserPii, emailLookupBidx } from './user-crypto';
+import { encryptUserPii, decryptUserPii, emailLookupBidx, getPiiIndexKey } from './user-crypto';
 
 const MASTER = 'user-crypto-test-master-key-32-chars-min!!';
 const indexKey = deriveIndexKey(MASTER);
@@ -43,6 +43,23 @@ describe('lookup path (the hard-gate proof)', () => {
   it('given a different email, should NOT collide', async () => {
     const enc = await encryptUserPii({ email: 'd1@x.com', name: 'D' }, indexKey);
     expect(emailLookupBidx('d2@x.com', indexKey)).not.toBe(enc.emailBidx);
+  });
+});
+
+describe('getPiiIndexKey (env edge)', () => {
+  it('given ENCRYPTION_KEY set, should derive a deterministic key', () => {
+    process.env.ENCRYPTION_KEY = MASTER;
+    expect(getPiiIndexKey().equals(getPiiIndexKey())).toBe(true);
+  });
+
+  it('given no ENCRYPTION_KEY, should throw', () => {
+    const prev = process.env.ENCRYPTION_KEY;
+    delete process.env.ENCRYPTION_KEY;
+    try {
+      expect(() => getPiiIndexKey()).toThrow(/ENCRYPTION_KEY/);
+    } finally {
+      process.env.ENCRYPTION_KEY = prev;
+    }
   });
 });
 
