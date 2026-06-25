@@ -263,7 +263,7 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
           <Link href="/privacy" className="underline hover:text-foreground">
             Privacy Policy
           </Link>
-          .
+          , and I&apos;m at least 16 years old.
         </Label>
       </div>
 

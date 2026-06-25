@@ -1057,6 +1057,11 @@
       "import": "./dist/canvas/cert-action.js",
       "require": "./dist/canvas/cert-action.js"
     },
+    "./consent": {
+      "types": "./dist/consent/index.d.ts",
+      "import": "./dist/consent/index.js",
+      "require": "./dist/consent/index.js"
+    },
     "./compliance/dsr/sla": {
       "types": "./dist/compliance/dsr/sla.d.ts",
       "import": "./dist/compliance/dsr/sla.js",

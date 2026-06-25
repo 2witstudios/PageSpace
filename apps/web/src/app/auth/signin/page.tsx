@@ -159,7 +159,7 @@ function SignInForm() {
   return (
     <AuthShell>
       <GoogleOneTap
-        autoSelect={true}
+        autoSelect={false}
         cancelOnTapOutside={true}
         context="signin"
         {...(inviteToken && { inviteToken })}

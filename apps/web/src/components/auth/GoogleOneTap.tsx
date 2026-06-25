@@ -4,6 +4,26 @@ import { useEffect, useCallback, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { CredentialResponse } from '@/types/google-identity';
 import { detectInAppBrowser } from '@/lib/auth/browser-detection';
+import { Button } from '@/components/ui/button';
+import { useConsentStore } from '@/stores/useConsentStore';
+import { shouldLoadThirdPartyScript } from '@pagespace/lib/consent';
+
+/**
+ * Platform eligibility for One Tap (desktop/native/mobile/in-app browsers are excluded).
+ * Used by both the init effect and the pre-consent notice render so they stay in sync.
+ */
+function isOneTapPlatformEligible(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  if (window.electron?.isDesktop) return false;
+  if ((window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.()) {
+    return false;
+  }
+  const ua = navigator.userAgent;
+  const isMobile = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile|tablet/i.test(ua);
+  const isWebView = /\bwv\b|WebView/i.test(ua);
+  if (isMobile || isWebView || detectInAppBrowser().isInApp) return false;
+  return true;
+}
 
 interface GoogleOneTapProps {
   /** Called when sign-in is successful */
@@ -29,7 +49,9 @@ const GOOGLE_GSI_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 export function GoogleOneTap({
   onSuccess,
   onError,
-  autoSelect = true,
+  // GDPR Art 7(2): never auto-submit a returning user's credential before they can read
+  // a notice and act. Defaults to false; callers must opt in explicitly.
+  autoSelect = false,
   cancelOnTapOutside = true,
   context = 'signin',
   disabled = false,
@@ -41,6 +63,15 @@ export function GoogleOneTap({
   const scriptLoadedRef = useRef(false);
   // null = still checking, true = logged in, false = not logged in
   const [sessionChecked, setSessionChecked] = useState<boolean | null>(null);
+
+  // ePrivacy Art 5(3): the Google Identity Services script must not load before consent.
+  const hydrateConsent = useConsentStore((s) => s.hydrate);
+  const grantConsent = useConsentStore((s) => s.grant);
+  const thirdPartyConsented = useConsentStore((s) => shouldLoadThirdPartyScript(s.state));
+
+  useEffect(() => {
+    hydrateConsent();
+  }, [hydrateConsent]);
 
   const handleCredentialResponse = useCallback(
     async (response: CredentialResponse) => {
@@ -168,24 +199,12 @@ export function GoogleOneTap({
     // User is already logged in - skip One Tap
     if (sessionChecked) return;
 
-    // Don't run in desktop app (use regular OAuth flow instead)
-    if (typeof window !== 'undefined' && window.electron?.isDesktop) {
-      return;
-    }
+    // Desktop/native/mobile/in-app browsers use other flows (and FedCM loops on mobile).
+    if (!isOneTapPlatformEligible()) return;
 
-    // Don't run in Capacitor native app (use native Google Sign-In instead)
-    if (typeof window !== 'undefined' &&
-        (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.()) {
-      console.debug('Google One Tap: Skipping on Capacitor native app');
-      return;
-    }
-
-    // Don't run on mobile browsers or in-app browsers — FedCM/One Tap causes login loops there
-    if (typeof navigator !== 'undefined') {
-      const isMobile = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile|tablet/i.test(navigator.userAgent);
-      const isWebView = /\bwv\b|WebView/i.test(navigator.userAgent);
-      if (isMobile || isWebView || detectInAppBrowser().isInApp) return;
-    }
+    // ePrivacy Art 5(3) / Art 13(1)(e)(f): do NOT inject the Google Identity Services
+    // script or display the prompt until the user has consented via the notice below.
+    if (!thirdPartyConsented) return;
 
     const clientId = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;
     if (!clientId) {
@@ -258,10 +277,39 @@ export function GoogleOneTap({
         window.google.accounts.id.cancel();
       }
     };
-  }, [disabled, sessionChecked, autoSelect, cancelOnTapOutside, context, handleCredentialResponse]);
+  }, [disabled, sessionChecked, autoSelect, cancelOnTapOutside, context, handleCredentialResponse, thirdPartyConsented]);
 
-  // This component doesn't render anything visible
-  // The One Tap prompt is rendered by Google's library
+  // Pre-consent notice (GDPR Art 13(1)(c)(d), ePrivacy Art 5(3)): when the user is not
+  // logged in and has not yet consented to the third-party script, show a notice that
+  // Google One Tap shares data with Google — and only load the script once they opt in.
+  const showNotice =
+    !disabled &&
+    sessionChecked === false &&
+    !thirdPartyConsented &&
+    isOneTapPlatformEligible() &&
+    !!process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID;
+
+  if (showNotice) {
+    return (
+      <div className="mb-4 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+        <p>
+          Google One Tap lets you sign in with your Google account. Enabling it loads Google&apos;s
+          sign-in script and shares your sign-in request with Google.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-2"
+          onClick={() => grantConsent('preferences')}
+        >
+          Enable Google One Tap
+        </Button>
+      </div>
+    );
+  }
+
+  // Otherwise nothing visible — the One Tap prompt is rendered by Google's library.
   return null;
 }
 

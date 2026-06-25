@@ -64,7 +64,7 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
   return (
     <AuthShell>
       <GoogleOneTap
-        autoSelect={true}
+        autoSelect={false}
         cancelOnTapOutside={true}
         context="signup"
         {...(inviteToken && { inviteToken })}

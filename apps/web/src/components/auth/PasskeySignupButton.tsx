@@ -268,7 +268,7 @@ export function PasskeySignupButton({
                 <Link href="/privacy" className="underline hover:text-foreground">
                   Privacy Policy
                 </Link>
-                .
+                , and I&apos;m at least 16 years old.
               </Label>
             </div>
             <div className="flex gap-2">
