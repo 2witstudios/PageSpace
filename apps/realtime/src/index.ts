@@ -33,6 +33,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
+import { authorizeBroadcastAudience } from './broadcast-audience';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 
@@ -443,6 +444,24 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
 
                 const { channelId, event, payload } = JSON.parse(body);
                 if (channelId && event && payload) {
+                    // #972: A valid signature proves the SENDER (web backend), not
+                    // that the AUDIENCE target is legitimate. Enforce that channelId
+                    // names a real room shape before emitting, so a signed-but-
+                    // malformed/forged request cannot fan a payload out to an
+                    // arbitrary or wildcard room (GDPR Art 5(1)(c) + Art 32).
+                    const audience = authorizeBroadcastAudience({ channelId, event, payload });
+                    if (!audience.allowed) {
+                        loggers.realtime.warn('Broadcast audience not authorized', {
+                            channelId,
+                            event,
+                            reason: audience.reason,
+                            ip: req.socket.remoteAddress,
+                        });
+                        res.writeHead(403, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Broadcast audience not authorized' }));
+                        return;
+                    }
+
                     io.to(channelId).emit(event, payload);
                     loggers.realtime.debug('Broadcast event sent successfully', {
                         channelId,

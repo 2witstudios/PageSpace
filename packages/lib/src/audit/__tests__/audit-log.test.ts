@@ -356,3 +356,68 @@ describe('auditRequest()', () => {
     expect(mockSecurityAudit.logEvent).toHaveBeenCalled();
   });
 });
+
+/**
+ * GDPR (#971): runtime enforcement that user-typed search text / PII never
+ * reaches the tamper-evident hash chain. Proves the wired sanitizer at the
+ * audit edge — if a search route audit call were ever given `query` text, the
+ * details that get persisted (logEvent) would NOT contain it.
+ */
+describe('audit pipeline GDPR sanitization (#971)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSecurityAudit.logEvent.mockResolvedValue(undefined);
+  });
+
+  it('strips user-typed query text from details before persistence (audit)', () => {
+    audit({
+      eventType: 'data.read',
+      userId: 'user-1',
+      resourceType: 'search',
+      resourceId: '*',
+      details: { query: 'sensitive personal search', resultCount: 4 },
+    });
+
+    const persisted = mockSecurityAudit.logEvent.mock.calls[0]?.[0];
+    expect(persisted.details.query).not.toBe('sensitive personal search');
+    expect(persisted.details.query).toBe('[redacted]');
+    expect(persisted.details.resultCount).toBe(4);
+
+    // And nothing logged to the structured logger leaks it either.
+    const loggedPayload = JSON.stringify(mockLoggers.security.info.mock.calls);
+    expect(loggedPayload).not.toContain('sensitive personal search');
+  });
+
+  it('strips query text from a search-route-shaped auditRequest call', () => {
+    const req = new Request('http://localhost/api/search?q=top+secret', {
+      headers: { 'user-agent': 'TestAgent/1.0' },
+    });
+
+    // Simulate a (hypothetical) regression where a route puts query in details.
+    auditRequest(req, {
+      eventType: 'data.read',
+      userId: 'user-1',
+      resourceType: 'search',
+      resourceId: '*',
+      details: { searchQuery: 'top secret', source: 'multi-drive', resultCount: 2 },
+    });
+
+    const persisted = mockSecurityAudit.logEvent.mock.calls[0]?.[0];
+    expect(persisted.details.searchQuery).toBe('[redacted]');
+    expect(persisted.details.source).toBe('multi-drive');
+    expect(persisted.details.resultCount).toBe(2);
+  });
+
+  it('leaves clean search details (counts/source) untouched', () => {
+    audit({
+      eventType: 'data.read',
+      userId: 'user-1',
+      resourceType: 'search',
+      resourceId: '*',
+      details: { resultCount: 9, source: 'mentions' },
+    });
+
+    const persisted = mockSecurityAudit.logEvent.mock.calls[0]?.[0];
+    expect(persisted.details).toEqual({ resultCount: 9, source: 'mentions' });
+  });
+});

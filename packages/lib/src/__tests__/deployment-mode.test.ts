@@ -87,6 +87,28 @@ describe('deployment-mode', () => {
     });
   });
 
+  describe('areCloudIntegrationsAllowed', () => {
+    it('given mode=onprem, should return false', async () => {
+      const { areCloudIntegrationsAllowed } = await loadModule();
+      expect(areCloudIntegrationsAllowed('onprem')).toBe(false);
+    });
+
+    it('given mode=cloud, should return true', async () => {
+      const { areCloudIntegrationsAllowed } = await loadModule();
+      expect(areCloudIntegrationsAllowed('cloud')).toBe(true);
+    });
+
+    it('given mode=tenant, should return true', async () => {
+      const { areCloudIntegrationsAllowed } = await loadModule();
+      expect(areCloudIntegrationsAllowed('tenant')).toBe(true);
+    });
+
+    it('given an empty/unset mode, should return true (defaults to cloud)', async () => {
+      const { areCloudIntegrationsAllowed } = await loadModule();
+      expect(areCloudIntegrationsAllowed('')).toBe(true);
+    });
+  });
+
   describe('isBillingEnabled', () => {
     it('given DEPLOYMENT_MODE=tenant, should return false', async () => {
       vi.stubEnv('DEPLOYMENT_MODE', 'tenant');

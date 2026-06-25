@@ -222,6 +222,11 @@
       "import": "./dist/audit/mask-email.js",
       "require": "./dist/audit/mask-email.js"
     },
+    "./audit/sanitize-audit-details": {
+      "types": "./dist/audit/sanitize-audit-details.d.ts",
+      "import": "./dist/audit/sanitize-audit-details.js",
+      "require": "./dist/audit/sanitize-audit-details.js"
+    },
     "./auth/broadcast-auth": {
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",
@@ -737,6 +742,16 @@
       "import": "./dist/audit/security-audit-alerting.js",
       "require": "./dist/audit/security-audit-alerting.js"
     },
+    "./incidents/breach-assessment": {
+      "types": "./dist/incidents/breach-assessment.d.ts",
+      "import": "./dist/incidents/breach-assessment.js",
+      "require": "./dist/incidents/breach-assessment.js"
+    },
+    "./incidents/incident-service": {
+      "types": "./dist/incidents/incident-service.d.ts",
+      "import": "./dist/incidents/incident-service.js",
+      "require": "./dist/incidents/incident-service.js"
+    },
     "./monitoring/change-group": {
       "types": "./dist/monitoring/change-group.d.ts",
       "import": "./dist/monitoring/change-group.js",
@@ -1123,6 +1138,9 @@
       "audit/security-audit": [
         "./dist/audit/security-audit.d.ts"
       ],
+      "audit/sanitize-audit-details": [
+        "./dist/audit/sanitize-audit-details.d.ts"
+      ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
       ],
@@ -1404,6 +1422,12 @@
       ],
       "audit/security-audit-alerting": [
         "./dist/audit/security-audit-alerting.d.ts"
+      ],
+      "incidents/breach-assessment": [
+        "./dist/incidents/breach-assessment.d.ts"
+      ],
+      "incidents/incident-service": [
+        "./dist/incidents/incident-service.d.ts"
       ],
       "monitoring/change-group": [
         "./dist/monitoring/change-group.d.ts"

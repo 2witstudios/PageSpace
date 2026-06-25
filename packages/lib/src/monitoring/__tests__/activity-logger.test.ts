@@ -503,6 +503,25 @@ describe('activity-logger', () => {
       expect(capturedState.insertValues?.isArchived).toBe(false);
     });
 
+    it('should stamp GDPR Art 30 record-of-processing fields (#980)', async () => {
+      await logActivity(baseInput);
+      expect(capturedState.insertValues).toMatchObject({
+        dataCategory: 'content',
+        legalBasis: 'contract',
+        retentionPolicy: 'account_lifetime',
+        recipients: ['internal'],
+      });
+    });
+
+    it('should classify security operations as legitimate interest (#980)', async () => {
+      await logActivity({ ...baseInput, operation: 'login', resourceType: 'user' });
+      expect(capturedState.insertValues).toMatchObject({
+        dataCategory: 'identity',
+        legalBasis: 'legitimate_interest',
+        retentionPolicy: 'security_log_retention',
+      });
+    });
+
     it('should set isAiGenerated=false by default', async () => {
       await logActivity(baseInput);
       expect(capturedState.insertValues?.isAiGenerated).toBe(false);

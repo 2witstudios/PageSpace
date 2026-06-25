@@ -99,6 +99,10 @@
       "types": "./dist/schema/members.d.ts",
       "default": "./dist/schema/members.js"
     },
+    "./schema/incidents": {
+      "types": "./dist/schema/incidents.d.ts",
+      "default": "./dist/schema/incidents.js"
+    },
     "./schema/monitoring": {
       "types": "./dist/schema/monitoring.d.ts",
       "default": "./dist/schema/monitoring.js"

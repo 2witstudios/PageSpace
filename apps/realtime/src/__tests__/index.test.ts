@@ -113,6 +113,9 @@ vi.mock('@pagespace/db/schema/social', () => ({
 
 // validation mock – pass through to real module but track calls
 vi.mock('../validation', () => ({
+  // isCUID2 is consumed by ../broadcast-audience (audience authorization, #972).
+  isCUID2: (input: unknown): input is string =>
+    typeof input === 'string' && input.length >= 2 && input.length <= 32 && /^[a-z][a-z0-9]{1,31}$/.test(input),
   validatePageId: vi.fn((input: unknown) => {
     if (typeof input === 'string' && /^[a-z][a-z0-9]{1,31}$/.test(input)) {
       return { ok: true, value: input };
@@ -362,7 +365,8 @@ describe('requestListener - /api/broadcast', () => {
   it('given POST /api/broadcast with valid signature, should emit to channelId and return 200', async () => {
     vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
 
-    const body = JSON.stringify({ channelId: 'channel-1', event: 'test-event', payload: { key: 'val' } });
+    // channelId must be a legitimate room shape (#972) — use a real CUID2 page room.
+    const body = JSON.stringify({ channelId: 'athmieqpwr4ax1t2e0i4lmor', event: 'test-event', payload: { key: 'val' } });
     const req = createMockReq({
       method: 'POST',
       url: '/api/broadcast',
@@ -378,6 +382,29 @@ describe('requestListener - /api/broadcast', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true }));
+  });
+
+  it('given POST /api/broadcast with valid signature but disallowed audience channelId, should return 403 and not emit (#972)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    // 'channel-1' is signature-valid but not a legitimate room shape (contains a hyphen → not a CUID2).
+    const body = JSON.stringify({ channelId: 'channel-1', event: 'test-event', payload: { key: 'val' } });
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/broadcast',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockIo.emit).not.toHaveBeenCalled();
+    expect(res.writeHead).toHaveBeenCalledWith(403, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ error: 'Broadcast audience not authorized' }));
   });
 
   it('given POST /api/broadcast with missing signature, should return 401', async () => {
