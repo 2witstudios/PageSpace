@@ -1,13 +1,15 @@
 # GDPR Consent & Analytics Gating Epic
 
-**Status**: ✅ COMPLETED (2026-06-24)
-**Goal**: Make PageSpace's consent story lawful — gate non-essential cookies, analytics, and third-party scripts behind explicit opt-in; record AI cross-border processing consent; verify age at signup.
+**Status**: ✅ COMPLETED (2026-06-25)
+**Goal**: Make PageSpace's consent story lawful — gate non-essential cookies, analytics, and third-party scripts behind explicit opt-in; affirm minimum age at signup.
 
-**Closes**: #923, #924, #925, #921, #940, #922, #939. All phases shipped; pure consent core (40 tests in `packages/lib/src/consent`) + thin edges, TDD throughout. Cookie-policy legal copy left as a `{/* FILL: cookie policy copy */}` slot per the user-owned task.
+**Closes**: #923, #924, #921, #940, #922, #939. Pure consent core (11 tests in `packages/lib/src/consent`) + thin edges, TDD throughout. Cookie-policy legal copy left as a `{/* FILL: cookie policy copy */}` slot per the user-owned task.
+
+**Scope note (2026-06-25 product call)**: the per-user AI-processing consent system (issue **#925**, originally Phase 2) was **dropped** — for an AI product, processing prompts is the contracted service under GDPR Art 6(1)(b), not a separate consent the user grants; cross-border disclosure belongs in the privacy policy / ToS, not a per-provider consent record. #925 is therefore **not** closed by this PR. The DOB-based age gate (#922, originally Phase 3) was **right-sized**: rather than a date-of-birth field + `users.ageVerifiedAt` column, age is folded into the existing Terms-of-Service affirmation every signup path already requires ("…and I am at least 16"), with an inline disclosure on the OAuth paths. #922 stays closed via that ToS affirmation.
 
 ## Overview
 
-Because PageSpace currently fires first-party analytics on every page (incl. unauth), loads Google Identity Services / One Tap before any notice, sets preference cookies with no consent gate, keeps no per-user record that prompts leave the platform, and has no age gate, the platform violates GDPR Art 6/7/8/13/25 and ePrivacy Art 5(3). This epic ships the code/UX half: a consent banner + store, consent-gated analytics (mode-aware), deferred third-party scripts, a per-user AI-processing consent record + capture UI, a One Tap pre-consent notice with autoSelect off, and a signup age gate. All consent/gating decisions live in PURE functions (tested first, RED→GREEN); React components are thin shells. Cookie-policy legal copy is a separate user-owned task — banner ships with a clearly-marked FILL slot.
+Because PageSpace currently fires first-party analytics on every page (incl. unauth), loads Google Identity Services / One Tap before any notice, sets preference cookies with no consent gate, and has no age affirmation, the platform violates GDPR Art 6/7/8/13/25 and ePrivacy Art 5(3). This epic ships the code/UX half: a consent banner + store, consent-gated analytics (mode-aware), deferred third-party scripts, a One Tap pre-consent notice with autoSelect off, and a minimum-age affirmation folded into the ToS checkbox at signup. All consent/gating decisions live in PURE functions (tested first, RED→GREEN); React components are thin shells. Cookie-policy legal copy is a separate user-owned task — banner ships with a clearly-marked FILL slot.
 
 ---
 
@@ -50,45 +52,24 @@ Pure decision for whether the Google Identity Services script may load.
 
 ---
 
-## Phase 2 — AI processing consent core — #925
+## Phase 2 — AI processing consent core — #925 — ❌ DROPPED
 
-### AI consent record shaping + validity
-
-Pure shaping of the per-user AI-processing consent record and a validity check.
-
-**Requirements**:
-- Given a user id, policy version, and timestamp, when building an AI-processing consent record, should produce a record carrying userId, the policy version, consentedAt, and a null revokedAt.
-- Given a consent record whose policy version matches the current version and revokedAt is null, should report valid AI consent.
-- Given a consent record that is revoked or whose policy version is stale, should report invalid (re-consent required).
-
-### AI consent DB table
-
-New Drizzle table for the AI-processing consent record (schema + generated migration).
-
-**Requirements**:
-- Given the schema package, should expose an `aiProcessingConsents` table keyed by user with policyVersion, consentedAt, revokedAt, and a unique constraint preventing duplicate active rows per user.
-- Given a schema change, the migration should be produced by `db:generate` (never hand-written) and not collide with existing migration numbering.
+**Not shipped.** An earlier iteration built a per-user AI-processing consent record (table, `/api/consent/ai-processing` route, capture UI/hook, and a flag-gated server enforcement guard). The 2026-06-25 product call removed all of it: for an AI product, processing the user's prompts *is* the contracted service (GDPR Art 6(1)(b)), so a separate "consent" the user grants/revokes is the wrong legal basis. Cross-border processing is a **disclosure** obligation (privacy policy / ToS), not a per-provider consent record. Issue **#925** remains open and is **not** closed by this PR.
 
 ---
 
-## Phase 3 — Age gate — #922
+## Phase 3 — Age affirmation — #922
 
-### Minimum-age pure logic
+Right-sized from a DOB-based gate to a minimum-age affirmation folded into the Terms-of-Service checkbox that every signup path already requires. No date-of-birth field, no `users.ageVerifiedAt` column, no separate age-pure-logic module or `AGE_REQUIRED` plumbing.
 
-Pure age computation honoring Art 8's 16-year default.
+### Signup age affirmation wiring
 
-**Requirements**:
-- Given a date of birth and a reference date, when computing age, should not count the current year's birthday until it has passed.
-- Given a date of birth that yields an age below the configured minimum (default 16), should report the age requirement as not met.
-- Given a malformed/absent date of birth, should report the requirement as not met (fail closed).
-
-### Signup age field wiring
-
-Thread the age confirmation through the passkey signup edge (form → route → user creation), persisting verification minimally.
+The existing "I agree to the Terms" affirmation is extended to "…and I am at least 16", so accepting it asserts both. Applies uniformly across passkey, magic-link, and OAuth signup; the OAuth buttons carry an inline age/ToS disclosure (no checkbox to intercept the redirect).
 
 **Requirements**:
-- Given a signup request asserting an age below the minimum, the signup edge should reject it before creating a user.
-- Given a successful signup, the user record should persist that age was verified at signup time.
+- Given any signup path (passkey, magic-link, OAuth), the user cannot complete signup without affirming the combined ToS + minimum-age statement.
+- Given the magic-link path, the affirmation is always-required and mirrors the signin ToS checkbox, so it never leaks whether the email is new (enumeration resistance).
+- Given the OAuth paths, the age/ToS affirmation is disclosed inline before the user leaves for the provider.
 
 ---
 
