@@ -107,7 +107,7 @@ describe('QueueManager', () => {
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(7);
+      expect(mockBossWork).toHaveBeenCalledTimes(8);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
@@ -115,7 +115,8 @@ describe('QueueManager', () => {
       expect(mockBossWork.mock.calls[4][0]).toBe('video-process');
       expect(mockBossWork.mock.calls[5][0]).toBe('siem-delivery');
       expect(mockBossWork.mock.calls[6][0]).toBe('pull-verify');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(7);
+      expect(mockBossWork.mock.calls[7][0]).toBe('account-erasure');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(8);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('pull-verify');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
@@ -123,6 +124,7 @@ describe('QueueManager', () => {
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ocr-process');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('video-process');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('siem-delivery');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('account-erasure');
       expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
     });
 
