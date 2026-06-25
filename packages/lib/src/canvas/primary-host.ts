@@ -38,6 +38,32 @@ export interface ActiveDomainRecord {
 }
 
 /**
+ * Select the drive's primary domain from its ACTIVE custom domains, applying the
+ * same precedence the published site uses: an explicitly-flagged domain wins,
+ * otherwise the earliest-created one (hostname lexicographic tie-break). Returns
+ * `null` when there are no active domains (caller falls back to the subdomain).
+ *
+ * Generic over the record shape so both the server resolver (which has
+ * `ActiveDomainRecord`) and the settings UI (which carries an `id`) can reuse the
+ * SAME selection — the badge/primary controls never drift from what is served.
+ */
+export function selectPrimaryActiveDomain<T extends ActiveDomainRecord>(activeDomains: T[]): T | null {
+  if (activeDomains.length === 0) return null;
+
+  const byCreatedThenHostname = (a: T, b: T) => {
+    const dt = a.createdAt.getTime() - b.createdAt.getTime();
+    if (dt !== 0) return dt;
+    return a.hostname < b.hostname ? -1 : a.hostname > b.hostname ? 1 : 0;
+  };
+
+  // An explicitly-selected primary wins over the earliest-created default.
+  const flagged = activeDomains.filter((d) => d.isPrimary);
+  const pool = flagged.length > 0 ? flagged : activeDomains;
+
+  return [...pool].sort(byCreatedThenHostname)[0];
+}
+
+/**
  * Resolve the primary published host for a drive.
  *
  * @param subdomain    - Drive's allocated pagespace.site subdomain.
@@ -54,20 +80,6 @@ export function resolvePrimaryPublishedHost({
   publishHost: string;
   activeDomains: ActiveDomainRecord[];
 }): string {
-  if (activeDomains.length === 0) {
-    return `${subdomain}.${publishHost}`;
-  }
-
-  const byCreatedThenHostname = (a: ActiveDomainRecord, b: ActiveDomainRecord) => {
-    const dt = a.createdAt.getTime() - b.createdAt.getTime();
-    if (dt !== 0) return dt;
-    return a.hostname < b.hostname ? -1 : a.hostname > b.hostname ? 1 : 0;
-  };
-
-  // An explicitly-selected primary wins over the earliest-created default.
-  const flagged = activeDomains.filter((d) => d.isPrimary);
-  const pool = flagged.length > 0 ? flagged : activeDomains;
-
-  const sorted = [...pool].sort(byCreatedThenHostname);
-  return sorted[0].hostname;
+  const primary = selectPrimaryActiveDomain(activeDomains);
+  return primary ? primary.hostname : `${subdomain}.${publishHost}`;
 }

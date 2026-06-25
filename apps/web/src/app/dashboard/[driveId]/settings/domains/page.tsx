@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
 import { normalizeHostname, validateCustomDomain, buildDnsInstructions } from '@pagespace/lib/validators/custom-domain';
+import { selectPrimaryActiveDomain } from '@pagespace/lib/canvas/primary-host';
 
 interface CustomDomain {
   id: string;
@@ -287,6 +288,21 @@ function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd
   const addDisabled = isAdding || !newDomain.trim() || atCap || notAvailable;
   // "Make primary" only matters once there's a choice to make between domains.
   const showPrimaryControls = domains.length > 1;
+  // Any in-flight mutation (add/verify/cert/primary/remove) locks every per-row
+  // action so concurrent requests can't race or produce stale toasts.
+  const anyBusy =
+    removingId !== null || verifyingId !== null || refreshingCertId !== null || settingPrimaryId !== null;
+  // The EFFECTIVE primary is what the published site actually serves — an
+  // explicitly-flagged active domain, else the earliest-created active one. Badge
+  // and "Make primary" key off this (not the raw `isPrimary` flag) so a migrated
+  // drive with no explicit primary still highlights its canonical domain, and a
+  // flagged-but-inactive row is never shown as primary. Same resolver the server uses.
+  const effectivePrimaryId =
+    selectPrimaryActiveDomain(
+      domains
+        .filter((d) => d.status === 'active')
+        .map((d) => ({ id: d.id, hostname: d.hostname, createdAt: new Date(d.createdAt), isPrimary: d.isPrimary })),
+    )?.id ?? null;
 
   return (
     <Card>
@@ -355,11 +371,12 @@ function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd
                 onRefreshCert={onRefreshCert}
                 onSetPrimary={onSetPrimary}
                 showPrimaryControls={showPrimaryControls}
+                isEffectivePrimary={domain.id === effectivePrimaryId}
                 isRemoving={removingId === domain.id}
                 isVerifying={verifyingId === domain.id}
                 isRefreshingCert={refreshingCertId === domain.id}
                 isSettingPrimary={settingPrimaryId === domain.id}
-                anyBusy={verifyingId !== null || refreshingCertId !== null || settingPrimaryId !== null}
+                anyBusy={anyBusy}
                 verifyReason={verifyReasons[domain.id]}
               />
             ))}
@@ -379,6 +396,7 @@ function DomainRow({
   onRefreshCert,
   onSetPrimary,
   showPrimaryControls,
+  isEffectivePrimary,
   isRemoving,
   isVerifying,
   isRefreshingCert,
@@ -392,6 +410,7 @@ function DomainRow({
   onRefreshCert: (id: string) => void;
   onSetPrimary: (id: string) => void;
   showPrimaryControls: boolean;
+  isEffectivePrimary: boolean;
   isRemoving: boolean;
   isVerifying: boolean;
   isRefreshingCert: boolean;
@@ -473,7 +492,7 @@ function DomainRow({
           <Globe className="h-4 w-4 text-muted-foreground flex-shrink-0" />
           <span className="text-sm font-medium truncate">{domain.hostname}</span>
           {statusBadge()}
-          {showPrimaryControls && domain.isPrimary && (
+          {showPrimaryControls && isEffectivePrimary && (
             <Badge variant="secondary" className="text-xs gap-1">
               <Star className="h-3 w-3 fill-current" />
               Primary
@@ -481,7 +500,7 @@ function DomainRow({
           )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          {showPrimaryControls && domain.status === 'active' && !domain.isPrimary && (
+          {showPrimaryControls && domain.status === 'active' && !isEffectivePrimary && (
             <Button
               variant="outline"
               size="sm"
@@ -545,7 +564,7 @@ function DomainRow({
             size="sm"
             className="h-7 w-7 p-0 text-destructive hover:text-destructive"
             onClick={() => onRemove(domain.id)}
-            disabled={isRemoving}
+            disabled={anyBusy}
             aria-label={`Remove domain ${domain.hostname}`}
           >
             {isRemoving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}

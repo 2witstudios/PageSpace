@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolvePrimaryPublishedHost } from '../primary-host';
+import { resolvePrimaryPublishedHost, selectPrimaryActiveDomain } from '../primary-host';
 
 describe('resolvePrimaryPublishedHost', () => {
   const PUBLISH_HOST = 'pagespace.site';
@@ -118,5 +118,28 @@ describe('resolvePrimaryPublishedHost', () => {
       ],
     });
     expect(host).toBe('a.acme.com');
+  });
+});
+
+describe('selectPrimaryActiveDomain', () => {
+  it('returns null when there are no active domains', () => {
+    expect(selectPrimaryActiveDomain([])).toBeNull();
+  });
+
+  it('returns the explicitly-flagged domain (preserving extra fields like id)', () => {
+    const chosen = selectPrimaryActiveDomain([
+      { id: 'a', hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
+      { id: 'b', hostname: 'docs.acme.com', createdAt: new Date('2026-03-01T00:00:00.000Z'), isPrimary: true },
+    ]);
+    expect(chosen?.id).toBe('b');
+    expect(chosen?.hostname).toBe('docs.acme.com');
+  });
+
+  it('falls back to the earliest-created active domain when none is flagged', () => {
+    const chosen = selectPrimaryActiveDomain([
+      { id: 'late', hostname: 'docs.acme.com', createdAt: new Date('2026-03-01T00:00:00.000Z') },
+      { id: 'early', hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
+    ]);
+    expect(chosen?.id).toBe('early');
   });
 });
