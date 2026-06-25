@@ -40,7 +40,9 @@ export function CookieBanner() {
               Privacy Policy
             </Link>{' '}
             and{' '}
-            <Link href="/cookies" className="underline hover:text-foreground">
+            {/* Cookie Policy lives within the Privacy Policy until a dedicated /cookies page
+                ships as part of the user-owned legal-copy task; avoids a 404 in the meantime. */}
+            <Link href="/privacy" className="underline hover:text-foreground">
               Cookie Policy
             </Link>{' '}
             for details.
