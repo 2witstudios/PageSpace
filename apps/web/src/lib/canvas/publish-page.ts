@@ -1,11 +1,11 @@
 import 'server-only';
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { normalizeSubdomain, validatePublishSubdomain } from '@pagespace/lib/validators/subdomain';
 import { isUniqueViolation } from '@pagespace/lib/services/subdomain-allocation';
+import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { slugify } from '@pagespace/lib/utils/utils';
 import { db } from '@pagespace/db/db';
-import { eq, and, isNull } from '@pagespace/db/operators';
+import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
@@ -161,38 +161,15 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // Resolve the drive's publish subdomain. The subdomain is a property of the
   // DRIVE, never of an individual publish request: once allocated it is always
   // reused. A caller-supplied `subdomain` is only a *candidate* for the drive's
-  // first allocation — it must pass validation and win the unique constraint.
-  // Using `input.subdomain` directly would let a caller publish under another
-  // drive's subdomain (or a reserved/invalid one), overwriting that public site.
+  // first allocation. `allocatePublishSubdomain` normalizes the candidate and
+  // auto-resolves reserved / already-taken / malformed values to a unique slug
+  // (pagespace -> pagespace-2, acme -> acme-3, …) rather than erroring — the same
+  // race-safe allocator used by drive creation. It is idempotent (returns the
+  // existing subdomain when one is set), so a caller can never overwrite another
+  // drive's subdomain or publish under a reserved one.
   let subdomain = drive.publishSubdomain;
   if (!subdomain) {
-    const candidate = normalizeSubdomain(input.subdomain ?? drive.slug);
-    const validation = validatePublishSubdomain(candidate);
-    if (!validation.valid) {
-      throw new PublishError(`Invalid subdomain: ${validation.reason}`, 400);
-    }
-
-    try {
-      // Compare-and-set: only the first publisher (publishSubdomain still NULL)
-      // wins the allocation. A concurrent loser's update matches no rows, so we
-      // re-read and adopt the winner's subdomain instead of returning a URL for
-      // a subdomain the drive no longer owns.
-      await db
-        .update(drives)
-        .set({ publishSubdomain: candidate })
-        .where(and(eq(drives.id, drive.id), isNull(drives.publishSubdomain)));
-    } catch (err) {
-      if (isUniqueViolation(err)) {
-        throw new PublishError('Subdomain taken, choose another', 409);
-      }
-      throw err;
-    }
-
-    const allocated = await db.query.drives.findFirst({
-      where: eq(drives.id, drive.id),
-      columns: { publishSubdomain: true },
-    });
-    subdomain = allocated?.publishSubdomain ?? candidate;
+    subdomain = await allocatePublishSubdomain(drive.id, input.subdomain ?? drive.slug);
   }
 
   // ------------------------------------------------------------------
