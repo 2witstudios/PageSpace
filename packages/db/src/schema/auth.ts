@@ -9,8 +9,15 @@ export const platformType = pgEnum('PlatformType', ['web', 'desktop', 'ios', 'an
 
 export const users = pgTable('users', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
+  // `name` and `email` hold AES-256-GCM ciphertext at rest (GDPR #965). Email
+  // equality lookups + uniqueness run against `emailBidx` (deterministic HMAC
+  // blind index) instead of the raw email value. See
+  // docs/security/pii-encryption-design.md.
   name: text('name').notNull(),
   email: text('email').unique().notNull(),
+  // Deterministic blind index of the normalized email — unique, queryable.
+  // Nullable during backfill; becomes the canonical lookup key once populated.
+  emailBidx: text('emailBidx'),
   emailVerified: timestamp('emailVerified', { mode: 'date' }),
   image: text('image'),
 
@@ -40,7 +47,11 @@ export const users = pgTable('users', {
   timezone: text('timezone'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
-});
+}, (table) => ({
+  // Unique blind-index lookup for email (preserves the email uniqueness
+  // guarantee once the raw-email unique constraint is retired post-backfill).
+  emailBidxIdx: uniqueIndex('users_email_bidx_idx').on(table.emailBidx),
+}));
 
 export const deviceTokens = pgTable('device_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),

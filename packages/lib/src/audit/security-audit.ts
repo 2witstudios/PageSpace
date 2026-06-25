@@ -22,6 +22,17 @@ import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
 import { queryAuditEvents } from './audit-query';
 import { stableStringify } from '../utils/stable-stringify';
+import { deriveIndexKey } from '../encryption/blind-index';
+import { encryptAuditIp } from '../encryption/audit-ip-crypto';
+
+/**
+ * Derive the blind-index key from ENCRYPTION_KEY, or null when no usable key is
+ * configured (e.g. dev/test) so audit IPs fall back to plaintext storage.
+ */
+function auditIndexKey(): Buffer | null {
+  const master = process.env.ENCRYPTION_KEY ?? '';
+  return master.length >= 32 ? deriveIndexKey(master) : null;
+}
 
 /**
  * Audit event input structure
@@ -154,6 +165,10 @@ export class SecurityAuditService {
 
       const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
 
+      // GDPR #965/#969: encrypt the IP at rest + populate its blind index.
+      // ipAddress is excluded from the event hash, so this is chain-safe.
+      const { ipAddress: storedIp, ipBidx } = await encryptAuditIp(event.ipAddress, auditIndexKey());
+
       await tx.insert(securityAuditLog).values({
         eventType: event.eventType,
         userId: event.userId,
@@ -161,7 +176,8 @@ export class SecurityAuditService {
         serviceId: event.serviceId,
         resourceType: event.resourceType,
         resourceId: event.resourceId,
-        ipAddress: event.ipAddress,
+        ipAddress: storedIp,
+        ipBidx,
         userAgent: event.userAgent,
         geoLocation: event.geoLocation,
         details: event.details,

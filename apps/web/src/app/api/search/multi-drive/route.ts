@@ -5,6 +5,7 @@ import { eq, and, sql, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
@@ -236,7 +237,7 @@ export async function GET(request: Request) {
       userId
     });
 
-    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'search', resourceId: '*', details: { searchType, resultCount: totalMatches, source: 'multi-drive' } });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'search', resourceId: '*', details: buildSearchAuditDetails({ resultCount: totalMatches, source: 'multi-drive', searchType }) });
 
     return NextResponse.json({
       success: true,
