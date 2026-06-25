@@ -17,6 +17,18 @@
  *   Never use !isCloud() to gate integrations — it incorrectly restricts tenant.
  */
 
+/**
+ * Pure predicate: are cloud integrations (external OAuth/GitHub/Calendar
+ * providers — international-transfer surfaces, GDPR Art 44/46) allowed for the
+ * given deployment mode? Onprem disables them; cloud and tenant allow them.
+ *
+ * Takes the mode explicitly (no env read) so it is deterministic and testable.
+ * The env-reading edge lives in {@link isOnPrem}/{@link isCloud}.
+ */
+export function areCloudIntegrationsAllowed(mode: string): boolean {
+  return mode !== 'onprem';
+}
+
 export function isOnPrem(): boolean {
   return process.env.DEPLOYMENT_MODE === 'onprem';
 }

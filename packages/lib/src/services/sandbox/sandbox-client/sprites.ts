@@ -104,6 +104,12 @@ export interface SpriteCommandLike {
   readonly stdin?: { write(data: string | Buffer): void };
   on(event: 'exit', listener: (code: number) => void): unknown;
   on(event: 'error', listener: (error: unknown) => void): unknown;
+  // Emitted by the SDK's WSCommand AFTER the WebSocket actually opens
+  // (`cmd.start().then(() => cmd.emit('spawn'))`). A failed/flapping attach
+  // rejects and emits 'error' instead, never 'spawn' — so 'spawn' is the
+  // authoritative, flap-safe "connection established" signal the terminal uses
+  // to reset its bounded reconnect budget.
+  on(event: 'spawn', listener: () => void): unknown;
   kill(signal?: string): void;
   resize?(cols: number, rows: number): void;
 }
@@ -117,6 +123,21 @@ export interface SpriteSpawnOptions {
   cols?: number;
 }
 
+/**
+ * An exec session as reported by `listSessions()` (GET `/v1/sprites/{name}/exec`).
+ * The `id` is the handle passed to `attachSession` (WSS `/v1/sprites/{name}/exec/{id}`)
+ * to transparently reconnect to a shell that survived a WebSocket keepalive drop.
+ * `isActive` is the SDK's mapping of the API's `is_active`; its exact meaning
+ * (process-alive vs client-attached) is not specified by the docs, so callers
+ * select a shell to reattach by `tty` and use `isActive` only as a tiebreaker.
+ */
+export interface SpriteSessionInfo {
+  id: string;
+  command: string;
+  isActive: boolean;
+  tty: boolean;
+}
+
 /** The Sprite instance subset the driver consumes. */
 export interface SpriteInstanceLike {
   readonly name: string;
@@ -125,6 +146,24 @@ export interface SpriteInstanceLike {
     args?: string[],
     options?: SpriteSpawnOptions,
   ): SpriteCommandLike;
+  /**
+   * Start a detachable session (the SDK forces `tty: true`). A TTY session has
+   * `max_run_after_disconnect: 0` server-side — it keeps running indefinitely
+   * after the client WebSocket drops — which is the basis for a persistent
+   * interactive terminal that survives keepalive timeouts and reconnects.
+   */
+  createSession(
+    command: string,
+    args?: string[],
+    options?: SpriteSpawnOptions,
+  ): SpriteCommandLike;
+  /**
+   * Reattach to an existing session by id (connects to WSS `/exec/{id}`); the
+   * server immediately replays the session's scrollback buffer as stdout.
+   */
+  attachSession(sessionId: string, options?: SpriteSpawnOptions): SpriteCommandLike;
+  /** List the Sprite's exec sessions (the source of truth for reattach). */
+  listSessions(): Promise<SpriteSessionInfo[]>;
   filesystem(workingDir?: string): SpriteFsLike;
   updateNetworkPolicy(policy: NetworkPolicy): Promise<void>;
   destroy(): Promise<void>;

@@ -1,5 +1,5 @@
 {
-  "id": "cacec7f5-98cc-4017-84a4-0fa5a04c8658",
+  "id": "32c592cb-1d4d-4b40-9840-6fb047dda415",
   "prevId": "59e84afc-d866-4f30-a8b6-381c0d2de0a3",
   "version": "7",
   "dialect": "postgresql",
@@ -759,12 +759,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "emailBidx": {
-          "name": "emailBidx",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "emailVerified": {
           "name": "emailVerified",
           "type": "timestamp",
@@ -918,23 +912,7 @@
           "default": "now()"
         }
       },
-      "indexes": {
-        "users_email_bidx_idx": {
-          "name": "users_email_bidx_idx",
-          "columns": [
-            {
-              "expression": "emailBidx",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
@@ -10859,12 +10837,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "ip_bidx": {
-          "name": "ip_bidx",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "user_agent": {
           "name": "user_agent",
           "type": "text",
@@ -11011,27 +10983,6 @@
           "columns": [
             {
               "expression": "ip_address",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "timestamp",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_security_audit_ip_bidx": {
-          "name": "idx_security_audit_ip_bidx",
-          "columns": [
-            {
-              "expression": "ip_bidx",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -17050,6 +17001,220 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
+    },
+    "public.data_subject_requests": {
+      "name": "data_subject_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subject_email": {
+          "name": "subject_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_type": {
+          "name": "request_type",
+          "type": "data_subject_request_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'erasure'"
+        },
+        "status": {
+          "name": "status",
+          "type": "data_subject_request_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "force_delete": {
+          "name": "force_delete",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "requested_by_user_id": {
+          "name": "requested_by_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "requested_by_type": {
+          "name": "requested_by_type",
+          "type": "data_subject_requester_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'self'"
+        },
+        "legal_basis": {
+          "name": "legal_basis",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "sla_deadline": {
+          "name": "sla_deadline",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "blocked_reason": {
+          "name": "blocked_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "job_id": {
+          "name": "job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "step_results": {
+          "name": "step_results",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "data_subject_requests_status_idx": {
+          "name": "data_subject_requests_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "data_subject_requests_sla_deadline_idx": {
+          "name": "data_subject_requests_sla_deadline_idx",
+          "columns": [
+            {
+              "expression": "sla_deadline",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "data_subject_requests_user_id_idx": {
+          "name": "data_subject_requests_user_id_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "data_subject_requests_user_id_users_id_fk": {
+          "name": "data_subject_requests_user_id_users_id_fk",
+          "tableFrom": "data_subject_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "data_subject_requests_requested_by_user_id_users_id_fk": {
+          "name": "data_subject_requests_requested_by_user_id_users_id_fk",
+          "tableFrom": "data_subject_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "requested_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
     }
   },
   "enums": {
@@ -17426,6 +17591,40 @@
         "active",
         "dns_failed",
         "cert_failed"
+      ]
+    },
+    "public.data_subject_request_status": {
+      "name": "data_subject_request_status",
+      "schema": "public",
+      "values": [
+        "pending",
+        "queued",
+        "in_progress",
+        "blocked",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "public.data_subject_request_type": {
+      "name": "data_subject_request_type",
+      "schema": "public",
+      "values": [
+        "erasure",
+        "export",
+        "access",
+        "rectification",
+        "restriction",
+        "portability",
+        "objection"
+      ]
+    },
+    "public.data_subject_requester_type": {
+      "name": "data_subject_requester_type",
+      "schema": "public",
+      "values": [
+        "self",
+        "admin"
       ]
     }
   },

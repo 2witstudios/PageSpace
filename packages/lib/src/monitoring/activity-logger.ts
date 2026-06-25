@@ -14,6 +14,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { createHash, randomBytes } from 'crypto';
 import { desc, isNotNull, sql } from 'drizzle-orm';
 import { stableStringify } from '../utils/stable-stringify';
+import { classifyProcessing } from '../compliance/art30/classify-processing';
 
 /**
  * Advisory lock key for serializing activity log hash chain writes.
@@ -430,6 +431,12 @@ function prepareActivityInsert(input: ActivityLogInput) {
     };
   }
 
+  // GDPR Art 30 record-of-processing classification (#980). Derived from the
+  // operation + resourceType via a pure classifier. These fields are NOT part
+  // of the tamper-evident hash chain (serializeLogDataForHash excludes them),
+  // so stamping them here does not affect chain verification.
+  const art30 = classifyProcessing(input.operation, input.resourceType);
+
   return {
     id: createId(),
     timestamp: new Date(),
@@ -438,6 +445,10 @@ function prepareActivityInsert(input: ActivityLogInput) {
     actorDisplayName: input.actorDisplayName,
     operation: input.operation,
     resourceType: input.resourceType,
+    dataCategory: art30.dataCategory,
+    legalBasis: art30.legalBasis,
+    retentionPolicy: art30.retentionPolicy,
+    recipients: art30.recipients,
     resourceId: input.resourceId,
     resourceTitle: input.resourceTitle,
     driveId: input.driveId,

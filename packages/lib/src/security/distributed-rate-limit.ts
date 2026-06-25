@@ -434,6 +434,39 @@ export async function getDistributedRateLimitStatus(
 }
 
 /**
+ * Increment and return the authentication-failure count for an identifier in
+ * the current window. Reuses the `rate_limit_buckets` table with an
+ * `authfail:` key prefix so the count survives restarts and spans replicas
+ * (#977) — feeding the pure auth-anomaly detector.
+ *
+ * Best-effort: returns 0 on DB error, so the caller treats an unknown count as
+ * "no anomaly" rather than failing the auth request.
+ */
+export async function countAuthFailure(identifier: string, windowMs: number): Promise<number> {
+  const now = Date.now();
+  const windowStart = currentWindowStart(windowMs, now);
+  const expiresAt = new Date(windowStart.getTime() + 2 * windowMs);
+  const key = `authfail:${identifier}`;
+
+  try {
+    const rows = await db
+      .insert(rateLimitBuckets)
+      .values({ key, windowStart, count: 1, expiresAt })
+      .onConflictDoUpdate({
+        target: [rateLimitBuckets.key, rateLimitBuckets.windowStart],
+        set: { count: sql`${rateLimitBuckets.count} + 1` },
+      })
+      .returning({ count: rateLimitBuckets.count });
+    return rows[0]?.count ?? 0;
+  } catch (error) {
+    loggers.api.warn('countAuthFailure failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  }
+}
+
+/**
  * Delete expired rate-limit buckets (`expires_at < now()`).
  *
  * Best-effort cleanup. In production, rethrows so the cron handler surfaces a

@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { abortStream, abortStreamByMessageId } from '@/lib/ai/core/stream-abort-registry';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { checkRateLimit } from '@pagespace/lib/auth/rate-limit-utils';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -30,8 +30,9 @@ export async function POST(request: Request) {
     }
     const userId = auth.userId;
 
-    // Rate limiting to prevent brute-force streamId guessing
-    const rateLimit = checkRateLimit(`abort:${userId}`, ABORT_RATE_LIMIT);
+    // Rate limiting to prevent brute-force streamId guessing.
+    // Postgres-backed so the limit survives restarts and spans replicas (#977).
+    const rateLimit = await checkDistributedRateLimit(`abort:${userId}`, ABORT_RATE_LIMIT);
     if (!rateLimit.allowed) {
       loggers.api.warn('AI abort rate limited', { userId, retryAfter: rateLimit.retryAfter });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_stream', resourceId: 'abort', details: { reason: 'rate_limited', method: 'POST' }, riskScore: 0.5 });

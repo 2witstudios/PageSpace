@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -28,6 +29,7 @@ const createConnectionSchema = z.object({
  * List all integration connections for the authenticated user.
  */
 export async function GET(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
 
@@ -70,6 +72,7 @@ export async function GET(request: Request) {
  * For API key/bearer: validates and creates connection immediately.
  */
 export async function POST(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 

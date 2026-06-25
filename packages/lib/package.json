@@ -242,6 +242,16 @@
       "import": "./dist/audit/mask-email.js",
       "require": "./dist/audit/mask-email.js"
     },
+    "./audit/sanitize-audit-details": {
+      "types": "./dist/audit/sanitize-audit-details.d.ts",
+      "import": "./dist/audit/sanitize-audit-details.js",
+      "require": "./dist/audit/sanitize-audit-details.js"
+    },
+    "./audit/admin-read-audit": {
+      "types": "./dist/audit/admin-read-audit.d.ts",
+      "import": "./dist/audit/admin-read-audit.js",
+      "require": "./dist/audit/admin-read-audit.js"
+    },
     "./auth/broadcast-auth": {
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",
@@ -767,6 +777,16 @@
       "import": "./dist/audit/security-audit-alerting.js",
       "require": "./dist/audit/security-audit-alerting.js"
     },
+    "./incidents/breach-assessment": {
+      "types": "./dist/incidents/breach-assessment.d.ts",
+      "import": "./dist/incidents/breach-assessment.js",
+      "require": "./dist/incidents/breach-assessment.js"
+    },
+    "./incidents/incident-service": {
+      "types": "./dist/incidents/incident-service.d.ts",
+      "import": "./dist/incidents/incident-service.js",
+      "require": "./dist/incidents/incident-service.js"
+    },
     "./monitoring/change-group": {
       "types": "./dist/monitoring/change-group.d.ts",
       "import": "./dist/monitoring/change-group.js",
@@ -841,6 +861,16 @@
       "types": "./dist/integrations/converter/openapi.d.ts",
       "import": "./dist/integrations/converter/openapi.js",
       "require": "./dist/integrations/converter/openapi.js"
+    },
+    "./security/auth-anomaly": {
+      "types": "./dist/security/auth-anomaly.d.ts",
+      "import": "./dist/security/auth-anomaly.js",
+      "require": "./dist/security/auth-anomaly.js"
+    },
+    "./security/auth-anomaly-reporter": {
+      "types": "./dist/security/auth-anomaly-reporter.d.ts",
+      "import": "./dist/security/auth-anomaly-reporter.js",
+      "require": "./dist/security/auth-anomaly-reporter.js"
     },
     "./security/jti-revocation": {
       "types": "./dist/security/jti-revocation.d.ts",
@@ -1017,6 +1047,11 @@
       "import": "./dist/compliance/retention/monitoring-retention.js",
       "require": "./dist/compliance/retention/monitoring-retention.js"
     },
+    "./compliance/retention/activity-log-archival": {
+      "types": "./dist/compliance/retention/activity-log-archival.d.ts",
+      "import": "./dist/compliance/retention/activity-log-archival.js",
+      "require": "./dist/compliance/retention/activity-log-archival.js"
+    },
     "./compliance/file-cleanup/orphan-detector": {
       "types": "./dist/compliance/file-cleanup/orphan-detector.d.ts",
       "import": "./dist/compliance/file-cleanup/orphan-detector.js",
@@ -1026,6 +1061,11 @@
       "types": "./dist/compliance/export/gdpr-export.d.ts",
       "import": "./dist/compliance/export/gdpr-export.js",
       "require": "./dist/compliance/export/gdpr-export.js"
+    },
+    "./compliance/export/export-format": {
+      "types": "./dist/compliance/export/export-format.d.ts",
+      "import": "./dist/compliance/export/export-format.js",
+      "require": "./dist/compliance/export/export-format.js"
     },
     "./compliance/anonymize": {
       "types": "./dist/compliance/anonymize.d.ts",
@@ -1041,6 +1081,66 @@
       "types": "./dist/canvas/cert-action.d.ts",
       "import": "./dist/canvas/cert-action.js",
       "require": "./dist/canvas/cert-action.js"
+    },
+    "./compliance/dsr/sla": {
+      "types": "./dist/compliance/dsr/sla.d.ts",
+      "import": "./dist/compliance/dsr/sla.js",
+      "require": "./dist/compliance/dsr/sla.js"
+    },
+    "./compliance/dsr/status-machine": {
+      "types": "./dist/compliance/dsr/status-machine.d.ts",
+      "import": "./dist/compliance/dsr/status-machine.js",
+      "require": "./dist/compliance/dsr/status-machine.js"
+    },
+    "./compliance/erasure/drive-disposition": {
+      "types": "./dist/compliance/erasure/drive-disposition.d.ts",
+      "import": "./dist/compliance/erasure/drive-disposition.js",
+      "require": "./dist/compliance/erasure/drive-disposition.js"
+    },
+    "./compliance/erasure/erasure-plan": {
+      "types": "./dist/compliance/erasure/erasure-plan.d.ts",
+      "import": "./dist/compliance/erasure/erasure-plan.js",
+      "require": "./dist/compliance/erasure/erasure-plan.js"
+    },
+    "./compliance/erasure/run-erasure": {
+      "types": "./dist/compliance/erasure/run-erasure.d.ts",
+      "import": "./dist/compliance/erasure/run-erasure.js",
+      "require": "./dist/compliance/erasure/run-erasure.js"
+    },
+    "./compliance/erasure/email-suppression": {
+      "types": "./dist/compliance/erasure/email-suppression.d.ts",
+      "import": "./dist/compliance/erasure/email-suppression.js",
+      "require": "./dist/compliance/erasure/email-suppression.js"
+    },
+    "./compliance/erasure/resend-suppression-client": {
+      "types": "./dist/compliance/erasure/resend-suppression-client.d.ts",
+      "import": "./dist/compliance/erasure/resend-suppression-client.js",
+      "require": "./dist/compliance/erasure/resend-suppression-client.js"
+    },
+    "./compliance/erasure/ai-provider-erasure": {
+      "types": "./dist/compliance/erasure/ai-provider-erasure.d.ts",
+      "import": "./dist/compliance/erasure/ai-provider-erasure.js",
+      "require": "./dist/compliance/erasure/ai-provider-erasure.js"
+    },
+    "./compliance/erasure/pseudonymize": {
+      "types": "./dist/compliance/erasure/pseudonymize.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize.js",
+      "require": "./dist/compliance/erasure/pseudonymize.js"
+    },
+    "./compliance/erasure/pseudonymize-repository": {
+      "types": "./dist/compliance/erasure/pseudonymize-repository.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize-repository.js",
+      "require": "./dist/compliance/erasure/pseudonymize-repository.js"
+    },
+    "./repositories/data-subject-request-repository": {
+      "types": "./dist/repositories/data-subject-request-repository.d.ts",
+      "import": "./dist/repositories/data-subject-request-repository.js",
+      "require": "./dist/repositories/data-subject-request-repository.js"
+    },
+    "./audit/security-audit-chain-verifier": {
+      "types": "./dist/audit/security-audit-chain-verifier.d.ts",
+      "import": "./dist/audit/security-audit-chain-verifier.js",
+      "require": "./dist/audit/security-audit-chain-verifier.js"
     }
   },
   "typesVersions": {
@@ -1164,6 +1264,12 @@
       ],
       "audit/security-audit": [
         "./dist/audit/security-audit.d.ts"
+      ],
+      "audit/sanitize-audit-details": [
+        "./dist/audit/sanitize-audit-details.d.ts"
+      ],
+      "audit/admin-read-audit": [
+        "./dist/audit/admin-read-audit.d.ts"
       ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
@@ -1453,6 +1559,12 @@
       "audit/security-audit-alerting": [
         "./dist/audit/security-audit-alerting.d.ts"
       ],
+      "incidents/breach-assessment": [
+        "./dist/incidents/breach-assessment.d.ts"
+      ],
+      "incidents/incident-service": [
+        "./dist/incidents/incident-service.d.ts"
+      ],
       "monitoring/change-group": [
         "./dist/monitoring/change-group.d.ts"
       ],
@@ -1497,6 +1609,12 @@
       ],
       "integrations/converter/openapi": [
         "./dist/integrations/converter/openapi.d.ts"
+      ],
+      "security/auth-anomaly": [
+        "./dist/security/auth-anomaly.d.ts"
+      ],
+      "security/auth-anomaly-reporter": [
+        "./dist/security/auth-anomaly-reporter.d.ts"
       ],
       "security/jti-revocation": [
         "./dist/security/jti-revocation.d.ts"
@@ -1603,11 +1721,17 @@
       "compliance/retention/monitoring-retention": [
         "./dist/compliance/retention/monitoring-retention.d.ts"
       ],
+      "compliance/retention/activity-log-archival": [
+        "./dist/compliance/retention/activity-log-archival.d.ts"
+      ],
       "compliance/file-cleanup/orphan-detector": [
         "./dist/compliance/file-cleanup/orphan-detector.d.ts"
       ],
       "compliance/export/gdpr-export": [
         "./dist/compliance/export/gdpr-export.d.ts"
+      ],
+      "compliance/export/export-format": [
+        "./dist/compliance/export/export-format.d.ts"
       ],
       "compliance/anonymize": [
         "./dist/compliance/anonymize.d.ts"

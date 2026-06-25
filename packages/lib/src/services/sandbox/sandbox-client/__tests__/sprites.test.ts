@@ -77,6 +77,9 @@ function fakeSprite(
   return {
     name: 'session-key',
     spawn: () => fakeCommand({ stdout: ['out'], exitCode: 0 }),
+    createSession: () => fakeCommand({ stdout: ['out'], exitCode: 0 }),
+    attachSession: () => fakeCommand({ stdout: ['out'], exitCode: 0 }),
+    listSessions: async () => [],
     filesystem: () => fs,
     updateNetworkPolicy: async () => {},
     destroy: async () => {},

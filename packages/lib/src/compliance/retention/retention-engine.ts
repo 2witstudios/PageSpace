@@ -6,7 +6,13 @@ import { pagePermissions } from '@pagespace/db/schema/members';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { pageVersions, driveBackups } from '@pagespace/db/schema/versioning';
+import { chatMessages } from '@pagespace/db/schema/core';
+import { messages, conversations } from '@pagespace/db/schema/conversations';
 import { runMonitoringRetentionCleanup } from './monitoring-retention';
+import {
+  resolveChatRetentionDays,
+  computeChatRetentionCutoff,
+} from './chat-retention';
 
 export interface CleanupResult {
   table: string;
@@ -116,8 +122,52 @@ export async function cleanupExpiredAiUsageLogs(database: DB): Promise<CleanupRe
   return { table: 'ai_usage_logs', deleted: result.length };
 }
 
+/**
+ * Hard-delete soft-deleted AI chat records (page-agent chat messages, global/
+ * channel messages, and conversations) older than the chat retention window
+ * (#974). Soft-deleted (`isActive=false`) rows have no operational need; keeping
+ * them indefinitely over-retains personal data. The window is configurable via
+ * RETENTION_CHAT_SOFT_DELETE_DAYS (default 30 days). Active conversations are
+ * never touched.
+ *
+ * Each table is aged by the timestamp that best reflects when the grace period
+ * should start, matching the existing purge helpers:
+ *  - conversations: `updatedAt` ($onUpdate bumps it on the soft-delete write),
+ *    so a long-lived conversation deleted today still gets its full grace period.
+ *  - messages / chat_messages: `createdAt` (these tables carry no soft-delete
+ *    timestamp; `editedAt` is only set on content edits). This matches the
+ *    existing `purgeInactiveMessages` semantics.
+ */
+export async function cleanupSoftDeletedChatRecords(database: DB): Promise<CleanupResult[]> {
+  const cutoff = computeChatRetentionCutoff(
+    new Date(),
+    resolveChatRetentionDays(process.env.RETENTION_CHAT_SOFT_DELETE_DAYS),
+  );
+
+  const [chatMsgs, globalMsgs, convos] = await Promise.all([
+    database
+      .delete(chatMessages)
+      .where(and(eq(chatMessages.isActive, false), lt(chatMessages.createdAt, cutoff)))
+      .returning({ id: chatMessages.id }),
+    database
+      .delete(messages)
+      .where(and(eq(messages.isActive, false), lt(messages.createdAt, cutoff)))
+      .returning({ id: messages.id }),
+    database
+      .delete(conversations)
+      .where(and(eq(conversations.isActive, false), lt(conversations.updatedAt, cutoff)))
+      .returning({ id: conversations.id }),
+  ]);
+
+  return [
+    { table: 'chat_messages', deleted: chatMsgs.length },
+    { table: 'messages', deleted: globalMsgs.length },
+    { table: 'conversations', deleted: convos.length },
+  ];
+}
+
 export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]> {
-  const [expiryResults, monitoringResults] = await Promise.all([
+  const [expiryResults, chatResults, monitoringResults] = await Promise.all([
     Promise.all([
       cleanupExpiredSessions(database),
       cleanupExpiredVerificationTokens(database),
@@ -129,7 +179,8 @@ export async function runRetentionCleanup(database: DB): Promise<CleanupResult[]
       cleanupExpiredPagePermissions(database),
       cleanupExpiredAiUsageLogs(database),
     ]),
+    cleanupSoftDeletedChatRecords(database),
     runMonitoringRetentionCleanup(),
   ]);
-  return [...expiryResults, ...monitoringResults];
+  return [...expiryResults, ...chatResults, ...monitoringResults];
 }

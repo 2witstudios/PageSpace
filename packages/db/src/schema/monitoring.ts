@@ -363,6 +363,15 @@ export const activityLogs = pgTable('activity_logs', {
   stateHashBefore: text('stateHashBefore'),
   stateHashAfter: text('stateHashAfter'),
 
+  // GDPR Art 30 record-of-processing fields (nullable for backfill safety).
+  // Populated on write by the activity-log edge from a pure classifier
+  // (classifyProcessing) so each row carries its lawful-basis / category /
+  // retention / recipient metadata for the record of processing activities.
+  dataCategory: text('dataCategory'),        // e.g. 'content', 'identity', 'usage_metadata'
+  legalBasis: text('legalBasis'),            // e.g. 'contract', 'legitimate_interest', 'consent'
+  retentionPolicy: text('retentionPolicy'),  // human/policy ref e.g. 'account_lifetime', '90d'
+  recipients: jsonb('recipients').$type<string[]>(), // categories of recipients (Art 30(1)(d))
+
   // Retention management
   isArchived: boolean('isArchived').default(false).notNull(),
 
