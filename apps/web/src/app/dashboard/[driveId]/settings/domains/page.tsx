@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
 import { toast } from 'sonner';
 import { fetchWithAuth, del, patch } from '@/lib/auth/auth-fetch';
@@ -29,6 +30,11 @@ interface DomainsResponse {
   domains: CustomDomain[];
   /** Maximum custom domains allowed by the drive owner's plan (0 = not available). */
   limit: number;
+}
+
+interface SubdomainResponse {
+  subdomain: string | null;
+  canChange: boolean;
 }
 
 const fetcher = (url: string) => fetchWithAuth(url).then((r) => r.json());
@@ -52,6 +58,8 @@ export default function DomainsSettingsPage() {
   const [verifyReasons, setVerifyReasons] = useState<Record<string, string | undefined>>({});
   const [refreshingCertId, setRefreshingCertId] = useState<string | null>(null);
   const [settingPrimaryId, setSettingPrimaryId] = useState<string | null>(null);
+  const [subdomainInput, setSubdomainInput] = useState('');
+  const [isSavingSubdomain, setIsSavingSubdomain] = useState(false);
 
   useEffect(() => {
     fetchDrives();
@@ -90,6 +98,40 @@ export default function DomainsSettingsPage() {
     drive && canManage ? `/api/drives/${driveId}/domains` : null,
     fetcher
   );
+
+  const { data: subdomainData, mutate: mutateSubdomain } = useSWR<SubdomainResponse>(
+    drive && canManage ? `/api/drives/${driveId}/subdomain` : null,
+    fetcher
+  );
+
+  useEffect(() => {
+    if (subdomainData?.subdomain) setSubdomainInput(subdomainData.subdomain);
+  }, [subdomainData?.subdomain]);
+
+  const handleChangeSubdomain = async () => {
+    const trimmed = subdomainInput.trim().toLowerCase();
+    if (!trimmed || isSavingSubdomain) return;
+    if (trimmed === subdomainData?.subdomain) return;
+    setIsSavingSubdomain(true);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/subdomain`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subdomain: trimmed }),
+      });
+      const data = await res.json().catch(() => ({})) as { subdomain?: string; error?: string };
+      if (!res.ok) {
+        toast.error(data.error ?? 'Failed to update subdomain');
+        return;
+      }
+      await mutateSubdomain();
+      toast.success('Subdomain updated');
+    } catch {
+      toast.error('Failed to update subdomain');
+    } finally {
+      setIsSavingSubdomain(false);
+    }
+  };
 
   const handleAddDomain = async () => {
     const hostname = normalizeHostname(newDomain.trim());
@@ -266,6 +308,15 @@ export default function DomainsSettingsPage() {
         <p className="text-muted-foreground">Custom domains and share defaults for this drive&apos;s published canvas site</p>
       </div>
 
+      <SubdomainCard
+        subdomain={subdomainData?.subdomain ?? null}
+        canChange={subdomainData?.canChange ?? false}
+        inputValue={subdomainInput}
+        onInputChange={setSubdomainInput}
+        onSave={handleChangeSubdomain}
+        isSaving={isSavingSubdomain}
+      />
+
       <CustomDomainsCard
         domains={domainsData?.domains ?? []}
         limit={domainsData?.limit ?? null}
@@ -335,6 +386,84 @@ export default function DomainsSettingsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ── Subdomain Card ──────────────────────────────────────────────────────────
+
+interface SubdomainCardProps {
+  subdomain: string | null;
+  canChange: boolean;
+  inputValue: string;
+  onInputChange: (v: string) => void;
+  onSave: () => void;
+  isSaving: boolean;
+}
+
+function SubdomainCard({ subdomain, canChange, inputValue, onInputChange, onSave, isSaving }: SubdomainCardProps) {
+  const preview = inputValue.trim().toLowerCase() || subdomain || 'your-subdomain';
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Globe className="h-4 w-4" />
+          Subdomain
+        </CardTitle>
+        <CardDescription>
+          Your published site URL on pagespace.site
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {subdomain && (
+          <a
+            href={`https://${subdomain}.pagespace.site`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block text-sm text-blue-500 hover:underline"
+          >
+            {subdomain}.pagespace.site
+          </a>
+        )}
+        {canChange ? (
+          <>
+            <div className="flex gap-2 items-end">
+              <div className="flex-1 space-y-1.5">
+                <Label htmlFor="subdomain-input">Custom subdomain</Label>
+                <div className="flex items-center">
+                  <Input
+                    id="subdomain-input"
+                    value={inputValue}
+                    onChange={(e) => onInputChange(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !isSaving && inputValue.trim().toLowerCase() !== subdomain && onSave()}
+                    placeholder="my-brand"
+                    className="rounded-r-none"
+                    disabled={isSaving}
+                  />
+                  <span className="inline-flex items-center px-3 h-9 rounded-r-md border border-l-0 bg-muted text-sm text-muted-foreground">
+                    .pagespace.site
+                  </span>
+                </div>
+              </div>
+              <Button
+                onClick={onSave}
+                disabled={isSaving || !inputValue.trim() || inputValue.trim().toLowerCase() === subdomain}
+              >
+                {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Save
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Preview: https://{preview}.pagespace.site
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Custom subdomain selection is a Pro feature. <Link href="/dashboard/settings/billing" className="text-blue-500 hover:underline">Upgrade</Link> to choose your own subdomain.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

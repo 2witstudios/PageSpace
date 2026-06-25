@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isUniqueViolation } from '@pagespace/lib/services/subdomain-allocation';
 import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { slugify } from '@pagespace/lib/utils/utils';
+import { validatePublishSubdomain, normalizeSubdomain } from '@pagespace/lib/validators/subdomain';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -432,6 +433,70 @@ export async function republishDriveCanonical(driveId: string, userId: string): 
  * lifecycle event will rebuild the files. No-op when publishing is unconfigured
  * or the drive has not yet been allocated a subdomain.
  */
+/**
+ * Change a drive's publish subdomain and migrate all published artifacts.
+ *
+ * Validates the new subdomain, checks global uniqueness, updates the DB, then
+ * re-renders every published page under the new prefix and regenerates site
+ * files. Old artifacts are deleted last (best-effort). The caller is responsible
+ * for auth and tier-gating.
+ */
+export async function changePublishSubdomain(
+  driveId: string,
+  candidate: string,
+  userId: string,
+): Promise<{ oldSubdomain: string | null; newSubdomain: string }> {
+  const drive = await db.query.drives.findFirst({
+    where: eq(drives.id, driveId),
+    columns: { id: true, publishSubdomain: true, kind: true },
+  });
+  if (!drive) throw new PublishError('Drive not found', 404);
+  if (isHomeDrive(drive)) throw new PublishError('Cannot change subdomain of a Home drive', 403);
+
+  const oldSubdomain = drive.publishSubdomain;
+
+  const normalized = normalizeSubdomain(candidate);
+  const validation = validatePublishSubdomain(normalized);
+  if (!validation.valid) {
+    throw new PublishError(validation.reason, 400);
+  }
+
+  if (normalized === oldSubdomain) {
+    return { oldSubdomain, newSubdomain: normalized };
+  }
+
+  const conflict = await db.query.drives.findFirst({
+    where: and(eq(drives.publishSubdomain, normalized), ne(drives.id, driveId)),
+    columns: { id: true },
+  });
+  if (conflict) {
+    throw new PublishError(`Subdomain "${normalized}" is already taken`, 409);
+  }
+
+  await db.update(drives).set({ publishSubdomain: normalized }).where(eq(drives.id, driveId));
+
+  // Re-render all published pages under the new subdomain prefix.
+  await republishDriveCanonical(driveId, userId);
+
+  // Regenerate robots/sitemap/404 under the new prefix.
+  await regeneratePublishedSiteFiles(driveId);
+
+  // Delete old artifacts (best-effort — pages already serve from new prefix).
+  if (oldSubdomain) {
+    try {
+      await clearPublishedPrefix(oldSubdomain);
+    } catch (err) {
+      loggers.api.warn('Failed to clear old subdomain prefix after change', {
+        driveId,
+        oldSubdomain,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { oldSubdomain, newSubdomain: normalized };
+}
+
 export async function regeneratePublishedSiteFiles(driveId: string): Promise<void> {
   try {
     if (!isPublishConfigured()) return;
