@@ -4,6 +4,18 @@
  */
 
 import { post } from '../auth/auth-fetch';
+import { shouldFireAnalytics } from '@pagespace/lib/consent';
+import { getDeploymentMode } from '../deployment-mode';
+import { getConsentStateFromCookie, CONSENT_CHANGED_EVENT } from '@/stores/useConsentStore';
+
+/**
+ * Single GDPR/ePrivacy gate for all analytics sends: fires only with analytics consent
+ * AND on a mode where analytics is permitted (never on onprem). Read at call time so a
+ * later consent decision takes effect immediately.
+ */
+function analyticsAllowed(): boolean {
+  return shouldFireAnalytics(getConsentStateFromCookie(), getDeploymentMode());
+}
 
 interface TrackingEvent {
   event: string;
@@ -47,6 +59,9 @@ class ClientTracker {
    * Track an event - fire and forget
    */
   track(event: string, data?: Record<string, unknown>): void {
+    // GDPR/ePrivacy: no non-essential analytics network call without consent (and never on onprem).
+    if (!analyticsAllowed()) return;
+
     const trackingEvent: TrackingEvent = {
       event,
       data,
@@ -225,10 +240,16 @@ export const trackTiming = (category: string, variable: string, duration: number
 
 // Auto-track page views on route changes (for Next.js)
 if (typeof window !== 'undefined') {
-  // Track initial page view
+  // Track initial page view (the tracker's own consent gate suppresses the send until
+  // analytics consent is granted; no-op on onprem).
   setTimeout(() => {
     trackPageView(window.location.pathname);
   }, 0);
+
+  // When the user grants consent later, capture the current page view that was suppressed.
+  window.addEventListener(CONSENT_CHANGED_EVENT, () => {
+    trackPageView(window.location.pathname);
+  });
   
   // Track route changes
   const originalPushState = history.pushState;

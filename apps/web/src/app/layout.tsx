@@ -6,6 +6,7 @@ import "./globals.css";
 import "@/styles/editor-readonly.css";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import ClientTrackingProvider from "@/components/providers/ClientTrackingProvider";
+import ConsentProvider from "@/components/providers/ConsentProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { NONCE_HEADER } from "@/middleware/security-headers";
 
@@ -159,6 +160,7 @@ export default async function RootLayout({
         >
           <ClientTrackingProvider />
           {children}
+          <ConsentProvider />
           <Toaster position="top-right" />
         </ThemeProvider>
       </body>

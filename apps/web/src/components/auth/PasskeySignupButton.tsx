@@ -15,6 +15,7 @@ import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getDevicePlatformFields, handleDesktopAuthResponse } from '@/lib/desktop-auth';
+import { meetsMinimumAge, DEFAULT_MINIMUM_AGE } from '@pagespace/lib/consent';
 
 interface PasskeySignupButtonProps {
   csrfToken: string;
@@ -50,6 +51,10 @@ export function PasskeySignupButton({
   const [name, setName] = useState('');
   const [email, setEmail] = useState(lockedEmail ?? '');
   const [acceptedTos, setAcceptedTos] = useState(false);
+  // GDPR Art 8 age gate. Validated client-side for UX with the same pure helper the
+  // server enforces with; the date of birth is sent for server validation and discarded.
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const isOldEnough = meetsMinimumAge(dateOfBirth, new Date());
 
   useEffect(() => {
     onLoadingChange?.(isRegistering);
@@ -73,6 +78,11 @@ export function PasskeySignupButton({
 
     if (!acceptedTos) {
       toast.error('Please agree to the Terms of Service and Privacy Policy');
+      return;
+    }
+
+    if (!isOldEnough) {
+      toast.error(`You must be at least ${DEFAULT_MINIMUM_AGE} years old to create an account`);
       return;
     }
 
@@ -126,6 +136,7 @@ export function PasskeySignupButton({
           expectedChallenge: options.challenge,
           csrfToken: freshToken,
           acceptedTos,
+          dateOfBirth,
           ...(inviteToken ? { inviteToken } : {}),
           ...platformFields,
         }),
@@ -180,7 +191,7 @@ export function PasskeySignupButton({
     } finally {
       setIsRegistering(false);
     }
-  }, [csrfToken, refreshToken, email, name, acceptedTos, inviteToken, nextPath, onSuccess, onEmailExists]);
+  }, [csrfToken, refreshToken, email, name, acceptedTos, isOldEnough, dateOfBirth, inviteToken, nextPath, onSuccess, onEmailExists]);
 
   // Don't render if browser doesn't support WebAuthn
   if (isSupported === false) {
@@ -193,7 +204,7 @@ export function PasskeySignupButton({
   // `acceptedTos` separately below.
   const isExpandTriggerDisabled =
     disabled || isRegistering || isSupported === null;
-  const isSubmitDisabled = isExpandTriggerDisabled || !acceptedTos;
+  const isSubmitDisabled = isExpandTriggerDisabled || !acceptedTos || !isOldEnough;
 
   return (
     <div className={cn('w-full', className)}>
@@ -247,6 +258,22 @@ export function PasskeySignupButton({
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={isRegistering || !!lockedEmail}
               />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="passkey-dob">Date of birth</Label>
+              <Input
+                id="passkey-dob"
+                name="dateOfBirth"
+                type="date"
+                autoComplete="bday"
+                value={dateOfBirth}
+                onChange={(e) => setDateOfBirth(e.target.value)}
+                disabled={isRegistering}
+              />
+              <p className="text-xs text-muted-foreground">
+                You must be at least {DEFAULT_MINIMUM_AGE} to create an account. We use this only to
+                verify your age and do not store it.
+              </p>
             </div>
             <div className="flex items-start gap-2">
               <Checkbox

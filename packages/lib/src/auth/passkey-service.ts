@@ -88,6 +88,12 @@ const verifySignupRegSchema = z.object({
   acceptedTos: z.boolean().refine((val) => val === true, {
     message: 'You must accept the Terms of Service',
   }),
+  // GDPR Art 8 age gate. The caller (signup route) validates the date of birth against
+  // the minimum age with the pure age-gate helper and asserts the result here; the DOB
+  // itself is never persisted (data minimization) — only ageVerifiedAt.
+  ageVerified: z.boolean().refine((val) => val === true, {
+    message: 'You must confirm you meet the minimum age requirement',
+  }),
 });
 
 // Result types following zero-trust pattern
@@ -924,6 +930,7 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
         // verification email the user must click.
         emailVerified: null,
         tosAcceptedAt: new Date(),
+        ageVerifiedAt: new Date(),
       });
 
       // Create passkey
