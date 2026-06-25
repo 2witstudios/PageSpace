@@ -11,6 +11,7 @@ import { ingestRouter } from './api/ingest';
 import { verifyRouter } from './api/verify';
 import avatarRouter from './api/avatar';
 import { deleteFileRouter } from './api/delete-file';
+import { erasureRouter } from './api/erasure';
 import dotenv from 'dotenv';
 import { authenticateService, requireScope } from './middleware/auth';
 import { requireResourceBinding, requirePageBinding } from './middleware/resource-binding';
@@ -178,6 +179,7 @@ app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avata
 // direct volume access (e.g. Fly.io deployments).
 app.use('/avatars', avatarRouter);
 app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
+app.use('/api/erasure', authenticateService, requireScope('erasure:enqueue'), erasureRouter);
 app.use('/cache', authenticateService, requireScope('files:read'), requireResourceBinding('params'), cacheRouter);
 
 // ---------------------------------------------------------------------------

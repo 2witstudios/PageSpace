@@ -190,8 +190,8 @@ describe('GET /api/account/export', () => {
 
       await GET(createRequest());
 
-      // Should append 11 JSON files (sessions, notifications, displayPreferences added; personalization omitted when null)
-      expect(mockArchive.append).toHaveBeenCalledTimes(11);
+      // 11 data files (personalization omitted when null) + manifest.json
+      expect(mockArchive.append).toHaveBeenCalledTimes(12);
       // Verify each data category name pattern
       const appendCalls = mockArchive.append.mock.calls.map(
         (call: unknown[]) => (call[1] as { name: string }).name
@@ -207,6 +207,44 @@ describe('GET /api/account/export', () => {
       expect(appendCalls.some((n: string) => n.includes('sessions.json'))).toBe(true);
       expect(appendCalls.some((n: string) => n.includes('notifications.json'))).toBe(true);
       expect(appendCalls.some((n: string) => n.includes('display-preferences.json'))).toBe(true);
+      // manifest.json is always present (Art 20 self-describing bundle)
+      expect(appendCalls.some((n: string) => n.includes('manifest.json'))).toBe(true);
+    });
+
+    it('manifest.json documents the schema version and file inventory', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
+
+      await GET(createRequest());
+
+      const manifestCall = mockArchive.append.mock.calls.find(
+        (call: unknown[]) => (call[1] as { name: string }).name.includes('manifest.json')
+      );
+      expect(manifestCall).toBeDefined();
+      const manifest = JSON.parse(manifestCall![0] as string);
+      expect(manifest.schemaVersion).toBe('1.0.0');
+      expect(manifest.format).toBe('native');
+      expect(Array.isArray(manifest.files)).toBe(true);
+      expect(manifest.files.some((f: { name: string }) => f.name === 'pages.json')).toBe(true);
+    });
+
+    it('format=portable emits a single schema.org data.json plus manifest', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
+
+      await GET(new Request('http://localhost/api/account/export?format=portable'));
+
+      const appendCalls = mockArchive.append.mock.calls.map(
+        (call: unknown[]) => (call[1] as { name: string }).name
+      );
+      // portable = data.json + manifest.json only
+      expect(mockArchive.append).toHaveBeenCalledTimes(2);
+      expect(appendCalls.some((n: string) => n.includes('data.json'))).toBe(true);
+      expect(appendCalls.some((n: string) => n.includes('manifest.json'))).toBe(true);
+
+      const dataCall = mockArchive.append.mock.calls.find(
+        (call: unknown[]) => (call[1] as { name: string }).name.includes('data.json')
+      );
+      const portable = JSON.parse(dataCall![0] as string);
+      expect(portable['@context']).toBe('https://schema.org');
     });
 
     it('appends personalization.json when personalization data exists', async () => {
@@ -217,7 +255,8 @@ describe('GET /api/account/export', () => {
 
       await GET(createRequest());
 
-      expect(mockArchive.append).toHaveBeenCalledTimes(12);
+      // 12 data files + manifest.json
+      expect(mockArchive.append).toHaveBeenCalledTimes(13);
       const appendCalls = mockArchive.append.mock.calls.map(
         (call: unknown[]) => (call[1] as { name: string }).name
       );

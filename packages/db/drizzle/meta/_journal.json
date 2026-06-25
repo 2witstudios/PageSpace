@@ -1212,6 +1212,13 @@
       "when": 1782358526841,
       "tag": "0172_unique_morlocks",
       "breakpoints": true
+    },
+    {
+      "idx": 173,
+      "version": "7",
+      "when": 1782398173997,
+      "tag": "0173_steep_doorman",
+      "breakpoints": true
     }
   ]
 }
