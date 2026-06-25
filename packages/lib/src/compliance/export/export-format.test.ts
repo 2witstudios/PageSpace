@@ -152,6 +152,40 @@ describe('toPortableExport', () => {
     expect(media[0].contentSize).toBe(1234);
   });
 
+  it('is field-level lossless: native fields without a schema.org slot are preserved', () => {
+    const portable = toPortableExport(
+      makeData({
+        messages: [
+          {
+            id: 'm1',
+            source: 'direct_message',
+            content: 'hi',
+            direction: 'sent',
+            role: 'user',
+            pageId: 'pg1',
+            conversationId: 'c1',
+            isActive: true,
+            deletedAt: D2,
+            createdAt: D1,
+          },
+        ],
+      }),
+    );
+
+    // profile.timezone and drive.slug have no schema.org equivalent but must survive
+    expect(portable.timezone).toBe('UTC');
+    const owns = portable.owns as Array<Record<string, unknown>>;
+    expect(owns[0].slug).toBe('drive-one');
+
+    const msg = (portable.message as Array<Record<string, unknown>>)[0];
+    expect(msg.direction).toBe('sent');
+    expect(msg.sender).toBe('user');
+    expect(msg.pageId).toBe('pg1');
+    expect(msg.conversationId).toBe('c1');
+    expect(msg.isActive).toBe(true);
+    expect(msg.dateDeleted).toBe('2024-02-03T04:05:06.000Z');
+  });
+
   it('is lossless: every native data category is represented (GDPR Art 20)', () => {
     const full = makeData({
       files: [{ id: 'f1', driveId: 'd1', sizeBytes: 1, mimeType: null, storagePath: null, createdAt: D1 }],

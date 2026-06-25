@@ -114,6 +114,9 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
     name: data.profile.name,
     email: data.profile.email,
     image: data.profile.image ?? null,
+    // Native field kept (no schema.org equivalent) so the portable export is
+    // field-for-field complete with the native export (GDPR Art 20).
+    timezone: data.profile.timezone ?? null,
     dateCreated: toIso(data.profile.createdAt),
     dateModified: toIso(data.profile.updatedAt),
     owns: data.drives.map((d) => ({
@@ -121,6 +124,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       identifier: d.id,
       name: d.name,
       roleName: d.role,
+      slug: d.slug,
       dateCreated: toIso(d.createdAt),
     })),
     creativeWork: data.pages.map((p) => ({
@@ -138,6 +142,13 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       identifier: m.id,
       text: m.content,
       messageAttachment: m.source,
+      // Native fields kept verbatim (no schema.org equivalents) for completeness.
+      direction: m.direction ?? null,
+      sender: m.role ?? null,
+      pageId: m.pageId ?? null,
+      conversationId: m.conversationId ?? null,
+      isActive: m.isActive ?? null,
+      dateDeleted: toIso(m.deletedAt ?? null),
       dateSent: toIso(m.createdAt),
     })),
     subjectOf: data.files.map((f) => ({
