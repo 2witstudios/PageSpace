@@ -1198,6 +1198,13 @@
       "when": 1782274551023,
       "tag": "0170_special_lady_mastermind",
       "breakpoints": true
+    },
+    {
+      "idx": 171,
+      "version": "7",
+      "when": 1782350522215,
+      "tag": "0171_far_sleeper",
+      "breakpoints": true
     }
   ]
 }
