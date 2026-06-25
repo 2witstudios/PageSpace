@@ -32,11 +32,11 @@ function isSiteFileKey(key: string): boolean {
  */
 export async function getActiveDomainRecords(driveId: string): Promise<ActiveDomainRecord[]> {
   const rows = await db
-    .select({ hostname: customDomains.hostname, status: customDomains.status, createdAt: customDomains.createdAt })
+    .select({ hostname: customDomains.hostname, status: customDomains.status, createdAt: customDomains.createdAt, isPrimary: customDomains.isPrimary })
     .from(customDomains)
     .where(eq(customDomains.driveId, driveId));
 
-  return rows.filter((r) => r.status === 'active').map((r) => ({ hostname: r.hostname, createdAt: r.createdAt }));
+  return rows.filter((r) => r.status === 'active').map((r) => ({ hostname: r.hostname, createdAt: r.createdAt, isPrimary: r.isPrimary }));
 }
 
 /**
