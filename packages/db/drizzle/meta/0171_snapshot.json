@@ -1,5 +1,5 @@
 {
-  "id": "ca48a232-106f-44c6-8282-7a00a6c9793d",
+  "id": "1258f90e-3531-430c-a889-a2f1acae0741",
   "prevId": "82871112-08d2-428c-8a32-2ac0eaee35c3",
   "version": "7",
   "dialect": "postgresql",
@@ -862,12 +862,6 @@
         },
         "tosAcceptedAt": {
           "name": "tosAcceptedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ageVerifiedAt": {
-          "name": "ageVerifiedAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -16896,6 +16890,13 @@
           "notNull": true,
           "default": "'pending'"
         },
+        "is_primary": {
+          "name": "is_primary",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -16934,6 +16935,22 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "custom_domains_primary_per_drive": {
+          "name": "custom_domains_primary_per_drive",
+          "columns": [
+            {
+              "expression": "drive_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"custom_domains\".\"is_primary\"",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -16943,93 +16960,6 @@
           "tableTo": "drives",
           "columnsFrom": [
             "drive_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
-    },
-    "public.ai_processing_consents": {
-      "name": "ai_processing_consents",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "userId": {
-          "name": "userId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "policyVersion": {
-          "name": "policyVersion",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "consentedAt": {
-          "name": "consentedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "revokedAt": {
-          "name": "revokedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "ai_processing_consents_user_id_idx": {
-          "name": "ai_processing_consents_user_id_idx",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ai_processing_consents_active_user_unique": {
-          "name": "ai_processing_consents_active_user_unique",
-          "columns": [
-            {
-              "expression": "userId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"ai_processing_consents\".\"revokedAt\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "ai_processing_consents_userId_users_id_fk": {
-          "name": "ai_processing_consents_userId_users_id_fk",
-          "tableFrom": "ai_processing_consents",
-          "tableTo": "users",
-          "columnsFrom": [
-            "userId"
           ],
           "columnsTo": [
             "id"

@@ -5,7 +5,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { publishCanvasPage, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
-import { deletePageFromCustomHosts } from '@/lib/canvas/custom-domain-mirror';
+import { deletePageFromCustomHosts, getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
+import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
@@ -78,12 +79,23 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         ? livePage.updatedAt > lastPublishedAt
         : false;
 
-    // The home page is served at the subdomain root (in addition to its slug),
-    // so report the root as its primary URL.
+    // Resolve the drive's primary published host: the user-selected (or
+    // earliest-created) active custom domain, falling back to the pagespace.site
+    // subdomain. This is the branded link visitors should land on, so it's what
+    // the publish control displays and copies.
+    const activeDomains = subdomain ? await getActiveDomainRecords(row.driveId) : [];
+    const primaryHost = subdomain
+      ? resolvePrimaryPublishedHost({ subdomain, publishHost: PUBLISH_HOST, activeDomains })
+      : null;
+
+    // The home page is served at the host root (in addition to its slug), so
+    // report the root as its primary URL. `primaryHost` is only null when the
+    // drive somehow has no publish subdomain (a published page always has one);
+    // returning a null url then is cleaner than emitting a broken `https://null/`.
     const isHomePage = drive?.homePageId === pageId;
-    const url = isHomePage
-      ? `https://${subdomain}.${PUBLISH_HOST}/`
-      : `https://${subdomain}.${PUBLISH_HOST}/${row.path}`;
+    const url = primaryHost
+      ? (isHomePage ? `https://${primaryHost}/` : `https://${primaryHost}/${row.path}`)
+      : null;
 
     return NextResponse.json({
       published: true,
