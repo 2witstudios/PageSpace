@@ -100,6 +100,62 @@ describe('resolveHostname — authoritative DNS', () => {
 
     // The NS lookup itself went through the public resolver (never the local one).
     expect(resolveNsImpl).toHaveBeenCalledWith(PUBLIC_DNS, 'jonowoodall.com');
+
+    // A non-empty authoritative answer is trusted directly — no redundant
+    // public-resolver query for the target.
+    expect(resolve4Impl).not.toHaveBeenCalledWith(PUBLIC_DNS, 'jonowoodall.com');
+  });
+
+  it('falls back to the public recursive resolver when the heuristic picks a multi-segment public suffix', async () => {
+    // registrableDomain('www.example.co.uk') === 'co.uk' — the parent zone, not
+    // the customer's zone. The .co.uk registry NS only hold a delegation.
+    resolveNsImpl.mockImplementation(async (_servers, domain) =>
+      domain === 'co.uk' ? ['ns1.nic.uk'] : [],
+    );
+    resolve4Impl.mockImplementation(async (servers, host) => {
+      if (host === 'ns1.nic.uk') return ['1.2.3.4']; // co.uk registry NS IP
+      if (host === 'www.example.co.uk') {
+        const isCoUkRegistry = servers.includes('1.2.3.4');
+        if (isCoUkRegistry) return []; // referral — not authoritative for example.co.uk
+        if (isPublic(servers)) return ['137.66.4.209']; // recursive resolver follows the delegation
+      }
+      return [];
+    });
+    resolve6Impl.mockResolvedValue([]);
+    resolveCnameImpl.mockResolvedValue([]);
+
+    const result = await resolveHostname('www.example.co.uk');
+
+    expect(result.a).toEqual(['137.66.4.209']);
+    // We tried the (wrong) authoritative zone, got a referral, then resolved via
+    // the public recursive resolver.
+    expect(resolve4Impl).toHaveBeenCalledWith(['1.2.3.4'], 'www.example.co.uk');
+    expect(resolve4Impl).toHaveBeenCalledWith(PUBLIC_DNS, 'www.example.co.uk');
+  });
+
+  it('falls back to the public recursive resolver when the target is in a deeper delegated zone', async () => {
+    // registrableDomain('app.example.com') === 'example.com', but app.example.com
+    // is delegated to a separate provider: example.com's NS return only a referral.
+    resolveNsImpl.mockImplementation(async (_servers, domain) =>
+      domain === 'example.com' ? ['ns1.example.com'] : [],
+    );
+    resolve4Impl.mockImplementation(async (servers, host) => {
+      if (host === 'ns1.example.com') return ['10.0.0.1']; // example.com authoritative NS
+      if (host === 'app.example.com') {
+        const isParentZone = servers.includes('10.0.0.1');
+        if (isParentZone) return []; // referral to the delegated sub-zone
+        if (isPublic(servers)) return ['137.66.4.209']; // recursive resolver follows the delegation
+      }
+      return [];
+    });
+    resolve6Impl.mockResolvedValue([]);
+    resolveCnameImpl.mockResolvedValue([]);
+
+    const result = await resolveHostname('app.example.com');
+
+    expect(result.a).toEqual(['137.66.4.209']);
+    expect(resolve4Impl).toHaveBeenCalledWith(['10.0.0.1'], 'app.example.com');
+    expect(resolve4Impl).toHaveBeenCalledWith(PUBLIC_DNS, 'app.example.com');
   });
 
   it('derives the registrable domain for a subdomain when looking up nameservers', async () => {

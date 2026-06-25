@@ -109,11 +109,19 @@ export function isApexDomain(hostname: string): boolean {
  * `www.acme.com` → `acme.com`, `docs.blog.acme.io` → `acme.io`,
  * `jonowoodall.com` → `jonowoodall.com`. Lowercased and trailing-dot-stripped.
  *
- * Like {@link isApexDomain}, this uses the simple "last 2 labels" heuristic,
- * which is accurate for single-segment TLDs (.com, .io, .dev) and a documented
- * limitation for multi-segment TLDs like .co.uk. Authoritative-NS lookups work
- * regardless: the registrar's NS for `example.co.uk` is reachable from the NS
- * of `co.uk`, so an over-broad registrable domain still resolves correctly.
+ * Like {@link isApexDomain}, this uses the simple "last 2 labels" heuristic.
+ * It is correct for single-segment TLDs (.com, .io, .dev) — the overwhelming
+ * majority of custom domains — but, for a multi-segment public suffix like
+ * .co.uk, it picks the parent zone (`www.example.co.uk` → `co.uk`) rather than
+ * the customer's zone (`example.co.uk`). The `.co.uk` registry's nameservers
+ * are NOT authoritative for `example.co.uk`; they only hold a delegation, so an
+ * authoritative query against them returns a referral (no answer records).
+ *
+ * The DNS resolver in `apps/web/src/lib/publish/dns-resolver.ts` accounts for
+ * this: when the authoritative query against the heuristic's zone returns no
+ * records, it falls back to a public *recursive* resolver, which performs full
+ * iterative resolution (following referrals) and so resolves multi-segment
+ * public suffixes and deeper delegations correctly.
  */
 export function registrableDomain(hostname: string): string {
   let h = hostname.trim().toLowerCase();

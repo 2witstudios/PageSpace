@@ -15,10 +15,18 @@ import type { ResolvedRecords } from '@pagespace/lib/validators/custom-domain';
  *   3. Point a second resolver at those authoritative NS IPs and query the
  *      target there — no cache lag, the records as the domain owner published them.
  *
- * Fallbacks: if the NS lookup or its IP resolution fails/empty, query the target
- * via the public resolver — still far better than the local one. If everything
- * fails, return empty arrays per record type (the "not yet set" semantics) — this
- * function never throws.
+ * Fallbacks: query the target via the public *recursive* resolver when either
+ *   - the NS lookup or its IP resolution fails/empty, OR
+ *   - the authoritative query returns NO records at all.
+ * The second case matters because the registrable-domain heuristic ("last 2
+ * labels") picks the parent zone for a multi-segment public suffix
+ * (`www.example.co.uk` → `co.uk`), and the target may also live in a deeper
+ * delegated zone — in both cases the queried nameservers are authoritative only
+ * for the parent and answer with a referral (no records). A public recursive
+ * resolver performs full iterative resolution (follows referrals), so it
+ * resolves those names correctly while still honoring TTLs and bypassing the
+ * stale local Fly resolver. If everything fails, return empty arrays per record
+ * type (the "not yet set" semantics) — this function never throws.
  */
 
 /** Fast public resolvers: Cloudflare, Google, Quad9. */
@@ -67,11 +75,16 @@ async function queryRecords(resolver: Resolver, hostname: string): Promise<Resol
   return { a, aaaa, cname };
 }
 
+/** Whether a resolution produced any A / AAAA / CNAME record. */
+function hasAnyRecord(records: ResolvedRecords): boolean {
+  return records.a.length > 0 || records.aaaa.length > 0 || records.cname.length > 0;
+}
+
 /**
  * Resolve a hostname's DNS records against its authoritative nameservers,
- * falling back to a public resolver, then to empty arrays. NXDOMAIN, ENODATA,
- * ENOTFOUND, and timeouts all surface as empty arrays for that record type —
- * the caller treats them as "not yet set".
+ * falling back to a public recursive resolver, then to empty arrays. NXDOMAIN,
+ * ENODATA, ENOTFOUND, and timeouts all surface as empty arrays for that record
+ * type — the caller treats them as "not yet set".
  */
 export async function resolveHostname(hostname: string): Promise<ResolvedRecords> {
   const publicResolver = makeResolver(PUBLIC_DNS_SERVERS);
@@ -80,9 +93,15 @@ export async function resolveHostname(hostname: string): Promise<ResolvedRecords
   const nsIps = await resolveAuthoritativeNsIps(hostname, publicResolver).catch(() => [] as string[]);
   if (nsIps.length > 0) {
     const authoritativeResolver = makeResolver(nsIps);
-    return queryRecords(authoritativeResolver, hostname);
+    const records = await queryRecords(authoritativeResolver, hostname);
+    // A non-empty answer is authoritative — trust it. An all-empty answer means
+    // the heuristic's zone wasn't authoritative for the target (a multi-segment
+    // public suffix, or a deeper delegation that returns only a referral), so
+    // fall through to the recursive resolver, which follows the referral chain.
+    if (hasAnyRecord(records)) return records;
   }
 
-  // 2. Fallback — public resolver (still bypasses the stale local resolver).
+  // 2. Fallback — public recursive resolver: follows referrals, honors TTLs, and
+  //    still bypasses the stale local Fly resolver.
   return queryRecords(publicResolver, hostname);
 }
