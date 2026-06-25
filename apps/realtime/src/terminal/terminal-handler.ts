@@ -1,6 +1,7 @@
 import type { TerminalSessionMap, TerminalSession } from './terminal-session-map';
 import { MAX_SCROLLBACK_BYTES, DETACHED_IDLE_MS } from './terminal-session-map';
 import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
+import { pickShellSession } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { validateTerminalConnectPayload, clampTerminalDimensions } from './validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -81,13 +82,25 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
         return;
       }
 
-      // New session: spawn a fresh shell.
+      // No in-memory session in THIS process. The TTY shell may still be alive on
+      // the Sprite (max_run_after_disconnect:0 outlives both socket drops and
+      // realtime restarts), so discover it and reattach — the Sprite is the source
+      // of truth. Falls back to a fresh shell on any lookup failure or when none
+      // is found.
       const { sandboxId } = authResult;
+
+      let existingSessionId: string | undefined;
+      try {
+        existingSessionId = pickShellSession(await authResult.sprite.listSessions())?.id;
+      } catch {
+        existingSessionId = undefined;
+      }
 
       const session: TerminalSession = {
         command: null as unknown as PtyShell, // assigned below before any async
         sandboxId,
         sessionKey,
+        sessionId: existingSessionId,
         releaseSlot: authResult.releaseSlot,
         outputFn: (data) => socket.emit('terminal:output', { data }),
         closedFn: (exitCode) => socket.emit('terminal:closed', { exitCode }),
@@ -103,6 +116,7 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
           sprite: authResult.sprite,
           cols: clampedCols,
           rows: clampedRows,
+          sessionId: existingSessionId,
           onOutput: (data) => {
             appendScrollback(session, data);
             session.outputFn(data);

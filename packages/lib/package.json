@@ -1021,6 +1021,65 @@
       "types": "./dist/consent/index.d.ts",
       "import": "./dist/consent/index.js",
       "require": "./dist/consent/index.js"
+    "./compliance/dsr/sla": {
+      "types": "./dist/compliance/dsr/sla.d.ts",
+      "import": "./dist/compliance/dsr/sla.js",
+      "require": "./dist/compliance/dsr/sla.js"
+    },
+    "./compliance/dsr/status-machine": {
+      "types": "./dist/compliance/dsr/status-machine.d.ts",
+      "import": "./dist/compliance/dsr/status-machine.js",
+      "require": "./dist/compliance/dsr/status-machine.js"
+    },
+    "./compliance/erasure/drive-disposition": {
+      "types": "./dist/compliance/erasure/drive-disposition.d.ts",
+      "import": "./dist/compliance/erasure/drive-disposition.js",
+      "require": "./dist/compliance/erasure/drive-disposition.js"
+    },
+    "./compliance/erasure/erasure-plan": {
+      "types": "./dist/compliance/erasure/erasure-plan.d.ts",
+      "import": "./dist/compliance/erasure/erasure-plan.js",
+      "require": "./dist/compliance/erasure/erasure-plan.js"
+    },
+    "./compliance/erasure/run-erasure": {
+      "types": "./dist/compliance/erasure/run-erasure.d.ts",
+      "import": "./dist/compliance/erasure/run-erasure.js",
+      "require": "./dist/compliance/erasure/run-erasure.js"
+    },
+    "./compliance/erasure/email-suppression": {
+      "types": "./dist/compliance/erasure/email-suppression.d.ts",
+      "import": "./dist/compliance/erasure/email-suppression.js",
+      "require": "./dist/compliance/erasure/email-suppression.js"
+    },
+    "./compliance/erasure/resend-suppression-client": {
+      "types": "./dist/compliance/erasure/resend-suppression-client.d.ts",
+      "import": "./dist/compliance/erasure/resend-suppression-client.js",
+      "require": "./dist/compliance/erasure/resend-suppression-client.js"
+    },
+    "./compliance/erasure/ai-provider-erasure": {
+      "types": "./dist/compliance/erasure/ai-provider-erasure.d.ts",
+      "import": "./dist/compliance/erasure/ai-provider-erasure.js",
+      "require": "./dist/compliance/erasure/ai-provider-erasure.js"
+    },
+    "./compliance/erasure/pseudonymize": {
+      "types": "./dist/compliance/erasure/pseudonymize.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize.js",
+      "require": "./dist/compliance/erasure/pseudonymize.js"
+    },
+    "./compliance/erasure/pseudonymize-repository": {
+      "types": "./dist/compliance/erasure/pseudonymize-repository.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize-repository.js",
+      "require": "./dist/compliance/erasure/pseudonymize-repository.js"
+    },
+    "./repositories/data-subject-request-repository": {
+      "types": "./dist/repositories/data-subject-request-repository.d.ts",
+      "import": "./dist/repositories/data-subject-request-repository.js",
+      "require": "./dist/repositories/data-subject-request-repository.js"
+    },
+    "./audit/security-audit-chain-verifier": {
+      "types": "./dist/audit/security-audit-chain-verifier.d.ts",
+      "import": "./dist/audit/security-audit-chain-verifier.js",
+      "require": "./dist/audit/security-audit-chain-verifier.js"
     }
   },
   "typesVersions": {

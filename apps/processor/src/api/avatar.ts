@@ -56,7 +56,7 @@ function avatarKey(userId: string, ext: string): string {
   return `avatars/${userId}/avatar${ext}`;
 }
 
-async function deleteUserAvatars(userId: string): Promise<void> {
+export async function deleteUserAvatars(userId: string): Promise<void> {
   const bucket = getS3Bucket();
   const listed = await s3().send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `avatars/${userId}/` }));
   const objects = listed.Contents ?? [];
