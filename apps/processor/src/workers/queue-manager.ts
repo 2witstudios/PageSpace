@@ -10,6 +10,7 @@ import type {
   OCRJobData,
   VideoProcessJobData,
   PullVerifyJobData,
+  AccountErasureJobData,
   TextExtractResult,
   IngestResult,
 } from '../types';
@@ -85,6 +86,7 @@ export class QueueManager {
       await this.boss.createQueue('ocr-process');
       await this.boss.createQueue('video-process');
       await this.boss.createQueue('siem-delivery');
+      await this.boss.createQueue('account-erasure');
       console.log('PgBoss queues created/verified');
     } catch (err) {
       console.warn('Queue creation warning:', err instanceof Error ? err.message : err);
@@ -241,6 +243,17 @@ export class QueueManager {
         return { success: true };
       }
     );
+
+    // Durable GDPR account erasure (#906). Retries with backoff on throw; a
+    // "blocked" outcome is recorded on the DSR row and is NOT retried.
+    const { runAccountErasureJob } = await import('./account-erasure-worker');
+    await this.boss.work('account-erasure',
+      async ([job]) => {
+        console.log(`Processing account-erasure job: ${job.id}`);
+        await runAccountErasureJob(job.data as AccountErasureJobData);
+        return { success: true };
+      }
+    );
   }
 
   async addJob<Q extends QueueName>(
@@ -294,7 +307,7 @@ export class QueueManager {
   }
 
   getQueueStatus(): Record<QueueName, QueueStats> {
-    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery'];
+    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure'];
     const perQueue = this.cachedStates?.queues ?? {};
 
     const status = {} as Record<QueueName, QueueStats>;

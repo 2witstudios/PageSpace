@@ -222,6 +222,10 @@
     "./schema/custom-domains": {
       "types": "./dist/schema/custom-domains.d.ts",
       "default": "./dist/schema/custom-domains.js"
+    },
+    "./schema/data-subject-requests": {
+      "types": "./dist/schema/data-subject-requests.d.ts",
+      "default": "./dist/schema/data-subject-requests.js"
     }
   },
   "scripts": {

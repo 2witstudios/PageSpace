@@ -1,5 +1,5 @@
 {
-  "id": "8e800110-e99a-4a49-9334-6cdd3c5cfc18",
+  "id": "32c592cb-1d4d-4b40-9840-6fb047dda415",
   "prevId": "59e84afc-d866-4f30-a8b6-381c0d2de0a3",
   "version": "7",
   "dialect": "postgresql",
@@ -5528,30 +5528,6 @@
         "stateHashAfter": {
           "name": "stateHashAfter",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "dataCategory": {
-          "name": "dataCategory",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "legalBasis": {
-          "name": "legalBasis",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "retentionPolicy": {
-          "name": "retentionPolicy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "recipients": {
-          "name": "recipients",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -17026,8 +17002,8 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "public.incidents": {
-      "name": "incidents",
+    "public.data_subject_requests": {
+      "name": "data_subject_requests",
       "schema": "",
       "columns": {
         "id": {
@@ -17036,128 +17012,135 @@
           "primaryKey": true,
           "notNull": true
         },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "description": {
-          "name": "description",
+        "user_id": {
+          "name": "user_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "severity": {
-          "name": "severity",
+        "subject_email": {
+          "name": "subject_email",
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "request_type": {
+          "name": "request_type",
+          "type": "data_subject_request_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'erasure'"
         },
         "status": {
           "name": "status",
-          "type": "text",
+          "type": "data_subject_request_status",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'detected'"
+          "default": "'pending'"
         },
-        "category": {
-          "name": "category",
+        "force_delete": {
+          "name": "force_delete",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "requested_by_user_id": {
+          "name": "requested_by_user_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "detectedAt": {
-          "name": "detectedAt",
-          "type": "timestamp with time zone",
+        "requested_by_type": {
+          "name": "requested_by_type",
+          "type": "data_subject_requester_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'self'"
+        },
+        "legal_basis": {
+          "name": "legal_basis",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
         },
-        "reportedBy": {
-          "name": "reportedBy",
+        "sla_deadline": {
+          "name": "sla_deadline",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "blocked_reason": {
+          "name": "blocked_reason",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "affectedUserCount": {
-          "name": "affectedUserCount",
+        "job_id": {
+          "name": "job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": 0
         },
-        "affectedScope": {
-          "name": "affectedScope",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "riskLevel": {
-          "name": "riskLevel",
+        "last_error": {
+          "name": "last_error",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "requiresAuthorityNotification": {
-          "name": "requiresAuthorityNotification",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "authorityNotificationDeadline": {
-          "name": "authorityNotificationDeadline",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "authorityNotifiedAt": {
-          "name": "authorityNotifiedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requiresSubjectNotification": {
-          "name": "requiresSubjectNotification",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "subjectsNotifiedAt": {
-          "name": "subjectsNotifiedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "metadata": {
-          "name": "metadata",
+        "step_results": {
+          "name": "step_results",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp with time zone",
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
         },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp with time zone",
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "closedAt": {
-          "name": "closedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
-        "idx_incidents_status": {
-          "name": "idx_incidents_status",
+        "data_subject_requests_status_idx": {
+          "name": "data_subject_requests_status_idx",
           "columns": [
             {
               "expression": "status",
@@ -17171,11 +17154,11 @@
           "method": "btree",
           "with": {}
         },
-        "idx_incidents_detected_at": {
-          "name": "idx_incidents_detected_at",
+        "data_subject_requests_sla_deadline_idx": {
+          "name": "data_subject_requests_sla_deadline_idx",
           "columns": [
             {
-              "expression": "detectedAt",
+              "expression": "sla_deadline",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -17186,11 +17169,11 @@
           "method": "btree",
           "with": {}
         },
-        "idx_incidents_authority_deadline": {
-          "name": "idx_incidents_authority_deadline",
+        "data_subject_requests_user_id_idx": {
+          "name": "data_subject_requests_user_id_idx",
           "columns": [
             {
-              "expression": "authorityNotificationDeadline",
+              "expression": "user_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -17203,12 +17186,25 @@
         }
       },
       "foreignKeys": {
-        "incidents_reportedBy_users_id_fk": {
-          "name": "incidents_reportedBy_users_id_fk",
-          "tableFrom": "incidents",
+        "data_subject_requests_user_id_users_id_fk": {
+          "name": "data_subject_requests_user_id_users_id_fk",
+          "tableFrom": "data_subject_requests",
           "tableTo": "users",
           "columnsFrom": [
-            "reportedBy"
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "data_subject_requests_requested_by_user_id_users_id_fk": {
+          "name": "data_subject_requests_requested_by_user_id_users_id_fk",
+          "tableFrom": "data_subject_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "requested_by_user_id"
           ],
           "columnsTo": [
             "id"
@@ -17595,6 +17591,40 @@
         "active",
         "dns_failed",
         "cert_failed"
+      ]
+    },
+    "public.data_subject_request_status": {
+      "name": "data_subject_request_status",
+      "schema": "public",
+      "values": [
+        "pending",
+        "queued",
+        "in_progress",
+        "blocked",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "public.data_subject_request_type": {
+      "name": "data_subject_request_type",
+      "schema": "public",
+      "values": [
+        "erasure",
+        "export",
+        "access",
+        "rectification",
+        "restriction",
+        "portability",
+        "objection"
+      ]
+    },
+    "public.data_subject_requester_type": {
+      "name": "data_subject_requester_type",
+      "schema": "public",
+      "values": [
+        "self",
+        "admin"
       ]
     }
   },

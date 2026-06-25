@@ -76,13 +76,16 @@ vi.mock('@pagespace/lib/services/drive-guards', () => ({
   isHomeDrive: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock('@pagespace/lib/validators/subdomain', () => ({
-  normalizeSubdomain: vi.fn((s: string) => s.toLowerCase()),
-  validatePublishSubdomain: vi.fn().mockReturnValue({ valid: true }),
-}));
-
 vi.mock('@pagespace/lib/services/subdomain-allocation', () => ({
   isUniqueViolation: vi.fn().mockReturnValue(false),
+}));
+
+// First-publish subdomain allocation is delegated to the shared, race-safe
+// allocator (the same one drive creation uses). It normalizes the candidate and
+// auto-resolves reserved / taken / malformed values to a unique slug. The stub
+// mirrors the normalize step so candidate-derived assertions stay faithful.
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  allocatePublishSubdomain: vi.fn((_driveId: string, base: string) => Promise.resolve(base.toLowerCase())),
 }));
 
 vi.mock('@pagespace/lib/utils/utils', () => ({
@@ -101,6 +104,7 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 import { db } from '@pagespace/db/db';
 import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, copyPublishedArtifact, isPublishConfigured } from '../published-storage';
 import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, republishDriveCanonical, PublishError } from '../publish-page';
+import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { getActiveDomainRecords } from '../custom-domain-mirror';
 import { renderPublishedPage } from '../render-published';
 import { extractAndStripOgMeta } from '../asset-pipeline';
@@ -213,8 +217,28 @@ describe('publishCanvasPage', () => {
       pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', subdomain: 'Chosen-Sub',
     });
 
-    // normalizeSubdomain lowercases the candidate before allocation.
+    // The caller-supplied value is only a candidate base: it is forwarded to the
+    // shared allocator (which normalizes + dedupes), never written verbatim.
+    expect(allocatePublishSubdomain).toHaveBeenCalledWith('drive-1', 'Chosen-Sub');
     expect(result.subdomain).toBe('chosen-sub');
+  });
+
+  it('given no existing subdomain and a reserved candidate, auto-slugs instead of erroring', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<div>hi</div>', driveId: 'drive-1',
+    }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'pagespace', publishSubdomain: null, kind: 'STANDARD', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+    // The allocator resolves the reserved slug to a suffixed, unique subdomain.
+    vi.mocked(allocatePublishSubdomain).mockResolvedValueOnce('pagespace-2');
+
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(allocatePublishSubdomain).toHaveBeenCalledWith('drive-1', 'pagespace');
+    expect(result.subdomain).toBe('pagespace-2');
+    expect(result.url).toBe('https://pagespace-2.pagespace.site/welcome');
   });
 
   it('given an explicit non-empty path, normalizes it (Foo -> foo)', async () => {

@@ -12,12 +12,21 @@ function makeShell(): PtyShell & { write: ReturnType<typeof vi.fn>; resize: Retu
   return { write: vi.fn(), resize: vi.fn(), kill: vi.fn() };
 }
 
-function makeSprite() {
-  return { name: 'sbx1', spawn: vi.fn(), filesystem: vi.fn(), updateNetworkPolicy: vi.fn(), destroy: vi.fn() };
+function makeSprite(sessions: Array<{ id: string; command: string; isActive: boolean; tty: boolean }> = []) {
+  return {
+    name: 'sbx1',
+    spawn: vi.fn(),
+    createSession: vi.fn(),
+    attachSession: vi.fn(),
+    listSessions: vi.fn(async () => sessions),
+    filesystem: vi.fn(),
+    updateNetworkPolicy: vi.fn(),
+    destroy: vi.fn(),
+  };
 }
 
-function makeAuthSuccess(sessionKey = 'key1') {
-  return { ok: true as const, sandboxId: 'sbx1', sessionKey, sprite: makeSprite(), releaseSlot: vi.fn() };
+function makeAuthSuccess(sessionKey = 'key1', sessions: Array<{ id: string; command: string; isActive: boolean; tty: boolean }> = []) {
+  return { ok: true as const, sandboxId: 'sbx1', sessionKey, sprite: makeSprite(sessions), releaseSlot: vi.fn() };
 }
 
 const validPayload = { pageId: 'page1', cols: 80, rows: 24 };
@@ -126,6 +135,44 @@ describe('buildTerminalHandlers', () => {
       expect(shell.kill).toHaveBeenCalledWith();
       expect(sessionMap.getByKey('key1')).toBeUndefined();
       expect(socket.emit).toHaveBeenCalledWith('terminal:closed', { exitCode: -2 });
+    });
+
+    it('given a live session already on the Sprite (e.g. after a realtime restart), should reattach to it via listSessions', async () => {
+      const auth = makeAuthSuccess('key1', [{ id: 'sess-9', command: 'bash', isActive: true, tty: true }]);
+      checkAuth.mockResolvedValue(auth);
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      expect(auth.sprite.listSessions).toHaveBeenCalled();
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-9' }));
+      expect(sessionMap.getByKey('key1')?.sessionId).toBe('sess-9');
+    });
+
+    it('given a detached TTY shell reporting isActive:false, should still discover and reattach to it', async () => {
+      // The API's is_active semantics are undocumented; a running-but-detached
+      // shell may report false. Discovery must match on tty, not isActive.
+      const auth = makeAuthSuccess('key1', [{ id: 'sess-detached', command: 'bash', isActive: false, tty: true }]);
+      checkAuth.mockResolvedValue(auth);
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-detached' }));
+    });
+
+    it('given only a non-TTY session on the Sprite, should NOT reattach (opens a fresh shell)', async () => {
+      const auth = makeAuthSuccess('key1', [{ id: 'sess-batch', command: 'npm test', isActive: true, tty: false }]);
+      checkAuth.mockResolvedValue(auth);
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: undefined }));
+    });
+
+    it('given no live session on the Sprite, should open a fresh shell with no sessionId', async () => {
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: undefined }));
     });
 
     it('given an existing live session for the same pageId, should reattach rather than spawn a new shell', async () => {

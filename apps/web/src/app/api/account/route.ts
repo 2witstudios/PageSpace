@@ -4,20 +4,14 @@ import { users } from '@pagespace/db/schema/auth';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
-import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
-import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge';
-import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
 import { isValidEmail } from '@pagespace/lib/validators/email';
-import { isCloud } from '@pagespace/lib/deployment-mode';
-import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
-import { getActorInfo, logActivity, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { securityAudit } from '@pagespace/lib/audit/security-audit';
+import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-disposition';
+import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
-import { stripe } from '@/lib/stripe/client';
+import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
 
 const patchBodySchema = z
   .object({
@@ -172,24 +166,6 @@ export async function PATCH(req: Request) {
   }
 }
 
-// Processor service URL
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
-
-const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
-
-async function createAvatarServiceToken(
-  userId: string,
-  expirationTime: string
-): Promise<{ token: string }> {
-  // createUserServiceToken validates that the user is accessing their own resources
-  const { token } = await createUserServiceToken(
-    userId,
-    REQUIRED_AVATAR_SCOPES,
-    expirationTime
-  );
-  return { token };
-}
-
 export async function DELETE(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) {
@@ -213,166 +189,68 @@ export async function DELETE(req: Request) {
       return Response.json({ error: 'Email confirmation does not match your account email' }, { status: 400 });
     }
 
-    // Check and categorize owned drives via repository seam
-    const ownedDrives = await accountRepository.getOwnedDrives(userId);
-
-    if (ownedDrives.length > 0) {
-      const driveIds = ownedDrives.map(d => d.id);
-
-      // Count members for each drive via repository seam
-      const memberCounts = await Promise.all(
-        driveIds.map(async (driveId) => ({
-          driveId,
-          memberCount: await accountRepository.getDriveMemberCount(driveId),
-        }))
+    // Idempotency: surface an in-flight erasure rather than enqueuing a second.
+    const existing = await dataSubjectRequestRepository.findActiveErasureForUser(userId);
+    if (existing) {
+      return Response.json(
+        {
+          message: 'Account erasure already in progress',
+          requestId: existing.id,
+          status: existing.status,
+          slaDeadline: existing.slaDeadline,
+        },
+        { status: 202 }
       );
-
-      // Categorize into solo and multi-member drives
-      const soloDriveIds = [];
-      const multiMemberDrives = [];
-
-      for (const drive of ownedDrives) {
-        const memberCountData = memberCounts.find(mc => mc.driveId === drive.id);
-        const memberCount = memberCountData?.memberCount || 0;
-
-        if (memberCount <= 1) {
-          soloDriveIds.push(drive.id);
-        } else {
-          multiMemberDrives.push(drive);
-        }
-      }
-
-      // Block deletion if multi-member drives still exist
-      if (multiMemberDrives.length > 0) {
-        return Response.json(
-          {
-            error: 'You must transfer ownership or delete all drives with other members before deleting your account',
-            multiMemberDrives: multiMemberDrives.map(d => d.name),
-          },
-          { status: 400 }
-        );
-      }
-
-      // Auto-delete solo drives via repository seam
-      if (soloDriveIds.length > 0) {
-        for (const driveId of soloDriveIds) {
-          await accountRepository.deleteDrive(driveId);
-        }
-        loggers.auth.info(`Auto-deleted ${soloDriveIds.length} solo drives for user ${userId}`);
-      }
     }
 
-    // Delete user's avatar if it exists and is a local file
-    if (user.image && !user.image.startsWith('http://') && !user.image.startsWith('https://')) {
-      try {
-        const { token: serviceToken } = await createAvatarServiceToken(userId, '2m');
-
-        await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${serviceToken}`
-          }
-        });
-      } catch (error) {
-        // Log error but don't fail the deletion
-        loggers.auth.error('Could not delete user avatar during account deletion:', error as Error);
-      }
-    }
-
-    // Log account deletion BEFORE anonymization (GDPR compliance).
-    // Best-effort: a logging failure must not block the right to erasure.
-    const actorInfo = await getActorInfo(userId);
-    try {
-      await logActivity({
-        userId,
-        actorEmail: actorInfo?.actorEmail ?? 'unknown@system',
-        actorDisplayName: actorInfo?.actorDisplayName,
-        operation: 'account_delete',
-        resourceType: 'user',
-        resourceId: userId,
-        resourceTitle: user.email ?? undefined,
-        driveId: null,
-      });
-    } catch (error) {
-      loggers.auth.error('Could not write activity log during account deletion:', error as Error);
-    }
-
-    // Anonymize activity logs before user deletion (GDPR compliance + SOX audit trail)
-    // This preserves the audit trail while removing PII
-    const anonymizeResult = await activityLogRepository.anonymizeForUser(
-      userId,
-      createAnonymizedActorEmail(userId)
+    // Self-service cannot orphan co-owned drives. Multi-member ownership blocks
+    // with guidance; the admin force-delete route is the escalation path (#908).
+    const ownedDrives = await accountRepository.getOwnedDrives(userId);
+    const drivesWithMembers = await Promise.all(
+      ownedDrives.map(async (drive) => ({
+        id: drive.id,
+        name: drive.name,
+        memberCount: await accountRepository.getDriveMemberCount(drive.id),
+      }))
     );
-    if (anonymizeResult.success) {
-      loggers.auth.info(`Anonymized activity logs for user ${userId}`);
-    } else {
-      // Log error but don't fail the deletion - user has right to delete their account
-      loggers.auth.error('Could not anonymize activity logs during account deletion:', new Error(anonymizeResult.error));
+    const disposition = planDriveDisposition(drivesWithMembers, { forceDelete: false });
+    if (disposition.blocked) {
+      return Response.json(
+        {
+          error:
+            'You must transfer ownership or delete all drives with other members before deleting your account',
+          multiMemberDrives: disposition.multiMemberDriveNames,
+        },
+        { status: 400 }
+      );
     }
 
-    // Clean up AI usage logs (no FK cascade exists for this table)
-    try {
-      await deleteAiUsageLogsForUser(userId);
-    } catch (error) {
-      loggers.auth.error('Could not delete AI usage logs during account deletion:', error as Error);
-    }
+    // Evidence the request receipt (best-effort) — the SLA clock starts now.
+    auditRequest(req, {
+      eventType: 'data.delete',
+      userId,
+      resourceType: 'account',
+      resourceId: userId,
+      details: { operation: 'erasure_request', requestedByType: 'self' },
+    });
 
-    // Clean up monitoring tables (systemLogs, apiMetrics, errorLogs, userActivities)
-    // Note: security_audit_log is intentionally NOT deleted — legal retention requirement
-    // (tamper-evident hash chain must remain intact for compliance)
-    try {
-      await deleteMonitoringDataForUser(userId);
-    } catch (error) {
-      loggers.auth.error('Could not delete monitoring data during account deletion:', error as Error);
-    }
+    const { requestId, slaDeadline } = await lodgeAndEnqueueErasure({
+      subjectUserId: userId,
+      subjectEmail: user.email,
+      stripeCustomerId: user.stripeCustomerId,
+      callerUserId: userId,
+      requestedByType: 'self',
+      forceDelete: false,
+    });
 
-    // Revoke all OAuth integration tokens BEFORE user deletion (Art. 17 GDPR — #911)
-    // Best-effort: log failures but never block the right to erasure
-    try {
-      const { revoked, failed } = await revokeUserIntegrationTokens(userId);
-      loggers.auth.info(`OAuth token revocation complete for user ${userId}: revoked=${revoked}, failed=${failed}`);
-    } catch (error) {
-      loggers.auth.error('Could not revoke OAuth tokens during account deletion:', error as Error);
-    }
+    loggers.auth.info(`Account erasure queued for user ${userId} (request ${requestId})`);
 
-    // Log security audit BEFORE user deletion so the userId FK is still valid.
-    // Best-effort: a transient audit-table or lock failure must not block the right to erasure.
-    try {
-      await securityAudit.logEvent({
-        eventType: 'admin.user.deleted',
-        userId,
-        resourceType: 'account',
-        resourceId: userId,
-        ipAddress:
-          req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-          req.headers.get('x-real-ip')?.trim() ??
-          'unknown',
-        userAgent: req.headers.get('user-agent')?.trim() ?? 'unknown',
-      });
-    } catch (error) {
-      loggers.auth.error('Could not write security audit during account deletion:', error as Error);
-    }
-
-    // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)
-    await accountRepository.deleteUser(userId);
-
-    // Delete Stripe customer AFTER user deletion (Art. 17 GDPR — #910)
-    // Cloud-only: on-prem and tenant deployments don't use Stripe
-    // Right to erasure cannot be gated on Stripe API availability — log failures only
-    if (user.stripeCustomerId && isCloud()) {
-      try {
-        await stripe.customers.del(user.stripeCustomerId);
-        loggers.auth.info(`Stripe customer deleted: ${user.stripeCustomerId}`);
-      } catch (error) {
-        loggers.auth.error('Could not delete Stripe customer during account deletion:', error as Error);
-      }
-    }
-
-    loggers.auth.info(`User account deleted: ${userId}`);
-
-    return Response.json({ message: 'Account deleted successfully' }, { status: 200 });
+    return Response.json(
+      { message: 'Account erasure queued', requestId, status: 'queued', slaDeadline },
+      { status: 202 }
+    );
   } catch (error) {
-    loggers.auth.error('Account deletion error:', error as Error);
-    return Response.json({ error: 'Failed to delete account' }, { status: 500 });
+    loggers.auth.error('Account erasure request error:', error as Error);
+    return Response.json({ error: 'Failed to queue account erasure' }, { status: 500 });
   }
 }

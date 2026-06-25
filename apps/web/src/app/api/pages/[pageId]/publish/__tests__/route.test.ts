@@ -28,11 +28,12 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserEditPage: (...args: unknown[]) => canUserEditPage(...args),
 }));
 
-const validatePublishSubdomain = vi.fn();
-vi.mock('@pagespace/lib/validators/subdomain', () => ({
-  normalizeSubdomain: (input: string) =>
-    input.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-+/, '').replace(/-+$/, ''),
-  validatePublishSubdomain: (...args: unknown[]) => validatePublishSubdomain(...args),
+// First-publish subdomain allocation is delegated to the shared, race-safe
+// allocator (the same one drive creation uses). It auto-resolves reserved /
+// taken / malformed candidates to a unique slug instead of erroring.
+const allocatePublishSubdomain = vi.fn();
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  allocatePublishSubdomain: (...args: unknown[]) => allocatePublishSubdomain(...args),
 }));
 
 vi.mock('@pagespace/lib/utils/utils', () => ({
@@ -129,7 +130,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   authenticateRequestWithOptions.mockResolvedValue({ userId: 'user-1' });
   canUserEditPage.mockResolvedValue(true);
-  validatePublishSubdomain.mockReturnValue({ valid: true });
+  allocatePublishSubdomain.mockResolvedValue('acme');
   isPublishConfigured.mockReturnValue(true);
   getPublishAssetBaseUrl.mockReturnValue('https://test-publish.t3.tigrisfiles.io');
   rewriteCanvasAssets.mockImplementation(async ({ html }: { html: string }) => ({ html }));
@@ -213,10 +214,12 @@ describe('POST /api/pages/[pageId]/publish', () => {
     const res = await POST(makeReq({}), { params });
     expect(res.status).toBe(200);
 
-    // validates and persists the NORMALIZED candidate derived from the slug
-    expect(validatePublishSubdomain).toHaveBeenCalledWith('acme');
-    // 2 updates: subdomain allocation + post-upload updatedAt advancement
-    expect(updateWhere).toHaveBeenCalledTimes(2);
+    // Delegates allocation to the shared allocator with the drive id + raw slug
+    // base (the allocator normalizes/dedupes internally).
+    expect(allocatePublishSubdomain).toHaveBeenCalledWith('drive-1', 'Acme');
+    // 1 update: post-upload updatedAt advancement (subdomain allocation no longer
+    // writes through this mocked `update` path — it's owned by the allocator).
+    expect(updateWhere).toHaveBeenCalledTimes(1);
 
     expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
     expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome', description: 'hi' }));
@@ -230,6 +233,25 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(json).toEqual({
       url: 'https://acme.pagespace.site/welcome',
       subdomain: 'acme',
+      path: 'welcome',
+      isHomePage: false,
+    });
+  });
+
+  it('first-publish with a reserved slug auto-slugs to a unique subdomain (no 4xx)', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'pagespace', publishSubdomain: null });
+    // 'pagespace' is reserved — the allocator resolves it to a suffixed slug.
+    allocatePublishSubdomain.mockResolvedValue('pagespace-2');
+
+    const res = await POST(makeReq({}), { params });
+    expect(res.status).toBe(200);
+
+    expect(allocatePublishSubdomain).toHaveBeenCalledWith('drive-1', 'pagespace');
+    const json = await res.json();
+    expect(json).toEqual({
+      url: 'https://pagespace-2.pagespace.site/welcome',
+      subdomain: 'pagespace-2',
       path: 'welcome',
       isHomePage: false,
     });
@@ -350,26 +372,19 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(res.status).toBe(200);
   });
 
-  it('returns 400 when the requested subdomain is invalid/reserved', async () => {
+  it('auto-slugs a caller-supplied reserved subdomain instead of erroring', async () => {
     findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: 'x', driveId: 'drive-1' });
     findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: null });
-    validatePublishSubdomain.mockReturnValue({ valid: false, reason: 'Subdomain "admin" is reserved' });
+    // The caller asks for the reserved 'admin'; the allocator resolves it.
+    allocatePublishSubdomain.mockResolvedValue('admin-2');
 
     const res = await POST(makeReq({ subdomain: 'admin' }), { params });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    // The caller-supplied value is forwarded as the base candidate.
+    expect(allocatePublishSubdomain).toHaveBeenCalledWith('drive-1', 'admin');
     const json = await res.json();
-    expect(json.error).toMatch(/reserved/i);
-    expect(updateWhere).not.toHaveBeenCalled();
-    expect(putPublishedArtifact).not.toHaveBeenCalled();
-  });
-
-  it('returns 409 when the chosen subdomain is already taken', async () => {
-    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: 'x', driveId: 'drive-1' });
-    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: null });
-    updateWhere.mockRejectedValue(Object.assign(new Error('dup'), { code: '23505' }));
-
-    const res = await POST(makeReq({}), { params });
-    expect(res.status).toBe(409);
+    expect(json.subdomain).toBe('admin-2');
+    expect(json.url).toBe('https://admin-2.pagespace.site/welcome');
   });
 
   it('republish: reuses the existing subdomain, re-uploads, updates the row', async () => {
@@ -380,7 +395,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(res.status).toBe(200);
 
     // no new allocation when the drive already owns a subdomain
-    expect(validatePublishSubdomain).not.toHaveBeenCalled();
+    expect(allocatePublishSubdomain).not.toHaveBeenCalled();
     // 1 update: post-upload updatedAt advancement only (no subdomain allocation)
     expect(updateWhere).toHaveBeenCalledTimes(1);
 
