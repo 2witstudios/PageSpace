@@ -38,14 +38,14 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth/rate-limit-utils', () => ({
-  checkRateLimit: vi.fn(),
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn(),
 }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { abortStream, abortStreamByMessageId } from '@/lib/ai/core/stream-abort-registry';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { checkRateLimit } from '@pagespace/lib/auth/rate-limit-utils';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 // Test fixtures
 const mockUserId = 'user-123';
@@ -77,7 +77,7 @@ describe('POST /api/ai/abort', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default: rate limit allowed
-    vi.mocked(checkRateLimit).mockReturnValue({ allowed: true, attemptsRemaining: 9 });
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 9 });
   });
 
   describe('Authentication', () => {
@@ -295,7 +295,7 @@ describe('POST /api/ai/abort', () => {
     it('returns 429 when rate limited', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
       vi.mocked(isAuthError).mockReturnValueOnce(false);
-      vi.mocked(checkRateLimit).mockReturnValueOnce({ allowed: false, retryAfter: 60 });
+      vi.mocked(checkDistributedRateLimit).mockResolvedValueOnce({ allowed: false, retryAfter: 60 });
 
       const request = createRequest({ streamId: mockStreamId });
       const response = await POST(request);
@@ -310,7 +310,7 @@ describe('POST /api/ai/abort', () => {
     it('logs rate limit warning', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
       vi.mocked(isAuthError).mockReturnValueOnce(false);
-      vi.mocked(checkRateLimit).mockReturnValueOnce({ allowed: false, retryAfter: 30 });
+      vi.mocked(checkDistributedRateLimit).mockResolvedValueOnce({ allowed: false, retryAfter: 30 });
 
       const request = createRequest({ streamId: mockStreamId });
       await POST(request);
