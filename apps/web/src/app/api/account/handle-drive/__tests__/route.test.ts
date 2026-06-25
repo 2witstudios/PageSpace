@@ -92,6 +92,7 @@ const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) =>
   kind: 'STANDARD' as const,
   publishSubdomain: null,
   homePageId: null,
+  publishDefaultOgImageUrl: null,
 });
 
 // Helper to create mock drive member

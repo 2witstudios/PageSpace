@@ -81,6 +81,7 @@ const createDriveFixture = (overrides: {
   kind: 'STANDARD' as const,
   publishSubdomain: null,
   homePageId: null,
+  publishDefaultOgImageUrl: null,
 });
 
 const createAccessFixture = (overrides: Partial<DriveAccessResult>): DriveAccessResult => ({

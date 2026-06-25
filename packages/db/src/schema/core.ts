@@ -21,6 +21,7 @@ export const drives = pgTable('drives', {
   drivePrompt: text('drivePrompt'), // Custom AI instructions for this drive
   publishSubdomain: text('publishSubdomain').unique(), // Globally-unique subdomain for published pages; set on first publish
   homePageId: text('homePageId').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }), // Drive landing page shown at drive root
+  publishDefaultOgImageUrl: text('publish_default_og_image_url'), // Drive-wide default social share image for published pages lacking their own
 }, (table) => {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),

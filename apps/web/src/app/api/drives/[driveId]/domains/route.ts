@@ -16,6 +16,10 @@ import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getPlan } from '@/lib/subscription/plans';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { reconcileCustomDomainCert } from '@/lib/canvas/reconcile-cert';
+
+/** Statuses whose cert is still advancing — worth a lazy reconcile on read. */
+const CERT_NON_TERMINAL = new Set(['verified', 'provisioning']);
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -58,7 +62,32 @@ export async function GET(
       getMaxCustomDomainsForDrive(driveId),
     ]);
 
-    return NextResponse.json({ domains, limit });
+    // Lazy cert reconcile (no cron): for each row whose cert is still advancing
+    // (verified | provisioning), advance it one step so the badge + canonical
+    // self-heal on any settings visit. Best-effort and bounded — typically 0–1
+    // rows, run concurrently; a Fly outage must NOT break the list response.
+    // `allowFailureTransition: false` keeps a read non-destructive — a transient
+    // Fly error never flips a DNS-valid domain to cert_failed or wipes its
+    // content; that is reserved for the explicit "Check SSL" action. Content
+    // already serves without this (mirrored at verify time).
+    const reconciled = await Promise.all(
+      domains.map(async (domain) => {
+        if (!CERT_NON_TERMINAL.has(domain.status)) return domain;
+        try {
+          const { status } = await reconcileCustomDomainCert(domain, { allowFailureTransition: false });
+          return { ...domain, status };
+        } catch (err) {
+          loggers.api.warn('Lazy cert reconcile failed during domains list', {
+            driveId,
+            hostname: domain.hostname,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return domain;
+        }
+      }),
+    );
+
+    return NextResponse.json({ domains: reconciled, limit });
   } catch (error) {
     loggers.api.error('Error listing custom domains:', error as Error);
     return NextResponse.json({ error: 'Failed to list domains' }, { status: 500 });

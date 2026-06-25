@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index, unique } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, index, unique } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -10,6 +10,12 @@ export const publishedPages = pgTable('published_pages', {
   pageId: text('page_id').notNull().references(() => pages.id, { onDelete: 'cascade' }),
   path: text('path').notNull(),
   artifactKey: text('artifact_key').notNull(),
+  // Author-facing per-page SEO overrides (nullable; absence = derive/inherit).
+  publishTitle: text('publish_title'),
+  publishDescription: text('publish_description'),
+  publishOgImageUrl: text('publish_og_image_url'),
+  // When true, the page emits robots=noindex and is excluded from the sitemap.
+  noindex: boolean('noindex').default(false).notNull(),
   publishedBy: text('published_by').references(() => users.id, { onDelete: 'set null' }),
   publishedAt: timestamp('published_at', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

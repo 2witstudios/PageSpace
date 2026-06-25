@@ -12,6 +12,7 @@ import { resolveHostname } from '@/lib/publish/dns-resolver';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
+import { mirrorDriveToCustomHost, clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -59,6 +60,29 @@ export async function POST(
       .update(customDomains)
       .set({ status: nextStatus })
       .where(eq(customDomains.id, domainId));
+
+    // Content mirroring is decoupled from cert activation: the moment DNS is
+    // confirmed, mirror the drive's published artifacts to `published/<host>/`
+    // so the custom-domain prefix is populated immediately — serving no longer
+    // waits on the async Fly cert. When DNS breaks, clear the prefix so stale
+    // content stops being served. Both best-effort and fire-and-forget: a
+    // storage failure must never fail the verify response.
+    if (nextStatus === 'verified') {
+      mirrorDriveToCustomHost(driveId, domain.hostname).catch((err) => {
+        loggers.api.warn('Failed to mirror drive to custom host on verify', {
+          driveId,
+          hostname: domain.hostname,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    } else {
+      clearCustomHost(domain.hostname).catch((err) => {
+        loggers.api.warn('Failed to clear custom host on DNS failure', {
+          hostname: domain.hostname,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
 
     auditRequest(request, {
       eventType: 'data.write',

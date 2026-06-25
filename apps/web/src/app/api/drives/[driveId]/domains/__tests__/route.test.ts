@@ -63,6 +63,11 @@ vi.mock('@/lib/subscription/plans', () => ({
   })),
 }));
 
+const reconcileCustomDomainCert = vi.fn();
+vi.mock('@/lib/canvas/reconcile-cert', () => ({
+  reconcileCustomDomainCert: (...args: unknown[]) => reconcileCustomDomainCert(...args),
+}));
+
 const DRIVE_ID = 'drive-1';
 const USER_ID = 'user-1';
 const mockAuth = { userId: USER_ID };
@@ -112,6 +117,8 @@ beforeEach(() => {
   authenticateRequestWithOptions.mockResolvedValue(mockAuth);
   checkMCPDriveScope.mockReturnValue(null);
   isPrincipalDriveOwnerOrAdmin.mockResolvedValue(true);
+  // Default reconcile: no-op echoing the input status (overridden per-test).
+  reconcileCustomDomainCert.mockImplementation(async (d: { status: string }) => ({ status: d.status, action: null }));
   // Default transaction: pass a tx stub that delegates to the same dbSelect/dbInsert mocks.
   dbTransaction.mockImplementation(async (cb: (tx: unknown) => unknown) =>
     cb({
@@ -174,6 +181,78 @@ describe('GET /api/drives/[driveId]/domains', () => {
     }));
     const res = await GET(makeReq(), ctx());
     expect(res.status).toBe(500);
+  });
+
+  // ── lazy cert reconcile ──────────────────────────────────────────────────
+  /** Stub a GET where the domain list is `domains` and tier lookup is `pro`. */
+  function mockGetSelects(domains: unknown[]) {
+    let callIndex = 0;
+    dbSelect.mockImplementation(() => {
+      callIndex++;
+      if (callIndex === 1) {
+        return { from: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue(domains) };
+      }
+      return { from: vi.fn().mockReturnThis(), innerJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue([{ tier: 'pro' }]) };
+    });
+  }
+
+  it('reconciles verified and provisioning rows and returns the advanced status', async () => {
+    mockGetSelects([
+      { id: 'd1', driveId: DRIVE_ID, hostname: 'verified.com', status: 'verified', createdAt: new Date() },
+      { id: 'd2', driveId: DRIVE_ID, hostname: 'prov.com', status: 'provisioning', createdAt: new Date() },
+    ]);
+    reconcileCustomDomainCert.mockImplementation(async (d: { hostname: string }) => ({
+      status: d.hostname === 'verified.com' ? 'provisioning' : 'active',
+      action: 'mark-active',
+    }));
+
+    const res = await GET(makeReq(), ctx());
+    const body = await res.json();
+
+    expect(reconcileCustomDomainCert).toHaveBeenCalledTimes(2);
+    expect(body.domains.find((d: { hostname: string }) => d.hostname === 'verified.com').status).toBe('provisioning');
+    expect(body.domains.find((d: { hostname: string }) => d.hostname === 'prov.com').status).toBe('active');
+  });
+
+  it('reconciles non-destructively on reads (allowFailureTransition: false)', async () => {
+    mockGetSelects([
+      { id: 'd1', driveId: DRIVE_ID, hostname: 'verified.com', status: 'verified', createdAt: new Date() },
+    ]);
+
+    await GET(makeReq(), ctx());
+
+    expect(reconcileCustomDomainCert).toHaveBeenCalledWith(
+      expect.objectContaining({ hostname: 'verified.com' }),
+      { allowFailureTransition: false },
+    );
+  });
+
+  it('does NOT reconcile terminal rows (pending/active/dns_failed/cert_failed)', async () => {
+    mockGetSelects([
+      { id: 'd1', driveId: DRIVE_ID, hostname: 'pending.com', status: 'pending', createdAt: new Date() },
+      { id: 'd2', driveId: DRIVE_ID, hostname: 'active.com', status: 'active', createdAt: new Date() },
+      { id: 'd3', driveId: DRIVE_ID, hostname: 'dnsfail.com', status: 'dns_failed', createdAt: new Date() },
+      { id: 'd4', driveId: DRIVE_ID, hostname: 'certfail.com', status: 'cert_failed', createdAt: new Date() },
+    ]);
+
+    const res = await GET(makeReq(), ctx());
+    const body = await res.json();
+
+    expect(reconcileCustomDomainCert).not.toHaveBeenCalled();
+    expect(body.domains).toHaveLength(4);
+  });
+
+  it('never 500s when reconcile throws (Fly outage) — returns the un-advanced row', async () => {
+    mockGetSelects([
+      { id: 'd1', driveId: DRIVE_ID, hostname: 'verified.com', status: 'verified', createdAt: new Date() },
+    ]);
+    reconcileCustomDomainCert.mockRejectedValueOnce(new Error('Fly is down'));
+
+    const res = await GET(makeReq(), ctx());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.domains[0].status).toBe('verified');
   });
 });
 

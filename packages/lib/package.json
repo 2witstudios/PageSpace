@@ -642,6 +642,11 @@
       "import": "./dist/canvas/render-document.js",
       "require": "./dist/canvas/render-document.js"
     },
+    "./canvas/resolve-published-meta": {
+      "types": "./dist/canvas/resolve-published-meta.d.ts",
+      "import": "./dist/canvas/resolve-published-meta.js",
+      "require": "./dist/canvas/resolve-published-meta.js"
+    },
     "./canvas/site-files": {
       "types": "./dist/canvas/site-files.d.ts",
       "import": "./dist/canvas/site-files.js",
@@ -1352,6 +1357,9 @@
       ],
       "canvas/render-document": [
         "./dist/canvas/render-document.d.ts"
+      ],
+      "canvas/resolve-published-meta": [
+        "./dist/canvas/resolve-published-meta.d.ts"
       ],
       "canvas/site-files": [
         "./dist/canvas/site-files.d.ts"
