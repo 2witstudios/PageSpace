@@ -187,6 +187,26 @@
       "import": "./dist/encryption/encryption-utils.js",
       "require": "./dist/encryption/encryption-utils.js"
     },
+    "./encryption/blind-index": {
+      "types": "./dist/encryption/blind-index.d.ts",
+      "import": "./dist/encryption/blind-index.js",
+      "require": "./dist/encryption/blind-index.js"
+    },
+    "./encryption/field-crypto": {
+      "types": "./dist/encryption/field-crypto.d.ts",
+      "import": "./dist/encryption/field-crypto.js",
+      "require": "./dist/encryption/field-crypto.js"
+    },
+    "./encryption/user-crypto": {
+      "types": "./dist/encryption/user-crypto.d.ts",
+      "import": "./dist/encryption/user-crypto.js",
+      "require": "./dist/encryption/user-crypto.js"
+    },
+    "./encryption/user-pii-backfill": {
+      "types": "./dist/encryption/user-pii-backfill.d.ts",
+      "import": "./dist/encryption/user-pii-backfill.js",
+      "require": "./dist/encryption/user-pii-backfill.js"
+    },
     "./auth/device-auth-utils": {
       "types": "./dist/auth/device-auth-utils.d.ts",
       "import": "./dist/auth/device-auth-utils.js",
@@ -1115,6 +1135,18 @@
       ],
       "encryption/encryption-utils": [
         "./dist/encryption/encryption-utils.d.ts"
+      ],
+      "encryption/blind-index": [
+        "./dist/encryption/blind-index.d.ts"
+      ],
+      "encryption/field-crypto": [
+        "./dist/encryption/field-crypto.d.ts"
+      ],
+      "encryption/user-crypto": [
+        "./dist/encryption/user-crypto.d.ts"
+      ],
+      "encryption/user-pii-backfill": [
+        "./dist/encryption/user-pii-backfill.d.ts"
       ],
       "auth/device-auth-utils": [
         "./dist/auth/device-auth-utils.d.ts"

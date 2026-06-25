@@ -90,8 +90,14 @@ export const securityAuditLog = pgTable('security_audit_log', {
   resourceType: text('resource_type'),
   resourceId: text('resource_id'),
 
-  // Request context
+  // Request context. `ip_address` holds AES-256-GCM ciphertext for rows written
+  // after encryption is enabled; `ip_bidx` is its deterministic blind index for
+  // equality forensics (idx_security_audit_ip_bidx). This is FORWARD-ONLY:
+  // existing rows stay plaintext because re-encrypting them would invalidate the
+  // tamper-evident hash chain (event_hash covers ip_address). See
+  // docs/security/pii-encryption-design.md.
   ipAddress: text('ip_address'),
+  ipBidx: text('ip_bidx'),
   userAgent: text('user_agent'),
   geoLocation: text('geo_location'),
 
@@ -122,6 +128,8 @@ export const securityAuditLog = pgTable('security_audit_log', {
   resourceIdx: index('idx_security_audit_resource').on(table.resourceType, table.resourceId, table.timestamp),
   // IP-based forensics
   ipTimestampIdx: index('idx_security_audit_ip').on(table.ipAddress, table.timestamp),
+  // IP-based forensics over encrypted rows (blind-index equality)
+  ipBidxTimestampIdx: index('idx_security_audit_ip_bidx').on(table.ipBidx, table.timestamp),
   // Hash chain verification
   eventHashIdx: index('idx_security_audit_event_hash').on(table.eventHash),
   // Predecessor lookup (ORDER BY chain_seq DESC LIMIT 1 inside advisory lock)

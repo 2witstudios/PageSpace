@@ -94,6 +94,39 @@ ciphertext preserves the original casing.
 - File-storage and processor changes (Phases 3–4) gate encryption behind config
   so cloud (already infra-disk-encrypted) is unaffected and onprem/tenant opt in.
 
+## Implementation status (#965)
+
+**Shipped + unit-tested (additive, no behavior change yet):**
+- Pure crypto core: `blind-index.ts` (domain-separated HMAC), `field-crypto.ts`
+  (rollout-safe `encryptField`/`decryptField`, IPv6-safe ciphertext detection).
+- User edge: `user-crypto.ts` (`encryptUserPii` / `decryptUserPii` /
+  `emailLookupBidx` / `getPiiIndexKey`) — proves the email blind-index lookup
+  path by test.
+- Schema migration `0171`: `users.emailBidx` (+ unique index),
+  `security_audit_log.ip_bidx` (+ index, forward-only).
+- Idempotent, resumable, dry-run backfill: `scripts/backfill-user-pii-encryption.ts`
+  + pure planner `user-pii-backfill.ts`.
+
+**Remaining: live call-site cutover (gated rollout, NOT done in the worktree).**
+Encryption is not yet "on": the app still writes plaintext and looks up by raw
+`email`. Flipping the ~27 `eq(users.email, …)` read sites + user create/update
+writes to the encryption edge changes the passwordless-auth hot path, which
+cannot be safely validated by the unit-only test environment available here
+(integration/React tests do not run in a `.pu` worktree). The cutover is a
+deliberate, separately-tested step and MUST follow this safe order:
+
+1. Deploy migration `0171` (additive, nullable — safe).
+2. Deploy app writing `email` ciphertext + `emailBidx` on create/update while
+   reads use a **dual lookup**: blind index first, fall back to raw-email match.
+   `decryptField` tolerates both encrypted and legacy plaintext, so mixed state
+   is safe.
+3. Run the backfill (dry-run, then live) with `ENCRYPTION_KEY` set.
+4. After 100% backfilled + verified, retire the raw-email fallback and drop the
+   raw `email` unique constraint in favor of `users_email_bidx_idx`.
+
+Each step is reversible and never leaves auth in a broken state. Until step 2
+ships, the columns added here are inert.
+
 ## Out of scope for this design (tracked elsewhere in the epic)
 
 - File storage at rest envelope encryption — #966, Phase 3.
