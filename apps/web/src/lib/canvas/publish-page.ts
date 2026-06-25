@@ -9,7 +9,7 @@ import { eq, and, isNull } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
-import { deriveDescription } from '@pagespace/lib/canvas/render-document';
+import { resolvePublishedMeta } from '@pagespace/lib/canvas/resolve-published-meta';
 import { renderPublishedPage } from './render-published';
 import {
   buildPublishedKey,
@@ -76,10 +76,24 @@ export interface PublishCanvasPageInput {
    */
   subdomain?: string;
   /**
+   * Author SEO override: page `<title>` / `og:title`. Empty string clears a
+   * previously-persisted override; `undefined` leaves the persisted value intact.
+   */
+  title?: string;
+  /**
+   * Author SEO override: meta + social description. Empty string clears; an
+   * `undefined` leaves the persisted value intact.
+   */
+  description?: string;
+  /**
+   * Author SEO override: social preview image URL. Empty string clears; an
+   * `undefined` leaves the persisted value intact.
+   */
+  ogImageUrl?: string;
+  /**
    * When true, the published page emits `<meta name="robots" content="noindex">`
-   * so search engines keep it out of their indexes. Defaults to indexable. The
-   * author-facing toggle + persistence is a separate task; this just honors the
-   * flag when a caller passes it.
+   * and is excluded from the sitemap. Persisted on `published_pages.noindex`.
+   * `undefined` leaves the persisted value intact (defaults to indexable).
    */
   noindex?: boolean;
 }
@@ -133,7 +147,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
-    columns: { id: true, slug: true, publishSubdomain: true, kind: true, homePageId: true },
+    columns: { id: true, slug: true, publishSubdomain: true, kind: true, homePageId: true, publishDefaultOgImageUrl: true },
   });
 
   if (!drive) {
@@ -214,6 +228,34 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
   const assetBaseUrl = getPublishAssetBaseUrl();
 
+  // ------------------------------------------------------------------
+  // 4b. Resolve effective SEO overrides
+  // ------------------------------------------------------------------
+  // Load any persisted per-page overrides (and the prior artifact key for
+  // cleanup). A publish call only carries override fields that the caller chose
+  // to change: an `undefined` field preserves the persisted value, an empty
+  // string clears it, a non-empty string sets it. This keeps republish paths
+  // that pass no overrides (e.g. home-page auto-republish) from wiping the
+  // author's settings.
+  const existing = await db.query.publishedPages.findFirst({
+    where: eq(publishedPages.pageId, pageId),
+    columns: {
+      artifactKey: true,
+      publishTitle: true,
+      publishDescription: true,
+      publishOgImageUrl: true,
+      noindex: true,
+    },
+  });
+
+  const mergeOverride = (next: string | undefined, persisted: string | null): string | null =>
+    next === undefined ? persisted : next.trim() || null;
+
+  const effectiveTitle = mergeOverride(input.title, existing?.publishTitle ?? null);
+  const effectiveDescription = mergeOverride(input.description, existing?.publishDescription ?? null);
+  const effectiveOgImageUrl = mergeOverride(input.ogImageUrl, existing?.publishOgImageUrl ?? null);
+  const effectiveNoindex = input.noindex === undefined ? existing?.noindex ?? false : input.noindex;
+
   // Resolve the drive's primary published host. When an active custom domain
   // exists it is the primary; otherwise we fall back to the subdomain. All
   // copies (subdomain + every custom host mirror) embed the same canonical URL
@@ -231,27 +273,29 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // slug. The SEO description prefers the author's og:description, falling back
   // to text derived from the page content; robots defaults to indexable.
   const canonicalUrl = isHomePage ? rootUrl : publishedUrl;
+  // Resolve the effective metadata through the pure precedence resolver:
+  // per-page override → canvas <meta> → drive default (image) / derived (text).
+  const resolvedMeta = resolvePublishedMeta({
+    override: { title: effectiveTitle, description: effectiveDescription, ogImageUrl: effectiveOgImageUrl },
+    noindex: effectiveNoindex,
+    pageTitle: page.title,
+    canvasMeta: { ogImageUrl: meta.ogImageUrl, ogDescription: meta.ogDescription },
+    driveDefaultOgImageUrl: drive.publishDefaultOgImageUrl,
+    body: bodyHtml,
+  });
   const html = renderPublishedPage({
     html: bodyHtml,
-    title: page.title ?? undefined,
+    title: resolvedMeta.title,
     assetBaseUrl,
     faviconHref: meta.faviconHref,
     faviconBaseUrl: meta.faviconHref ? undefined : FAVICON_BASE_URL,
     pageUrl: canonicalUrl,
-    ogImageUrl: meta.ogImageUrl,
-    ogDescription: meta.ogDescription,
-    description: meta.ogDescription ?? deriveDescription(bodyHtml),
-    robots: input.noindex ? 'noindex' : undefined,
+    ogImageUrl: resolvedMeta.ogImageUrl,
+    ogDescription: resolvedMeta.description,
+    description: resolvedMeta.description,
+    robots: resolvedMeta.robots,
   });
   const key = buildPublishedKey(subdomain, path);
-
-  // ------------------------------------------------------------------
-  // 5. Capture existing artifact key for cleanup
-  // ------------------------------------------------------------------
-  const existing = await db.query.publishedPages.findFirst({
-    where: eq(publishedPages.pageId, pageId),
-    columns: { artifactKey: true },
-  });
 
   // ------------------------------------------------------------------
   // 6. Upsert published_pages row
@@ -264,6 +308,10 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
         pageId,
         path,
         artifactKey: key,
+        publishTitle: effectiveTitle,
+        publishDescription: effectiveDescription,
+        publishOgImageUrl: effectiveOgImageUrl,
+        noindex: effectiveNoindex,
         publishedBy: userId,
         updatedAt: new Date(),
       })
@@ -272,6 +320,10 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
         set: {
           path,
           artifactKey: key,
+          publishTitle: effectiveTitle,
+          publishDescription: effectiveDescription,
+          publishOgImageUrl: effectiveOgImageUrl,
+          noindex: effectiveNoindex,
           publishedBy: userId,
         },
       });
@@ -376,10 +428,13 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
     const primaryHost = resolvePrimaryPublishedHost({ subdomain, publishHost: PUBLISH_HOST, activeDomains });
     const origin = `https://${primaryHost}`;
 
-    const published = await db.query.publishedPages.findMany({
+    const allPublished = await db.query.publishedPages.findMany({
       where: eq(publishedPages.driveId, driveId),
-      columns: { pageId: true, path: true, updatedAt: true },
+      columns: { pageId: true, path: true, updatedAt: true, noindex: true },
     });
+    // Pages flagged noindex emit robots=noindex and must not be advertised in the
+    // sitemap either, so crawlers never discover them through it.
+    const published = allPublished.filter((row) => !row.noindex);
 
     // The home page is canonicalised to the subdomain root (where it is
     // mirror-served) instead of its slug, so the inventory has no duplicate for
@@ -406,13 +461,8 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
       }
     }
 
-    // Build one sitemap entry per published page.
-    //
-    // NOTE: `publishCanvasPage` accepts a transient `noindex` flag that only sets
-    // the page's `<meta robots>` — it is NOT persisted to `published_pages`, so
-    // the sitemap cannot honor it yet (the page-level noindex meta still keeps it
-    // out of the index). When a persisted `noindex` column lands, filter it out
-    // HERE (e.g. `published.filter((p) => !p.noindex)`).
+    // Build one sitemap entry per published page (noindex pages already filtered
+    // out of `published` above, so the sitemap never advertises them).
     const routes = published.map((row) => ({
       loc:
         rootMirrorExists && row.pageId === drive.homePageId
