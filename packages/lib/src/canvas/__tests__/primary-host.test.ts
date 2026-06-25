@@ -81,4 +81,42 @@ describe('resolvePrimaryPublishedHost', () => {
     expect(host).not.toBe('my-drive.pagespace.site');
     expect(host).toBe('custom.example.com');
   });
+
+  it('honors an explicitly-selected primary over the earliest-created default', () => {
+    const host = resolvePrimaryPublishedHost({
+      subdomain: 'acme',
+      publishHost: PUBLISH_HOST,
+      activeDomains: [
+        { hostname: 'www.acme.com',  createdAt: new Date('2026-01-01T00:00:00.000Z') },
+        { hostname: 'docs.acme.com', createdAt: new Date('2026-03-01T00:00:00.000Z'), isPrimary: true },
+        { hostname: 'blog.acme.com', createdAt: new Date('2026-06-01T00:00:00.000Z') },
+      ],
+    });
+    expect(host).toBe('docs.acme.com');
+  });
+
+  it('falls back to earliest-created when isPrimary is false on every domain', () => {
+    const host = resolvePrimaryPublishedHost({
+      subdomain: 'acme',
+      publishHost: PUBLISH_HOST,
+      activeDomains: [
+        { hostname: 'docs.acme.com', createdAt: new Date('2026-03-01T00:00:00.000Z'), isPrimary: false },
+        { hostname: 'www.acme.com',  createdAt: new Date('2026-01-01T00:00:00.000Z'), isPrimary: false },
+      ],
+    });
+    expect(host).toBe('www.acme.com');
+  });
+
+  it('breaks ties between multiple flagged primaries deterministically', () => {
+    const sameTime = new Date('2026-01-01T00:00:00.000Z');
+    const host = resolvePrimaryPublishedHost({
+      subdomain: 'acme',
+      publishHost: PUBLISH_HOST,
+      activeDomains: [
+        { hostname: 'z.acme.com', createdAt: sameTime, isPrimary: true },
+        { hostname: 'a.acme.com', createdAt: sameTime, isPrimary: true },
+      ],
+    });
+    expect(host).toBe('a.acme.com');
+  });
 });

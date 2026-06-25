@@ -7,12 +7,15 @@
  * `robots.txt Sitemap:` across ALL copies. When multiple copies point at the
  * same primary host, search engines consolidate ranking signals on that one URL.
  *
- * Primary-host selection rule (deterministic — no DB flag needed):
- *   - If the drive has ≥1 active custom domain, the PRIMARY is the active domain
- *     with the earliest `createdAt` (earliest-registered, not earliest-activated,
- *     because the schema has no separate activation timestamp). Ties (same
- *     timestamp) are broken by hostname lexicographic order so the result is
- *     always predictable.
+ * Primary-host selection rule (deterministic):
+ *   - If the drive has an active custom domain explicitly flagged `isPrimary`,
+ *     that domain is the PRIMARY (the user's chosen host). Ties between multiple
+ *     flagged domains are broken by earliest `createdAt` then hostname.
+ *   - Otherwise, if the drive has ≥1 active custom domain, the PRIMARY is the
+ *     active domain with the earliest `createdAt` (earliest-registered, not
+ *     earliest-activated, because the schema has no separate activation
+ *     timestamp). Ties (same timestamp) are broken by hostname lexicographic
+ *     order so the result is always predictable.
  *   - Otherwise fall back to `<subdomain>.<publishHost>` (the pagespace.site
  *     subdomain, which is always authoritative when no custom domain is active).
  *
@@ -30,6 +33,8 @@
 export interface ActiveDomainRecord {
   hostname: string;
   createdAt: Date;
+  /** True when the user explicitly selected this domain as the drive's primary. */
+  isPrimary?: boolean;
 }
 
 /**
@@ -53,11 +58,16 @@ export function resolvePrimaryPublishedHost({
     return `${subdomain}.${publishHost}`;
   }
 
-  const sorted = [...activeDomains].sort((a, b) => {
+  const byCreatedThenHostname = (a: ActiveDomainRecord, b: ActiveDomainRecord) => {
     const dt = a.createdAt.getTime() - b.createdAt.getTime();
     if (dt !== 0) return dt;
     return a.hostname < b.hostname ? -1 : a.hostname > b.hostname ? 1 : 0;
-  });
+  };
 
+  // An explicitly-selected primary wins over the earliest-created default.
+  const flagged = activeDomains.filter((d) => d.isPrimary);
+  const pool = flagged.length > 0 ? flagged : activeDomains;
+
+  const sorted = [...pool].sort(byCreatedThenHostname);
   return sorted[0].hostname;
 }

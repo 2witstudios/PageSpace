@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2 } from 'lucide-react';
+import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star } from 'lucide-react';
 import { useDriveStore } from '@/hooks/useDrive';
 import { toast } from 'sonner';
 import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
@@ -20,6 +20,7 @@ interface CustomDomain {
   driveId: string;
   hostname: string;
   status: 'pending' | 'verified' | 'failed' | 'dns_failed' | 'provisioning' | 'active' | 'cert_failed';
+  isPrimary: boolean;
   createdAt: string;
 }
 
@@ -45,6 +46,7 @@ export default function DomainsSettingsPage() {
   const [verifyingDomainId, setVerifyingDomainId] = useState<string | null>(null);
   const [verifyReasons, setVerifyReasons] = useState<Record<string, string | undefined>>({});
   const [refreshingCertId, setRefreshingCertId] = useState<string | null>(null);
+  const [settingPrimaryId, setSettingPrimaryId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchDrives();
@@ -166,6 +168,29 @@ export default function DomainsSettingsPage() {
     }
   };
 
+  const handleSetPrimary = async (domainId: string) => {
+    if (settingPrimaryId) return;
+    setSettingPrimaryId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPrimary: true }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(data.error ?? 'Failed to set primary domain');
+        return;
+      }
+      await mutateDomains();
+      toast.success('Primary domain updated');
+    } catch {
+      toast.error('Failed to set primary domain');
+    } finally {
+      setSettingPrimaryId(null);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
@@ -219,10 +244,12 @@ export default function DomainsSettingsPage() {
         onRemove={handleRemoveDomain}
         onVerify={handleVerifyDomain}
         onRefreshCert={handleRefreshCert}
+        onSetPrimary={handleSetPrimary}
         isAdding={isAddingDomain}
         removingId={removingDomainId}
         verifyingId={verifyingDomainId}
         refreshingCertId={refreshingCertId}
+        settingPrimaryId={settingPrimaryId}
         verifyReasons={verifyReasons}
       />
     </div>
@@ -241,10 +268,12 @@ interface CustomDomainsCardProps {
   onRemove: (id: string) => void;
   onVerify: (id: string) => void;
   onRefreshCert: (id: string) => void;
+  onSetPrimary: (id: string) => void;
   isAdding: boolean;
   removingId: string | null;
   verifyingId: string | null;
   refreshingCertId: string | null;
+  settingPrimaryId: string | null;
   verifyReasons: Record<string, string | undefined>;
 }
 
@@ -252,10 +281,12 @@ const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
 const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
 const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
 
-function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, isAdding, removingId, verifyingId, refreshingCertId, verifyReasons }: CustomDomainsCardProps) {
+function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, verifyReasons }: CustomDomainsCardProps) {
   const atCap = limit !== null && limit > 0 && domains.length >= limit;
   const notAvailable = limit === 0;
   const addDisabled = isAdding || !newDomain.trim() || atCap || notAvailable;
+  // "Make primary" only matters once there's a choice to make between domains.
+  const showPrimaryControls = domains.length > 1;
 
   return (
     <Card>
@@ -307,6 +338,12 @@ function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd
           </p>
         )}
 
+        {showPrimaryControls && (
+          <p className="text-xs text-muted-foreground">
+            The primary domain is used as the canonical address for SEO and is the link shown on your published Canvas pages.
+          </p>
+        )}
+
         {domains.length > 0 ? (
           <div className="space-y-3">
             {domains.map((domain) => (
@@ -316,10 +353,13 @@ function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd
                 onRemove={onRemove}
                 onVerify={onVerify}
                 onRefreshCert={onRefreshCert}
+                onSetPrimary={onSetPrimary}
+                showPrimaryControls={showPrimaryControls}
                 isRemoving={removingId === domain.id}
                 isVerifying={verifyingId === domain.id}
                 isRefreshingCert={refreshingCertId === domain.id}
-                anyBusy={verifyingId !== null || refreshingCertId !== null}
+                isSettingPrimary={settingPrimaryId === domain.id}
+                anyBusy={verifyingId !== null || refreshingCertId !== null || settingPrimaryId !== null}
                 verifyReason={verifyReasons[domain.id]}
               />
             ))}
@@ -337,9 +377,12 @@ function DomainRow({
   onRemove,
   onVerify,
   onRefreshCert,
+  onSetPrimary,
+  showPrimaryControls,
   isRemoving,
   isVerifying,
   isRefreshingCert,
+  isSettingPrimary,
   anyBusy,
   verifyReason,
 }: {
@@ -347,9 +390,12 @@ function DomainRow({
   onRemove: (id: string) => void;
   onVerify: (id: string) => void;
   onRefreshCert: (id: string) => void;
+  onSetPrimary: (id: string) => void;
+  showPrimaryControls: boolean;
   isRemoving: boolean;
   isVerifying: boolean;
   isRefreshingCert: boolean;
+  isSettingPrimary: boolean;
   anyBusy: boolean;
   verifyReason: string | undefined;
 }) {
@@ -427,8 +473,31 @@ function DomainRow({
           <Globe className="h-4 w-4 text-muted-foreground flex-shrink-0" />
           <span className="text-sm font-medium truncate">{domain.hostname}</span>
           {statusBadge()}
+          {showPrimaryControls && domain.isPrimary && (
+            <Badge variant="secondary" className="text-xs gap-1">
+              <Star className="h-3 w-3 fill-current" />
+              Primary
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
+          {showPrimaryControls && domain.status === 'active' && !domain.isPrimary && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => onSetPrimary(domain.id)}
+              disabled={anyBusy}
+              aria-label={`Make ${domain.hostname} the primary domain`}
+            >
+              {isSettingPrimary ? (
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              ) : (
+                <Star className="h-3 w-3 mr-1" />
+              )}
+              Make primary
+            </Button>
+          )}
           {showVerifyButton && (
             <Button
               variant="outline"

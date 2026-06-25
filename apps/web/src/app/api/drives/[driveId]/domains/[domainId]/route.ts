@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import {
   authenticateRequestWithOptions,
   isAuthError,
@@ -11,8 +12,96 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
+import { regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+const patchDomainSchema = z.object({
+  isPrimary: z.literal(true),
+});
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ driveId: string; domainId: string }> },
+) {
+  try {
+    const { driveId, domainId } = await context.params;
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
+    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+      return NextResponse.json({ error: 'Only drive owners and admins can change the primary domain' }, { status: 403 });
+    }
+
+    let requestBody: unknown;
+    try {
+      requestBody = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
+
+    const body = patchDomainSchema.safeParse(requestBody);
+    if (!body.success) {
+      return NextResponse.json({ error: 'Invalid request body', details: body.error.issues }, { status: 400 });
+    }
+
+    const target = await db.query.customDomains.findFirst({
+      where: and(eq(customDomains.id, domainId), eq(customDomains.driveId, driveId)),
+      columns: { id: true, hostname: true, status: true },
+    });
+
+    if (!target) {
+      return NextResponse.json({ error: 'Domain not found' }, { status: 404 });
+    }
+
+    // Only a live host can be primary — the primary domain is the canonical SEO
+    // host and the link shown on published pages, so it must actually serve.
+    if (target.status !== 'active') {
+      return NextResponse.json({ error: 'Only an active domain can be set as primary' }, { status: 400 });
+    }
+
+    // Clear-then-set in a transaction so the drive always has exactly one primary
+    // (also guarded by the partial unique index custom_domains_primary_per_drive).
+    const [updated] = await db.transaction(async (tx) => {
+      await tx
+        .update(customDomains)
+        .set({ isPrimary: false })
+        .where(and(eq(customDomains.driveId, driveId), eq(customDomains.isPrimary, true)));
+
+      return tx
+        .update(customDomains)
+        .set({ isPrimary: true })
+        .where(and(eq(customDomains.id, domainId), eq(customDomains.driveId, driveId)))
+        .returning();
+    });
+
+    // Refresh the drive's site files so sitemap/robots advertise the new
+    // canonical host immediately. Best-effort: a failure must not fail the
+    // primary change (the next publish regenerates them anyway).
+    regeneratePublishedSiteFiles(driveId).catch((err) => {
+      loggers.api.warn('Failed to regenerate site files after primary domain change', {
+        driveId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: auth.userId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { operation: 'set-primary-custom-domain', hostname: target.hostname },
+    });
+
+    return NextResponse.json({ domain: updated });
+  } catch (error) {
+    loggers.api.error('Error setting primary custom domain:', error as Error);
+    return NextResponse.json({ error: 'Failed to set primary domain' }, { status: 500 });
+  }
+}
 
 export async function DELETE(
   request: Request,
