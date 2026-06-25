@@ -95,6 +95,24 @@ describe('ContentStore extracted-text encryption (#973)', () => {
   });
 });
 
+describe('ContentStore decrypts when the flag is turned OFF after encrypting', () => {
+  it('given an envelope original and flag later OFF (key still set), getOriginal still decrypts', async () => {
+    // Write encrypted.
+    const enabled = createStore({ enabled: true, masterKey: KEY });
+    const plain = Buffer.from('previously encrypted video bytes');
+    const { contentHash } = await enabled.store.saveOriginal(plain, 'v.mp4');
+    const envelope = enabled.objects.get(`files/${contentHash}/original`)!;
+    expect(isEnvelope(envelope)).toBe(true);
+
+    // New store with the flag OFF but the key still configured reads the same
+    // object — it must NOT return the raw PSE1 envelope.
+    const disabled = createStore({ enabled: false, masterKey: KEY });
+    disabled.objects.set(`files/${contentHash}/original`, envelope);
+    const read = await disabled.store.getOriginal(contentHash);
+    expect(read!.equals(plain)).toBe(true);
+  });
+});
+
 describe('ContentStore legacy plaintext reads', () => {
   it('given a plaintext original written before encryption, should read it back', async () => {
     const { store, objects } = createStore({ enabled: true, masterKey: KEY });

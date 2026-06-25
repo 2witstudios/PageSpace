@@ -14,7 +14,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: () => ({}), gt: () => ({}), asc: () => ({}) }));
 
-import { backfill } from '../backfill-user-pii-encryption';
+import { backfill, resolveBackfillMode } from '../backfill-user-pii-encryption';
 import { deriveIndexKey } from '@pagespace/lib/encryption/blind-index';
 import { looksEncrypted } from '@pagespace/lib/encryption/field-crypto';
 
@@ -48,6 +48,22 @@ function captureUpdate() {
   }));
   return { update, sets };
 }
+
+describe('resolveBackfillMode (cutover safety gate)', () => {
+  it('defaults to dry-run when --apply is absent', () => {
+    expect(resolveBackfillMode({ apply: false, cutoverConfirmed: false })).toEqual({ ok: true, dryRun: true });
+  });
+
+  it('refuses a live --apply run unless the cutover is confirmed deployed', () => {
+    const mode = resolveBackfillMode({ apply: true, cutoverConfirmed: false });
+    expect(mode.ok).toBe(false);
+    if (!mode.ok) expect(mode.error).toContain('PII_ENCRYPTION_CUTOVER_DEPLOYED');
+  });
+
+  it('allows a live run only when --apply AND cutover confirmed', () => {
+    expect(resolveBackfillMode({ apply: true, cutoverConfirmed: true })).toEqual({ ok: true, dryRun: false });
+  });
+});
 
 describe('backfill-user-pii-encryption', () => {
   it('live mode: encrypts plaintext rows and writes email+name+emailBidx', async () => {

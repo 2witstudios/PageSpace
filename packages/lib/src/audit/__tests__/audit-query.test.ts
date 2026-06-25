@@ -18,6 +18,7 @@ const { mockDb, mockSecurityAuditLog } = vi.hoisted(() => {
       resourceType: 'resourceType',
       resourceId: 'resourceId',
       ipAddress: 'ipAddress',
+      ipBidx: 'ipBidx',
       timestamp: 'timestamp',
     },
   };
@@ -32,13 +33,14 @@ vi.mock('@pagespace/db/schema/security-audit', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn((col: string) => `desc(${col})`),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
+  or: vi.fn((...args: unknown[]) => ({ or: args })),
   gte: vi.fn((col: string, val: unknown) => ({ gte: [col, val] })),
   lte: vi.fn((col: string, val: unknown) => ({ lte: [col, val] })),
   eq: vi.fn((col: string, val: unknown) => ({ eq: [col, val] })),
 }));
 
 import { queryAuditEvents } from '../audit-query';
-import { eq, gte, lte } from '@pagespace/db/operators';
+import { eq, or, gte, lte } from '@pagespace/db/operators';
 
 describe('queryAuditEvents()', () => {
   const mockEvents = [
@@ -106,10 +108,31 @@ describe('queryAuditEvents()', () => {
     expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.resourceId, 'page-1');
   });
 
-  it('given ipAddress filter, should apply eq condition on ipAddress', async () => {
-    await queryAuditEvents({ ipAddress: '10.0.0.1' });
+  it('given ipAddress filter with no ENCRYPTION_KEY, should apply a plain eq on ipAddress', async () => {
+    const prev = process.env.ENCRYPTION_KEY;
+    delete process.env.ENCRYPTION_KEY;
+    try {
+      await queryAuditEvents({ ipAddress: '10.0.0.1' });
+      expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.ipAddress, '10.0.0.1');
+      expect(or).not.toHaveBeenCalled();
+    } finally {
+      if (prev !== undefined) process.env.ENCRYPTION_KEY = prev;
+    }
+  });
 
-    expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.ipAddress, '10.0.0.1');
+  it('given ipAddress filter with a key, should match by blind index OR legacy plaintext', async () => {
+    const prev = process.env.ENCRYPTION_KEY;
+    process.env.ENCRYPTION_KEY = 'audit-query-test-master-key-at-least-32!!';
+    try {
+      await queryAuditEvents({ ipAddress: '10.0.0.1' });
+      // Dual filter: blind-index match for encrypted rows + plaintext for legacy.
+      expect(or).toHaveBeenCalled();
+      expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.ipBidx, expect.stringMatching(/^[0-9a-f]{64}$/));
+      expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.ipAddress, '10.0.0.1');
+    } finally {
+      if (prev === undefined) delete process.env.ENCRYPTION_KEY;
+      else process.env.ENCRYPTION_KEY = prev;
+    }
   });
 
   it('given limit: 0, should apply limit(0) to query', async () => {

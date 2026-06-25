@@ -461,14 +461,15 @@ export class ContentStore {
     const normalizedHash = this.normalizeContentHash(rawHash);
     const key = this.originalKey(normalizedHash);
 
-    const fileStat = await stat(tempFilePath);
-
     // ContentType omitted: presigned-URL delivery overrides via ResponseContentType.
     // If a direct-serve path is ever added, add a mimeType param here.
+    let size: number;
     if (this.originalsEncrypted()) {
       // Encryption buffers the (content-addressed, size-capped) file to wrap it
-      // in an envelope; streaming GCM is avoided for format simplicity.
+      // in an envelope; streaming GCM is avoided for format simplicity. Size is
+      // taken from the single read — no separate stat() (avoids a TOCTOU race).
       const plain = await readFile(tempFilePath);
+      size = plain.length;
       await this.s3.send(
         new PutObjectCommand({
           Bucket: this.bucket,
@@ -487,12 +488,13 @@ export class ContentStore {
         },
       });
       await upload.done();
+      size = (await stat(tempFilePath)).size;
     }
 
     const metadata: OriginalFileMetadata = {
       originalName,
       contentHash: normalizedHash,
-      size: fileStat.size,
+      size,
       savedAt: new Date().toISOString(),
     };
 
@@ -579,10 +581,13 @@ export class ContentStore {
     const normalizedHash = this.normalizeContentHash(contentHash);
     await mkdir(path.dirname(destPath), { recursive: true });
 
-    // When originals are encrypted at rest, buffer-and-decrypt (objects are
-    // content-addressed and size-capped) since the envelope cannot be raw-
-    // streamed. Otherwise stream straight through to disk as before.
-    if (this.originalsEncrypted()) {
+    // Whenever a key is configured, buffer-and-decrypt (objects are content-
+    // addressed and size-capped) so previously-enveloped originals decrypt
+    // correctly EVEN IF FILE_ENCRYPTION_ENABLED was later turned off — otherwise
+    // the raw PSE1 envelope would be streamed to disk. getOriginal() decrypts
+    // envelopes and passes legacy plaintext through. Only raw-stream when no key
+    // exists (nothing could be encrypted).
+    if (this.hasKey()) {
       const buf = await this.getOriginal(normalizedHash);
       if (!buf) throw new Error(`File not found in S3: ${contentHash}`);
       await pipeline(Readable.from(buf), createWriteStream(destPath));

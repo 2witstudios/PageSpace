@@ -12,7 +12,17 @@
  * plaintext email, so each row's ciphertext + index are written atomically.
  *
  * Usage:
- *   bun scripts/backfill-user-pii-encryption.ts [--dry-run]
+ *   bun scripts/backfill-user-pii-encryption.ts            # dry-run (default, safe)
+ *   PII_ENCRYPTION_CUTOVER_DEPLOYED=true \
+ *     bun scripts/backfill-user-pii-encryption.ts --apply  # live write
+ *
+ * SAFETY GATE (GDPR #965): a live run rewrites `users.email`/`users.name` to
+ * ciphertext. If the app image still reads/queries plaintext email
+ * (`eq(users.email, …)`), running this FIRST breaks magic-link / passkey /
+ * OAuth / account email lookups and returns ciphertext in API responses. The
+ * runner therefore defaults to dry-run and refuses `--apply` unless
+ * `PII_ENCRYPTION_CUTOVER_DEPLOYED=true` explicitly confirms the
+ * encryption-aware app (ciphertext writes + `emailBidx` lookups) is deployed.
  *
  * Requires ENCRYPTION_KEY in the environment (same key used at runtime).
  *
@@ -33,6 +43,36 @@ import { getPiiIndexKey } from '@pagespace/lib/encryption/user-crypto';
 const BATCH_SIZE = 500;
 
 export type BackfillResult = { encrypted: number; skipped: number };
+
+export type BackfillMode =
+  | { ok: true; dryRun: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Resolve the run mode. Dry-run is the default; a live write requires BOTH
+ * `--apply` and explicit confirmation that the encryption-aware app is deployed,
+ * so the backfill cannot break plaintext-email auth lookups by running early.
+ */
+export function resolveBackfillMode({
+  apply,
+  cutoverConfirmed,
+}: {
+  apply: boolean;
+  cutoverConfirmed: boolean;
+}): BackfillMode {
+  if (!apply) return { ok: true, dryRun: true };
+  if (!cutoverConfirmed) {
+    return {
+      ok: false,
+      error:
+        'Refusing live PII backfill: set PII_ENCRYPTION_CUTOVER_DEPLOYED=true only AFTER the ' +
+        'encryption-aware app (email ciphertext writes + emailBidx lookups) is deployed. Running ' +
+        'earlier breaks magic-link/passkey/OAuth/account email lookups. See ' +
+        'docs/security/pii-encryption-design.md.',
+    };
+  }
+  return { ok: true, dryRun: false };
+}
 
 type DbLike = Pick<typeof defaultDb, 'select' | 'update'>;
 
@@ -88,8 +128,15 @@ export async function backfill(
 
 // Only run when invoked directly (not when imported by tests).
 if (import.meta.main) {
-  const dryRun = process.argv.includes('--dry-run');
-  backfill(dryRun)
+  const mode = resolveBackfillMode({
+    apply: process.argv.includes('--apply'),
+    cutoverConfirmed: process.env.PII_ENCRYPTION_CUTOVER_DEPLOYED === 'true',
+  });
+  if (!mode.ok) {
+    console.error(`❌ ${mode.error}`);
+    process.exit(1);
+  }
+  backfill(mode.dryRun)
     .then(() => process.exit(0))
     .catch((err) => {
       console.error('❌ Backfill failed:', err);

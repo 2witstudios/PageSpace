@@ -80,7 +80,8 @@ export async function middleware(req: NextRequest) {
           return createSecureErrorResponse(
             { error: 'Origin not allowed', code: 'ORIGIN_INVALID' },
             403,
-            isProduction
+            isProduction,
+            isSecureRequest(req)
           );
         }
         logSecurityEvent('origin_validation_warning', {
