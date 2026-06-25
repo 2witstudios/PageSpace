@@ -135,6 +135,27 @@ describe('queryAuditEvents()', () => {
     }
   });
 
+  it('given an undecryptable IP row, should not fail the whole query (per-row fallback)', async () => {
+    const prev = process.env.ENCRYPTION_KEY;
+    process.env.ENCRYPTION_KEY = 'audit-query-test-master-key-at-least-32!!';
+    // Ciphertext-shaped (passes looksEncrypted) but invalid → decrypt throws.
+    const bogus = `${'a'.repeat(64)}:${'a'.repeat(32)}:${'a'.repeat(32)}:abcd`;
+    const rows = [
+      { id: 'ok', ipAddress: '10.0.0.9' },
+      { id: 'bad', ipAddress: bogus },
+    ];
+    mockDb._chain.orderBy.mockResolvedValue(rows);
+    try {
+      const result = await queryAuditEvents({});
+      expect(result).toHaveLength(2);
+      // The bad row falls back to its stored value rather than throwing.
+      expect(result.find((r) => (r as { id: string }).id === 'bad')!.ipAddress).toBe(bogus);
+    } finally {
+      if (prev === undefined) delete process.env.ENCRYPTION_KEY;
+      else process.env.ENCRYPTION_KEY = prev;
+    }
+  });
+
   it('given limit: 0, should apply limit(0) to query', async () => {
     mockDb._chain.orderBy.mockReturnValue({ limit: mockDb._chain.limit });
     mockDb._chain.limit.mockResolvedValue([]);

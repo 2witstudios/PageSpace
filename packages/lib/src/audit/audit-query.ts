@@ -80,8 +80,16 @@ export async function queryAuditEvents(
   }
 
   // Decrypt the at-rest IP for display. `decryptField` passes legacy plaintext
-  // and null through unchanged, so mixed encrypted/plaintext rows both work.
-  return Promise.all(
-    rows.map(async (row) => ({ ...row, ipAddress: await decryptField(row.ipAddress) })),
-  );
+  // and null through unchanged, so mixed encrypted/plaintext rows both work. A
+  // single undecryptable row (corruption / key rotation) must not fail the whole
+  // forensic query — fall back to the stored value for that row only.
+  return Promise.all(rows.map((row) => decryptRowIp(row)));
+}
+
+async function decryptRowIp(row: SelectSecurityAuditLog): Promise<SelectSecurityAuditLog> {
+  try {
+    return { ...row, ipAddress: await decryptField(row.ipAddress) };
+  } catch {
+    return row;
+  }
 }
