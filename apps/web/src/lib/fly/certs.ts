@@ -2,6 +2,12 @@ import type { FlyCertResponse } from '@pagespace/lib/canvas/cert-action';
 
 const FLY_API_URL = 'https://api.fly.io/graphql';
 
+// Bound the Fly request so a hung response can't block the caller indefinitely.
+// addCertificate is invoked from the domains-list GET (lazy cert reconcile), so
+// an unbounded fetch would stall the settings UI. On timeout the AbortSignal
+// rejects the fetch and we degrade to an ok:false error response.
+const FLY_API_TIMEOUT_MS = 10_000;
+
 // Fly's GraphQL `addCertificate` takes `appId` (an ID! whose value is the app
 // NAME), NOT `appName` — passing `appName` is rejected with a schema error, so
 // this mutation never succeeded until this was corrected.
@@ -57,6 +63,7 @@ async function flyGraphQL<T>(
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(FLY_API_TIMEOUT_MS),
     });
 
     if (!response.ok) {

@@ -63,6 +63,26 @@ describe('addCertificate', () => {
     expect(init.method).toBe('POST');
   });
 
+  it('passes a bounded AbortSignal (timeout) to fetch so a hung Fly response cannot block the caller', async () => {
+    mockFetchOk(addCertOk('Awaiting certificates'));
+
+    await addCertificate(APP_NAME, HOSTNAME);
+
+    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('returns ok:false when the Fly request times out (aborted)', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' }),
+    );
+
+    const result = await addCertificate(APP_NAME, HOSTNAME);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/timed out/i);
+  });
+
   it('sends the mutation with appId (not appName) and hostname variables', async () => {
     mockFetchOk(addCertOk('Awaiting certificates'));
 
