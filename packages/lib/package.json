@@ -227,6 +227,11 @@
       "import": "./dist/audit/sanitize-audit-details.js",
       "require": "./dist/audit/sanitize-audit-details.js"
     },
+    "./audit/admin-read-audit": {
+      "types": "./dist/audit/admin-read-audit.d.ts",
+      "import": "./dist/audit/admin-read-audit.js",
+      "require": "./dist/audit/admin-read-audit.js"
+    },
     "./auth/broadcast-auth": {
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",
@@ -827,6 +832,16 @@
       "import": "./dist/integrations/converter/openapi.js",
       "require": "./dist/integrations/converter/openapi.js"
     },
+    "./security/auth-anomaly": {
+      "types": "./dist/security/auth-anomaly.d.ts",
+      "import": "./dist/security/auth-anomaly.js",
+      "require": "./dist/security/auth-anomaly.js"
+    },
+    "./security/auth-anomaly-reporter": {
+      "types": "./dist/security/auth-anomaly-reporter.d.ts",
+      "import": "./dist/security/auth-anomaly-reporter.js",
+      "require": "./dist/security/auth-anomaly-reporter.js"
+    },
     "./security/jti-revocation": {
       "types": "./dist/security/jti-revocation.d.ts",
       "import": "./dist/security/jti-revocation.js",
@@ -1140,6 +1155,9 @@
       ],
       "audit/sanitize-audit-details": [
         "./dist/audit/sanitize-audit-details.d.ts"
+      ],
+      "audit/admin-read-audit": [
+        "./dist/audit/admin-read-audit.d.ts"
       ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
@@ -1473,6 +1491,12 @@
       ],
       "integrations/converter/openapi": [
         "./dist/integrations/converter/openapi.d.ts"
+      ],
+      "security/auth-anomaly": [
+        "./dist/security/auth-anomaly.d.ts"
+      ],
+      "security/auth-anomaly-reporter": [
+        "./dist/security/auth-anomaly-reporter.d.ts"
       ],
       "security/jti-revocation": [
         "./dist/security/jti-revocation.d.ts"

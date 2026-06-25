@@ -12,6 +12,8 @@
 import { withAdminAuth } from '@/lib/auth';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { buildAdminReadAuditEvent } from '@pagespace/lib/audit/admin-read-audit';
 import { buildCompleteRequest, type CompletePayloadResult, type LocationContext } from '@/lib/ai/core/complete-request-builder';
 import { type ToolDefinitionForExtraction, extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/core/schema-introspection';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
@@ -52,10 +54,25 @@ interface ModePromptData {
   completePayload: CompletePayloadResult;
 }
 
-async function handleGlobalPrompt(userId: string, request: Request): Promise<Response> {
+async function handleGlobalPrompt(
+  userId: string,
+  request: Request,
+  opts?: { impersonated?: boolean }
+): Promise<Response> {
   // Adapter: the inner logic expects an object with an `id` field
   const adminUser = { id: userId };
   try {
+    // GDPR Art 32(1)(b) (#954): operator read of a user's workspace (drives,
+    // page titles, drive list) — emit an immutable admin.data.read audit event.
+    // Via the service path this is an impersonated read of another subject.
+    auditRequest(request, buildAdminReadAuditEvent({
+      adminUserId: userId,
+      resourceType: 'admin_global_prompt',
+      targetUserId: userId,
+      accessedDataCategories: ['workspace_structure', 'drive_list', 'page_titles'],
+      impersonated: opts?.impersonated ?? false,
+    }));
+
     // Parse query params for context selection
     const { searchParams } = new URL(request.url);
     const selectedDriveId = searchParams.get('driveId'); // null = dashboard context
@@ -475,7 +492,7 @@ export async function GET(request: Request): Promise<Response> {
     }
     const userId = request.headers.get('x-service-user-id');
     if (!userId) return Response.json({ error: 'Missing user context' }, { status: 400 });
-    return handleGlobalPrompt(userId, request);
+    return handleGlobalPrompt(userId, request, { impersonated: true });
   }
-  return withAdminAuth(async (adminUser, req) => handleGlobalPrompt(adminUser.id, req))(request);
+  return withAdminAuth(async (adminUser, req) => handleGlobalPrompt(adminUser.id, req, { impersonated: false }))(request);
 }
