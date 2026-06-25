@@ -17,6 +17,7 @@ import {
   canPrincipalViewPage,
   canPrincipalEditPage,
 } from '@/lib/auth';
+import { assertAiProcessingConsent } from '@/lib/ai/ai-consent-guard';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
@@ -60,6 +61,11 @@ export async function POST(request: Request): Promise<Response> {
     auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'openai_inference', resourceId: 'post', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
     return authResult.error;
   }
+
+  // GDPR Art 13(1)(e)(f)/44 — block AI processing when consent enforcement is on and
+  // the user has not granted it (flag-gated, default-off; no-op otherwise).
+  const aiConsentBlock = await assertAiProcessingConsent(authResult.userId);
+  if (aiConsentBlock) return aiConsentBlock;
 
   // 2. Validate request body
   let rawBody: unknown;
