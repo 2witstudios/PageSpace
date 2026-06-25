@@ -100,7 +100,7 @@ vi.mock('@pagespace/lib/utils/utils', () => ({
 
 import { db } from '@pagespace/db/db';
 import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, deletePublishedArtifact, copyPublishedArtifact, isPublishConfigured } from '../published-storage';
-import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, PublishError } from '../publish-page';
+import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, republishDriveCanonical, PublishError } from '../publish-page';
 import { getActiveDomainRecords } from '../custom-domain-mirror';
 
 // The mocked `db` keeps the real relational-query return types, so partial test
@@ -712,5 +712,58 @@ describe('syncPublishedHomeRoot', () => {
     vi.mocked(copyPublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
 
     await expect(syncPublishedHomeRoot('drive-1')).resolves.toBeUndefined();
+  });
+});
+
+describe('republishDriveCanonical', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isPublishConfigured).mockReturnValue(true);
+  });
+
+  it('re-renders every published page at its existing path and returns the count', async () => {
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue([
+      { pageId: 'page-1', path: 'about' },
+      { pageId: 'page-2', path: 'team/leadership' },
+    ] as unknown as Awaited<ReturnType<typeof db.query.publishedPages.findMany>>);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(
+      pageRow({ id: 'page-x', type: 'CANVAS', title: 'Ignored Title', content: '<div/>', driveId: 'drive-1' }),
+    );
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
+    }));
+
+    const count = await republishDriveCanonical('drive-1', 'user-1');
+
+    expect(count).toBe(2);
+    // Each page is re-published at its STORED path, not re-derived from the title.
+    const paths = vi.mocked(putPublishedArtifact).mock.calls.map(([arg]) => (arg as { path: string }).path);
+    expect(paths).toContain('about');
+    expect(paths).toContain('team/leadership');
+  });
+
+  it('isolates per-page failures and counts only the successes', async () => {
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue([
+      { pageId: 'missing', path: 'gone' },
+      { pageId: 'page-2', path: 'ok' },
+    ] as unknown as Awaited<ReturnType<typeof db.query.publishedPages.findMany>>);
+    // First page is missing → publishCanvasPage throws; second succeeds.
+    vi.mocked(db.query.pages.findFirst)
+      .mockResolvedValueOnce(undefined as unknown as PageRow)
+      .mockResolvedValue(pageRow({ id: 'page-2', type: 'CANVAS', title: 'OK', content: '<div/>', driveId: 'drive-1' }));
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD', homePageId: null,
+    }));
+
+    const count = await republishDriveCanonical('drive-1', 'user-1');
+
+    expect(count).toBe(1);
+  });
+
+  it('is a no-op returning 0 when publishing is not configured', async () => {
+    vi.mocked(isPublishConfigured).mockReturnValue(false);
+    const count = await republishDriveCanonical('drive-1', 'user-1');
+    expect(count).toBe(0);
+    expect(db.query.publishedPages.findMany).not.toHaveBeenCalled();
   });
 });

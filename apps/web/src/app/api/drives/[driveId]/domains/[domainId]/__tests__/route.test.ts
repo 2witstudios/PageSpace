@@ -51,11 +51,13 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
 
 const clearCustomHost = vi.fn().mockResolvedValue(undefined);
 const regeneratePublishedSiteFiles = vi.fn().mockResolvedValue(undefined);
+const republishDriveCanonical = vi.fn().mockResolvedValue(0);
 vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
   clearCustomHost: (...args: unknown[]) => clearCustomHost(...args),
 }));
 vi.mock('@/lib/canvas/publish-page', () => ({
   regeneratePublishedSiteFiles: (...args: unknown[]) => regeneratePublishedSiteFiles(...args),
+  republishDriveCanonical: (...args: unknown[]) => republishDriveCanonical(...args),
 }));
 
 const DRIVE_ID = 'drive-1';
@@ -205,13 +207,16 @@ describe('PATCH /api/drives/[driveId]/domains/[domainId] (set primary)', () => {
     expect(body.domain.isPrimary).toBe(true);
   });
 
-  it('regenerates site files and audits on success', async () => {
+  it('re-renders published pages, regenerates site files, and audits on success', async () => {
     findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
     wireTransaction({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', status: 'active', isPrimary: true });
 
     await PATCH(makePatchReq(), ctx());
     await Promise.resolve();
 
+    // Pages are re-rendered with the new primary host BEFORE site files refresh,
+    // so an already-published drive doesn't keep advertising the old canonical.
+    expect(republishDriveCanonical).toHaveBeenCalledWith(DRIVE_ID, USER_ID);
     expect(regeneratePublishedSiteFiles).toHaveBeenCalledWith(DRIVE_ID);
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       eventType: 'data.write',

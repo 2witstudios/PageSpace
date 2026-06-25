@@ -12,7 +12,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
-import { regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
+import { regeneratePublishedSiteFiles, republishDriveCanonical } from '@/lib/canvas/publish-page';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -78,15 +78,22 @@ export async function PATCH(
         .returning();
     });
 
-    // Refresh the drive's site files so sitemap/robots advertise the new
-    // canonical host immediately. Best-effort: a failure must not fail the
-    // primary change (the next publish regenerates them anyway).
-    regeneratePublishedSiteFiles(driveId).catch((err) => {
-      loggers.api.warn('Failed to regenerate site files after primary domain change', {
+    // Re-render every published page so the canonical/og:url baked into each
+    // artifact points at the NEW primary host, then refresh the drive's
+    // sitemap/robots. Awaited so the published site is consistent before we
+    // report success. Both calls are best-effort by contract (they log and
+    // swallow failures); the try/catch is a final guard so a storage hiccup
+    // never fails the primary change itself — the DB update has already
+    // committed and the next publish re-bakes anything that lagged.
+    try {
+      await republishDriveCanonical(driveId, auth.userId);
+      await regeneratePublishedSiteFiles(driveId);
+    } catch (err) {
+      loggers.api.warn('Failed to refresh published pages after primary domain change', {
         driveId,
         error: err instanceof Error ? err.message : String(err),
       });
-    });
+    }
 
     auditRequest(request, {
       eventType: 'data.write',

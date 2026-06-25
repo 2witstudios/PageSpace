@@ -342,6 +342,45 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
 }
 
 /**
+ * Re-render every published page in a drive so the canonical / og:url / JSON-LD
+ * URLs baked into each artifact reflect the drive's CURRENT primary host.
+ *
+ * Call this after the primary custom domain changes: `regeneratePublishedSiteFiles`
+ * alone only refreshes the sitemap/robots, leaving each page artifact still
+ * advertising the previous primary until it is individually republished. Each
+ * page is re-published at its EXISTING `published_pages.path` — never re-derived
+ * from the (possibly since-changed) title, which would relocate the page.
+ *
+ * Per-page failures are logged, not thrown — a partial refresh beats none, and
+ * the next publish of a failed page picks up the current primary. No-op when
+ * publishing is unconfigured. Returns the number of pages successfully
+ * re-rendered (useful for callers/tests).
+ */
+export async function republishDriveCanonical(driveId: string, userId: string): Promise<number> {
+  if (!isPublishConfigured()) return 0;
+
+  const published = await db.query.publishedPages.findMany({
+    where: eq(publishedPages.driveId, driveId),
+    columns: { pageId: true, path: true },
+  });
+
+  let refreshed = 0;
+  for (const row of published) {
+    try {
+      await publishCanvasPage({ pageId: row.pageId, driveId, userId, path: row.path });
+      refreshed += 1;
+    } catch (err) {
+      loggers.api.warn('Failed to re-render published page for canonical refresh', {
+        driveId,
+        pageId: row.pageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return refreshed;
+}
+
+/**
  * (Re)generate the site-level files for a published drive — `robots.txt`,
  * `sitemap.xml`, and `404.html` — and write them to storage at the subdomain
  * root (`published/<sub>/<file>`).
