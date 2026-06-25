@@ -277,6 +277,10 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo): Promise<OA
       role: 'user' as const,
       storageUsedBytes: 0,
       subscriptionTier: 'free' as const,
+      // GDPR Art 8: OAuth signups attest to the minimum age via the disclosure shown
+      // at the provider sign-in entry point; record the verification timestamp so this
+      // shared path (incl. mobile Google exchange) matches the other OAuth routes.
+      ageVerifiedAt: new Date(),
     };
 
     // Add provider-specific ID based on provider
