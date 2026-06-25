@@ -137,7 +137,7 @@ describe('buildTerminalHandlers', () => {
       expect(socket.emit).toHaveBeenCalledWith('terminal:closed', { exitCode: -2 });
     });
 
-    it('given a live tmux session already on the Sprite (e.g. after a realtime restart), should reattach to it via listSessions', async () => {
+    it('given a live session already on the Sprite (e.g. after a realtime restart), should reattach to it via listSessions', async () => {
       const auth = makeAuthSuccess('key1', [{ id: 'sess-9', command: 'bash', isActive: true, tty: true }]);
       checkAuth.mockResolvedValue(auth);
       const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });

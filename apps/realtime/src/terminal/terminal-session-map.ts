@@ -7,7 +7,7 @@ export type TerminalSession = {
   command: PtyShell;
   sandboxId: string;
   sessionKey: string;
-  /** Detachable tmux session id on the Sprite, used to reattach after a WS drop. */
+  /** Detachable exec session id on the Sprite, used to reattach after a WS drop. */
   sessionId?: string;
   reAuthInterval?: ReturnType<typeof setInterval>;
   idleTimer?: ReturnType<typeof setTimeout>;

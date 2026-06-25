@@ -57,7 +57,7 @@ export function openPtyShell({ sprite, cols, rows, sessionId, onOutput, onExit }
   const toStr = (chunk: unknown) => (typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8'));
 
   let current: SpriteCommandLike;
-  // The live tmux session id to reattach to. Known immediately when attaching;
+  // The live session id to reattach to. Known immediately when attaching;
   // for a freshly created session it is resolved in the background via
   // listSessions() (and again at reconnect time as a fallback).
   let currentSessionId: string | undefined = sessionId;
