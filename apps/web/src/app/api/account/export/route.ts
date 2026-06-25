@@ -1,4 +1,10 @@
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
+import {
+  parseExportFormat,
+  buildNativeExportFiles,
+  buildPortableExportFiles,
+  buildExportManifest,
+} from '@pagespace/lib/compliance/export/export-format';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
@@ -22,6 +28,10 @@ export async function GET(request: Request) {
     return auth.error;
   }
   const userId = auth.userId;
+
+  // Portability format selection (Art 20). `native` = per-section JSON (default);
+  // `portable` = a single documented schema.org bundle. Unknown values → native.
+  const format = parseExportFormat(new URL(request.url).searchParams.get('format'));
 
   // Rate limiting (distributed via Postgres rate_limit_buckets)
   const rateLimitKey = `export:user:${userId}`;
@@ -72,21 +82,16 @@ export async function GET(request: Request) {
       },
     });
 
-    // Add JSON files to archive
-    archive.append(JSON.stringify(data.profile, null, 2), { name: `pagespace-export-${dateStr}/profile.json` });
-    archive.append(JSON.stringify(data.drives, null, 2), { name: `pagespace-export-${dateStr}/drives.json` });
-    archive.append(JSON.stringify(data.pages, null, 2), { name: `pagespace-export-${dateStr}/pages.json` });
-    archive.append(JSON.stringify(data.messages, null, 2), { name: `pagespace-export-${dateStr}/messages.json` });
-    archive.append(JSON.stringify(data.files, null, 2), { name: `pagespace-export-${dateStr}/files-metadata.json` });
-    archive.append(JSON.stringify(data.activity, null, 2), { name: `pagespace-export-${dateStr}/activity.json` });
-    archive.append(JSON.stringify(data.aiUsage, null, 2), { name: `pagespace-export-${dateStr}/ai-usage.json` });
-    archive.append(JSON.stringify(data.tasks, null, 2), { name: `pagespace-export-${dateStr}/tasks.json` });
-    archive.append(JSON.stringify(data.sessions, null, 2), { name: `pagespace-export-${dateStr}/sessions.json` });
-    archive.append(JSON.stringify(data.notifications, null, 2), { name: `pagespace-export-${dateStr}/notifications.json` });
-    archive.append(JSON.stringify(data.displayPreferences, null, 2), { name: `pagespace-export-${dateStr}/display-preferences.json` });
-    if (data.personalization) {
-      archive.append(JSON.stringify(data.personalization, null, 2), { name: `pagespace-export-${dateStr}/personalization.json` });
+    // Build the file set for the requested format and append each as JSON.
+    const files = format === 'portable' ? buildPortableExportFiles(data) : buildNativeExportFiles(data);
+    for (const file of files) {
+      archive.append(JSON.stringify(file.data, null, 2), { name: `pagespace-export-${dateStr}/${file.name}` });
     }
+
+    // manifest.json documents the schema version + file inventory so the bundle
+    // is self-describing (GDPR Art 20 portability).
+    const manifest = buildExportManifest(files, { exportedAt: new Date(), format });
+    archive.append(JSON.stringify(manifest, null, 2), { name: `pagespace-export-${dateStr}/manifest.json` });
 
     // Finalize the archive (must be called after all data is appended)
     archive.finalize();

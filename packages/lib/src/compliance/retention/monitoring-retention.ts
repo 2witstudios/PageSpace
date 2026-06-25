@@ -7,6 +7,7 @@ const DEFAULT_API_METRICS_DAYS = 90;
 const DEFAULT_SYSTEM_LOGS_DAYS = 30;
 const DEFAULT_ERROR_LOGS_DAYS = 90;
 const DEFAULT_USER_ACTIVITIES_DAYS = 180;
+const DEFAULT_AI_USAGE_LOGS_DAYS = 90;
 
 export interface RetentionConfig {
   apiMetricsDays: number;
@@ -29,6 +30,16 @@ export function getRetentionConfig(): RetentionConfig {
     errorLogsDays: parsePositiveInt(process.env.RETENTION_ERROR_LOGS_DAYS, DEFAULT_ERROR_LOGS_DAYS),
     userActivitiesDays: parsePositiveInt(process.env.RETENTION_USER_ACTIVITIES_DAYS, DEFAULT_USER_ACTIVITIES_DAYS),
   };
+}
+
+/**
+ * Retention window (in days) for AI usage logs, used by the purge-ai-usage-logs
+ * cron. Configurable via RETENTION_AI_USAGE_LOGS_DAYS so tenant deployments can
+ * tune storage limits without a code change (mirrors the RETENTION_* pattern
+ * above). Falls back to 90 days for unset/invalid values.
+ */
+export function getAiUsageLogsRetentionDays(): number {
+  return parsePositiveInt(process.env.RETENTION_AI_USAGE_LOGS_DAYS, DEFAULT_AI_USAGE_LOGS_DAYS);
 }
 
 export function getRetentionCutoff(days: number): Date {

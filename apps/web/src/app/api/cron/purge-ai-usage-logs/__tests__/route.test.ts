@@ -69,4 +69,24 @@ describe('/api/cron/purge-ai-usage-logs', () => {
 
     expect(mockAudit).not.toHaveBeenCalled();
   });
+
+  it('purges using the env-configured retention window, not a hardcoded 90', async () => {
+    const original = process.env.RETENTION_AI_USAGE_LOGS_DAYS;
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = '30';
+    try {
+      const before = Date.now();
+      await GET(makeRequest());
+      const after = Date.now();
+
+      expect(mockPurge).toHaveBeenCalledTimes(1);
+      const cutoff = mockPurge.mock.calls[0][0] as Date;
+      const expectedMs = 30 * 24 * 60 * 60 * 1000;
+      // cutoff ≈ now - 30d; bounded by the test's wall-clock window
+      expect(cutoff.getTime()).toBeGreaterThanOrEqual(before - expectedMs - 5);
+      expect(cutoff.getTime()).toBeLessThanOrEqual(after - expectedMs + 5);
+    } finally {
+      if (original === undefined) delete process.env.RETENTION_AI_USAGE_LOGS_DAYS;
+      else process.env.RETENTION_AI_USAGE_LOGS_DAYS = original;
+    }
+  });
 });
