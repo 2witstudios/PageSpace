@@ -239,6 +239,23 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     [conversations, currentConversationId],
   );
 
+  // A real conversation can become active without ever entering the cached list:
+  // the first message on a fresh page creates it, but private conversations are
+  // not broadcast and the stream-completion path doesn't refresh the list. Since
+  // the list is now fetched on the chat tab, a fresh page caches [] up-front;
+  // without this, the header share toggle never appears and opening History
+  // reuses that stale empty cache. Pull the list once per id that's missing from
+  // it so both the header and History reflect the just-created conversation.
+  const syncedConversationRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentConversationId) return;
+    if (currentConversationId === `${page.id}-default`) return;
+    if (conversations.some((c) => c.id === currentConversationId)) return;
+    if (syncedConversationRef.current === currentConversationId) return;
+    syncedConversationRef.current = currentConversationId;
+    refreshConversations();
+  }, [currentConversationId, conversations, page.id, refreshConversations]);
+
   // ============================================
   // CHAT CONFIGURATION
   // ============================================
