@@ -65,7 +65,8 @@ export async function GET(request: Request) {
 
     // Build ZIP archive
     const archive = archiver('zip', { zlib: { level: 6 } });
-    const dateStr = new Date().toISOString().split('T')[0];
+    const exportedAt = new Date();
+    const dateStr = exportedAt.toISOString().split('T')[0];
 
     // Bridge Node Readable → Web ReadableStream
     const readable = new ReadableStream({
@@ -90,7 +91,7 @@ export async function GET(request: Request) {
 
     // manifest.json documents the schema version + file inventory so the bundle
     // is self-describing (GDPR Art 20 portability).
-    const manifest = buildExportManifest(files, { exportedAt: new Date(), format });
+    const manifest = buildExportManifest(files, { exportedAt, format });
     archive.append(JSON.stringify(manifest, null, 2), { name: `pagespace-export-${dateStr}/manifest.json` });
 
     // Finalize the archive (must be called after all data is appended)
