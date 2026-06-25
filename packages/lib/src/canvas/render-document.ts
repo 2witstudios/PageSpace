@@ -93,9 +93,16 @@ export interface RenderCanvasDocumentInput {
  * the edge. For the IN-APP iframe this <meta> is the page's whole CSP and the
  * iframe `sandbox` attribute supplies the opaque origin. The `sandbox` directive
  * cannot be expressed via a <meta> tag, so it deliberately does not appear here.
+ *
+ * Google Fonts is explicitly allowlisted because author/AI-authored canvases
+ * commonly pull web fonts from it: `style-src` permits the stylesheet `<link>`
+ * (`fonts.googleapis.com`) and a dedicated `font-src` permits the font files
+ * (`fonts.gstatic.com`) — without the latter, `default-src 'none'` would block
+ * the `.woff2` files. Only these two hosts are allowed; any other external
+ * style/font host is still blocked.
  */
 export const BASELINE_CSP =
-  "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'";
+  "default-src 'none'; img-src data: https:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'";
 
 /**
  * Baseline document reset, emitted BEFORE the author CSS.

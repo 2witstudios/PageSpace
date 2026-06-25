@@ -44,6 +44,22 @@ describe('renderCanvasDocument', () => {
     expect(BASELINE_CSP).not.toContain('sandbox');
   });
 
+  it('should allowlist Google Fonts (stylesheet host in style-src, font host in font-src)', () => {
+    expect(BASELINE_CSP).toContain("style-src 'unsafe-inline' https://fonts.googleapis.com");
+    expect(BASELINE_CSP).toContain('font-src https://fonts.gstatic.com');
+    // No other external style/font host is allowed.
+    expect(BASELINE_CSP).not.toContain('https://fonts.googleapis.com https://');
+  });
+
+  it('should embed the Google Fonts hosts in the rendered CSP <meta> when the author links them', () => {
+    const out = renderCanvasDocument({
+      html: '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter&display=swap"><p>x</p>',
+    });
+    expect(out).toContain('http-equiv="Content-Security-Policy"');
+    expect(out).toContain('https://fonts.googleapis.com');
+    expect(out).toContain('font-src https://fonts.gstatic.com');
+  });
+
   it('should emit a baseline reset that zeroes the body margin (no UA border/frame)', () => {
     const out = renderCanvasDocument({ html: '<div>x</div>' });
     expect(out).toContain('html,body{margin:0;padding:0;}');
