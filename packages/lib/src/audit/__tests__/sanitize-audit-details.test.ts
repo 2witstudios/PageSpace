@@ -95,4 +95,29 @@ describe('sanitizeAuditDetails (#971)', () => {
     expect(out.content).toBe(REDACTED_MARKER);
     expect(out.ok).toBe(true);
   });
+
+  it('redacts email-bearing key variants by substring (targetEmail, googleEmail, …)', () => {
+    const input = {
+      targetEmail: 'invitee@example.com',
+      targetUserEmail: 'member@example.com',
+      googleEmail: 'g@example.com',
+      invitedEmail: 'x@example.com',
+      EMAIL: 'y@example.com',
+      resultCount: 2,
+    };
+    const out = sanitizeAuditDetails(input)!;
+    expect(out.targetEmail).toBe(REDACTED_MARKER);
+    expect(out.targetUserEmail).toBe(REDACTED_MARKER);
+    expect(out.googleEmail).toBe(REDACTED_MARKER);
+    expect(out.invitedEmail).toBe(REDACTED_MARKER);
+    expect(out.EMAIL).toBe(REDACTED_MARKER);
+    expect(out.resultCount).toBe(2);
+  });
+
+  it('does NOT over-redact safe metadata keys that merely contain a non-email denylist word', () => {
+    // `content` is exact-match only — `contentType`/`contentSize` must survive.
+    const input = { contentType: 'tiptap', contentSize: 1024, contextType: 'page', nextStep: 'done' };
+    const out = sanitizeAuditDetails(input)!;
+    expect(out).toEqual(input);
+  });
 });

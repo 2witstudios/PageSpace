@@ -64,13 +64,17 @@ async function handleGlobalPrompt(
   try {
     // GDPR Art 32(1)(b) (#954): operator read of a user's workspace (drives,
     // page titles, drive list) — emit an immutable admin.data.read audit event.
-    // Via the service path this is an impersonated read of another subject.
+    // On the service path the actor is the service token (not the impersonated
+    // subject), so attribute it via serviceId and leave userId unset; on the
+    // admin path the admin reads their own workspace (actor == subject).
+    const isService = opts?.impersonated === true;
     auditRequest(request, buildAdminReadAuditEvent({
-      adminUserId: userId,
+      adminUserId: isService ? undefined : userId,
+      serviceId: isService ? 'service-token' : undefined,
       resourceType: 'admin_global_prompt',
       targetUserId: userId,
       accessedDataCategories: ['workspace_structure', 'drive_list', 'page_titles'],
-      impersonated: opts?.impersonated ?? false,
+      impersonated: isService,
     }));
 
     // Parse query params for context selection

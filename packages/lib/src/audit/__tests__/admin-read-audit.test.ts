@@ -35,6 +35,22 @@ describe('buildAdminReadAuditEvent (#954)', () => {
     expect(event.details?.impersonated).toBe(true);
   });
 
+  it('attributes service-token reads to the service, not the impersonated subject', () => {
+    const event = buildAdminReadAuditEvent({
+      serviceId: 'service-token',
+      resourceType: 'admin_global_prompt',
+      targetUserId: 'subject-9',
+      accessedDataCategories: ['workspace_structure'],
+      impersonated: true,
+    });
+
+    // Actor is the service; the subject must NOT be recorded as the actor.
+    expect(event.serviceId).toBe('service-token');
+    expect(event.userId).toBeUndefined();
+    expect(event.details?.targetUserId).toBe('subject-9');
+    expect(event.details?.actorServiceId).toBe('service-token');
+  });
+
   it('falls back resourceId to resourceType when no id/subject is given', () => {
     const event = buildAdminReadAuditEvent({
       adminUserId: 'admin-1',

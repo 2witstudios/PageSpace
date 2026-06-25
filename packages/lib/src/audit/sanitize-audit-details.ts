@@ -24,6 +24,12 @@
  *   Always returns a NEW object for a non-empty input; identical inputs yield
  *   deep-equal outputs.
  * - Case-insensitive key matching, so `Query`, `EMAIL`, etc. are also caught.
+ * - Two-tier matching. Most keys are matched EXACTLY (a substring rule would
+ *   over-redact safe metadata, e.g. `content` would also catch `contentType` /
+ *   `contentSize`). PII identifiers that routinely appear as prefixed/suffixed
+ *   variants are matched by SUBSTRING — notably `email`, so invite-flow keys
+ *   like `targetEmail` / `targetUserEmail` / `googleEmail` are all redacted and
+ *   never enter the tamper-evident hash chain.
  * - Value type is irrelevant: a denylisted key is redacted regardless of
  *   whether its value is a string, number, or object (PII can hide in any).
  */
@@ -33,7 +39,7 @@ export const REDACTED_MARKER = '[redacted]' as const;
 
 /**
  * Keys whose values are assumed to carry user-typed text or PII and must never
- * reach the audit hash chain. Compared case-insensitively.
+ * reach the audit hash chain. Matched EXACTLY, case-insensitively.
  */
 export const DENYLISTED_DETAIL_KEYS: readonly string[] = [
   'query',
@@ -45,6 +51,14 @@ export const DENYLISTED_DETAIL_KEYS: readonly string[] = [
   'content',
   'email',
 ];
+
+/**
+ * PII identifier fragments matched as case-insensitive SUBSTRINGS of the key,
+ * to catch the many prefixed/suffixed variants email addresses appear under
+ * (`targetEmail`, `targetUserEmail`, `googleEmail`, `invitedEmail`, …). Keep
+ * this list narrow — only fragments that are PII wherever they appear.
+ */
+export const DENYLISTED_KEY_SUBSTRINGS: readonly string[] = ['email'];
 
 const DENYLIST_LOWER = new Set(DENYLISTED_DETAIL_KEYS.map((k) => k.toLowerCase()));
 
@@ -65,7 +79,11 @@ export function sanitizeAuditDetails(
 
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(details)) {
-    out[key] = DENYLIST_LOWER.has(key.toLowerCase()) ? REDACTED_MARKER : value;
+    const keyLower = key.toLowerCase();
+    const redact =
+      DENYLIST_LOWER.has(keyLower) ||
+      DENYLISTED_KEY_SUBSTRINGS.some((fragment) => keyLower.includes(fragment));
+    out[key] = redact ? REDACTED_MARKER : value;
   }
   return out;
 }

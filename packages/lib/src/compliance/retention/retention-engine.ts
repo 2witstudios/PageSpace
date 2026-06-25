@@ -129,6 +129,14 @@ export async function cleanupExpiredAiUsageLogs(database: DB): Promise<CleanupRe
  * them indefinitely over-retains personal data. The window is configurable via
  * RETENTION_CHAT_SOFT_DELETE_DAYS (default 30 days). Active conversations are
  * never touched.
+ *
+ * Each table is aged by the timestamp that best reflects when the grace period
+ * should start, matching the existing purge helpers:
+ *  - conversations: `updatedAt` ($onUpdate bumps it on the soft-delete write),
+ *    so a long-lived conversation deleted today still gets its full grace period.
+ *  - messages / chat_messages: `createdAt` (these tables carry no soft-delete
+ *    timestamp; `editedAt` is only set on content edits). This matches the
+ *    existing `purgeInactiveMessages` semantics.
  */
 export async function cleanupSoftDeletedChatRecords(database: DB): Promise<CleanupResult[]> {
   const cutoff = computeChatRetentionCutoff(
@@ -147,7 +155,7 @@ export async function cleanupSoftDeletedChatRecords(database: DB): Promise<Clean
       .returning({ id: messages.id }),
     database
       .delete(conversations)
-      .where(and(eq(conversations.isActive, false), lt(conversations.createdAt, cutoff)))
+      .where(and(eq(conversations.isActive, false), lt(conversations.updatedAt, cutoff)))
       .returning({ id: conversations.id }),
   ]);
 

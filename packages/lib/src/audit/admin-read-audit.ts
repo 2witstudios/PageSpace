@@ -15,8 +15,17 @@
 import type { AuditEvent } from './security-audit';
 
 export interface AdminReadInput {
-  /** The admin/operator performing the read. */
-  adminUserId: string;
+  /**
+   * The human admin/operator performing the read. Omit for service-token
+   * (impersonation) reads, which have no human actor — set `serviceId` instead.
+   */
+  adminUserId?: string;
+  /**
+   * The service principal performing the read, for service-token / impersonation
+   * paths. Recorded as the audit event's `serviceId` so the read is attributed
+   * to the operator/service rather than to the impersonated subject.
+   */
+  serviceId?: string;
   /** Logical resource read, e.g. 'user_workspace', 'ai_conversation_stats'. */
   resourceType: string;
   /** Specific resource id, if any. Falls back to the target subject. */
@@ -34,19 +43,23 @@ export interface AdminReadInput {
 
 /**
  * Build an immutable `admin.data.read` audit event for a privileged admin read.
- * The event captures the actor, the data subject, what category of data was
- * accessed, and whether it was an impersonated read.
+ * The event captures the actor (human `userId` OR `serviceId`), the data
+ * subject, what category of data was accessed, and whether it was an
+ * impersonated read — so service-token reads are attributable to the service
+ * and never recorded against the impersonated subject.
  */
 export function buildAdminReadAuditEvent(input: AdminReadInput): AuditEvent {
   return {
     eventType: 'admin.data.read',
     userId: input.adminUserId,
+    serviceId: input.serviceId,
     resourceType: input.resourceType,
     resourceId: input.resourceId ?? input.targetUserId ?? input.resourceType,
     riskScore: input.impersonated ? 0.6 : 0.5,
     anomalyFlags: input.impersonated ? ['admin_impersonation'] : undefined,
     details: {
       privilegedAdminRead: true,
+      actorServiceId: input.serviceId ?? null,
       targetUserId: input.targetUserId ?? null,
       accessedDataCategories: [...input.accessedDataCategories],
       impersonated: input.impersonated ?? false,

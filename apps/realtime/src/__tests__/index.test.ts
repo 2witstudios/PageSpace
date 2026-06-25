@@ -407,6 +407,30 @@ describe('requestListener - /api/broadcast', () => {
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ error: 'Broadcast audience not authorized' }));
   });
 
+  it('given POST /api/broadcast with valid signature but a missing required field, should return 400 and not emit (#972)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    // Signature-valid JSON but missing `event` → malformed payload (400), distinct
+    // from a well-formed-but-disallowed audience shape (403).
+    const body = JSON.stringify({ channelId: 'athmieqpwr4ax1t2e0i4lmor', payload: { key: 'val' } });
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/broadcast',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockIo.emit).not.toHaveBeenCalled();
+    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ error: 'Invalid broadcast payload' }));
+  });
+
   it('given POST /api/broadcast with missing signature, should return 401', async () => {
     const body = JSON.stringify({ channelId: 'c1', event: 'e1', payload: {} });
     const req = createMockReq({
