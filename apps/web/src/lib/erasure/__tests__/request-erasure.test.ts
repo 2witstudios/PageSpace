@@ -115,4 +115,13 @@ describe('lodgeAndEnqueueErasure', () => {
     expect(repo.markFailed).toHaveBeenCalledWith('dsr_1', expect.stringContaining('processor down'));
     expect(repo.markQueued).not.toHaveBeenCalled();
   });
+
+  it('given enqueue throws, should NOT lock the subject out (erasure never queued)', async () => {
+    // Locking sessions on a failed enqueue would log the user out behind a
+    // "deletion failed" error while their account still exists. The bump must
+    // only happen once the job is durably queued.
+    vi.mocked(enqueueAccountErasure).mockRejectedValue(new Error('processor down'));
+    await expect(lodgeAndEnqueueErasure(baseInput)).rejects.toThrow('processor down');
+    expect(db.update).not.toHaveBeenCalled();
+  });
 });

@@ -76,16 +76,6 @@ export async function lodgeAndEnqueueErasure(input: LodgeErasureInput): Promise<
     });
   }
 
-  // Lock the subject out immediately — they (or an admin) have requested erasure.
-  try {
-    await db
-      .update(users)
-      .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
-      .where(eq(users.id, input.subjectUserId));
-  } catch (error) {
-    loggers.auth.error('Could not bump tokenVersion during erasure lodge:', error as Error);
-  }
-
   let jobId: string;
   try {
     jobId = await enqueueAccountErasure({
@@ -97,10 +87,24 @@ export async function lodgeAndEnqueueErasure(input: LodgeErasureInput): Promise<
     // The DSR row exists but no job was queued. Leaving it `pending` would make
     // `findActiveErasureForUser` report a phantom in-flight erasure that no
     // worker will ever process, blocking retries. Mark it failed so a fresh
-    // request can be lodged, then surface the failure to the caller.
+    // request can be lodged, then surface the failure to the caller. The subject
+    // is NOT locked out here: their erasure was not queued, so they must remain
+    // able to use their account (and retry) — locking out on a 500 would log
+    // them out behind a "deletion failed" error.
     const message = error instanceof Error ? error.message : String(error);
     await dataSubjectRequestRepository.markFailed(request.id, `enqueue failed: ${message}`);
     throw error;
+  }
+
+  // Lock the subject out immediately, now that the erasure is durably queued —
+  // they (or an admin) have requested erasure and a worker will process it.
+  try {
+    await db
+      .update(users)
+      .set({ tokenVersion: sql`${users.tokenVersion} + 1` })
+      .where(eq(users.id, input.subjectUserId));
+  } catch (error) {
+    loggers.auth.error('Could not bump tokenVersion during erasure lodge:', error as Error);
   }
 
   // Guarded pending|blocked -> queued: never regress a row the worker may have
