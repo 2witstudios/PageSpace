@@ -137,7 +137,11 @@ export function escapeHtml(value: string): string {
  * stylesheet — the script is preserved verbatim.
  */
 function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): { css: string; body: string } {
-  const scriptOrStyle = /<script\b[^>]*>[\s\S]*?<\/script\s*>|<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
+  // Closing tags tolerate arbitrary junk before `>` (whitespace, newlines, bogus
+  // attributes) so a tag like `</style\n foo>` or `</script bar>` can't smuggle
+  // content past the match. The `\b` after the tag name keeps `</styled>` /
+  // `</scripted>` from being mistaken for a close.
+  const scriptOrStyle = /<script\b[^>]*>[\s\S]*?<\/script\b[^>]*>|<style\b[^>]*>([\s\S]*?)<\/style\b[^>]*>/gi;
   const cssParts: string[] = [];
   const body = html.replace(scriptOrStyle, (match, styleContent: string | undefined) => {
     // styleContent is the capture group; defined only when a real <style>

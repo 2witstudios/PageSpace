@@ -591,4 +591,27 @@ describe('renderCanvasDocument — Twitter Card', () => {
     const out = renderCanvasDocument({ html: '<p>x</p>', title: 'My Page' });
     expect(out).not.toContain('twitter:');
   });
+
+  // Hardened closing-tag matching: junk/whitespace/bogus attributes before `>`
+  // must not let style/script content escape the alternation (CodeQL 204-205).
+  it('given a <style> closed with junk before `>` (`</style\\n foo>`), should still hoist+sanitize and drop it from the body', () => {
+    const out = renderCanvasDocument({
+      html: '<style>body { background: url("https://evil.com/pixel.png"); }</style\n foo><p>x</p>',
+    });
+    // External url() was routed through sanitizeCSS (hoisted to <head>), not leaked.
+    expect(out).not.toContain('https://evil.com');
+    expect(out).toContain('url("")');
+    // The whole <style>…</style\n foo> block was consumed — no <style> survives in the body.
+    expect(out).toContain('</head><body><p>x</p></body>');
+  });
+
+  it('given a <script> closed with a bogus attribute (`</script bar>`), should PRESERVE the script verbatim', () => {
+    const out = renderCanvasDocument({
+      html: '<div id="app"></div><script>document.getElementById("app").textContent = "hi";</script bar>',
+    });
+    // Scripts are preserved by design (sandboxed iframe + strict CSP); the junk
+    // close must not cause the script body to be mistaken for a <style>.
+    expect(out).toContain('<script>');
+    expect(out).toContain('document.getElementById("app")');
+  });
 });
