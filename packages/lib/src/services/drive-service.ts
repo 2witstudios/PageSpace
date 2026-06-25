@@ -48,6 +48,7 @@ export interface UpdateDriveInput {
   name?: string;
   drivePrompt?: string | null;
   homePageId?: string | null;
+  publishDefaultOgImageUrl?: string | null;
 }
 
 export interface DriveAccessInfo {
@@ -353,6 +354,10 @@ export async function updateDrive(
 
   if (input.homePageId !== undefined) {
     updateData.homePageId = input.homePageId;
+  }
+
+  if (input.publishDefaultOgImageUrl !== undefined) {
+    updateData.publishDefaultOgImageUrl = input.publishDefaultOgImageUrl;
   }
 
   // Home drives cannot be renamed; other updates (drivePrompt, homePageId) are allowed.

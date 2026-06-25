@@ -133,6 +133,7 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
   kind: 'STANDARD' as const,
   publishSubdomain: null,
   homePageId: null,
+  publishDefaultOgImageUrl: null,
 });
 
 // ============================================================================

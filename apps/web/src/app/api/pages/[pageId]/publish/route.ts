@@ -18,6 +18,12 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const publishSchema = z.object({
   subdomain: z.string().optional(),
   path: z.string().optional(),
+  // Author SEO overrides. Empty string clears a persisted override; an absent
+  // field leaves it unchanged. ogImageUrl must be a valid URL when non-empty.
+  title: z.string().max(300).optional(),
+  description: z.string().max(1000).optional(),
+  ogImageUrl: z.union([z.literal(''), z.url()]).optional(),
+  noindex: z.boolean().optional(),
 }).nullable();
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -41,7 +47,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
     const row = await db.query.publishedPages.findFirst({
       where: eq(publishedPages.pageId, pageId),
-      columns: { driveId: true, path: true, publishedAt: true, updatedAt: true },
+      columns: {
+        driveId: true,
+        path: true,
+        publishedAt: true,
+        updatedAt: true,
+        publishTitle: true,
+        publishDescription: true,
+        publishOgImageUrl: true,
+        noindex: true,
+      },
     });
 
     if (!row) {
@@ -105,6 +120,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       subdomain,
       path: row.path,
       isHomePage,
+      // Persisted author SEO overrides, so the publish dialog can pre-fill.
+      title: row.publishTitle ?? null,
+      description: row.publishDescription ?? null,
+      ogImageUrl: row.publishOgImageUrl ?? null,
+      noindex: row.noindex ?? false,
     });
   } catch (error) {
     loggers.api.error('Error reading publish status:', error as Error);
@@ -170,6 +190,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       userId,
       path: parsedBody?.path,
       subdomain: parsedBody?.subdomain,
+      title: parsedBody?.title,
+      description: parsedBody?.description,
+      ogImageUrl: parsedBody?.ogImageUrl,
+      noindex: parsedBody?.noindex,
     });
 
     auditRequest(req, {
