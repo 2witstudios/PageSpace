@@ -7,6 +7,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { sendNotificationEmail } from '../services/notification-email-service';
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
 import { sendPushNotification, type PushNotificationPayload } from './push-notifications';
+import { decryptUserRow } from '../auth/user-repository';
 
 // Export types and guards
 export * from './types';
@@ -119,11 +120,12 @@ export async function getUserNotifications(userId: string, limit = 50) {
 
   type NotificationResult = (typeof userNotifications)[number];
 
-  return userNotifications.map((row: NotificationResult) => ({
+  return Promise.all(userNotifications.map(async (row: NotificationResult) => ({
     ...row.notification,
-    triggeredByUser: row.triggeredByUser,
+    // Decrypt the joined actor's PII at the edge (legacy plaintext passes through).
+    triggeredByUser: await decryptUserRow(row.triggeredByUser),
     drive: row.drive,
-  }));
+  })));
 }
 
 export async function getUnreadNotificationCount(userId: string) {

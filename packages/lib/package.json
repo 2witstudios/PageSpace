@@ -212,6 +212,11 @@
       "import": "./dist/auth/device-auth-utils.js",
       "require": "./dist/auth/device-auth-utils.js"
     },
+    "./auth/user-repository": {
+      "types": "./dist/auth/user-repository.d.ts",
+      "import": "./dist/auth/user-repository.js",
+      "require": "./dist/auth/user-repository.js"
+    },
     "./auth/token-lifecycle-policy": {
       "types": "./dist/auth/token-lifecycle-policy.d.ts",
       "import": "./dist/auth/token-lifecycle-policy.js",

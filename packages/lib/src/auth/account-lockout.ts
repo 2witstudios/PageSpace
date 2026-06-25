@@ -15,6 +15,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { eq, sql } from 'drizzle-orm';
 import { loggers } from '../logging/logger-config';
 import { maskEmail } from '../audit/mask-email';
+import { userEmailMatch } from './user-repository';
 
 // Lockout thresholds
 const MAX_FAILED_ATTEMPTS = 10;
@@ -76,7 +77,7 @@ export async function isAccountLockedByEmail(
   email: string
 ): Promise<{ isLocked: boolean; lockedUntil: Date | null }> {
   const user = await db.query.users.findFirst({
-    where: eq(users.email, email.toLowerCase()),
+    where: userEmailMatch(email.toLowerCase()),
     columns: {
       lockedUntil: true,
     },
@@ -185,7 +186,7 @@ export async function recordFailedLoginAttemptByEmail(
 ): Promise<AccountLockoutResult> {
   try {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email.toLowerCase()),
+      where: userEmailMatch(email.toLowerCase()),
       columns: { id: true },
     });
 
