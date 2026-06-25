@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST, DELETE } from '../route';
+import { getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
 
 vi.mock('server-only', () => ({}));
 
@@ -469,6 +470,39 @@ describe('GET /api/pages/[pageId]/publish', () => {
       path: 'welcome',
       isHomePage: false,
     });
+  });
+
+  it('returns the primary custom-domain URL when an active custom domain exists', async () => {
+    const publishedAt = new Date('2024-01-01T10:00:00Z');
+    const updatedAt = new Date('2024-01-01T10:00:01Z');
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt, updatedAt });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: new Date('2024-01-01T09:55:00Z') });
+    vi.mocked(getActiveDomainRecords).mockResolvedValueOnce([
+      { hostname: 'www.acme.com', createdAt: new Date('2026-01-01T00:00:00.000Z') },
+    ]);
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    // url is the branded host; subdomain is still reported for reference.
+    expect(json.url).toBe('https://www.acme.com/welcome');
+    expect(json.subdomain).toBe('acme');
+  });
+
+  it('returns a null url when the drive has no publish subdomain (degenerate)', async () => {
+    const publishedAt = new Date('2024-01-01T10:00:00Z');
+    const updatedAt = new Date('2024-01-01T10:00:01Z');
+    findFirstPublished.mockResolvedValue({ driveId: 'drive-1', path: 'welcome', publishedAt, updatedAt });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: null });
+    findFirstPage.mockResolvedValue({ updatedAt: new Date('2024-01-01T09:55:00Z') });
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.url).toBeNull();
+    // No active-domain lookup is attempted without a subdomain to fall back to.
+    expect(getActiveDomainRecords).not.toHaveBeenCalled();
   });
 
   it('reports the subdomain root as the URL when the published page is the drive home page', async () => {
