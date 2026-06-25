@@ -11,6 +11,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
+import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -40,9 +41,12 @@ export async function DELETE(
     }
 
     // Wipe all artifacts under this host's prefix so stale content is not
-    // served if the domain is re-added later or pointed elsewhere. Best-effort:
-    // a storage failure does not block the successful domain removal.
-    if (deleted.status === 'active') {
+    // served if the domain is re-added later or pointed elsewhere. Keyed off the
+    // serving predicate (verified | provisioning | active) — content is mirrored
+    // at verify time, so a verified/provisioning domain removed before SSL goes
+    // active still has a populated prefix that must be cleared. Best-effort: a
+    // storage failure does not block the successful domain removal.
+    if (isServingStatus(deleted.status)) {
       clearCustomHost(deleted.hostname).catch((err) => {
         loggers.api.warn('Failed to clear custom host artifacts after domain removal', {
           hostname: deleted.hostname,

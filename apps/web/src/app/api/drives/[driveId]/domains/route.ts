@@ -66,12 +66,15 @@ export async function GET(
     // (verified | provisioning), advance it one step so the badge + canonical
     // self-heal on any settings visit. Best-effort and bounded — typically 0–1
     // rows, run concurrently; a Fly outage must NOT break the list response.
-    // Content already serves without this (mirrored at verify time).
+    // `allowFailureTransition: false` keeps a read non-destructive — a transient
+    // Fly error never flips a DNS-valid domain to cert_failed or wipes its
+    // content; that is reserved for the explicit "Check SSL" action. Content
+    // already serves without this (mirrored at verify time).
     const reconciled = await Promise.all(
       domains.map(async (domain) => {
         if (!CERT_NON_TERMINAL.has(domain.status)) return domain;
         try {
-          const { status } = await reconcileCustomDomainCert(domain);
+          const { status } = await reconcileCustomDomainCert(domain, { allowFailureTransition: false });
           return { ...domain, status };
         } catch (err) {
           loggers.api.warn('Lazy cert reconcile failed during domains list', {

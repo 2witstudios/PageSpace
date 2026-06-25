@@ -214,6 +214,19 @@ describe('GET /api/drives/[driveId]/domains', () => {
     expect(body.domains.find((d: { hostname: string }) => d.hostname === 'prov.com').status).toBe('active');
   });
 
+  it('reconciles non-destructively on reads (allowFailureTransition: false)', async () => {
+    mockGetSelects([
+      { id: 'd1', driveId: DRIVE_ID, hostname: 'verified.com', status: 'verified', createdAt: new Date() },
+    ]);
+
+    await GET(makeReq(), ctx());
+
+    expect(reconcileCustomDomainCert).toHaveBeenCalledWith(
+      expect.objectContaining({ hostname: 'verified.com' }),
+      { allowFailureTransition: false },
+    );
+  });
+
   it('does NOT reconcile terminal rows (pending/active/dns_failed/cert_failed)', async () => {
     mockGetSelects([
       { id: 'd1', driveId: DRIVE_ID, hostname: 'pending.com', status: 'pending', createdAt: new Date() },

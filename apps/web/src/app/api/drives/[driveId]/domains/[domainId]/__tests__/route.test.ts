@@ -129,13 +129,37 @@ describe('DELETE /api/drives/[driveId]/domains/[domainId]', () => {
     expect(clearCustomHost).toHaveBeenCalledWith('acme.com');
   });
 
-  it('does NOT trigger clearCustomHost for a non-active domain', async () => {
-    const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'pending.com', status: 'pending', createdAt: new Date() };
+  it('triggers clearCustomHost when deleted domain is verified (serving, mirrored at verify time)', async () => {
+    const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'verified.com', status: 'verified', createdAt: new Date() };
+    dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([deleted]) }) });
+
+    const res = await DELETE(makeReq(), ctx());
+    await Promise.resolve();
+
+    expect(res.status).toBe(200);
+    expect(clearCustomHost).toHaveBeenCalledWith('verified.com');
+  });
+
+  it('triggers clearCustomHost when deleted domain is provisioning (serving)', async () => {
+    const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'prov.com', status: 'provisioning', createdAt: new Date() };
     dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([deleted]) }) });
 
     await DELETE(makeReq(), ctx());
     await Promise.resolve();
 
-    expect(clearCustomHost).not.toHaveBeenCalled();
+    expect(clearCustomHost).toHaveBeenCalledWith('prov.com');
+  });
+
+  it('does NOT trigger clearCustomHost for a non-serving domain (pending/dns_failed)', async () => {
+    for (const status of ['pending', 'dns_failed', 'cert_failed']) {
+      clearCustomHost.mockClear();
+      const deleted = { id: DOMAIN_ID, driveId: DRIVE_ID, hostname: `${status}.com`, status, createdAt: new Date() };
+      dbDelete.mockReturnValue({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([deleted]) }) });
+
+      await DELETE(makeReq(), ctx());
+      await Promise.resolve();
+
+      expect(clearCustomHost).not.toHaveBeenCalled();
+    }
   });
 });

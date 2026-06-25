@@ -27,6 +27,18 @@ export interface CertReconcileResult {
   action: CertAction['action'] | null;
 }
 
+export interface CertReconcileOptions {
+  /**
+   * Whether a Fly API error may transition the domain to `cert_failed` (and
+   * clear its mirrored prefix). Defaults to `true` for the explicit "Check SSL"
+   * action. The lazy domains-list GET passes `false`: a transient Fly
+   * error/timeout on a mere read must NOT flip a DNS-valid domain to
+   * `cert_failed` or wipe its content — that destructive transition is reserved
+   * for the user-initiated refresh.
+   */
+  allowFailureTransition?: boolean;
+}
+
 /**
  * Advance a custom domain's TLS cert state by one step, shared by the explicit
  * "Check SSL" route and the lazy reconcile on the domains-list GET.
@@ -48,11 +60,16 @@ export interface CertReconcileResult {
  * cert decision is committed first, then mirror/clear run best-effort. A Fly
  * error surfaces as a `cert_failed` status (via `nextCertAction`), not an
  * exception — so callers can run it concurrently across rows without a single
- * outage breaking the batch.
+ * outage breaking the batch. On the lazy GET path (`allowFailureTransition:
+ * false`) a Fly error is instead swallowed as a no-op, so a read never destroys
+ * a DNS-valid domain's content.
  */
 export async function reconcileCustomDomainCert(
   domain: CertReconcileDomain,
+  opts: CertReconcileOptions = {},
 ): Promise<CertReconcileResult> {
+  const { allowFailureTransition = true } = opts;
+
   if (!process.env.FLY_API_TOKEN) {
     return { status: domain.status, action: null };
   }
@@ -62,6 +79,15 @@ export async function reconcileCustomDomainCert(
 
   const flyCert = await addCertificate(FLY_APP_NAME, domain.hostname);
   const action = nextCertAction(domain.status as CertEligibleStatus, flyCert);
+
+  // Non-destructive read path: a Fly error/timeout maps to `mark-failed`, which
+  // would flip the domain to `cert_failed` and wipe its mirrored prefix. On the
+  // lazy GET we refuse that — only ever advance forward; a DNS-valid domain must
+  // not lose its content because a list read hit a transient Fly blip.
+  if (action.action === 'mark-failed' && !allowFailureTransition) {
+    return { status: domain.status, action: null };
+  }
+
   const nextStatus = certActionToDbStatus(action);
 
   await db.update(customDomains).set({ status: nextStatus }).where(eq(customDomains.id, domain.id));

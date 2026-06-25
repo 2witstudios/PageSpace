@@ -154,6 +154,45 @@ describe('reconcileCustomDomainCert — cert advance', () => {
   });
 });
 
+describe('reconcileCustomDomainCert — non-destructive read path (allowFailureTransition: false)', () => {
+  it('Fly error is a no-op: does NOT flip to cert_failed, does NOT update the DB, does NOT clear', async () => {
+    addCertificate.mockResolvedValue({ ok: false, error: 'Fly API timeout' });
+
+    const result = await reconcileCustomDomainCert(domain('verified'), { allowFailureTransition: false });
+
+    expect(result).toEqual({ status: 'verified', action: null });
+    expect(dbUpdate).not.toHaveBeenCalled();
+    expect(clearCustomHost).not.toHaveBeenCalled();
+  });
+
+  it('still advances forward on success (verified + Ready → active) even with failures suppressed', async () => {
+    addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+    const result = await reconcileCustomDomainCert(domain('verified'), { allowFailureTransition: false });
+
+    expect(result.status).toBe('active');
+    expect(setMock).toHaveBeenCalledWith({ status: 'active' });
+    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+  });
+
+  it('still advances provisioning → provisioning (poll) with failures suppressed', async () => {
+    addCertificate.mockResolvedValue({ ok: true, configured: false });
+
+    const result = await reconcileCustomDomainCert(domain('provisioning'), { allowFailureTransition: false });
+
+    expect(result.status).toBe('provisioning');
+  });
+
+  it('the default (no opts) STILL flips a Fly error to cert_failed + clears — explicit refresh path', async () => {
+    addCertificate.mockResolvedValue({ ok: false, error: 'Fly API timeout' });
+
+    const result = await reconcileCustomDomainCert(domain('verified'));
+
+    expect(result.status).toBe('cert_failed');
+    expect(clearCustomHost).toHaveBeenCalledWith('docs.acme.com');
+  });
+});
+
 describe('reconcileCustomDomainCert — side effects never throw', () => {
   it('does not throw when clearCustomHost fails on cert_failed', async () => {
     addCertificate.mockResolvedValue({ ok: false, error: 'Fly down' });
