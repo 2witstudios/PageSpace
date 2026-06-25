@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home, Image as ImageIcon } from 'lucide-react';
+import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home } from 'lucide-react';
 import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
 import { usePageTree } from '@/hooks/usePageTree';
@@ -51,8 +51,6 @@ export default function GeneralSettingsPage() {
 
   const [name, setName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [ogImage, setOgImage] = useState('');
-  const [isSavingOgImage, setIsSavingOgImage] = useState(false);
   const [isClearingHomePage, setIsClearingHomePage] = useState(false);
   const startEditing = useEditingStore((s) => s.startEditing);
   const endEditing = useEditingStore((s) => s.endEditing);
@@ -70,10 +68,6 @@ export default function GeneralSettingsPage() {
 
   useEffect(() => {
     if (drive && !useEditingStore.getState().isAnyEditing()) setName(drive.name);
-  }, [drive]);
-
-  useEffect(() => {
-    if (drive) setOgImage(drive.publishDefaultOgImageUrl ?? '');
   }, [drive]);
 
   const { data: membersData } = useSWR<MembersResponse>(
@@ -108,22 +102,6 @@ export default function GeneralSettingsPage() {
       toast.error('Failed to clear home page');
     } finally {
       setIsClearingHomePage(false);
-    }
-  };
-
-  const handleSaveOgImage = async (clear = false) => {
-    if (isSavingOgImage) return;
-    const next = clear ? '' : ogImage.trim();
-    setIsSavingOgImage(true);
-    try {
-      await patch(`/api/drives/${driveId}`, { publishDefaultOgImageUrl: next });
-      updateDriveInStore(driveId, { publishDefaultOgImageUrl: next || null });
-      if (clear) setOgImage('');
-      toast.success(clear ? 'Default share image cleared' : 'Default share image saved');
-    } catch {
-      toast.error('Failed to save default share image');
-    } finally {
-      setIsSavingOgImage(false);
     }
   };
 
@@ -303,56 +281,6 @@ export default function GeneralSettingsPage() {
           >
             Manage Members
           </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <ImageIcon className="h-4 w-4" />
-            Default Share Image
-          </CardTitle>
-          <CardDescription>
-            The Open Graph image used when a published page has no image of its own. Recommended 1200×630.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="default-og-image">Image URL</Label>
-            <Input
-              id="default-og-image"
-              type="url"
-              value={ogImage}
-              onChange={(e) => setOgImage(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSaveOgImage()}
-              placeholder="https://…"
-            />
-          </div>
-          {ogImage.trim() && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={ogImage.trim()}
-              alt="Default share image preview"
-              className="max-h-40 w-full rounded-md border object-contain bg-muted"
-              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-            />
-          )}
-          <div className="flex gap-2">
-            <Button
-              onClick={() => handleSaveOgImage()}
-              disabled={isSavingOgImage || ogImage.trim() === (drive.publishDefaultOgImageUrl ?? '')}
-            >
-              {isSavingOgImage && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Save
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => handleSaveOgImage(true)}
-              disabled={isSavingOgImage || !(drive.publishDefaultOgImageUrl ?? '')}
-            >
-              Clear
-            </Button>
-          </div>
         </CardContent>
       </Card>
     </div>

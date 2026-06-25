@@ -8,10 +8,10 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star } from 'lucide-react';
+import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon } from 'lucide-react';
 import { useDriveStore } from '@/hooks/useDrive';
 import { toast } from 'sonner';
-import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, del, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
 import { normalizeHostname, validateCustomDomain, buildDnsInstructions } from '@pagespace/lib/validators/custom-domain';
 import { selectPrimaryActiveDomain } from '@pagespace/lib/canvas/primary-host';
@@ -40,7 +40,10 @@ export default function DomainsSettingsPage() {
   const drives = useDriveStore((state) => state.drives);
   const isLoading = useDriveStore((state) => state.isLoading);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
+  const updateDriveInStore = useDriveStore((state) => state.updateDrive);
 
+  const [ogImage, setOgImage] = useState('');
+  const [isSavingOgImage, setIsSavingOgImage] = useState(false);
   const [newDomain, setNewDomain] = useState('');
   const [isAddingDomain, setIsAddingDomain] = useState(false);
   const [removingDomainId, setRemovingDomainId] = useState<string | null>(null);
@@ -55,6 +58,26 @@ export default function DomainsSettingsPage() {
 
   const drive = drives.find((d) => d.id === driveId);
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
+
+  useEffect(() => {
+    if (drive) setOgImage(drive.publishDefaultOgImageUrl ?? '');
+  }, [drive]);
+
+  const handleSaveOgImage = async (clear = false) => {
+    if (isSavingOgImage) return;
+    const next = clear ? '' : ogImage.trim();
+    setIsSavingOgImage(true);
+    try {
+      await patch(`/api/drives/${driveId}`, { publishDefaultOgImageUrl: next });
+      updateDriveInStore(driveId, { publishDefaultOgImageUrl: next || null });
+      if (clear) setOgImage('');
+      toast.success(clear ? 'Default share image cleared' : 'Default share image saved');
+    } catch {
+      toast.error('Failed to save default share image');
+    } finally {
+      setIsSavingOgImage(false);
+    }
+  };
 
   const { data: domainsData, mutate: mutateDomains } = useSWR<DomainsResponse>(
     drive && canManage ? `/api/drives/${driveId}/domains` : null,
@@ -233,7 +256,7 @@ export default function DomainsSettingsPage() {
           Back to Settings
         </Button>
         <h1 className="text-3xl font-bold mb-1">Domains &amp; Publishing</h1>
-        <p className="text-muted-foreground">Custom domains for this drive&apos;s published canvas site</p>
+        <p className="text-muted-foreground">Custom domains and share defaults for this drive&apos;s published canvas site</p>
       </div>
 
       <CustomDomainsCard
@@ -253,6 +276,56 @@ export default function DomainsSettingsPage() {
         settingPrimaryId={settingPrimaryId}
         verifyReasons={verifyReasons}
       />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ImageIcon className="h-4 w-4" />
+            Default Share Image
+          </CardTitle>
+          <CardDescription>
+            The Open Graph image used when a published page has no image of its own. Recommended 1200×630.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="default-og-image">Image URL</Label>
+            <Input
+              id="default-og-image"
+              type="url"
+              value={ogImage}
+              onChange={(e) => setOgImage(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSaveOgImage()}
+              placeholder="https://…"
+            />
+          </div>
+          {ogImage.trim() && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={ogImage.trim()}
+              alt="Default share image preview"
+              className="max-h-40 w-full rounded-md border object-contain bg-muted"
+              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+            />
+          )}
+          <div className="flex gap-2">
+            <Button
+              onClick={() => handleSaveOgImage()}
+              disabled={isSavingOgImage || ogImage.trim() === (drive.publishDefaultOgImageUrl ?? '')}
+            >
+              {isSavingOgImage && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => handleSaveOgImage(true)}
+              disabled={isSavingOgImage || !(drive.publishDefaultOgImageUrl ?? '')}
+            >
+              Clear
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
