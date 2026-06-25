@@ -1,9 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { openPtyShell } from '../sprites-shell';
-import type { SpriteInstanceLike, SpriteCommandLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import type {
+  SpriteInstanceLike,
+  SpriteCommandLike,
+  SpriteSessionInfo,
+} from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 
-function buildFakeCommand(): SpriteCommandLike & { _stdout: EventEmitter; _stderr: EventEmitter; _emitter: EventEmitter } {
+type FakeCommand = SpriteCommandLike & { _stdout: EventEmitter; _stderr: EventEmitter; _emitter: EventEmitter };
+
+function buildFakeCommand(): FakeCommand {
   const _stdout = new EventEmitter();
   const _stderr = new EventEmitter();
   const _emitter = new EventEmitter();
@@ -11,7 +17,7 @@ function buildFakeCommand(): SpriteCommandLike & { _stdout: EventEmitter; _stder
   const resizeFn = vi.fn();
   const killFn = vi.fn();
 
-  const cmd: SpriteCommandLike & { _stdout: EventEmitter; _stderr: EventEmitter; _emitter: EventEmitter } = {
+  const cmd: FakeCommand = {
     _stdout,
     _stderr,
     _emitter,
@@ -25,31 +31,44 @@ function buildFakeCommand(): SpriteCommandLike & { _stdout: EventEmitter; _stder
   return cmd;
 }
 
-function buildFakeSprite(cmd: SpriteCommandLike): SpriteInstanceLike & { spawnCalls: { file: string; args: string[]; options: unknown }[] } {
-  const spawnCalls: { file: string; args: string[]; options: unknown }[] = [];
+type FakeSprite = SpriteInstanceLike & {
+  createSession: ReturnType<typeof vi.fn>;
+  attachSession: ReturnType<typeof vi.fn>;
+  listSessions: ReturnType<typeof vi.fn>;
+};
+
+function buildFakeSprite(
+  cmd: SpriteCommandLike,
+  opts: { sessions?: SpriteSessionInfo[]; attachCmd?: SpriteCommandLike; listRejects?: boolean } = {},
+): FakeSprite {
   return {
     name: 'fake-sprite',
-    spawnCalls,
-    spawn: vi.fn((file, args = [], options = {}) => {
-      spawnCalls.push({ file, args, options });
-      return cmd;
+    spawn: vi.fn(),
+    createSession: vi.fn(() => cmd),
+    attachSession: vi.fn(() => opts.attachCmd ?? cmd),
+    listSessions: vi.fn(async () => {
+      if (opts.listRejects) throw new Error('list failed');
+      return opts.sessions ?? [];
     }),
     filesystem: vi.fn(),
     updateNetworkPolicy: vi.fn(),
     destroy: vi.fn(),
-  } as unknown as SpriteInstanceLike & { spawnCalls: { file: string; args: string[]; options: unknown }[] };
+  } as unknown as FakeSprite;
 }
 
+const liveSession: SpriteSessionInfo = { id: 'sess-1', command: 'bash', isActive: true, tty: true };
+
 describe('openPtyShell', () => {
-  it('given a sprite and dimensions, should call spawn with bash + tty:true + correct dims + cwd + terminal env', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('given a sprite and dimensions, should create a detachable session with bash + tty + dims + cwd + terminal env', () => {
     const cmd = buildFakeCommand();
     const sprite = buildFakeSprite(cmd);
-    const onOutput = vi.fn();
-    const onExit = vi.fn();
 
-    openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
 
-    expect(sprite.spawn).toHaveBeenCalledWith('bash', [], {
+    expect(sprite.createSession).toHaveBeenCalledWith('bash', [], {
       tty: true,
       cols: 80,
       rows: 24,
@@ -58,13 +77,22 @@ describe('openPtyShell', () => {
     });
   });
 
+  it('given a sessionId, should attach to the existing session instead of creating one', () => {
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+
+    openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-1', onOutput: vi.fn(), onExit: vi.fn() });
+
+    expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
+    expect(sprite.createSession).not.toHaveBeenCalled();
+  });
+
   it('given sprite emits stdout data, should call onOutput with the string', () => {
     const cmd = buildFakeCommand();
     const sprite = buildFakeSprite(cmd);
     const onOutput = vi.fn();
-    const onExit = vi.fn();
 
-    openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
     cmd._stdout.emit('data', 'hello\r\n');
 
     expect(onOutput).toHaveBeenCalledWith('hello\r\n');
@@ -74,9 +102,8 @@ describe('openPtyShell', () => {
     const cmd = buildFakeCommand();
     const sprite = buildFakeSprite(cmd);
     const onOutput = vi.fn();
-    const onExit = vi.fn();
 
-    openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
     cmd._stderr.emit('data', Buffer.from('err msg'));
 
     expect(onOutput).toHaveBeenCalledWith('err msg');
@@ -85,10 +112,9 @@ describe('openPtyShell', () => {
   it('given sprite emits exit, should call onExit with the exit code', () => {
     const cmd = buildFakeCommand();
     const sprite = buildFakeSprite(cmd);
-    const onOutput = vi.fn();
     const onExit = vi.fn();
 
-    openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
     cmd._emitter.emit('exit', 0);
 
     expect(onExit).toHaveBeenCalledWith(0);
@@ -124,19 +150,6 @@ describe('openPtyShell', () => {
     expect(cmd.kill).toHaveBeenCalledWith('SIGKILL');
   });
 
-  it('given sprite emits an error event, should call onOutput with error text and onExit with -1', () => {
-    const cmd = buildFakeCommand();
-    const sprite = buildFakeSprite(cmd);
-    const onOutput = vi.fn();
-    const onExit = vi.fn();
-
-    openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
-    cmd._emitter.emit('error', new Error('connection lost'));
-
-    expect(onOutput).toHaveBeenCalledWith(expect.stringContaining('connection lost'));
-    expect(onExit).toHaveBeenCalledWith(-1);
-  });
-
   it('given stdin is null, shell.write should be a no-op', () => {
     const cmd = buildFakeCommand();
     (cmd as Record<string, unknown>).stdin = null;
@@ -155,5 +168,75 @@ describe('openPtyShell', () => {
     cmd._emitter.emit('exit', null);
 
     expect(onExit).toHaveBeenCalledWith(-1);
+  });
+
+  describe('reconnect on transient WebSocket drop', () => {
+    it('given an error and a live session exists, should reattach and NOT call onExit', async () => {
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
+      expect(onExit).not.toHaveBeenCalled();
+    });
+
+    it('given a reattached session, output flows from the new command', async () => {
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      attachCmd._stdout.emit('data', 'back\r\n');
+      expect(onOutput).toHaveBeenCalledWith('back\r\n');
+    });
+
+    it('given an error and NO live session, should call onExit(-1) without an error banner', async () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [] });
+      const onOutput = vi.fn();
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onExit).toHaveBeenCalledWith(-1);
+      expect(onOutput).not.toHaveBeenCalledWith(expect.stringContaining('Shell error'));
+    });
+
+    it('given reattach repeatedly fails, should give up after the bounded budget and surface onExit(-1)', async () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { listRejects: true });
+      const onOutput = vi.fn();
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(onExit).toHaveBeenCalledWith(-1);
+      expect(onOutput).toHaveBeenCalledWith(expect.stringContaining('lost connection'));
+    });
+
+    it('given a genuine exit (not an error), should call onExit immediately without reattaching', () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+      cmd._emitter.emit('exit', 0);
+
+      expect(onExit).toHaveBeenCalledWith(0);
+      expect(sprite.attachSession).not.toHaveBeenCalled();
+    });
   });
 });
