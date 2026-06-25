@@ -33,7 +33,8 @@ hot-path routes) narrows over time and query cost stays bounded as the table
 grows.
 
 **Job.** `apps/web/src/app/api/cron/archive-activity-logs/route.ts`, HMAC-validated
-via `validateSignedCronRequest` on the same cadence as the other retention crons.
+via `validateSignedCronRequest`, registered in `docker/cron/crontab` (daily at
+02:30 UTC, alongside the other retention/purge jobs).
 
 **Engine.** `packages/lib/src/compliance/retention/activity-log-archival.ts`:
 

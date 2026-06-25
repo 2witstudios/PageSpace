@@ -27,6 +27,11 @@
 # Verifies hash chain integrity of security audit log
 0 2 * * * cron-curl GET __WEB_URL__/api/cron/verify-audit-chain >> /var/log/cron/audit-chain.log 2>&1
 
+# Activity log archival (hot→cold tier) - Daily at 2:30am UTC
+# Flips isArchived=true on activity_logs older than ACTIVITY_LOGS_ARCHIVE_DAYS (default 365)
+# so the active-view stays bounded. Flag-flip only: never deletes rows or touches the hash chain.
+30 2 * * * cron-curl GET __WEB_URL__/api/cron/archive-activity-logs >> /var/log/cron/archive-activity-logs.log 2>&1
+
 # AI usage log purge - Daily at 3am UTC
 # Anonymizes prompt/completion text >30 days, purges rows >90 days
 0 3 * * * cron-curl POST __WEB_URL__/api/cron/purge-ai-usage-logs >> /var/log/cron/purge-ai-usage.log 2>&1
