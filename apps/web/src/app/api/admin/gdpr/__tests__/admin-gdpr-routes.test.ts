@@ -1,0 +1,116 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// withAdminAuth -> just inject a fake admin and call the handler.
+vi.mock('@/lib/auth', () => ({
+  withAdminAuth: (handler: (user: { id: string }, req: Request) => Promise<Response>) =>
+    (req: Request) => handler({ id: 'admin_1' }, req),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: { auth: { info: vi.fn(), error: vi.fn() } },
+}));
+vi.mock('@pagespace/lib/repositories/account-repository', () => ({
+  accountRepository: { findById: vi.fn() },
+}));
+vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
+  dataSubjectRequestRepository: { findActiveErasureForUser: vi.fn(), listRecent: vi.fn() },
+}));
+vi.mock('@/lib/erasure/request-erasure', () => ({ lodgeAndEnqueueErasure: vi.fn() }));
+vi.mock('@pagespace/lib/compliance/erasure/pseudonymize-repository', () => ({
+  pseudonymizeActivityLogsForUser: vi.fn(),
+  pseudonymizeSecurityAuditLogForUser: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/hash-chain-verifier', () => ({ verifyHashChain: vi.fn() }));
+vi.mock('@pagespace/lib/audit/security-audit-chain-verifier', () => ({ verifySecurityAuditChain: vi.fn() }));
+vi.mock('@pagespace/lib/audit/security-audit', () => ({ securityAudit: { logEvent: vi.fn() } }));
+
+import { POST as erasurePost } from '../erasure/route';
+import { POST as pseudoPost } from '../pseudonymize/route';
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
+import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { pseudonymizeActivityLogsForUser, pseudonymizeSecurityAuditLogForUser } from '@pagespace/lib/compliance/erasure/pseudonymize-repository';
+import { verifyHashChain } from '@pagespace/lib/monitoring/hash-chain-verifier';
+import { verifySecurityAuditChain } from '@pagespace/lib/audit/security-audit-chain-verifier';
+import { securityAudit } from '@pagespace/lib/audit/security-audit';
+
+const post = (handler: (r: Request) => Promise<Response>, body: unknown) =>
+  handler(new Request('https://x/api/admin/gdpr', { method: 'POST', body: JSON.stringify(body) }));
+
+beforeEach(() => vi.clearAllMocks());
+
+describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
+  beforeEach(() => {
+    vi.mocked(accountRepository.findById).mockResolvedValue({
+      id: 'u1', email: 'a@b.com', image: null, stripeCustomerId: null,
+    });
+    vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue(null);
+    vi.mocked(lodgeAndEnqueueErasure).mockResolvedValue({
+      requestId: 'dsr_1', jobId: 'job_1', slaDeadline: new Date('2026-03-01T00:00:00Z'),
+    });
+  });
+
+  it('given the wrong confirmation phrase, should refuse with 400', async () => {
+    const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE wrong' });
+    expect(res.status).toBe(400);
+    expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+  });
+
+  it('given a valid confirmation, should queue a force-delete erasure as admin', async () => {
+    const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
+    expect(res.status).toBe(202);
+    expect(lodgeAndEnqueueErasure).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedByType: 'admin', forceDelete: true, callerUserId: 'admin_1' })
+    );
+  });
+
+  it('given an unknown user, should 404', async () => {
+    vi.mocked(accountRepository.findById).mockResolvedValue(null);
+    const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/admin/gdpr/pseudonymize', () => {
+  const validChain = { isValid: true, breakPoint: null } as never;
+
+  beforeEach(() => {
+    vi.mocked(verifyHashChain).mockResolvedValue(validChain);
+    vi.mocked(verifySecurityAuditChain).mockResolvedValue(validChain);
+    vi.mocked(pseudonymizeActivityLogsForUser).mockResolvedValue(3);
+    vi.mocked(pseudonymizeSecurityAuditLogForUser).mockResolvedValue(2);
+    vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
+  });
+
+  it('given the wrong confirmation, should refuse with 400 and not mutate', async () => {
+    const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'nope' });
+    expect(res.status).toBe(400);
+    expect(pseudonymizeActivityLogsForUser).not.toHaveBeenCalled();
+  });
+
+  it('given an already-broken chain, should refuse with 409 before mutating', async () => {
+    vi.mocked(verifyHashChain).mockResolvedValue({ isValid: false, breakPoint: {} } as never);
+    const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
+    expect(res.status).toBe(409);
+    expect(pseudonymizeActivityLogsForUser).not.toHaveBeenCalled();
+  });
+
+  it('given a valid run, should pseudonymize, verify, self-audit and report counts', async () => {
+    const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.activityRowsPseudonymized).toBe(3);
+    expect(body.securityRowsPseudonymized).toBe(2);
+    expect(body.chainIntact).toBe(true);
+    expect(securityAudit.logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceId: 'u1', details: expect.objectContaining({ action: 'art17_pseudonymization' }) })
+    );
+  });
+
+  it('given the chain breaks AFTER pseudonymization, should fail loudly with 500', async () => {
+    vi.mocked(verifyHashChain)
+      .mockResolvedValueOnce(validChain) // before
+      .mockResolvedValueOnce({ isValid: false, breakPoint: {} } as never); // after
+    const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
+    expect(res.status).toBe(500);
+  });
+});

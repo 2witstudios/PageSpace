@@ -84,6 +84,15 @@ export interface VideoProcessResult {
   error?: string;
 }
 
+/**
+ * Durable GDPR account-erasure job (#906). Carries only identifiers; the worker
+ * re-reads the data_subject_requests row for the authoritative state.
+ */
+export interface AccountErasureJobData {
+  requestId: string;
+  userId: string;
+}
+
 // Discriminated union for addJob
 export type JobDataMap = {
   'ingest-file': IngestFileJobData;
@@ -93,6 +102,7 @@ export type JobDataMap = {
   'video-process': VideoProcessJobData;
   'pull-verify': PullVerifyJobData;
   'siem-delivery': Record<string, never>;
+  'account-erasure': AccountErasureJobData;
 };
 
 export type QueueName = keyof JobDataMap;
