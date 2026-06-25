@@ -12,9 +12,16 @@ vi.mock('@pagespace/lib/repositories/account-repository', () => ({
   accountRepository: { findById: vi.fn() },
 }));
 vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
-  dataSubjectRequestRepository: { findActiveErasureForUser: vi.fn(), listRecent: vi.fn() },
+  dataSubjectRequestRepository: {
+    findActiveErasureForUser: vi.fn(),
+    listRecent: vi.fn(),
+    setForceDelete: vi.fn(),
+    markQueued: vi.fn(),
+    markFailed: vi.fn(),
+  },
 }));
 vi.mock('@/lib/erasure/request-erasure', () => ({ lodgeAndEnqueueErasure: vi.fn() }));
+vi.mock('@/lib/erasure/enqueue', () => ({ enqueueAccountErasure: vi.fn() }));
 vi.mock('@pagespace/lib/compliance/erasure/pseudonymize-repository', () => ({
   pseudonymizeActivityLogsForUser: vi.fn(),
   pseudonymizeSecurityAuditLogForUser: vi.fn(),
@@ -28,6 +35,7 @@ import { POST as pseudoPost } from '../pseudonymize/route';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { enqueueAccountErasure } from '@/lib/erasure/enqueue';
 import { pseudonymizeActivityLogsForUser, pseudonymizeSecurityAuditLogForUser } from '@pagespace/lib/compliance/erasure/pseudonymize-repository';
 import { verifyHashChain } from '@pagespace/lib/monitoring/hash-chain-verifier';
 import { verifySecurityAuditChain } from '@pagespace/lib/audit/security-audit-chain-verifier';
@@ -67,6 +75,37 @@ describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
     vi.mocked(accountRepository.findById).mockResolvedValue(null);
     const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
     expect(res.status).toBe(404);
+  });
+
+  it('given a BLOCKED existing request, should grant force-delete and re-queue it', async () => {
+    vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue({
+      id: 'dsr_blocked', status: 'blocked',
+    } as never);
+    vi.mocked(enqueueAccountErasure).mockResolvedValue('job_2');
+    vi.mocked(dataSubjectRequestRepository.setForceDelete).mockResolvedValue(undefined);
+    vi.mocked(dataSubjectRequestRepository.markQueued).mockResolvedValue(1);
+
+    const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
+    const body = await res.json();
+    expect(res.status).toBe(202);
+    expect(body.requestId).toBe('dsr_blocked');
+    expect(dataSubjectRequestRepository.setForceDelete).toHaveBeenCalledWith('dsr_blocked');
+    expect(enqueueAccountErasure).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'dsr_blocked', userId: 'u1', callerUserId: 'admin_1' })
+    );
+    expect(dataSubjectRequestRepository.markQueued).toHaveBeenCalledWith('dsr_blocked', 'job_2');
+    // Must NOT create a brand-new request for the blocked one.
+    expect(lodgeAndEnqueueErasure).not.toHaveBeenCalled();
+  });
+
+  it('given a non-blocked active request, should report it unchanged (202, no requeue)', async () => {
+    vi.mocked(dataSubjectRequestRepository.findActiveErasureForUser).mockResolvedValue({
+      id: 'dsr_inflight', status: 'in_progress',
+    } as never);
+    const res = await post(erasurePost, { userId: 'u1', confirmation: 'ERASE u1' });
+    expect(res.status).toBe(202);
+    expect(enqueueAccountErasure).not.toHaveBeenCalled();
+    expect(dataSubjectRequestRepository.setForceDelete).not.toHaveBeenCalled();
   });
 });
 

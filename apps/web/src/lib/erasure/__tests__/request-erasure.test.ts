@@ -14,7 +14,8 @@ vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
   dataSubjectRequestRepository: {
     create: vi.fn(),
     appendStepResult: vi.fn(),
-    updateStatus: vi.fn(),
+    markQueued: vi.fn(),
+    markFailed: vi.fn(),
   },
 }));
 vi.mock('@/lib/stripe/client', () => ({ stripe: { customers: { del: vi.fn() } } }));
@@ -36,7 +37,8 @@ beforeEach(() => {
     slaDeadline: new Date('2026-03-01T00:00:00.000Z'),
   } as never);
   repo.appendStepResult.mockResolvedValue(undefined);
-  repo.updateStatus.mockResolvedValue(undefined);
+  repo.markQueued.mockResolvedValue(1);
+  repo.markFailed.mockResolvedValue(undefined);
   const whereFn = vi.fn().mockResolvedValue(undefined);
   const setFn = vi.fn().mockReturnValue({ where: whereFn });
   vi.mocked(db.update).mockReturnValue({ set: setFn } as never);
@@ -63,7 +65,7 @@ describe('lodgeAndEnqueueErasure', () => {
       userId: 'u1',
       callerUserId: 'u1',
     });
-    expect(repo.updateStatus).toHaveBeenCalledWith('dsr_1', 'queued', { jobId: 'job_1' });
+    expect(repo.markQueued).toHaveBeenCalledWith('dsr_1', 'job_1');
     expect(result).toEqual({
       requestId: 'dsr_1',
       jobId: 'job_1',
@@ -105,5 +107,12 @@ describe('lodgeAndEnqueueErasure', () => {
       expect.objectContaining({ step: 'stripe-customer', status: 'failed' })
     );
     expect(result.jobId).toBe('job_1');
+  });
+
+  it('given enqueue throws, should mark the DSR failed (not leave it pending) and rethrow', async () => {
+    vi.mocked(enqueueAccountErasure).mockRejectedValue(new Error('processor down'));
+    await expect(lodgeAndEnqueueErasure(baseInput)).rejects.toThrow('processor down');
+    expect(repo.markFailed).toHaveBeenCalledWith('dsr_1', expect.stringContaining('processor down'));
+    expect(repo.markQueued).not.toHaveBeenCalled();
   });
 });

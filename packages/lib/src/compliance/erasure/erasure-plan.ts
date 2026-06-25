@@ -28,11 +28,14 @@ export const ERASURE_STEPS: readonly ErasureStepId[] = [
   'delete-avatar',
   'log-account-deletion',
   'anonymize-activity-logs',
-  'purge-ai-usage',
   'purge-monitoring',
   'revoke-integrations',
   'email-suppression',
+  // AI-provider erasure derives the provider list from the user's ai_usage
+  // rows, so it MUST run before those rows are purged (else the manifest is
+  // always empty and no ZDR/manual-review evidence is recorded).
   'ai-provider-erasure',
+  'purge-ai-usage',
   'security-audit',
   'delete-user',
   'stripe-customer',
@@ -51,11 +54,13 @@ const STEP_DEFS: ErasureStep[] = [
   { id: 'delete-avatar', fatal: false, cloudOnly: false },
   { id: 'log-account-deletion', fatal: false, cloudOnly: false },
   { id: 'anonymize-activity-logs', fatal: false, cloudOnly: false },
-  { id: 'purge-ai-usage', fatal: false, cloudOnly: false },
   { id: 'purge-monitoring', fatal: false, cloudOnly: false },
   { id: 'revoke-integrations', fatal: false, cloudOnly: false },
   { id: 'email-suppression', fatal: false, cloudOnly: true },
+  // Must precede purge-ai-usage: it reads the ai_usage rows to learn which
+  // providers the user touched.
   { id: 'ai-provider-erasure', fatal: false, cloudOnly: true },
+  { id: 'purge-ai-usage', fatal: false, cloudOnly: false },
   { id: 'security-audit', fatal: false, cloudOnly: false },
   // Deleting the user row is the irreversible core — must succeed.
   { id: 'delete-user', fatal: true, cloudOnly: false },

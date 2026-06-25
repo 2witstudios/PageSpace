@@ -37,6 +37,11 @@ describe('buildErasurePlan', () => {
     expect(email?.fatal).toBe(false);
   });
 
+  it('runs ai-provider-erasure BEFORE purge-ai-usage (manifest reads ai_usage rows)', () => {
+    const ids = buildErasurePlan({ deploymentMode: 'cloud' }).map((s) => s.id);
+    expect(ids.indexOf('ai-provider-erasure')).toBeLessThan(ids.indexOf('purge-ai-usage'));
+  });
+
   it('every step id is unique', () => {
     const plan = buildErasurePlan({ deploymentMode: 'cloud' });
     const ids = plan.map((s) => s.id);

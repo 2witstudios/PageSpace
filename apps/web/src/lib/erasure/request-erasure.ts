@@ -86,13 +86,26 @@ export async function lodgeAndEnqueueErasure(input: LodgeErasureInput): Promise<
     loggers.auth.error('Could not bump tokenVersion during erasure lodge:', error as Error);
   }
 
-  const jobId = await enqueueAccountErasure({
-    requestId: request.id,
-    userId: input.subjectUserId,
-    callerUserId: input.callerUserId,
-  });
+  let jobId: string;
+  try {
+    jobId = await enqueueAccountErasure({
+      requestId: request.id,
+      userId: input.subjectUserId,
+      callerUserId: input.callerUserId,
+    });
+  } catch (error) {
+    // The DSR row exists but no job was queued. Leaving it `pending` would make
+    // `findActiveErasureForUser` report a phantom in-flight erasure that no
+    // worker will ever process, blocking retries. Mark it failed so a fresh
+    // request can be lodged, then surface the failure to the caller.
+    const message = error instanceof Error ? error.message : String(error);
+    await dataSubjectRequestRepository.markFailed(request.id, `enqueue failed: ${message}`);
+    throw error;
+  }
 
-  await dataSubjectRequestRepository.updateStatus(request.id, 'queued', { jobId });
+  // Guarded pending|blocked -> queued: never regress a row the worker may have
+  // already advanced to in_progress/completed in the time since enqueue.
+  await dataSubjectRequestRepository.markQueued(request.id, jobId);
 
   return { requestId: request.id, jobId, slaDeadline: request.slaDeadline };
 }

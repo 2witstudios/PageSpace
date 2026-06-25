@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { enqueueAccountErasure } from '@/lib/erasure/enqueue';
 
 /**
  * Admin-gated Right-to-Erasure escalation (#908).
@@ -47,6 +48,36 @@ export const POST = withAdminAuth(async (admin, request) => {
 
   const existing = await dataSubjectRequestRepository.findActiveErasureForUser(userId);
   if (existing) {
+    // A request that the worker BLOCKED on multi-member drives is exactly what
+    // this escalation route exists to resolve — grant force-delete and
+    // re-queue the SAME row rather than refusing. Other active states are
+    // genuinely in flight, so report them unchanged.
+    if (existing.status === 'blocked') {
+      await dataSubjectRequestRepository.setForceDelete(existing.id);
+      try {
+        const jobId = await enqueueAccountErasure({
+          requestId: existing.id,
+          userId,
+          callerUserId: admin.id,
+        });
+        await dataSubjectRequestRepository.markQueued(existing.id, jobId);
+        loggers.auth.info(
+          `Admin ${admin.id} re-queued blocked erasure ${existing.id} for ${userId} with force-delete`
+        );
+        return Response.json(
+          { message: 'Blocked erasure re-queued with force-delete', requestId: existing.id, jobId },
+          { status: 202 }
+        );
+      } catch (error) {
+        await dataSubjectRequestRepository.markFailed(
+          existing.id,
+          `re-enqueue failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+        loggers.auth.error('Admin re-enqueue of blocked erasure failed:', error as Error);
+        return Response.json({ error: 'Failed to re-queue blocked erasure' }, { status: 500 });
+      }
+    }
+
     return Response.json(
       { message: 'Erasure already in progress', requestId: existing.id, status: existing.status },
       { status: 202 }

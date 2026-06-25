@@ -7,7 +7,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, inArray, desc, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, desc, sql } from '@pagespace/db/operators';
 import {
   dataSubjectRequests,
   type DataSubjectRequest,
@@ -86,6 +86,44 @@ export const dataSubjectRequestRepository = {
     await db
       .update(dataSubjectRequests)
       .set({ status, updatedAt: new Date(), ...patch })
+      .where(eq(dataSubjectRequests.id, id));
+  },
+
+  /**
+   * Transition a freshly-lodged (or admin-reopened) request to `queued` and
+   * record the jobId — but ONLY if it is still `pending`/`blocked`. This guards
+   * against a race where the durable worker has already advanced the row to
+   * `in_progress`/`completed` by the time the enqueuer writes back; without the
+   * guard we would regress a terminal state to `queued`. Returns the number of
+   * rows updated (0 means the worker already moved on).
+   */
+  markQueued: async (id: string, jobId: string): Promise<number> => {
+    const rows = await db
+      .update(dataSubjectRequests)
+      .set({ status: 'queued', jobId, blockedReason: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(dataSubjectRequests.id, id),
+          inArray(dataSubjectRequests.status, ['pending', 'blocked'])
+        )
+      )
+      .returning({ id: dataSubjectRequests.id });
+    return rows.length;
+  },
+
+  /** Mark a request failed (e.g. enqueue threw) so it is no longer "active". */
+  markFailed: async (id: string, error: string): Promise<void> => {
+    await db
+      .update(dataSubjectRequests)
+      .set({ status: 'failed', lastError: error, updatedAt: new Date() })
+      .where(eq(dataSubjectRequests.id, id));
+  },
+
+  /** Admin escalation: grant force-delete and clear the block on a request. */
+  setForceDelete: async (id: string): Promise<void> => {
+    await db
+      .update(dataSubjectRequests)
+      .set({ forceDelete: true, blockedReason: null, updatedAt: new Date() })
       .where(eq(dataSubjectRequests.id, id));
   },
 
