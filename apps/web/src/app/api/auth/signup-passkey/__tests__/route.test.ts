@@ -118,7 +118,6 @@ const validPayload = {
   expectedChallenge: 'challenge-123',
   csrfToken: 'valid-csrf',
   acceptedTos: true,
-  dateOfBirth: '1990-01-01',
   passkeyName: 'My Device',
 };
 
@@ -188,24 +187,7 @@ describe('POST /api/auth/signup-passkey', () => {
         expectedChallenge: 'challenge-123',
         passkeyName: 'My Device',
         acceptedTos: true,
-        ageVerified: true,
       });
-    });
-
-    it('rejects an under-age signup before creating a user (GDPR Art 8)', async () => {
-      const now = new Date();
-      const underageDob = `${now.getUTCFullYear() - 10}-01-01`;
-      const response = await POST(createRequest({ ...validPayload, dateOfBirth: underageDob }));
-      const body = await response.json();
-      expect(response.status).toBe(403);
-      expect(body.error).toMatch(/at least/i);
-      expect(verifySignupRegistration).not.toHaveBeenCalled();
-    });
-
-    it('returns 400 when dateOfBirth is missing', async () => {
-      const { dateOfBirth: _omit, ...payload } = validPayload;
-      const response = await POST(createRequest(payload));
-      expect(response.status).toBe(400);
     });
 
     it('provisions getting started drive', async () => {

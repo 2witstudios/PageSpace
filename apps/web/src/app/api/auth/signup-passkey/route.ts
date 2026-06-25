@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
-import { meetsMinimumAge, DEFAULT_MINIMUM_AGE } from '@pagespace/lib/consent';
 import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -34,9 +33,6 @@ const verifySchema = z.object({
   acceptedTos: z.boolean().refine((val) => val === true, {
     message: 'You must accept the Terms of Service',
   }),
-  // GDPR Art 8 age gate: date of birth (YYYY-MM-DD), validated against the minimum age
-  // server-side and then discarded — only ageVerifiedAt is persisted (data minimization).
-  dateOfBirth: z.string().min(1),
   inviteToken: z.string().min(1).optional(),
   platform: z.enum(['web', 'desktop']).optional().default('web'),
   deviceId: z.string().optional(),
@@ -65,22 +61,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email: validatedEmail, name, response, expectedChallenge, csrfToken, passkeyName, acceptedTos, dateOfBirth } = validation.data;
+    const { email: validatedEmail, name, response, expectedChallenge, csrfToken, passkeyName, acceptedTos } = validation.data;
     email = validatedEmail.toLowerCase().trim();
-
-    // GDPR Art 8 age gate — reject under-age signups BEFORE any user is created.
-    // The pure age-gate helper fails closed on malformed/absent dates of birth.
-    if (!meetsMinimumAge(dateOfBirth, new Date())) {
-      auditRequest(req, {
-        eventType: 'security.suspicious.activity',
-        riskScore: 0.3,
-        details: { reason: 'signup_age_below_minimum', flow: 'signup' },
-      });
-      return NextResponse.json(
-        { error: `You must be at least ${DEFAULT_MINIMUM_AGE} years old to create an account` },
-        { status: 403 }
-      );
-    }
 
     // Verify login CSRF token BEFORE rate limiting so stale tokens
     // don't burn rate limit attempts (cheap stateless HMAC check)
@@ -142,7 +124,6 @@ export async function POST(req: Request) {
       expectedChallenge,
       passkeyName,
       acceptedTos,
-      ageVerified: true,
     });
 
     if (!result.ok) {

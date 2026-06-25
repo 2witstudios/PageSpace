@@ -19,7 +19,6 @@ import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { assertAiProcessingConsent } from '@/lib/ai/ai-consent-guard';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage, saveGlobalAssistantMessageToDatabase } from '@/lib/ai/core/message-utils';
@@ -247,11 +246,6 @@ export async function POST(
       return auth.error;
     }
     const userId = auth.userId;
-
-    // GDPR Art 13(1)(e)(f)/44 — block AI processing when consent enforcement is on and
-    // the user has not granted it (flag-gated, default-off; no-op otherwise).
-    const aiConsentBlock = await assertAiProcessingConsent(userId);
-    if (aiConsentBlock) return aiConsentBlock;
 
     const { id: conversationId } = await context.params;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });

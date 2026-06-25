@@ -23,10 +23,6 @@ const sendMagicLinkSchema = z.object({
   next: z.string().min(1).max(2048).optional(),
   inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
   tosAccepted: z.boolean(),
-  // GDPR Art 8 age gate. Like tosAccepted this is an always-required affirmation
-  // on the inline form (for both signin and signup) so the response never reveals
-  // whether the email is new — preserving enumeration resistance.
-  ageConfirmed: z.boolean(),
 }).refine(
   (data) => data.platform !== 'desktop' || (data.deviceId && data.deviceName),
   { message: 'deviceId and deviceName are required for desktop platform' }
@@ -109,7 +105,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email, platform, deviceId, deviceName, next, inviteToken, tosAccepted, ageConfirmed } =
+    const { email, platform, deviceId, deviceName, next, inviteToken, tosAccepted } =
       validation.data;
     const normalizedEmail = email.toLowerCase().trim();
 
@@ -125,21 +121,6 @@ export async function POST(req: Request) {
       });
       return Response.json(
         { code: 'tos_required', error: 'Terms of Service must be accepted' },
-        { status: 400 },
-      );
-    }
-
-    // GDPR Art 8 age gate, mirroring the tosAccepted guard: required for every
-    // request so the failure mode is loud + auditable and never leaks whether the
-    // email already has an account.
-    if (ageConfirmed !== true) {
-      auditRequest(req, {
-        eventType: 'security.suspicious.activity',
-        riskScore: 0.3,
-        details: { reason: 'magic_link_age_not_confirmed' },
-      });
-      return Response.json(
-        { code: 'age_required', error: 'You must confirm you meet the minimum age requirement' },
         { status: 400 },
       );
     }
@@ -240,7 +221,6 @@ export async function POST(req: Request) {
         email: normalizedEmail,
         now: new Date(),
         tosAccepted,
-        ageVerified: ageConfirmed,
         ...(platform && { platform }),
         ...(deviceId && { deviceId }),
         ...(deviceName && { deviceName }),
@@ -273,9 +253,9 @@ export async function POST(req: Request) {
         });
       }
 
-      // TOS_REQUIRED, AGE_REQUIRED and VALIDATION_FAILED are upstream-impossible
-      // (the schema and the explicit tosAccepted/ageConfirmed guards above catch
-      // them first); surface as a generic 200 to preserve enumeration resistance.
+      // TOS_REQUIRED and VALIDATION_FAILED are upstream-impossible (the schema
+      // and the explicit tosAccepted guard above catch them first); surface as
+      // a generic 200 to preserve enumeration resistance.
       loggers.auth.error(
         'Magic link pipe returned unexpected error',
         new Error(`MagicLinkErrorCode: ${result.error}`),

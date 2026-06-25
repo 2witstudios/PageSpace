@@ -61,9 +61,6 @@ export interface MagicLinkPorts {
   createUserAccount: (input: {
     email: string;
     tosAcceptedAt: Date;
-    // GDPR Art 8: timestamp the age was verified at signup. The pipe only calls
-    // this for new users that passed the age gate, so it is always set.
-    ageVerifiedAt: Date;
   }) => Promise<{ id: string }>;
   createTokenAndPersist: (input: {
     userId: string;

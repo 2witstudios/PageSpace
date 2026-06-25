@@ -4,5 +4,3 @@
  * consume these functions.
  */
 export * from './consent-core';
-export * from './ai-consent';
-export * from './age-gate';

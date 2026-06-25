@@ -165,7 +165,6 @@ describe('magic-link round-trip — next honoured end-to-end', () => {
         email: 'user@example.com',
         next: '/dashboard/drive_abc',
         tosAccepted: true,
-        ageConfirmed: true,
       }),
     );
     expect(sendResp.status).toBe(200);
@@ -187,7 +186,6 @@ describe('magic-link round-trip — next honoured end-to-end', () => {
         email: 'user@example.com',
         next: '//evil.com/phish',
         tosAccepted: true,
-        ageConfirmed: true,
       }),
     );
     expect(sendResp.status).toBe(200);
@@ -208,7 +206,6 @@ describe('magic-link round-trip — next honoured end-to-end', () => {
         email: 'user@example.com',
         next: '/dashboard/drive_abc',
         tosAccepted: true,
-        ageConfirmed: true,
       }),
     );
     expect(sendResp.status).toBe(200);
@@ -279,7 +276,6 @@ describe('magic-link round-trip — inviteToken metadata binding end-to-end', ()
         email: 'invitee@example.com',
         inviteToken: 'ps_invite_abc',
         tosAccepted: true,
-        ageConfirmed: true,
       }),
     );
     expect(sendResp.status).toBe(200);

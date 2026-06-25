@@ -209,11 +209,9 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
     const tosAcceptedAt = new Date('2026-05-07T22:00:00.000Z');
 
     const ports = buildMagicLinkPorts();
-    const ageVerifiedAt = new Date('2026-05-07T22:00:00.000Z');
     const result = await ports.createUserAccount({
       email: 'fresh@example.com',
       tosAcceptedAt,
-      ageVerifiedAt,
     });
 
     expect(result).toEqual({ id: 'user_new_123' });
@@ -227,7 +225,6 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
         role: 'user',
         tokenVersion: 1,
         tosAcceptedAt,
-        ageVerifiedAt,
         // Default name derives from the local part of the email so empty
         // 'name' (which is notNull in the schema) never blocks creation.
         name: 'fresh',
@@ -246,7 +243,6 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
     const result = await ports.createUserAccount({
       email: 'racey@example.com',
       tosAcceptedAt: new Date(),
-      ageVerifiedAt: new Date(),
     });
 
     expect(result).toEqual({ id: 'user_existing_456' });
@@ -259,7 +255,7 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
 
     const ports = buildMagicLinkPorts();
     await expect(
-      ports.createUserAccount({ email: 'u@example.com', tosAcceptedAt: new Date(), ageVerifiedAt: new Date() }),
+      ports.createUserAccount({ email: 'u@example.com', tosAcceptedAt: new Date() }),
     ).rejects.toThrow(/connection refused/);
     expect(dbSelectMock).not.toHaveBeenCalled();
   });
@@ -273,7 +269,7 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
 
     const ports = buildMagicLinkPorts();
     await expect(
-      ports.createUserAccount({ email: 'u@example.com', tosAcceptedAt: new Date(), ageVerifiedAt: new Date() }),
+      ports.createUserAccount({ email: 'u@example.com', tosAcceptedAt: new Date() }),
     ).rejects.toThrow(fakey);
     expect(dbSelectMock).not.toHaveBeenCalled();
   });
@@ -285,7 +281,7 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
 
     const ports = buildMagicLinkPorts();
     await expect(
-      ports.createUserAccount({ email: 'u@example.com', tosAcceptedAt: new Date(), ageVerifiedAt: new Date() }),
+      ports.createUserAccount({ email: 'u@example.com', tosAcceptedAt: new Date() }),
     ).rejects.toThrow(constraintErr);
   });
 
@@ -296,7 +292,6 @@ describe('buildMagicLinkPorts.createUserAccount', () => {
     await ports.createUserAccount({
       email: '@example.com',
       tosAcceptedAt: new Date(),
-      ageVerifiedAt: new Date(),
     });
 
     const valuesCall = dbInsertMock.mock.results[0].value.values as ReturnType<typeof vi.fn>;

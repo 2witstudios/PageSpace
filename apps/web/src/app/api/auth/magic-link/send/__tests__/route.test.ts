@@ -94,17 +94,13 @@ const createMagicLinkRequest = (
     ...headers,
   };
 
-  // Auto-add tosAccepted:true / ageConfirmed:true to inline-object bodies that
-  // omit them, so the legacy tests (CSRF, rate limit, validation) keep passing
-  // the schema. Tests that specifically exercise the ToS / age gate set the
-  // relevant field explicitly.
-  let bodyObj = body;
-  if (typeof bodyObj === 'object' && bodyObj !== null && !('tosAccepted' in bodyObj)) {
-    bodyObj = { ...bodyObj, tosAccepted: true };
-  }
-  if (typeof bodyObj === 'object' && bodyObj !== null && !('ageConfirmed' in bodyObj)) {
-    bodyObj = { ...bodyObj, ageConfirmed: true };
-  }
+  // Auto-add tosAccepted:true to inline-object bodies that omit it, so the
+  // legacy tests (CSRF, rate limit, validation) keep passing the schema. Tests
+  // that specifically exercise the ToS gate set tosAccepted explicitly.
+  const bodyObj =
+    typeof body === 'object' && body !== null && !('tosAccepted' in body)
+      ? { ...body, tosAccepted: true }
+      : body;
 
   const bodyStr = typeof bodyObj === 'string' ? bodyObj : JSON.stringify(bodyObj);
 
@@ -294,30 +290,6 @@ describe('POST /api/auth/magic-link/send', () => {
       const response = await POST(request);
       expect(response.status).toBe(400);
       expect(pipeInner).not.toHaveBeenCalled();
-    });
-
-    it('returns 400 age_required when ageConfirmed is false (GDPR Art 8; never call the pipe)', async () => {
-      const request = createMagicLinkRequest({
-        email: 'test@example.com',
-        tosAccepted: true,
-        ageConfirmed: false,
-      });
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body).toEqual({
-        code: 'age_required',
-        error: 'You must confirm you meet the minimum age requirement',
-      });
-      expect(pipeInner).not.toHaveBeenCalled();
-      expect(auditRequest).toHaveBeenCalledWith(
-        request,
-        expect.objectContaining({
-          eventType: 'security.suspicious.activity',
-          details: expect.objectContaining({ reason: 'magic_link_age_not_confirmed' }),
-        }),
-      );
     });
   });
 

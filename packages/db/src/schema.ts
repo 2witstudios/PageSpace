@@ -47,7 +47,6 @@ export * from './schema/credits';
 export * from './schema/commands';
 export * from './schema/ai-compaction';
 export * from './schema/custom-domains';
-export * from './schema/ai-consent';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -98,7 +97,6 @@ import * as credits from './schema/credits';
 import * as commands from './schema/commands';
 import * as aiCompaction from './schema/ai-compaction';
 import * as customDomains from './schema/custom-domains';
-import * as aiConsent from './schema/ai-consent';
 
 export const schema = {
   ...auth,
@@ -150,5 +148,4 @@ export const schema = {
   ...commands,
   ...aiCompaction,
   ...customDomains,
-  ...aiConsent,
 };

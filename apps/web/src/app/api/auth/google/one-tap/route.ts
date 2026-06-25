@@ -200,9 +200,6 @@ export async function POST(req: Request) {
         name: userName,
         email,
         emailVerified: email_verified ? new Date() : null,
-        // GDPR Art 8: OAuth signups attest to the minimum age via the disclosure
-        // shown beside the provider buttons; record the verification timestamp.
-        ageVerifiedAt: new Date(),
         image: null,
         googleId,
         provider: 'google',

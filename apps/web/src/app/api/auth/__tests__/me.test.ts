@@ -52,7 +52,6 @@ const mockUser: User = {
   stripeCustomerId: null,
   subscriptionTier: 'free',
   tosAcceptedAt: null,
-  ageVerifiedAt: null,
   failedLoginAttempts: 0,
   lockedUntil: null,
   suspendedAt: null,

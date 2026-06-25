@@ -59,7 +59,7 @@ describe('MagicLinkForm', () => {
   });
 
   describe('ToS gate', () => {
-    it('disables the submit button until both the ToS and age checkboxes are ticked', async () => {
+    it('disables the submit button until the ToS checkbox is ticked', async () => {
       setupFetchMock();
       render(<MagicLinkForm />);
 
@@ -67,21 +67,16 @@ describe('MagicLinkForm', () => {
       const submit = screen.getByRole('button', { name: /sign-in link/i });
       expect(submit).toBeDisabled();
 
-      // Ticking only ToS is not enough — the GDPR Art 8 age gate also blocks submit.
       await userEvent.click(screen.getByLabelText(/i agree/i));
-      expect(submit).toBeDisabled();
-
-      await userEvent.click(screen.getByLabelText(/at least 16/i));
       expect(submit).toBeEnabled();
     });
 
-    it('sends tosAccepted: true and ageConfirmed: true in the POST body once both checkboxes are ticked', async () => {
+    it('sends tosAccepted: true in the POST body once the checkbox is ticked', async () => {
       const fetchSpy = setupFetchMock();
       render(<MagicLinkForm />);
 
       await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
       await userEvent.click(screen.getByLabelText(/i agree/i));
-      await userEvent.click(screen.getByLabelText(/at least 16/i));
       await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
 
       const sendCall = fetchSpy.mock.calls.find(([url]) =>
@@ -90,7 +85,6 @@ describe('MagicLinkForm', () => {
       expect(sendCall).toBeDefined();
       const body = JSON.parse((sendCall![1] as RequestInit).body as string) as Record<string, unknown>;
       expect(body.tosAccepted).toBe(true);
-      expect(body.ageConfirmed).toBe(true);
       expect(body.email).toBe('user@example.com');
     });
 
@@ -127,7 +121,6 @@ describe('MagicLinkForm', () => {
 
       await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
       await userEvent.click(screen.getByLabelText(/i agree/i));
-      await userEvent.click(screen.getByLabelText(/at least 16/i));
       await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
 
       const sendCall = fetchSpy.mock.calls.find(([url]) =>
@@ -146,7 +139,6 @@ describe('MagicLinkForm', () => {
 
       await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
       await userEvent.click(screen.getByLabelText(/i agree/i));
-      await userEvent.click(screen.getByLabelText(/at least 16/i));
       await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
 
       const sendCall = fetchSpy.mock.calls.find(([url]) =>

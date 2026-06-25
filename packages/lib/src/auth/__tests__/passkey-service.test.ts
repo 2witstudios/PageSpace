@@ -757,7 +757,7 @@ describe('passkey-service', () => {
 
       const result = await verifySignupRegistration({
         email: 'test@example.com', name: 'Test',
-        response: { id: 'cred-1' }, expectedChallenge: 'ch-1', acceptedTos: true, ageVerified: true,
+        response: { id: 'cred-1' }, expectedChallenge: 'ch-1', acceptedTos: true,
       });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('CHALLENGE_NOT_FOUND');
@@ -771,7 +771,7 @@ describe('passkey-service', () => {
 
       const result = await verifySignupRegistration({
         email: 'test@example.com', name: 'Test',
-        response: { id: 'cred-1' }, expectedChallenge: 'ch-1', acceptedTos: true, ageVerified: true,
+        response: { id: 'cred-1' }, expectedChallenge: 'ch-1', acceptedTos: true,
       });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('VALIDATION_FAILED');
@@ -786,7 +786,7 @@ describe('passkey-service', () => {
 
       const result = await verifySignupRegistration({
         email: 'test@example.com', name: 'Test',
-        response: { id: 'cred-1' }, expectedChallenge: 'ch-1', acceptedTos: true, ageVerified: true,
+        response: { id: 'cred-1' }, expectedChallenge: 'ch-1', acceptedTos: true,
       });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('EMAIL_EXISTS');
@@ -826,62 +826,13 @@ describe('passkey-service', () => {
       const result = await verifySignupRegistration({
         email: 'test@example.com', name: 'Test',
         response: { id: 'cred-1', response: { transports: ['internal'] } },
-        expectedChallenge: 'ch-1', acceptedTos: true, ageVerified: true,
+        expectedChallenge: 'ch-1', acceptedTos: true,
       });
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.data.userId).toBe('test-cuid');
         expect(result.data.passkeyId).toBe('test-cuid');
       }
-    });
-
-    it('persists ageVerifiedAt on the created user (GDPR Art 8)', async () => {
-      mockDb.query.verificationTokens.findFirst.mockResolvedValueOnce({
-        id: 'ch-1', usedAt: null, expiresAt: new Date(Date.now() + 60000),
-        metadata: JSON.stringify({ email: 'test@example.com' }),
-      });
-      mockDb.query.users.findFirst.mockResolvedValueOnce(null);
-      mockDb.update.mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([{ id: 'ch-1' }]),
-          }),
-        }),
-      });
-      mockVerifyRegResponse.mockResolvedValueOnce({
-        verified: true,
-        registrationInfo: {
-          credential: { id: 'cred-id', publicKey: new Uint8Array([1, 2, 3]), counter: 0 },
-          credentialDeviceType: 'multiDevice',
-          credentialBackedUp: true,
-        },
-      });
-
-      const insertValues = vi.fn().mockResolvedValue(undefined);
-      mockDb.transaction.mockImplementation(async (fn: Function) => {
-        await fn({ insert: vi.fn().mockReturnValue({ values: insertValues }) });
-      });
-
-      await verifySignupRegistration({
-        email: 'test@example.com', name: 'Test',
-        response: { id: 'cred-1', response: {} },
-        expectedChallenge: 'ch-1', acceptedTos: true, ageVerified: true,
-      });
-
-      const userInsert = insertValues.mock.calls
-        .map((call) => call[0])
-        .find((value) => value && typeof value === 'object' && 'email' in value);
-      expect(userInsert).toBeDefined();
-      expect(userInsert.ageVerifiedAt).toBeInstanceOf(Date);
-    });
-
-    it('rejects when ageVerified is not asserted', async () => {
-      const result = await verifySignupRegistration({
-        email: 'test@example.com', name: 'Test',
-        response: { id: 'cred-1' }, expectedChallenge: 'ch-1', acceptedTos: true,
-      });
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error.code).toBe('VALIDATION_FAILED');
     });
 
     it('should return EMAIL_EXISTS on unique constraint violation', async () => {
@@ -913,7 +864,7 @@ describe('passkey-service', () => {
       const result = await verifySignupRegistration({
         email: 'test@example.com', name: 'Test',
         response: { id: 'cred-1', response: {} },
-        expectedChallenge: 'ch-1', acceptedTos: true, ageVerified: true,
+        expectedChallenge: 'ch-1', acceptedTos: true,
       });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('EMAIL_EXISTS');
@@ -948,7 +899,7 @@ describe('passkey-service', () => {
       await expect(verifySignupRegistration({
         email: 'test@example.com', name: 'Test',
         response: { id: 'cred-1', response: {} },
-        expectedChallenge: 'ch-1', acceptedTos: true, ageVerified: true,
+        expectedChallenge: 'ch-1', acceptedTos: true,
       })).rejects.toThrow('connection refused');
     });
   });

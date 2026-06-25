@@ -28,7 +28,6 @@ import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
-import { assertAiProcessingConsent } from '@/lib/ai/ai-consent-guard';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -149,11 +148,6 @@ export async function POST(request: Request) {
     }
     userId = authResult.userId;
     loggers.ai.debug('AI Chat API: Authentication successful', { userId });
-
-    // GDPR Art 13(1)(e)(f)/44 — block AI processing when consent enforcement is on and
-    // the user has not granted it (flag-gated, default-off; no-op otherwise).
-    const aiConsentBlock = await assertAiProcessingConsent(userId);
-    if (aiConsentBlock) return aiConsentBlock;
 
     // Body size guard — reject payloads over 25MB before parsing
     const contentLength = parseInt(request.headers.get('content-length') || '0', 10);

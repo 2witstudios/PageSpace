@@ -89,16 +89,10 @@ export interface RequestMagicLinkInput {
   // the user when no account exists for `email`. Must be true for unknown
   // emails or the pipe returns TOS_REQUIRED. Existing users are unaffected.
   tosAccepted: boolean;
-  // GDPR Art 8 age gate. The caller validates the date of birth against the
-  // minimum age with the pure age-gate helper and asserts the boolean result
-  // here. Required to auto-create the user when no account exists for `email`;
-  // false for unknown emails returns AGE_REQUIRED. Existing users are unaffected.
-  ageVerified: boolean;
 }
 
 export type MagicLinkErrorCode =
   | 'TOS_REQUIRED'
-  | 'AGE_REQUIRED'
   | 'ACCOUNT_SUSPENDED'
   | 'VALIDATION_FAILED';
 

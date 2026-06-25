@@ -181,15 +181,9 @@ export const requestMagicLink =
       if (!input.tosAccepted) {
         return { ok: false, error: 'TOS_REQUIRED' };
       }
-      // GDPR Art 8: refuse to create an under-age account. The route validated
-      // the date of birth against the minimum age with the pure helper.
-      if (!input.ageVerified) {
-        return { ok: false, error: 'AGE_REQUIRED' };
-      }
       const created = await ports.createUserAccount({
         email: input.email,
         tosAcceptedAt: input.now,
-        ageVerifiedAt: input.now,
       });
       userId = created.id;
     } else {

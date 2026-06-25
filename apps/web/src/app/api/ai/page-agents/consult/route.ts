@@ -3,7 +3,6 @@ import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from '
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage } from '@/lib/auth';
-import { assertAiProcessingConsent } from '@/lib/ai/ai-consent-guard';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -166,11 +165,6 @@ export async function POST(request: Request) {
       return auth.error;
     }
     const userId = auth.userId;
-
-    // GDPR Art 13(1)(e)(f)/44 — block AI processing when consent enforcement is on and
-    // the user has not granted it (flag-gated, default-off; no-op otherwise).
-    const aiConsentBlock = await assertAiProcessingConsent(userId);
-    if (aiConsentBlock) return aiConsentBlock;
 
     const body = await request.json();
     const { agentId, question, context } = body;

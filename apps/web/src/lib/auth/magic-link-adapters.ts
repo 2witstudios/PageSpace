@@ -18,7 +18,7 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
   loadUserByEmail: async ({ email }) =>
     driveInviteRepository.loadUserAccountByEmail(email),
 
-  createUserAccount: async ({ email, tosAcceptedAt, ageVerifiedAt }) => {
+  createUserAccount: async ({ email, tosAcceptedAt }) => {
     const id = createId();
     try {
       // `name` is NOT NULL in the schema. Email zod-validates upstream so the
@@ -36,7 +36,6 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
           role: 'user',
           tokenVersion: 1,
           tosAcceptedAt,
-          ageVerifiedAt,
         })
         .returning({ id: users.id });
       return { id: created.id };

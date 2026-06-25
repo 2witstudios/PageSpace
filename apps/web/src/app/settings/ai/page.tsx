@@ -8,7 +8,6 @@ import { CheckCircle2, ArrowLeft, Server } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { AiProcessingConsentNotice } from '@/components/consent/AiProcessingConsentNotice';
 
 interface ProviderAvailability {
   isAvailable: boolean;
@@ -91,10 +90,6 @@ export default function AiSettingsPage() {
           )}
         </CardContent>
       </Card>
-
-      {/* GDPR Art 13(1)(e)(f)/44 — capture consent that prompts are processed by
-          external AI providers (potentially outside the EU). Self-hides once granted. */}
-      <AiProcessingConsentNotice />
     </div>
   );
 }

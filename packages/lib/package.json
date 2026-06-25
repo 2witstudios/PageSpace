@@ -1016,11 +1016,6 @@
       "types": "./dist/consent/index.d.ts",
       "import": "./dist/consent/index.js",
       "require": "./dist/consent/index.js"
-    },
-    "./consent/ai-consent-service": {
-      "types": "./dist/consent/ai-consent-service.d.ts",
-      "import": "./dist/consent/ai-consent-service.js",
-      "require": "./dist/consent/ai-consent-service.js"
     }
   },
   "typesVersions": {

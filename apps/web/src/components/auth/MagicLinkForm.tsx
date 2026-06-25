@@ -27,8 +27,6 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [acceptedTos, setAcceptedTos] = useState(false);
-  // GDPR Art 8 age gate — affirmation required to create an account via magic link.
-  const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [formState, setFormState] = useState<FormState>('input');
   const [error, setError] = useState<string | null>(null);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
@@ -83,11 +81,6 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
       setError('Please accept the Terms and Privacy Policy to continue.');
       return;
     }
-    if (!ageConfirmed) {
-      setFormState('error');
-      setError('Please confirm you meet the minimum age requirement to continue.');
-      return;
-    }
 
     setFormState('sending');
     setError(null);
@@ -117,7 +110,6 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
         body: JSON.stringify({
           email: email.trim(),
           tosAccepted: acceptedTos,
-          ageConfirmed,
           ...platformFields,
           ...(nextPath && { next: nextPath }),
           ...(inviteToken && { inviteToken }),
@@ -158,7 +150,7 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
       setFormState('error');
       setError('Network error. Please check your connection and try again.');
     }
-  }, [email, formState, cooldownSeconds, nextPath, inviteToken, acceptedTos, ageConfirmed]);
+  }, [email, formState, cooldownSeconds, nextPath, inviteToken, acceptedTos]);
 
   const handleResend = useCallback(async () => {
     if (cooldownSeconds > 0) return;
@@ -176,7 +168,6 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
     setError(null);
     setEmail('');
     setAcceptedTos(false);
-    setAgeConfirmed(false);
     setCooldownSeconds(0);
     setRetryAfterSeconds(0);
   }, []);
@@ -272,23 +263,7 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
           <Link href="/privacy" className="underline hover:text-foreground">
             Privacy Policy
           </Link>
-          .
-        </Label>
-      </div>
-
-      <div className="flex items-start gap-2">
-        <Checkbox
-          id="magic-link-age"
-          checked={ageConfirmed}
-          onCheckedChange={(checked) => setAgeConfirmed(checked === true)}
-          disabled={formState === 'sending'}
-          className="mt-0.5"
-        />
-        <Label
-          htmlFor="magic-link-age"
-          className="text-xs font-normal leading-snug text-muted-foreground"
-        >
-          I confirm I am at least 16 years old.
+          , and I&apos;m at least 16 years old.
         </Label>
       </div>
 
@@ -306,7 +281,7 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
       <Button
         type="submit"
         className="w-full"
-        disabled={formState === 'sending' || retryAfterSeconds > 0 || !acceptedTos || !ageConfirmed}
+        disabled={formState === 'sending' || retryAfterSeconds > 0 || !acceptedTos}
       >
         {formState === 'sending' ? (
           <div className="flex items-center gap-2">
