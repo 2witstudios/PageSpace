@@ -10,6 +10,10 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import {
+  buildSearchAuditDetails,
+  auditDetailsContainText,
+} from '@pagespace/lib/audit/search-audit-details';
 
 const SRC = join(__dirname, '..', '..');
 
@@ -58,4 +62,32 @@ describe('GDPR: audit details must not contain user-typed text or PII', () => {
     }
   });
 
+});
+
+/**
+ * Runtime enforcement (GDPR #971): the static source scan above is a regression
+ * guard only. The audit details actually emitted by every search route are now
+ * built by buildSearchAuditDetails, which structurally cannot include the query.
+ */
+describe('GDPR: search audit details exclude the user query at runtime', () => {
+  const QUERY = "alice's confidential salary 2026";
+
+  it('builder ignores a query smuggled in via an untyped field', () => {
+    const details = buildSearchAuditDetails({ resultCount: 5, query: QUERY } as unknown as {
+      resultCount: number;
+    });
+    expect(auditDetailsContainText(details, QUERY)).toBe(false);
+    expect(JSON.stringify(details)).not.toContain('alice');
+  });
+
+  it('every whitelisted shape used by the routes is query-free', () => {
+    const shapes = [
+      buildSearchAuditDetails({ resultCount: 3 }),
+      buildSearchAuditDetails({ resultCount: 3, source: 'multi-drive', searchType: 'text' }),
+      buildSearchAuditDetails({ resultCount: 3, source: 'mentions' }),
+    ];
+    for (const details of shapes) {
+      expect(auditDetailsContainText(details, QUERY)).toBe(false);
+    }
+  });
 });

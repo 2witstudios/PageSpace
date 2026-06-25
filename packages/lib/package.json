@@ -727,6 +727,11 @@
       "import": "./dist/audit/audit-log.js",
       "require": "./dist/audit/audit-log.js"
     },
+    "./audit/search-audit-details": {
+      "types": "./dist/audit/search-audit-details.d.ts",
+      "import": "./dist/audit/search-audit-details.js",
+      "require": "./dist/audit/search-audit-details.js"
+    },
     "./audit/audit-query": {
       "types": "./dist/audit/audit-query.d.ts",
       "import": "./dist/audit/audit-query.js",
@@ -1398,6 +1403,9 @@
       ],
       "audit/audit-log": [
         "./dist/audit/audit-log.d.ts"
+      ],
+      "audit/search-audit-details": [
+        "./dist/audit/search-audit-details.d.ts"
       ],
       "audit/audit-query": [
         "./dist/audit/audit-query.d.ts"

@@ -8,6 +8,7 @@ import { verifyAuth } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
 interface SearchResult {
@@ -420,7 +421,7 @@ export async function GET(request: Request) {
       }
     });
 
-    auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'search', resourceId: '*', details: { resultCount: finalResults.length } });
+    auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'search', resourceId: '*', details: buildSearchAuditDetails({ resultCount: finalResults.length }) });
 
     return NextResponse.json({ results: finalResults });
   } catch (error) {

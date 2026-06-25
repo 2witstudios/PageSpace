@@ -3,6 +3,7 @@ import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pag
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
@@ -435,7 +436,7 @@ export async function GET(request: Request) {
     const finalSuggestions = [...groupSuggestions, ...otherSuggestions].slice(0, 10);
     loggers.api.debug('[API] Returning suggestions', { count: finalSuggestions.length, suggestions: finalSuggestions });
 
-    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'search', resourceId: driveId ?? '*', details: { source: 'mentions', resultCount: finalSuggestions.length } });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'search', resourceId: driveId ?? '*', details: buildSearchAuditDetails({ resultCount: finalSuggestions.length, source: 'mentions' }) });
 
     return NextResponse.json(finalSuggestions);
   } catch (error) {
