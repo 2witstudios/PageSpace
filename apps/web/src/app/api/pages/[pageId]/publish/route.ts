@@ -89,11 +89,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       : null;
 
     // The home page is served at the host root (in addition to its slug), so
-    // report the root as its primary URL.
+    // report the root as its primary URL. `primaryHost` is only null when the
+    // drive somehow has no publish subdomain (a published page always has one);
+    // returning a null url then is cleaner than emitting a broken `https://null/`.
     const isHomePage = drive?.homePageId === pageId;
-    const url = isHomePage
-      ? `https://${primaryHost}/`
-      : `https://${primaryHost}/${row.path}`;
+    const url = primaryHost
+      ? (isHomePage ? `https://${primaryHost}/` : `https://${primaryHost}/${row.path}`)
+      : null;
 
     return NextResponse.json({
       published: true,
