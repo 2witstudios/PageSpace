@@ -104,6 +104,12 @@ export interface SpriteCommandLike {
   readonly stdin?: { write(data: string | Buffer): void };
   on(event: 'exit', listener: (code: number) => void): unknown;
   on(event: 'error', listener: (error: unknown) => void): unknown;
+  // Emitted by the SDK's WSCommand AFTER the WebSocket actually opens
+  // (`cmd.start().then(() => cmd.emit('spawn'))`). A failed/flapping attach
+  // rejects and emits 'error' instead, never 'spawn' — so 'spawn' is the
+  // authoritative, flap-safe "connection established" signal the terminal uses
+  // to reset its bounded reconnect budget.
+  on(event: 'spawn', listener: () => void): unknown;
   kill(signal?: string): void;
   resize?(cols: number, rows: number): void;
 }

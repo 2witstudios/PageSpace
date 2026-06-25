@@ -238,5 +238,55 @@ describe('openPtyShell', () => {
       expect(onExit).toHaveBeenCalledWith(0);
       expect(sprite.attachSession).not.toHaveBeenCalled();
     });
+
+    it('given a command that errored, should IGNORE its trailing stale exit and reattach instead', async () => {
+      // A keepalive timeout in the SDK emits 'error' AND THEN closes the socket,
+      // which makes the same dead transport emit a spurious 'exit' (code 0). That
+      // stale exit must not tear the session down while reconnect() is in flight.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      cmd._emitter.emit('exit', 0); // trailing stale exit from the SAME dead command
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(onExit).not.toHaveBeenCalled();
+      expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
+    });
+
+    it('given repeated idle keepalive cycles that each reattach successfully, should NOT trip the bounded budget', async () => {
+      // Each cycle: the live command errors (keepalive drop) → reconnect →
+      // attachSession returns a fresh command that confirms open via 'spawn' but
+      // emits NO stdout. The 'spawn' reset must keep the budget from climbing, so
+      // a healthy-but-quiet shell survives indefinitely. Without it, the failure
+      // counter would reach the fatal budget (> 5) and close the terminal.
+      const initial = buildFakeCommand();
+      const attached: FakeCommand[] = [];
+      const sprite = buildFakeSprite(initial, { sessions: [liveSession] });
+      // A successful reattach: fresh command, emits 'spawn' once wired (next tick).
+      sprite.attachSession.mockImplementation(() => {
+        const next = buildFakeCommand();
+        attached.push(next);
+        setTimeout(() => next._emitter.emit('spawn'), 0);
+        return next;
+      });
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+
+      // Run more cycles than MAX_RECONNECT_ATTEMPTS (5) would otherwise allow.
+      let currentCmd: FakeCommand = initial;
+      for (let i = 0; i < 8; i += 1) {
+        currentCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+        await vi.advanceTimersByTimeAsync(2000); // cover backoff delay + spawn tick
+        currentCmd = attached[attached.length - 1];
+      }
+
+      expect(onExit).not.toHaveBeenCalled();
+      expect(sprite.attachSession.mock.calls.length).toBeGreaterThan(5);
+    });
   });
 });

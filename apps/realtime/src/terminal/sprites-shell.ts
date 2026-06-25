@@ -75,14 +75,31 @@ export function openPtyShell({ sprite, cols, rows, sessionId, onOutput, onExit }
   }
 
   function wire(cmd: SpriteCommandLike): void {
+    // Per-command staleness. A keepalive timeout in the SDK emits 'error' and
+    // then closes the socket, which makes the SAME dead command also emit a
+    // spurious 'exit' (code 0 or 1). A genuine shell exit (user typed `exit`)
+    // emits ONLY 'exit', no preceding 'error'. We mark a command stale the
+    // instant it errors so the trailing close/exit it produces can't tear the
+    // session down while reconnect() is replacing it.
+    let stale = false;
     cmd.stdout.on('data', (chunk) => {
       // Any inbound data proves the connection recovered; reset the failure budget.
       consecutiveFailures = 0;
       onOutput(toStr(chunk));
     });
     cmd.stderr.on('data', (chunk) => onOutput(toStr(chunk)));
-    cmd.on('exit', (code) => fatal(code ?? -1));
-    cmd.on('error', () => { void reconnect(); });
+    // The SDK emits 'spawn' only AFTER the WebSocket actually opens. A confirmed
+    // open is the authoritative signal the connection is healthy — reset the
+    // bounded reconnect budget here so an idle shell that reattaches cleanly but
+    // stays quiet (no stdout) doesn't slowly exhaust the budget and get killed.
+    cmd.on('spawn', () => { consecutiveFailures = 0; });
+    cmd.on('exit', (code) => {
+      // Ignore the stale exit that trails a keepalive 'error' on the same dead
+      // command — only an exit WITHOUT a preceding error is a real shell exit.
+      if (stale) return;
+      fatal(code ?? -1);
+    });
+    cmd.on('error', () => { stale = true; void reconnect(); });
   }
 
   async function reconnect(): Promise<void> {
