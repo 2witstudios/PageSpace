@@ -4,6 +4,7 @@ import {
   validateCustomDomain,
   buildDnsInstructions,
   isApexDomain,
+  registrableDomain,
   verifyDnsRecords,
 } from '../custom-domain';
 import type { DnsInstructions, ResolvedRecords } from '../custom-domain';
@@ -134,6 +135,40 @@ describe('isApexDomain', () => {
     expect(isApexDomain('www.acme.com')).toBe(false);
     expect(isApexDomain('blog.acme.com')).toBe(false);
     expect(isApexDomain('a.b.c.com')).toBe(false);
+  });
+});
+
+describe('registrableDomain', () => {
+  it('returns an apex domain unchanged', () => {
+    expect(registrableDomain('jonowoodall.com')).toBe('jonowoodall.com');
+    expect(registrableDomain('acme.io')).toBe('acme.io');
+  });
+
+  it('reduces a subdomain to its last two labels', () => {
+    expect(registrableDomain('www.acme.com')).toBe('acme.com');
+    expect(registrableDomain('blog.acme.com')).toBe('acme.com');
+  });
+
+  it('reduces a deep subdomain to its last two labels', () => {
+    expect(registrableDomain('docs.blog.acme.io')).toBe('acme.io');
+    expect(registrableDomain('a.b.c.d.example.com')).toBe('example.com');
+  });
+
+  it('strips a trailing dot', () => {
+    expect(registrableDomain('www.acme.com.')).toBe('acme.com');
+    expect(registrableDomain('acme.com.')).toBe('acme.com');
+  });
+
+  it('lowercases the result', () => {
+    expect(registrableDomain('WWW.ACME.COM')).toBe('acme.com');
+  });
+
+  it('returns a single label unchanged', () => {
+    expect(registrableDomain('localhost')).toBe('localhost');
+  });
+
+  it('returns empty string for empty input', () => {
+    expect(registrableDomain('')).toBe('');
   });
 });
 

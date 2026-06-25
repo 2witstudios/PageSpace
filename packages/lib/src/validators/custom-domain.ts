@@ -102,6 +102,28 @@ export function isApexDomain(hostname: string): boolean {
   return hostname.split('.').length === 2;
 }
 
+/**
+ * The registrable domain — the last two labels of a hostname — used to look up
+ * a domain's authoritative nameservers.
+ *
+ * `www.acme.com` → `acme.com`, `docs.blog.acme.io` → `acme.io`,
+ * `jonowoodall.com` → `jonowoodall.com`. Lowercased and trailing-dot-stripped.
+ *
+ * Like {@link isApexDomain}, this uses the simple "last 2 labels" heuristic,
+ * which is accurate for single-segment TLDs (.com, .io, .dev) and a documented
+ * limitation for multi-segment TLDs like .co.uk. Authoritative-NS lookups work
+ * regardless: the registrar's NS for `example.co.uk` is reachable from the NS
+ * of `co.uk`, so an over-broad registrable domain still resolves correctly.
+ */
+export function registrableDomain(hostname: string): string {
+  let h = hostname.trim().toLowerCase();
+  if (h.endsWith('.')) h = h.slice(0, -1);
+  if (!h) return '';
+  const labels = h.split('.');
+  if (labels.length <= 2) return h;
+  return labels.slice(-2).join('.');
+}
+
 export interface DnsRecord {
   type: 'A' | 'AAAA' | 'CNAME';
   name: string;
