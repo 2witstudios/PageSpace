@@ -207,21 +207,33 @@ describe('PATCH /api/drives/[driveId]/domains/[domainId] (set primary)', () => {
     expect(body.domain.isPrimary).toBe(true);
   });
 
-  it('re-renders published pages, regenerates site files, and audits on success', async () => {
+  it('re-renders published pages and audits on success', async () => {
     findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
     wireTransaction({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', status: 'active', isPrimary: true });
+    // Two pages were re-rendered (each refreshes site files internally), so the
+    // route must NOT redundantly regenerate them again.
+    republishDriveCanonical.mockResolvedValueOnce(2);
 
     await PATCH(makePatchReq(), ctx());
     await Promise.resolve();
 
-    // Pages are re-rendered with the new primary host BEFORE site files refresh,
-    // so an already-published drive doesn't keep advertising the old canonical.
     expect(republishDriveCanonical).toHaveBeenCalledWith(DRIVE_ID, USER_ID);
-    expect(regeneratePublishedSiteFiles).toHaveBeenCalledWith(DRIVE_ID);
+    expect(regeneratePublishedSiteFiles).not.toHaveBeenCalled();
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       eventType: 'data.write',
       details: expect.objectContaining({ operation: 'set-primary-custom-domain', hostname: 'acme.com' }),
     }));
+  });
+
+  it('still refreshes site files when the drive has no published pages to re-render', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireTransaction({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', status: 'active', isPrimary: true });
+    republishDriveCanonical.mockResolvedValueOnce(0);
+
+    await PATCH(makePatchReq(), ctx());
+    await Promise.resolve();
+
+    expect(regeneratePublishedSiteFiles).toHaveBeenCalledWith(DRIVE_ID);
   });
 
   it('returns 500 on unexpected db error', async () => {

@@ -79,15 +79,19 @@ export async function PATCH(
     });
 
     // Re-render every published page so the canonical/og:url baked into each
-    // artifact points at the NEW primary host, then refresh the drive's
-    // sitemap/robots. Awaited so the published site is consistent before we
-    // report success. Both calls are best-effort by contract (they log and
-    // swallow failures); the try/catch is a final guard so a storage hiccup
+    // artifact points at the NEW primary host. Each re-publish also regenerates
+    // the drive's sitemap/robots, so only refresh those separately when nothing
+    // was re-rendered (a drive with no published pages still needs its crawl
+    // files pointed at the new primary). Awaited so the published site is
+    // consistent before we report success. Best-effort by contract (these log
+    // and swallow failures); the try/catch is a final guard so a storage hiccup
     // never fails the primary change itself — the DB update has already
     // committed and the next publish re-bakes anything that lagged.
     try {
-      await republishDriveCanonical(driveId, auth.userId);
-      await regeneratePublishedSiteFiles(driveId);
+      const refreshed = await republishDriveCanonical(driveId, auth.userId);
+      if (refreshed === 0) {
+        await regeneratePublishedSiteFiles(driveId);
+      }
     } catch (err) {
       loggers.api.warn('Failed to refresh published pages after primary domain change', {
         driveId,

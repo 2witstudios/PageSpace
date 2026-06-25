@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -296,13 +296,18 @@ function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd
   // explicitly-flagged active domain, else the earliest-created active one. Badge
   // and "Make primary" key off this (not the raw `isPrimary` flag) so a migrated
   // drive with no explicit primary still highlights its canonical domain, and a
-  // flagged-but-inactive row is never shown as primary. Same resolver the server uses.
-  const effectivePrimaryId =
-    selectPrimaryActiveDomain(
-      domains
-        .filter((d) => d.status === 'active')
-        .map((d) => ({ id: d.id, hostname: d.hostname, createdAt: new Date(d.createdAt), isPrimary: d.isPrimary })),
-    )?.id ?? null;
+  // flagged-but-inactive row is never shown as primary. Same resolver the server
+  // uses. Memoized: the controlled add-domain input re-renders this card per
+  // keystroke, and this filters/maps/sorts the domain list.
+  const effectivePrimaryId = useMemo(
+    () =>
+      selectPrimaryActiveDomain(
+        domains
+          .filter((d) => d.status === 'active')
+          .map((d) => ({ id: d.id, hostname: d.hostname, createdAt: new Date(d.createdAt), isPrimary: d.isPrimary })),
+      )?.id ?? null,
+    [domains],
+  );
 
   return (
     <Card>
