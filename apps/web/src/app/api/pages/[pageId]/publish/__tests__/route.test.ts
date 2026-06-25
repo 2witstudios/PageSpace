@@ -219,11 +219,9 @@ describe('POST /api/pages/[pageId]/publish', () => {
 
     expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
     expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome', description: 'hi' }));
-    // `robots` is forwarded EXPLICITLY (as undefined) so the renderer applies its
-    // index default — objectContaining alone can't prove the key was passed.
+    // With no noindex override, the resolver forwards the explicit index default.
     const firstCallArg = renderPublishedPage.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(Object.prototype.hasOwnProperty.call(firstCallArg, 'robots')).toBe(true);
-    expect(firstCallArg.robots).toBeUndefined();
+    expect(firstCallArg.robots).toBe('index, follow');
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'acme', path: 'welcome', html: '<html>rendered</html>' });
     expect(onConflictDoUpdate).toHaveBeenCalledTimes(1);
 
@@ -316,6 +314,39 @@ describe('POST /api/pages/[pageId]/publish', () => {
     const res = await POST(makeReq({}), { params });
     expect(res.status).toBe(200);
     expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ faviconBaseUrl: 'https://pagespace.ai', faviconHref: undefined }));
+  });
+
+  it('accepts SEO overrides and threads them into the rendered page', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD' });
+    findFirstPublished.mockResolvedValue(null);
+
+    const res = await POST(makeReq({ title: 'Custom Title', description: 'Custom desc', noindex: true }), { params });
+    expect(res.status).toBe(200);
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Custom Title',
+      description: 'Custom desc',
+      robots: 'noindex',
+    }));
+  });
+
+  it('returns 400 when ogImageUrl is not a valid URL', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD' });
+
+    const res = await POST(makeReq({ ogImageUrl: 'not-a-url' }), { params });
+    expect(res.status).toBe(400);
+    // Schema rejected the body before any artifact write.
+    expect(putPublishedArtifact).not.toHaveBeenCalled();
+  });
+
+  it('accepts an empty-string ogImageUrl (clears the override)', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD' });
+    findFirstPublished.mockResolvedValue(null);
+
+    const res = await POST(makeReq({ ogImageUrl: '' }), { params });
+    expect(res.status).toBe(200);
   });
 
   it('returns 400 when the requested subdomain is invalid/reserved', async () => {
@@ -468,6 +499,31 @@ describe('GET /api/pages/[pageId]/publish', () => {
       subdomain: 'acme',
       path: 'welcome',
       isHomePage: false,
+      title: null,
+      description: null,
+      ogImageUrl: null,
+      noindex: false,
+    });
+  });
+
+  it('returns the persisted SEO overrides so the publish dialog can pre-fill', async () => {
+    const ts = new Date('2024-01-01T10:00:00Z');
+    findFirstPublished.mockResolvedValue({
+      driveId: 'drive-1', path: 'welcome', publishedAt: ts, updatedAt: ts,
+      publishTitle: 'Custom Title', publishDescription: 'Custom desc',
+      publishOgImageUrl: 'https://img.example/og.png', noindex: true,
+    });
+    findFirstDrive.mockResolvedValue({ publishSubdomain: 'acme' });
+    findFirstPage.mockResolvedValue({ updatedAt: ts });
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toMatchObject({
+      title: 'Custom Title',
+      description: 'Custom desc',
+      ogImageUrl: 'https://img.example/og.png',
+      noindex: true,
     });
   });
 

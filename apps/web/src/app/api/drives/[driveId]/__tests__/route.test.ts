@@ -484,6 +484,60 @@ describe('PATCH /api/drives/[driveId]', () => {
     });
   });
 
+  describe('publishDefaultOgImageUrl', () => {
+    const ownerFixtures = () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+    };
+
+    it('persists a valid default OG image URL', async () => {
+      ownerFixtures();
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ publishDefaultOgImageUrl: 'https://img.example/og.png' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(updateDrive).toHaveBeenCalledWith(
+        mockDriveId,
+        expect.objectContaining({ publishDefaultOgImageUrl: 'https://img.example/og.png' })
+      );
+    });
+
+    it('normalizes an empty string to null (clear)', async () => {
+      ownerFixtures();
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ publishDefaultOgImageUrl: '' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(updateDrive).toHaveBeenCalledWith(
+        mockDriveId,
+        expect.objectContaining({ publishDefaultOgImageUrl: null })
+      );
+    });
+
+    it('rejects a non-URL default OG image without touching the service', async () => {
+      ownerFixtures();
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ publishDefaultOgImageUrl: 'not-a-url' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(400);
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+  });
+
   describe('homePageId', () => {
     const ownerFixtures = () => {
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
