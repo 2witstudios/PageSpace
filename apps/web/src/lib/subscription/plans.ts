@@ -54,6 +54,11 @@ export interface PlanDefinition {
      * this tier. The add-domain endpoint enforces this at request time.
      */
     maxCustomDomains: number;
+    /**
+     * Whether the user can choose a custom subdomain for their published
+     * canvas site. Free users get the auto-allocated slug; Pro+ can change it.
+     */
+    canChooseSubdomain: boolean;
   };
   features: PlanFeature[];
   highlighted?: boolean;
@@ -96,6 +101,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         formatted: '50MB',
       },
       maxCustomDomains: 0,
+      canChooseSubdomain: false,
     },
     features: [
       { name: monthlyCreditsPhrase('free'), included: true },
@@ -143,6 +149,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         formatted: '250MB',
       },
       maxCustomDomains: 1,
+      canChooseSubdomain: true,
     },
     features: [
       { name: monthlyCreditsPhrase('pro'), included: true, description: '3x more than Free' },
@@ -187,6 +194,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         formatted: '500MB',
       },
       maxCustomDomains: 3,
+      canChooseSubdomain: true,
     },
     features: [
       { name: monthlyCreditsPhrase('founder'), included: true, description: '10x more than Free' },
@@ -226,6 +234,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
         formatted: '1GB',
       },
       maxCustomDomains: 10,
+      canChooseSubdomain: true,
     },
     features: [
       { name: monthlyCreditsPhrase('business'), included: true, description: '20x more than Free' },
