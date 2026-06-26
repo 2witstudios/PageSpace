@@ -7,7 +7,7 @@ import {
   isPrincipalDriveOwnerOrAdmin,
 } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { auditRequest } from '@/lib/audit/audit-log';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
