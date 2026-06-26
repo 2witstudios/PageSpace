@@ -102,6 +102,12 @@ describe('QueueManager', () => {
   });
 
   describe('initialize', () => {
+    // The FIRST initialize() in this file pays a one-time cost: startWorkers()
+    // fires 7 dynamic `await import(...)` of worker modules, and vitest resolves
+    // + transforms that module graph on first import (mocks don't skip resolution).
+    // On a loaded CI runner that cold-start can exceed the 5s default timeout,
+    // while every later initialize() hits the module cache and is instant — hence
+    // a generous timeout only here. Not a product-code issue.
     it('starts pg-boss and sets up workers', async () => {
       const qm = new QueueManager();
       await qm.initialize();
@@ -126,7 +132,7 @@ describe('QueueManager', () => {
       expect(mockBossCreateQueue).toHaveBeenCalledWith('siem-delivery');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('account-erasure');
       expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
-    });
+    }, 30000);
 
     it('handles queue creation errors gracefully', async () => {
       mockBossCreateQueue.mockRejectedValue(new Error('Queue already exists'));
