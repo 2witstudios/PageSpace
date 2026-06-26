@@ -16,7 +16,7 @@ import { getPlan } from '@/lib/subscription/plans';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { changePublishSubdomain, PublishError } from '@/lib/canvas/publish-page';
 
-const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true }; // keep PATCH CSRF-protected
 
 const schema = z.object({
   subdomain: z.string().min(1).max(63),
