@@ -392,6 +392,10 @@ export async function GET(request: Request) {
       // the multi-word substring-match behaviour for both plaintext and
       // ciphertext rows.
       if (authorizedUserIds.size > 0) {
+        const words = query.trim()
+          ? query.trim().split(/\s+/).filter(Boolean).map((w) => w.toLowerCase())
+          : [];
+
         const userRows = await db.select({
           id: users.id,
           name: users.name,
@@ -400,11 +404,16 @@ export async function GET(request: Request) {
         .from(users)
         .where(inArray(users.id, Array.from(authorizedUserIds)));
 
-        const decryptedUsers = await decryptUserRows(userRows);
+        // Decryption runs scrypt per value, so avoid decrypting the whole
+        // authorized set when we don't have to. With no query, nothing is
+        // filtered by name and only the first 10 rows can ever be shown — so
+        // decrypt just those. With a query present we must decrypt every
+        // candidate (ciphertext can't be substring-matched in SQL); that scan
+        // is bounded to authorized drive members, and a name blind index is the
+        // follow-up that removes it (mirrors the deferred email blind-index work).
+        const rowsToDecrypt = words.length === 0 ? userRows.slice(0, 10) : userRows;
+        const decryptedUsers = await decryptUserRows(rowsToDecrypt);
 
-        const words = query.trim()
-          ? query.trim().split(/\s+/).filter(Boolean).map((w) => w.toLowerCase())
-          : [];
         const matches = decryptedUsers.filter((user) => {
           if (words.length === 0) return true;
           const name = (user.name ?? '').toLowerCase();
