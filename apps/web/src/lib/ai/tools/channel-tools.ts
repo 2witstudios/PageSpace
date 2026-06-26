@@ -158,25 +158,12 @@ export const channelTools = {
             channelLogger.warn('Failed to get actor info for activity logging');
           });
 
-        // Fetch the complete message with user info for broadcasting
-        const newMessage = await db.query.channelMessages.findFirst({
-          where: eq(channelMessages.id, createdMessage.id),
-          with: {
-            user: {
-              columns: { id: true, name: true, image: true },
-            },
-            file: {
-              columns: { id: true, mimeType: true, sizeBytes: true },
-            },
-            reactions: {
-              with: {
-                user: {
-                  columns: { id: true, name: true },
-                },
-              },
-            },
-          },
-        });
+        // Fetch the complete message with user info for broadcasting. Routed
+        // through the repository loader so the joined author/reactor name PII is
+        // decrypted at the edge (GDPR #965) before this payload is broadcast to
+        // every channel member — an inline query here would leak ciphertext once
+        // the flag is on (legacy plaintext passes through unchanged).
+        const newMessage = await channelMessageRepository.loadChannelMessageWithRelations(createdMessage.id);
 
         // Broadcast to real-time channel
         if (process.env.INTERNAL_REALTIME_URL && newMessage) {
