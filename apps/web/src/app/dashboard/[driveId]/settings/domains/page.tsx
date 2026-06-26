@@ -459,7 +459,7 @@ function SubdomainCard({ subdomain, canChange, inputValue, onInputChange, onSave
           </>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Custom subdomain selection is a Pro feature. <Link href="/dashboard/settings/billing" className="text-blue-500 hover:underline">Upgrade</Link> to choose your own subdomain.
+            Custom subdomain selection is a Pro feature. <Link href="/settings/billing" className="text-blue-500 hover:underline">Upgrade</Link> to choose your own subdomain.
           </p>
         )}
       </CardContent>

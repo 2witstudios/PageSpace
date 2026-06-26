@@ -218,7 +218,6 @@ describe('Subscription Plans', () => {
         expect(plans[i].limits.monthlyCreditsCents).toBeGreaterThan(plans[i - 1].limits.monthlyCreditsCents);
       }
     });
-    });
 
     it('should gate canChooseSubdomain to Pro and above', () => {
       expect(PLANS.free.limits.canChooseSubdomain).toBe(false);

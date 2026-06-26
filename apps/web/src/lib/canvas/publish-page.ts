@@ -6,7 +6,7 @@ import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service'
 import { slugify } from '@pagespace/lib/utils/utils';
 import { validatePublishSubdomain, normalizeSubdomain } from '@pagespace/lib/validators/subdomain';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, and, ne } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
@@ -21,6 +21,7 @@ import {
   copyPublishedArtifact,
   isPublishConfigured,
   getPublishAssetBaseUrl,
+  clearPublishedPrefix,
 } from './published-storage';
 import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMeta } from './asset-pipeline';
 import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml } from '@pagespace/lib/canvas/site-files';
@@ -473,10 +474,27 @@ export async function changePublishSubdomain(
     throw new PublishError(`Subdomain "${normalized}" is already taken`, 409);
   }
 
-  await db.update(drives).set({ publishSubdomain: normalized }).where(eq(drives.id, driveId));
+  try {
+    await db.update(drives).set({ publishSubdomain: normalized }).where(eq(drives.id, driveId));
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new PublishError(`Subdomain "${normalized}" is already taken`, 409);
+    }
+    throw err;
+  }
 
   // Re-render all published pages under the new subdomain prefix.
-  await republishDriveCanonical(driveId, userId);
+  const publishedRows = await db.query.publishedPages.findMany({
+    where: eq(publishedPages.driveId, driveId),
+    columns: { pageId: true },
+  });
+  const refreshedCount = await republishDriveCanonical(driveId, userId);
+  if (refreshedCount !== publishedRows.length) {
+    throw new PublishError(
+      `Subdomain migration incomplete: refreshed ${refreshedCount}/${publishedRows.length} published pages`,
+      500,
+    );
+  }
 
   // Regenerate robots/sitemap/404 under the new prefix.
   await regeneratePublishedSiteFiles(driveId);
