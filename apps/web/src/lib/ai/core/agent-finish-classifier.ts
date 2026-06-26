@@ -122,10 +122,11 @@ export function classifyAttempt(args: ClassifyAttemptArgs): AttemptOutcome {
       return { kind: 'terminal', reason: 'content-filter' };
 
     case 'other':
-    case 'unknown':
     case undefined:
     default:
       // Ambiguous provider state. Only retry-from-scratch when nothing was streamed;
+      // (v6 removed the 'unknown' FinishReason; 'error' is handled above, anything
+      // else falls through here.)
       // once content is on the wire, restarting would duplicate it, so stop here.
       return args.emittedContent
         ? { kind: 'terminal', reason: 'ambiguous' }

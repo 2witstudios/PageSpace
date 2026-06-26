@@ -201,10 +201,11 @@ export async function prepareHistoryForModel(
  * ToolSet reference given to streamText/generateText so divergence is
  * structurally impossible.
  */
-export function finishModelRequest(params: FinishRequestParams): FinishRequestResult {
+export async function finishModelRequest(params: FinishRequestParams): Promise<FinishRequestResult> {
   const { prepared, tools, tail } = params;
   const toConvert = tail ?? (prepared.messages as Parameters<typeof convertToModelMessages>[0]);
-  const tailModelMessages = convertToModelMessages(toConvert, { tools });
+  // v6: convertToModelMessages is async.
+  const tailModelMessages = await convertToModelMessages(toConvert, { tools });
   const modelMessages: ModelMessage[] = prepared.summaryText
     ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]
     : tailModelMessages;

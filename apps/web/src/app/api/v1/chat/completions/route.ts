@@ -365,7 +365,7 @@ export async function POST(request: Request): Promise<Response> {
 
     // Sliding-window compaction: only active for thread-mode calls where we own history.
     // Non-admin users, client-manages-history, and non-thread-mode all get exact legacy behavior.
-    let compactedModelMessages: ModelMessage[] = convertToModelMessages(sanitized);
+    let compactedModelMessages: ModelMessage[] = await convertToModelMessages(sanitized);
     let v1ScheduleCompaction: () => void = () => undefined;
     if (isThreadMode && !clientManagesHistory) {
       const prepared = await prepareHistoryForModel({
@@ -380,7 +380,7 @@ export async function POST(request: Request): Promise<Response> {
         user: { id: authResult.userId, role: gateUser?.role ?? null },
       });
       v1ScheduleCompaction = prepared.scheduleCompaction;
-      ({ modelMessages: compactedModelMessages } = finishModelRequest({ prepared, tools: finalTools }));
+      ({ modelMessages: compactedModelMessages } = await finishModelRequest({ prepared, tools: finalTools }));
     }
 
     // Standard OpenAI-style cancel: the consumer closing the HTTP connection stops generation.
@@ -555,8 +555,8 @@ export async function POST(request: Request): Promise<Response> {
           if (aborted) {
             loggers.ai.info('OpenAI API: stream aborted by consumer', { pageId, conversationId });
           }
-          const totalUsage = await aiResult.totalUsage.catch(() => undefined);
-          const steps = await aiResult.steps.catch(() => undefined);
+          const totalUsage = await Promise.resolve(aiResult.totalUsage).catch(() => undefined);
+          const steps = await Promise.resolve(aiResult.steps).catch(() => undefined);
           await settle({ aborted, text: assistantText || undefined, totalUsage, steps });
           if (!aborted) v1ScheduleCompaction();
           if (!aborted) {
@@ -572,8 +572,8 @@ export async function POST(request: Request): Promise<Response> {
           // Gather whatever partial usage/spend the stream produced before failing.
           // totalUsage/steps reject if the stream never produced them — treat that as
           // "nothing burned".
-          const totalUsage = await aiResult.totalUsage.catch(() => undefined);
-          const steps = await aiResult.steps.catch(() => undefined);
+          const totalUsage = await Promise.resolve(aiResult.totalUsage).catch(() => undefined);
+          const steps = await Promise.resolve(aiResult.steps).catch(() => undefined);
 
           if (aborted) {
             // Some providers surface an abort as a thrown AbortError instead of ending the

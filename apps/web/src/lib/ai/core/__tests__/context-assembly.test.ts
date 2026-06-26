@@ -204,22 +204,22 @@ describe('prepareHistoryForModel — metadata passthrough', () => {
 describe('finishModelRequest', () => {
   const tail = [userMsg('u0', 'hello'), assistantReadMsg('a0')];
 
-  it('no summary — returns tail as modelMessages, stableBoundaryIndex=0', () => {
+  it('no summary — returns tail as modelMessages, stableBoundaryIndex=0', async () => {
     const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
-    const { modelMessages, stableBoundaryIndex } = finishModelRequest({ prepared, tools: {} as never });
+    const { modelMessages, stableBoundaryIndex } = await finishModelRequest({ prepared, tools: {} as never });
 
     expect(stableBoundaryIndex).toBe(0);
     // convertToModelMessages is mocked as identity — messages flow through unchanged
     expect(modelMessages).toEqual(tail);
   });
 
-  it('with summary — prepends summary message and stableBoundaryIndex=1', () => {
+  it('with summary — prepends summary message and stableBoundaryIndex=1', async () => {
     const prepared = {
       summaryText: 'summary text here',
       messages: tail,
       stableBoundaryIndex: 1,
     };
-    const { modelMessages, stableBoundaryIndex } = finishModelRequest({ prepared, tools: {} as never });
+    const { modelMessages, stableBoundaryIndex } = await finishModelRequest({ prepared, tools: {} as never });
 
     expect(stableBoundaryIndex).toBe(1);
     expect(modelMessages[0]).toEqual({ role: 'user', content: 'summary text here' });
@@ -227,10 +227,10 @@ describe('finishModelRequest', () => {
     expect(modelMessages).toHaveLength(tail.length + 1);
   });
 
-  it('tail override — converts the provided tail instead of prepared.messages', () => {
+  it('tail override — converts the provided tail instead of prepared.messages', async () => {
     const overrideTail = [userMsg('u99', 'override')] as unknown as Parameters<typeof import('ai').convertToModelMessages>[0];
     const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
-    const { modelMessages } = finishModelRequest({ prepared, tail: overrideTail, tools: {} as never });
+    const { modelMessages } = await finishModelRequest({ prepared, tail: overrideTail, tools: {} as never });
 
     expect(modelMessages).toEqual(overrideTail);
   });
@@ -241,7 +241,7 @@ describe('finishModelRequest', () => {
     const myTools = { tool_a: {} } as never;
     const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
 
-    finishModelRequest({ prepared, tools: myTools });
+    await finishModelRequest({ prepared, tools: myTools });
 
     expect(mockConvert).toHaveBeenCalledWith(
       expect.anything(),
@@ -255,7 +255,7 @@ describe('finishModelRequest', () => {
     mockConvert.mockClear();
     const prepared = { summaryText: '', messages: tail, stableBoundaryIndex: 0 };
 
-    finishModelRequest({ prepared, tools: {} as never });
+    await finishModelRequest({ prepared, tools: {} as never });
 
     expect(mockConvert).toHaveBeenCalledWith(expect.anything(), { tools: {} });
   });

@@ -173,20 +173,20 @@ describe('classifyAttempt', () => {
     });
   });
 
-  it('unknown/other finish reasons with no content are ambiguous retries', () => {
+  it('other finish reasons with no content are ambiguous retries', () => {
     assert({
-      given: 'an unknown finishReason before any content',
+      given: "an 'other' finishReason before any content",
       should: 'retry as ambiguous',
-      actual: classifyAttempt(base({ finishReason: 'unknown', emittedContent: false })),
+      actual: classifyAttempt(base({ finishReason: 'other', emittedContent: false })),
       expected: { kind: 'retry', reason: 'ambiguous' },
     });
   });
 
-  it('unknown/other finish reasons AFTER content are terminal', () => {
+  it('other finish reasons AFTER content are terminal', () => {
     assert({
-      given: 'an unknown finishReason after content was streamed',
+      given: "an 'other' finishReason after content was streamed",
       should: 'be terminal:ambiguous (restarting would duplicate)',
-      actual: classifyAttempt(base({ finishReason: 'unknown', emittedContent: true })),
+      actual: classifyAttempt(base({ finishReason: 'other', emittedContent: true })),
       expected: { kind: 'terminal', reason: 'ambiguous' },
     });
   });

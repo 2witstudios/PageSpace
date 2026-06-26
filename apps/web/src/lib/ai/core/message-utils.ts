@@ -61,7 +61,15 @@ interface ToolCall {
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
-  state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error';
+  // v6 widened tool-part states with the human-in-the-loop approval lifecycle.
+  state:
+    | 'input-streaming'
+    | 'input-available'
+    | 'output-available'
+    | 'output-error'
+    | 'approval-requested'
+    | 'approval-responded'
+    | 'output-denied';
 }
 
 interface ToolResult {
