@@ -303,7 +303,12 @@ export const driveInviteRepository = {
       .innerJoin(users, eq(users.id, pendingInvites.invitedBy))
       .where(eq(pendingInvites.tokenHash, tokenHash))
       .limit(1);
-    return results.at(0) ?? null;
+    const row = results.at(0);
+    if (!row) return null;
+    // Decrypt the inviter's joined name PII at the edge (GDPR #965) — this flows
+    // to the invite/signup screens (legacy plaintext passes through unchanged).
+    row.inviterName = await decryptField(row.inviterName);
+    return row;
   },
 
   async findActivePendingInviteByDriveAndEmail(
@@ -409,7 +414,7 @@ export const driveInviteRepository = {
     createdAt: Date;
     expiresAt: Date | null;
   }>> {
-    return db
+    const rows = await db
       .select({
         id: pendingInvites.id,
         email: pendingInvites.email,
@@ -431,6 +436,14 @@ export const driveInviteRepository = {
           isNull(pendingInvites.consumedAt),
         ),
       );
+    // Decrypt the inviter's joined name PII at the edge (GDPR #965) — this list
+    // is returned to the member-management UI (legacy plaintext passes through).
+    await Promise.all(
+      rows.map(async (r) => {
+        r.invitedByName = await decryptField(r.invitedByName);
+      }),
+    );
+    return rows;
   },
 
   // Loader for the revoke route (PR 2). Returns expired-unconsumed rows too

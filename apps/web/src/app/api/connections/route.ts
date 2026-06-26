@@ -5,6 +5,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { userProfiles } from '@pagespace/db/schema/members'
 import { connections } from '@pagespace/db/schema/social';
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -202,7 +203,9 @@ export async function POST(request: Request) {
       .where(eq(users.id, userId))
       .limit(1);
 
-    const senderName = sender?.displayName || sender?.name || 'Someone';
+    // Decrypt the sender's name PII at the edge (GDPR #965) — it is embedded in
+    // the notification message + email metadata (legacy plaintext passes through).
+    const senderName = sender?.displayName || (await decryptField(sender?.name)) || 'Someone';
 
     // Send notification to target user (broadcasts via Socket.IO)
     await createNotification({

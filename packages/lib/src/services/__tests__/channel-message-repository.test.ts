@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Boundary-level test double: see test-doubles/db.ts for the design rationale
 // (no thenable Drizzle chain mocks; assertions read observable state, not the
@@ -27,6 +27,9 @@ vi.mock('@pagespace/db/schema/storage', async () => {
 });
 
 import { channelMessageRepository } from '../channel-message-repository';
+// Real encryption helpers (NOT mocked) — prove ciphertext seeded at rest is
+// decrypted at the read edge. Legacy plaintext must still pass through.
+import { encryptField, looksEncrypted } from '../../encryption/field-crypto';
 
 interface AssertParams {
   given: string;
@@ -1043,6 +1046,99 @@ describe('channelMessageRepository surface', () => {
         'updateChannelMessageContent',
         'upsertChannelReadStatus',
       ],
+    });
+  });
+});
+
+describe('channelMessageRepository — PII decryption at the read edge (GDPR #965)', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    // A >=32-char key so the real AES-GCM encrypt/decrypt primitives are usable.
+    process.env.ENCRYPTION_KEY = 'channel-repo-pii-test-master-key-32chars!';
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('listChannelMessages decrypts the joined author and reactor names', async () => {
+    const aliceCipher = await encryptField('Alice');
+    const bobCipher = await encryptField('Bob');
+    // Guard: the seeded values are genuinely ciphertext, not plaintext.
+    expect(looksEncrypted(aliceCipher)).toBe(true);
+    expect(looksEncrypted(bobCipher)).toBe(true);
+
+    testDbState.seed('users', [
+      { id: 'u-1', name: aliceCipher, image: '/a.png' },
+      { id: 'u-2', name: bobCipher },
+    ]);
+    testDbState.seed('channelMessages', [
+      { id: 'm-1', pageId: 'page-1', userId: 'u-1', isActive: true, parentId: null, createdAt: new Date('2026-05-01T00:00:00Z') },
+    ]);
+    testDbState.seed('channelMessageReactions', [
+      { id: 'rx-1', messageId: 'm-1', userId: 'u-2', emoji: '👍' },
+    ]);
+
+    const rows = await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
+
+    assert({
+      given: 'author + reactor names stored as AES-GCM ciphertext at rest',
+      should: 'return plaintext names at the read edge for both the author and the reactor',
+      actual: {
+        author: (rows[0]?.user as { name: string } | null)?.name,
+        reactor: (rows[0]?.reactions as Array<{ user: { name: string } }> | undefined)?.[0]?.user?.name,
+      },
+      expected: { author: 'Alice', reactor: 'Bob' },
+    });
+  });
+
+  it('loadChannelMessageWithRelations decrypts the joined author name', async () => {
+    const cipher = await encryptField('Carol');
+    testDbState.seed('users', [{ id: 'u-9', name: cipher }]);
+    testDbState.seed('channelMessages', [
+      { id: 'm-9', pageId: 'page-1', userId: 'u-9', isActive: true, parentId: null },
+    ]);
+
+    const row = await channelMessageRepository.loadChannelMessageWithRelations('m-9');
+
+    assert({
+      given: 'a single message whose author name is ciphertext at rest',
+      should: 'decrypt the author name on the loaded relation',
+      actual: (row?.user as { name: string } | null)?.name,
+      expected: 'Carol',
+    });
+  });
+
+  it('loadChannelReactionWithUser decrypts the reactor name', async () => {
+    const cipher = await encryptField('Dave');
+    testDbState.seed('users', [{ id: 'u-7', name: cipher }]);
+    testDbState.seed('channelMessageReactions', [
+      { id: 'rx-7', messageId: 'm-7', userId: 'u-7', emoji: '🎉' },
+    ]);
+
+    const row = await channelMessageRepository.loadChannelReactionWithUser('rx-7');
+
+    assert({
+      given: 'a reaction whose reactor name is ciphertext at rest',
+      should: 'decrypt the reactor name before the row is broadcast',
+      actual: (row?.user as { name: string } | null)?.name,
+      expected: 'Dave',
+    });
+  });
+
+  it('passes legacy plaintext names through unchanged (mixed-state safety)', async () => {
+    testDbState.seed('users', [{ id: 'u-legacy', name: 'Plain Pat' }]);
+    testDbState.seed('channelMessages', [
+      { id: 'm-legacy', pageId: 'page-1', userId: 'u-legacy', isActive: true, parentId: null },
+    ]);
+
+    const rows = await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
+
+    assert({
+      given: 'a legacy row whose name is still plaintext (mid-backfill)',
+      should: 'pass the plaintext name through unchanged',
+      actual: (rows[0]?.user as { name: string } | null)?.name,
+      expected: 'Plain Pat',
     });
   });
 });
