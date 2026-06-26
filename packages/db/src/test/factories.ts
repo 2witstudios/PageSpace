@@ -16,7 +16,7 @@ export const factories = {
       tokenVersion: 0,
       role: 'user' as const,
       currentAiProvider: 'openai',
-      currentAiModel: 'openai/gpt-5.3-chat',
+      currentAiModel: 'openai/gpt-5.3-codex',
       storageUsedBytes: 0,
       activeUploads: 0,
       subscriptionTier: 'free',

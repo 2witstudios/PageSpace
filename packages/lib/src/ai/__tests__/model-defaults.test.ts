@@ -7,9 +7,9 @@ import {
 } from '../model-defaults';
 
 describe('model-defaults', () => {
-  it('defaults to the OpenAI GPT-5.3 Chat product default (OpenRouter-backed)', () => {
+  it('defaults to the OpenAI GPT-5.3 Codex product default (OpenRouter-backed)', () => {
     expect(DEFAULT_AI_PROVIDER).toBe('openai');
-    expect(DEFAULT_AI_MODEL).toBe('openai/gpt-5.3-chat');
+    expect(DEFAULT_AI_MODEL).toBe('openai/gpt-5.3-codex');
   });
 
   it('uses a vendor-prefixed (OpenRouter) model id', () => {

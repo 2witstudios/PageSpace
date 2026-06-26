@@ -1,0 +1,1 @@
+ALTER TABLE "users" ALTER COLUMN "currentAiModel" SET DEFAULT 'openai/gpt-5.3-codex';
