@@ -28,7 +28,7 @@ export const users = pgTable('users', {
   role: userRole('role').default('user').notNull(),
   adminRoleVersion: integer('adminRoleVersion').default(0).notNull(),
   currentAiProvider: text('currentAiProvider').default('openai').notNull(),
-  currentAiModel: text('currentAiModel').default('openai/gpt-5.3-chat').notNull(),
+  currentAiModel: text('currentAiModel').default('openai/gpt-5.3-codex').notNull(),
   // Storage tracking fields (quota/tier now computed from subscriptionTier)
   storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
   activeUploads: integer('activeUploads').default(0).notNull(),

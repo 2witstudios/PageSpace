@@ -60,7 +60,7 @@ Documents use a TipTap rich-text editor with:
 
 ## 4. Set Up AI
 
-PageSpace gives you one catalogue of models from many vendors, organised by vendor, so you reach them all without supplying any API keys — PageSpace manages the credentials. The default model is \`openai/gpt-5.3-chat\`.
+PageSpace gives you one catalogue of models from many vendors, organised by vendor, so you reach them all without supplying any API keys — PageSpace manages the credentials. The default model is \`openai/gpt-5.3-codex\`.
 
 | Vendor | What it is |
 |--------|-----------|
@@ -70,7 +70,7 @@ PageSpace gives you one catalogue of models from many vendors, organised by vend
 | xAI | Grok 4 family |
 | DeepSeek, Qwen, Mistral, Moonshot, MiniMax, Meta, and more | Additional open and frontier models in the catalogue |
 
-Open **Settings > AI** to pick a model. The model you pick becomes your account-level default; any individual AI Chat page can override it. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost. Free accounts use a curated allowlist — \`openai/gpt-5.3-chat\` (default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family — while paid plans unlock the full catalogue.
+Open **Settings > AI** to pick a model. The model you pick becomes your account-level default; any individual AI Chat page can override it. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost. Free accounts use a curated allowlist — \`openai/gpt-5.3-codex\` (default), \`openai/gpt-5.3-chat\`, the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family — while paid plans unlock the full catalogue.
 
 ## 5. Create an AI Agent
 

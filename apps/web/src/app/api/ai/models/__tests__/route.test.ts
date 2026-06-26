@@ -16,7 +16,7 @@ describe('GET /api/ai/models', () => {
     const body = await res.json();
     expect(Array.isArray(body.providers)).toBe(true);
     expect(body.defaultProvider).toBe('openai');
-    expect(body.defaultModel).toBe('openai/gpt-5.3-chat');
+    expect(body.defaultModel).toBe('openai/gpt-5.3-codex');
   });
 
   it('includes a known model and never includes pricing', async () => {

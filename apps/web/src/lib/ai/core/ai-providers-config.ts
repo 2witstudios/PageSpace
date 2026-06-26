@@ -54,6 +54,7 @@ export const ADMIN_ONLY_PROVIDERS = new Set<string>(['glm']);
  * this curated set of cheaper models. `DEFAULT_MODEL` must be a member.
  */
 export const FREE_TIER_MODELS = new Set<string>([
+  'openai/gpt-5.3-codex',
   'openai/gpt-5.3-chat',
   'openai/gpt-5.4-nano',
   'openai/gpt-5.4-mini',
