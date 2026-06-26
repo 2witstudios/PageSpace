@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { readCookieValue, buildConsentCookieString } from '../cookie-utils';
+import {
+  readCookieValue,
+  buildConsentCookieString,
+  buildExpireHostOnlyConsentCookieString,
+} from '../cookie-utils';
 
 describe('cookie-utils: readCookieValue', () => {
   it('reads a named cookie from a document.cookie string', () => {
@@ -45,6 +49,20 @@ describe('cookie-utils: buildConsentCookieString', () => {
 
   it('omits the domain attribute for an empty-string domain', () => {
     const out = buildConsentCookieString('ps_consent', '{"a":1}', 1000, '');
+    expect(out.toLowerCase()).not.toContain('domain=');
+  });
+});
+
+describe('cookie-utils: buildExpireHostOnlyConsentCookieString', () => {
+  it('names the cookie and expires it immediately at path /', () => {
+    const out = buildExpireHostOnlyConsentCookieString('ps_consent');
+    expect(out).toContain('ps_consent=');
+    expect(out.toLowerCase()).toContain('max-age=0');
+    expect(out).toContain('path=/');
+  });
+
+  it('omits any domain attribute so it targets the host-only cookie', () => {
+    const out = buildExpireHostOnlyConsentCookieString('ps_consent');
     expect(out.toLowerCase()).not.toContain('domain=');
   });
 });

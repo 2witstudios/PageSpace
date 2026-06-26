@@ -38,3 +38,17 @@ export function buildConsentCookieString(
   const domainAttr = domain ? `; domain=${domain}` : '';
   return `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSeconds}; samesite=lax${domainAttr}`;
 }
+
+/**
+ * Build a `document.cookie` assignment that expires the LEGACY host-only consent cookie.
+ *
+ * When we migrate to a domain-scoped cookie (`domain=.pagespace.ai`), writing the new
+ * cookie does NOT replace a pre-existing host-only cookie of the same name — the browser
+ * keeps both, and `readCookieValue` may return the stale host-only one. This delete must
+ * OMIT the `domain` attribute: a host-only cookie can only be cleared by a host-only
+ * `Set-Cookie`, so adding `domain=` here would target the wrong (domain-scoped) cookie and
+ * leave the stale value in place. The caller writes this before the new domain-scoped value.
+ */
+export function buildExpireHostOnlyConsentCookieString(name: string): string {
+  return `${name}=; path=/; max-age=0; samesite=lax`;
+}
