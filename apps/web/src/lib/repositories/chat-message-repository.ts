@@ -8,6 +8,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, lt } from '@pagespace/db/operators'
 import { chatMessages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 
 export interface ToolResult {
   toolCallId: string;
@@ -98,7 +99,10 @@ export const chatMessageRepository = {
       )
       .orderBy(chatMessages.createdAt);
 
-    return messages as ChatMessage[];
+    // Decrypt PII at the edge (GDPR #965) so the message author name is plaintext.
+    return Promise.all(
+      messages.map(async (m) => ({ ...m, userName: await decryptField(m.userName) })),
+    ) as Promise<ChatMessage[]>;
   },
 
   /**

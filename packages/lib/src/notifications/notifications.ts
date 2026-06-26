@@ -8,6 +8,7 @@ import { sendNotificationEmail } from '../services/notification-email-service';
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
 import { sendPushNotification, type PushNotificationPayload } from './push-notifications';
 import { decryptUserRow } from '../auth/user-repository';
+import { decryptField } from '../encryption/field-crypto';
 
 // Export types and guards
 export * from './types';
@@ -242,9 +243,13 @@ export async function createPermissionNotification(
 
   if (!page) return null;
 
-  const triggeredByUser = await db.query.users.findFirst({
+  // Decrypt PII at the edge: the actor's name is embedded verbatim into the
+  // stored notification `message` + email-template metadata (denormalized display
+  // snapshots, NOT encrypted columns), so it must be plaintext (GDPR #965).
+  const triggeredByUserRow = await db.query.users.findFirst({
     where: eq(users.id, triggeredByUserId),
   });
+  const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
   const permissionList = [];
   if (permissions.canView) permissionList.push('view');
@@ -309,9 +314,12 @@ export async function createDriveNotification(
 
   if (!drive) return null;
 
-  const triggeredByUser = triggeredByUserId ? await db.query.users.findFirst({
+  // Decrypt PII at the edge (GDPR #965): the actor name is snapshotted into the
+  // notification `message` + email-template metadata (plaintext display fields).
+  const triggeredByUserRow = triggeredByUserId ? await db.query.users.findFirst({
     where: eq(users.id, triggeredByUserId),
   }) : null;
+  const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
   let notificationType: NotificationType;
   let title: string;
@@ -358,12 +366,14 @@ export async function createOrUpdateMessageNotification(
   triggeredByUserId: string,
   senderName?: string
 ) {
-  // Get sender name if not provided
+  // Get sender name if not provided. Decrypt PII at the edge (GDPR #965): the
+  // sender name is snapshotted into the notification title/push/email, which are
+  // plaintext display surfaces (legacy plaintext passes through unchanged).
   if (!senderName) {
     const sender = await db.query.users.findFirst({
       where: eq(users.id, triggeredByUserId),
     });
-    senderName = sender?.name || 'Someone';
+    senderName = (await decryptField(sender?.name)) || 'Someone';
   }
 
   // Check if there's an existing unread notification for this specific conversation
@@ -453,11 +463,14 @@ export async function createMentionNotification(
 
   if (!page) return null;
 
-  const triggeredByUser = options?.mentionerNameOverride
+  // Decrypt PII at the edge (GDPR #965): the mentioner name is snapshotted into
+  // the notification message/metadata (plaintext display surface).
+  const triggeredByUserRow = options?.mentionerNameOverride
     ? null
     : await db.query.users.findFirst({
         where: eq(users.id, triggeredByUserId),
       });
+  const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
   const mentionerName = options?.mentionerNameOverride || triggeredByUser?.name || 'Someone';
 
@@ -501,9 +514,12 @@ export async function createTaskAssignedNotification(
 
   if (!taskListPage) return null;
 
-  const triggeredByUser = await db.query.users.findFirst({
+  // Decrypt PII at the edge (GDPR #965): the assigner name is snapshotted into
+  // the notification message/metadata (plaintext display surface).
+  const triggeredByUserRow = await db.query.users.findFirst({
     where: eq(users.id, triggeredByUserId),
   });
+  const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
   const assignerName = triggeredByUser?.name || 'Someone';
 

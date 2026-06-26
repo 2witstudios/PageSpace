@@ -3,6 +3,7 @@ import { and, eq, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
+import { decryptField } from '../encryption/field-crypto';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import type { DriveShareLink, ShareLinkPermission } from '@pagespace/db/schema/share-links';
 import { createId } from '@paralleldrive/cuid2';
@@ -483,7 +484,8 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
       customRoleId: row.customRoleId,
       customRoleName: row.customRoleName,
       customRoleColor: row.customRoleColor,
-      creatorName: row.creatorName ?? 'Unknown',
+      // Decrypt PII at the edge (GDPR #965) so the creator name is plaintext.
+      creatorName: (await decryptField(row.creatorName)) ?? 'Unknown',
       expiresAt: row.expiresAt ?? null,
       useCount: row.useCount,
     };
@@ -521,7 +523,8 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
       pageTitle: row.pageTitle ?? undefined,
       driveName: row.driveName ?? undefined,
       permissions: row.permissions,
-      creatorName: row.creatorName ?? 'Unknown',
+      // Decrypt PII at the edge (GDPR #965) so the creator name is plaintext.
+      creatorName: (await decryptField(row.creatorName)) ?? 'Unknown',
       expiresAt: row.expiresAt ?? null,
       useCount: row.useCount,
     };
