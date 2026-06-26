@@ -26,7 +26,7 @@
     "electron-updater": "^6.6.2",
     "node-machine-id": "^1.1.12",
     "ws": "^8.18.3",
-    "zod": "^4.0.16"
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@types/node": "^20.17.12",

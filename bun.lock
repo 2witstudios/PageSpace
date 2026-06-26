@@ -65,7 +65,7 @@
         "recharts": "^3.1.2",
         "stripe": "^20.1.0",
         "tailwind-merge": "^3.3.1",
-        "zod": "^4.0.16",
+        "zod": "^4.1.8",
       },
       "devDependencies": {
         "@eslint/eslintrc": "^3",
@@ -154,7 +154,7 @@
         "electron-updater": "^6.6.2",
         "node-machine-id": "^1.1.12",
         "ws": "^8.18.3",
-        "zod": "^4.0.16",
+        "zod": "^4.1.8",
       },
       "devDependencies": {
         "@types/node": "^20.17.12",
@@ -431,7 +431,7 @@
         "use-debounce": "^10.0.5",
         "use-stick-to-bottom": "^1.1.1",
         "ws": "^8.18.3",
-        "zod": "^4.0.16",
+        "zod": "^4.1.8",
         "zustand": "^5.0.6",
       },
       "devDependencies": {
@@ -501,7 +501,7 @@
         "server-only": "^0.0.1",
         "xlsx": "^0.18.5",
         "yaml": "^2.8.2",
-        "zod": "^4.0.16",
+        "zod": "^4.1.8",
       },
       "devDependencies": {
         "@react-email/preview-server": "5.1.1",
