@@ -55,6 +55,7 @@ jobs:
               NEXT_PUBLIC_PUBLISH_EDGE_IPV4=137.66.4.209
               NEXT_PUBLIC_PUBLISH_EDGE_IPV6=2a09:8280:1::118:198f:0
               NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=pagespace-proxy.fly.dev
+              NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
           - service: migrate
             dockerfile: apps/web/Dockerfile.migrate
             context: .

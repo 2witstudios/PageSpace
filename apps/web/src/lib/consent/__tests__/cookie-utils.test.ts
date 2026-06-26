@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { readCookieValue, buildConsentCookieString } from '../cookie-utils';
+import {
+  readCookieValue,
+  buildConsentCookieString,
+  buildExpireHostOnlyConsentCookieString,
+} from '../cookie-utils';
 
 describe('cookie-utils: readCookieValue', () => {
   it('reads a named cookie from a document.cookie string', () => {
@@ -27,5 +31,38 @@ describe('cookie-utils: buildConsentCookieString', () => {
     expect(out).toContain('path=/');
     expect(out).toContain('max-age=1000');
     expect(out.toLowerCase()).toContain('samesite=lax');
+  });
+
+  it('omits the domain attribute when no domain is given', () => {
+    const out = buildConsentCookieString('ps_consent', '{"a":1}', 1000);
+    expect(out.toLowerCase()).not.toContain('domain=');
+  });
+
+  it('appends the domain attribute when a domain is given (shares the cookie across subdomains)', () => {
+    const out = buildConsentCookieString('ps_consent', '{"a":1}', 1000, '.pagespace.ai');
+    expect(out).toContain('domain=.pagespace.ai');
+    // other attributes are unaffected
+    expect(out).toContain('path=/');
+    expect(out).toContain('max-age=1000');
+    expect(out.toLowerCase()).toContain('samesite=lax');
+  });
+
+  it('omits the domain attribute for an empty-string domain', () => {
+    const out = buildConsentCookieString('ps_consent', '{"a":1}', 1000, '');
+    expect(out.toLowerCase()).not.toContain('domain=');
+  });
+});
+
+describe('cookie-utils: buildExpireHostOnlyConsentCookieString', () => {
+  it('names the cookie and expires it immediately at path /', () => {
+    const out = buildExpireHostOnlyConsentCookieString('ps_consent');
+    expect(out).toContain('ps_consent=');
+    expect(out.toLowerCase()).toContain('max-age=0');
+    expect(out).toContain('path=/');
+  });
+
+  it('omits any domain attribute so it targets the host-only cookie', () => {
+    const out = buildExpireHostOnlyConsentCookieString('ps_consent');
+    expect(out.toLowerCase()).not.toContain('domain=');
   });
 });
