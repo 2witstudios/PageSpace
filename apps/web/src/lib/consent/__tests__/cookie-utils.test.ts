@@ -28,4 +28,23 @@ describe('cookie-utils: buildConsentCookieString', () => {
     expect(out).toContain('max-age=1000');
     expect(out.toLowerCase()).toContain('samesite=lax');
   });
+
+  it('omits the domain attribute when no domain is given', () => {
+    const out = buildConsentCookieString('ps_consent', '{"a":1}', 1000);
+    expect(out.toLowerCase()).not.toContain('domain=');
+  });
+
+  it('appends the domain attribute when a domain is given (shares the cookie across subdomains)', () => {
+    const out = buildConsentCookieString('ps_consent', '{"a":1}', 1000, '.pagespace.ai');
+    expect(out).toContain('domain=.pagespace.ai');
+    // other attributes are unaffected
+    expect(out).toContain('path=/');
+    expect(out).toContain('max-age=1000');
+    expect(out.toLowerCase()).toContain('samesite=lax');
+  });
+
+  it('omits the domain attribute for an empty-string domain', () => {
+    const out = buildConsentCookieString('ps_consent', '{"a":1}', 1000, '');
+    expect(out.toLowerCase()).not.toContain('domain=');
+  });
 });

@@ -27,10 +27,13 @@ function readConsentFromCookie(): ConsentState {
 
 function persistConsentToCookie(state: ConsentState): void {
   if (typeof document === 'undefined') return;
+  // Scope the cookie to the registrable domain (same as the theme cookie) so consent is
+  // shared across pagespace.ai subdomains / auth redirects instead of re-prompting per host.
   document.cookie = buildConsentCookieString(
     CONSENT_COOKIE_NAME,
     serializeConsentState(state),
     ONE_YEAR_SECONDS,
+    process.env.NEXT_PUBLIC_COOKIE_DOMAIN,
   );
   window.dispatchEvent(new CustomEvent(CONSENT_CHANGED_EVENT, { detail: state }));
 }

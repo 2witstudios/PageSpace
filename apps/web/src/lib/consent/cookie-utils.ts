@@ -21,11 +21,20 @@ export function readCookieValue(cookieString: string, name: string): string | un
   return undefined;
 }
 
-/** Build a `document.cookie` assignment string for the consent value. */
+/**
+ * Build a `document.cookie` assignment string for the consent value.
+ *
+ * Pass `domain` (the registrable domain, e.g. `.pagespace.ai`) so the consent cookie is
+ * shared across subdomains instead of being host-only — otherwise the banner re-prompts on
+ * every host change. Mirrors the theme cookie (`theme-cookie.ts`). The caller reads the
+ * domain from env; this stays a pure, env-free function.
+ */
 export function buildConsentCookieString(
   name: string,
   value: string,
   maxAgeSeconds: number,
+  domain?: string,
 ): string {
-  return `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSeconds}; samesite=lax`;
+  const domainAttr = domain ? `; domain=${domain}` : '';
+  return `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSeconds}; samesite=lax${domainAttr}`;
 }
