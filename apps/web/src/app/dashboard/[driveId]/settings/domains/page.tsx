@@ -35,6 +35,7 @@ interface DomainsResponse {
 interface SubdomainResponse {
   subdomain: string | null;
   canChange: boolean;
+  publishHost: string;
 }
 
 const fetcher = (url: string) => fetchWithAuth(url).then((r) => r.json());
@@ -310,6 +311,7 @@ export default function DomainsSettingsPage() {
 
       <SubdomainCard
         subdomain={subdomainData?.subdomain ?? null}
+        publishHost={subdomainData?.publishHost ?? 'pagespace.site'}
         canChange={subdomainData?.canChange ?? false}
         inputValue={subdomainInput}
         onInputChange={setSubdomainInput}
@@ -393,6 +395,7 @@ export default function DomainsSettingsPage() {
 
 interface SubdomainCardProps {
   subdomain: string | null;
+  publishHost: string;
   canChange: boolean;
   inputValue: string;
   onInputChange: (v: string) => void;
@@ -400,7 +403,7 @@ interface SubdomainCardProps {
   isSaving: boolean;
 }
 
-function SubdomainCard({ subdomain, canChange, inputValue, onInputChange, onSave, isSaving }: SubdomainCardProps) {
+function SubdomainCard({ subdomain, publishHost, canChange, inputValue, onInputChange, onSave, isSaving }: SubdomainCardProps) {
   const preview = inputValue.trim().toLowerCase() || subdomain || 'your-subdomain';
 
   return (
@@ -411,18 +414,18 @@ function SubdomainCard({ subdomain, canChange, inputValue, onInputChange, onSave
           Subdomain
         </CardTitle>
         <CardDescription>
-          Your published site URL on pagespace.site
+          Your published site URL on {publishHost}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {subdomain && (
           <a
-            href={`https://${subdomain}.pagespace.site`}
+            href={`https://${subdomain}.${publishHost}`}
             target="_blank"
             rel="noreferrer"
             className="inline-block text-sm text-blue-500 hover:underline"
           >
-            {subdomain}.pagespace.site
+            {subdomain}.{publishHost}
           </a>
         )}
         {canChange ? (
@@ -441,7 +444,7 @@ function SubdomainCard({ subdomain, canChange, inputValue, onInputChange, onSave
                     disabled={isSaving}
                   />
                   <span className="inline-flex items-center px-3 h-9 rounded-r-md border border-l-0 bg-muted text-sm text-muted-foreground">
-                    .pagespace.site
+                    .{publishHost}
                   </span>
                 </div>
               </div>
@@ -454,7 +457,7 @@ function SubdomainCard({ subdomain, canChange, inputValue, onInputChange, onSave
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Preview: https://{preview}.pagespace.site
+              Preview: https://{preview}.{publishHost}
             </p>
           </>
         ) : (

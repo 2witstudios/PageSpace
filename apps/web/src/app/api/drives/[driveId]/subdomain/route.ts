@@ -14,7 +14,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getPlan } from '@/lib/subscription/plans';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
-import { changePublishSubdomain, PublishError } from '@/lib/canvas/publish-page';
+import { changePublishSubdomain, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true }; // keep PATCH CSRF-protected
 
@@ -60,6 +60,7 @@ export async function GET(
     return NextResponse.json({
       subdomain: driveRow?.publishSubdomain ?? null,
       canChange,
+      publishHost: PUBLISH_HOST,
     });
   } catch (error) {
     loggers.api.error('Error reading subdomain:', error as Error);
@@ -120,7 +121,8 @@ export async function PATCH(
 
     return NextResponse.json({
       subdomain: result.newSubdomain,
-      url: `https://${result.newSubdomain}.pagespace.site`,
+      publishHost: PUBLISH_HOST,
+      url: `https://${result.newSubdomain}.${PUBLISH_HOST}`,
     });
   } catch (error) {
     loggers.api.error('Error changing subdomain:', error as Error);

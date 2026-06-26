@@ -21,7 +21,6 @@ import {
   copyPublishedArtifact,
   isPublishConfigured,
   getPublishAssetBaseUrl,
-  clearPublishedPrefix,
 } from './published-storage';
 import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMeta } from './asset-pipeline';
 import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml } from '@pagespace/lib/canvas/site-files';
@@ -483,35 +482,43 @@ export async function changePublishSubdomain(
     throw err;
   }
 
-  // Re-render all published pages under the new subdomain prefix.
-  const publishedRows = await db.query.publishedPages.findMany({
-    where: eq(publishedPages.driveId, driveId),
-    columns: { pageId: true },
-  });
-  const refreshedCount = await republishDriveCanonical(driveId, userId);
-  if (refreshedCount !== publishedRows.length) {
-    throw new PublishError(
-      `Subdomain migration incomplete: refreshed ${refreshedCount}/${publishedRows.length} published pages`,
-      500,
-    );
-  }
+  try {
+    // Re-render all published pages under the new subdomain prefix.
+    const publishedRows = await db.query.publishedPages.findMany({
+      where: eq(publishedPages.driveId, driveId),
+      columns: { pageId: true },
+    });
+    const refreshedCount = await republishDriveCanonical(driveId, userId);
+    if (refreshedCount !== publishedRows.length) {
+      throw new PublishError(
+        `Subdomain migration incomplete: refreshed ${refreshedCount}/${publishedRows.length} published pages`,
+        500,
+      );
+    }
 
-  // Regenerate robots/sitemap/404 under the new prefix.
-  await regeneratePublishedSiteFiles(driveId);
-
-  // Delete old artifacts (best-effort — pages already serve from new prefix).
-  if (oldSubdomain) {
+    // Regenerate robots/sitemap/404 under the new prefix.
+    await regeneratePublishedSiteFiles(driveId);
+  } catch (err) {
+    // Roll back subdomain pointer so the drive keeps serving from the previous
+    // host when migration doesn't fully complete.
     try {
-      await clearPublishedPrefix(oldSubdomain);
-    } catch (err) {
-      loggers.api.warn('Failed to clear old subdomain prefix after change', {
+      await db.update(drives).set({ publishSubdomain: oldSubdomain }).where(eq(drives.id, driveId));
+    } catch (rollbackErr) {
+      loggers.api.error('Failed to roll back publish subdomain after migration error', {
         driveId,
         oldSubdomain,
-        error: err instanceof Error ? err.message : String(err),
+        attemptedSubdomain: normalized,
+        error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
       });
     }
+
+    if (err instanceof PublishError) throw err;
+    throw new PublishError('Failed to migrate published artifacts to new subdomain', 500);
   }
 
+  // Do not clear the old prefix here. Once the DB pointer changes, the old
+  // subdomain can be claimed by another drive; prefix-wide deletion could remove
+  // artifacts that no longer belong to this drive.
   return { oldSubdomain, newSubdomain: normalized };
 }
 
