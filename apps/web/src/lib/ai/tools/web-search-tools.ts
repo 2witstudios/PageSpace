@@ -374,12 +374,11 @@ Returns the page content converted to readable markdown.`,
         for (const chunk of chunks) { allBytes.set(chunk, offset); offset += chunk.length; }
         const html = new TextDecoder().decode(allBytes);
 
-        const cleaned = html
-          .replace(/<script[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[\s\S]*?<\/style>/gi, '');
-
         const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
-        const fullMarkdown = td.turndown(cleaned);
+        // Drop <script>/<style> via Turndown's HTML parser rather than regex, so
+        // malformed/nested tags can't smuggle content into the markdown.
+        td.remove(['script', 'style']);
+        const fullMarkdown = td.turndown(html);
         const markdown = fullMarkdown.slice(0, maxLength);
 
         webSearchLogger.info('URL fetch complete', {

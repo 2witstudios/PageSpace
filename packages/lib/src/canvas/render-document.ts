@@ -144,7 +144,14 @@ export function escapeHtml(value: string): string {
  * stylesheet — the script is preserved verbatim.
  */
 function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): { css: string; body: string } {
-  const scriptOrStyle = /<script\b[^>]*>[\s\S]*?<\/script\s*>|<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
+  // Tag names require a genuine delimiter — whitespace, `/`, or `>` — immediately
+  // after the name (the `(?=[\s/>])` lookahead), mirroring the HTML tokenizer.
+  // Only after that delimiter is arbitrary junk/attributes tolerated up to `>`,
+  // so `</style\n foo>` / `</script bar>` can't smuggle content past the match,
+  // while hyphenated names like `<script-template>` / `</script-template>` are
+  // NOT mistaken for a real script/style tag (a `\b` alone would match before
+  // `-`/`:` and could truncate an author script mid-block, corrupting it).
+  const scriptOrStyle = /<script(?=[\s/>])[^>]*>[\s\S]*?<\/script(?=[\s/>])[^>]*>|<style(?=[\s/>])[^>]*>([\s\S]*?)<\/style(?=[\s/>])[^>]*>/gi;
   const cssParts: string[] = [];
   const body = html.replace(scriptOrStyle, (match, styleContent: string | undefined) => {
     // styleContent is the capture group; defined only when a real <style>

@@ -610,4 +610,56 @@ describe('renderCanvasDocument — Twitter Card', () => {
     const out = renderCanvasDocument({ html: '<p>x</p>', title: 'My Page' });
     expect(out).not.toContain('twitter:');
   });
+
+  // Hardened closing-tag matching: junk/whitespace/bogus attributes before `>`
+  // must not let style/script content escape the alternation (CodeQL 204-205).
+  it('given a <style> closed with junk before `>` (`</style\\n foo>`), should still hoist+sanitize and drop it from the body', () => {
+    const out = renderCanvasDocument({
+      html: '<style>body { background: url("https://evil.com/pixel.png"); }</style\n foo><p>x</p>',
+    });
+    // External url() was routed through sanitizeCSS (hoisted to <head>), not leaked.
+    expect(out).not.toContain('https://evil.com');
+    expect(out).toContain('url("")');
+    // The whole <style>…</style\n foo> block was consumed — no <style> survives in the body.
+    expect(out).toContain('</head><body><p>x</p></body>');
+  });
+
+  it('given a <script> closed with a bogus attribute (`</script bar>`), should PRESERVE the script verbatim', () => {
+    const out = renderCanvasDocument({
+      html: '<div id="app"></div><script>document.getElementById("app").textContent = "hi";</script bar>',
+    });
+    // Scripts are preserved by design (sandboxed iframe + strict CSP); the junk
+    // close must not cause the script body to be mistaken for a <style>.
+    expect(out).toContain('<script>');
+    expect(out).toContain('document.getElementById("app")');
+  });
+
+  // A hyphen/colon after the tag name is NOT a valid end-tag delimiter, so a
+  // hyphenated token like `</script-template>` must NOT terminate the <script>.
+  // Otherwise the parser would resume outside the script and wrongly hoist a
+  // later inner <style>, corrupting an author script that should stay verbatim.
+  it('given `</script-template>` text inside a <script>, should PRESERVE the whole script and NOT hoist a <style> that follows inside it', () => {
+    const out = renderCanvasDocument({
+      html: '<script>const t = "</script-template>"; const css = "<style>.x{color:red}</style>";</script><p>x</p>',
+    });
+    // The entire script (including the inner <style> text) is preserved verbatim.
+    expect(out).toContain('const t = "</script-template>"');
+    expect(out).toContain('const css = "<style>.x{color:red}</style>"');
+    // The inner <style> was script text, not a real stylesheet — it must NOT be
+    // sanitized/hoisted into <head>. There is no real author stylesheet here, so
+    // the (single, baseline) <style> in <head> carries no author `.x` rule.
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).not.toContain('.x{color:red}');
+  });
+
+  it('given a custom element `<script-template>`, should NOT treat it as a <script> open', () => {
+    const out = renderCanvasDocument({
+      html: '<script-template><style>.y{color:blue}</style></script-template>',
+    });
+    // `<script-template>` is a normal (custom) element, so the <style> inside it
+    // IS a real stylesheet — it should be sanitized + hoisted, not preserved raw.
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain('.y');
+    expect(out).not.toContain('<style>.y{color:blue}</style>');
+  });
 });
