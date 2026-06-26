@@ -19,6 +19,7 @@ import {
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
@@ -382,7 +383,14 @@ export async function triggerMentionedAgentResponses(
       limit: CONTEXT_MESSAGE_LIMIT,
     });
 
-    const contextMessages = [...recentMessages].reverse();
+    // Decrypt PII at the edge (GDPR #965) so the agent transcript shows plaintext
+    // sender names (legacy plaintext passes through unchanged).
+    const contextMessages = await Promise.all(
+      [...recentMessages].reverse().map(async (m) => ({
+        ...m,
+        user: m.user ? { ...m.user, name: await decryptField(m.user.name) } : null,
+      })),
+    );
     const transcript = buildChannelTranscript(contextMessages);
     const question = toSingleLine(
       convertMentionsToDisplayText(params.content),

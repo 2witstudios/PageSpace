@@ -3,8 +3,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
-import { users } from '@pagespace/db/schema/auth';
+import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -42,10 +41,12 @@ export async function GET(request: Request) {
   }
 
   try {
-    const candidate = await db.query.users.findFirst({
-      where: eq(users.email, email),
+    const candidateRow = await db.query.users.findFirst({
+      where: userEmailMatch(email),
       columns: { id: true, name: true, email: true, image: true },
     });
+    // Decrypt PII at the edge so downstream visibility + response see plaintext.
+    const candidate = candidateRow ? await decryptUserRow(candidateRow) : undefined;
 
     // Relationship scoping (L1): only surface a user's identity to a caller who
     // already shares context (a drive or accepted connection) — or to the user

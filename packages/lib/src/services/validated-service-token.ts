@@ -17,6 +17,7 @@ import {
   getUserDrivePermissions,
 } from '../permissions/permissions';
 import { canUserAccessFile } from '../permissions/file-access';
+import { prepareUserWrite } from '../auth/user-repository';
 import { sessionService } from '../auth/session-service';
 import { loggers } from '../logging/logger-config';
 
@@ -621,18 +622,19 @@ export const SYSTEM_SERVICE_USER_ID = 'system' as const;
  * than in-memory state that could disagree with the DB across deploys.
  */
 async function ensureSystemPrincipal(): Promise<void> {
+  const systemUser: typeof users.$inferInsert = {
+    id: SYSTEM_SERVICE_USER_ID,
+    name: 'System',
+    email: 'system@pagespace.invalid',
+    provider: 'email',
+    tokenVersion: 0,
+    role: 'user',
+    adminRoleVersion: 0,
+    subscriptionTier: 'free',
+  };
   await db
     .insert(users)
-    .values({
-      id: SYSTEM_SERVICE_USER_ID,
-      name: 'System',
-      email: 'system@pagespace.invalid',
-      provider: 'email',
-      tokenVersion: 0,
-      role: 'user',
-      adminRoleVersion: 0,
-      subscriptionTier: 'free',
-    })
+    .values(await prepareUserWrite(systemUser))
     .onConflictDoNothing();
 }
 

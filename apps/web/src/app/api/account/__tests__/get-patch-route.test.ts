@@ -297,8 +297,11 @@ describe('PATCH /api/account', () => {
     expect(response.status).toBe(200);
     expect(body.email).toBe('new@example.com');
     // A genuine email change also clears verification so the new address must
-    // be re-verified.
-    expect(setMock).toHaveBeenCalledWith({ email: 'new@example.com', emailVerified: null });
+    // be re-verified. The cutover edge additionally writes the deterministic
+    // `emailBidx` blind index (key configured in the test env).
+    const setArg = setMock.mock.calls[0][0];
+    expect(setArg).toMatchObject({ email: 'new@example.com', emailVerified: null });
+    expect(setArg.emailBidx).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('should return 400 when email format is invalid', async () => {
@@ -473,7 +476,9 @@ describe('PATCH /api/account', () => {
 
     // Assert
     expect(response.status).toBe(200);
-    expect(setMock).toHaveBeenCalledWith({ email: 'new@example.com', emailVerified: null });
+    const setArgReset = setMock.mock.calls[0][0];
+    expect(setArgReset).toMatchObject({ email: 'new@example.com', emailVerified: null });
+    expect(setArgReset.emailBidx).toMatch(/^[0-9a-f]{64}$/);
     expect(sendVerificationEmail).toHaveBeenCalledWith({
       userId: mockUserId,
       email: 'new@example.com',
@@ -534,7 +539,12 @@ describe('PATCH /api/account', () => {
 
     // Assert
     expect(response.status).toBe(200);
-    expect(setMock).toHaveBeenCalledWith({ email: 'test@example.com' });
+    // No verification reset (no emailVerified key); the cutover edge still writes
+    // the deterministic emailBidx alongside the (unchanged) email.
+    const setArgNoReset = setMock.mock.calls[0][0];
+    expect(setArgNoReset.email).toBe('test@example.com');
+    expect(setArgNoReset).not.toHaveProperty('emailVerified');
+    expect(setArgNoReset.emailBidx).toMatch(/^[0-9a-f]{64}$/);
     expect(sendVerificationEmail).not.toHaveBeenCalled();
   });
 
@@ -567,7 +577,10 @@ describe('PATCH /api/account', () => {
 
     // Assert — no emailVerified reset, no verification email
     expect(response.status).toBe(200);
-    expect(setMock).toHaveBeenCalledWith({ email: 'john.doe@gmail.com' });
+    const setArgMixed = setMock.mock.calls[0][0];
+    expect(setArgMixed.email).toBe('john.doe@gmail.com');
+    expect(setArgMixed).not.toHaveProperty('emailVerified');
+    expect(setArgMixed.emailBidx).toMatch(/^[0-9a-f]{64}$/);
     expect(sendVerificationEmail).not.toHaveBeenCalled();
   });
 

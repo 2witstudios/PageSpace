@@ -7,6 +7,7 @@ import { connections } from '@pagespace/db/schema/social';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { createNotification, markConnectionRequestActioned } from '@pagespace/lib/notifications/notifications';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -111,7 +112,9 @@ export async function PATCH(
           .where(eq(users.id, userId))
           .limit(1);
 
-        const rejectUserName = rejectUser?.displayName || rejectUser?.name || 'Someone';
+        // Decrypt PII at the edge (GDPR #965): the actor name is snapshotted into
+        // the notification message/metadata. Profile displayName stays plaintext.
+        const rejectUserName = rejectUser?.displayName || (await decryptField(rejectUser?.name)) || 'Someone';
 
         // Send rejection notification (broadcast via Socket.IO)
         await createNotification({
@@ -185,7 +188,9 @@ export async function PATCH(
         .where(eq(users.id, userId))
         .limit(1);
 
-      const actionUserName = actionUser?.displayName || actionUser?.name || 'Someone';
+      // Decrypt PII at the edge (GDPR #965): the actor name is snapshotted into
+      // the notification message/metadata. Profile displayName stays plaintext.
+      const actionUserName = actionUser?.displayName || (await decryptField(actionUser?.name)) || 'Someone';
 
       await createNotification({
         userId: notifyUserId!,

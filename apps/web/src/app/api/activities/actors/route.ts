@@ -4,6 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
@@ -123,7 +124,11 @@ export async function GET(request: Request) {
       .where(whereCondition)
       .orderBy(sortExpression);
 
-    return NextResponse.json({ actors });
+    // Decrypt PII at the edge. The COALESCE may yield ciphertext (from users) or
+    // legacy plaintext (the activity-log actor fallback); decryptField handles both.
+    const decryptedActors = await decryptUserRows(actors);
+
+    return NextResponse.json({ actors: decryptedActors });
   } catch (error) {
     loggers.api.error('Error fetching activity actors:', error as Error);
     return NextResponse.json(

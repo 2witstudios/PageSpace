@@ -10,6 +10,7 @@ import { eq, and, sql, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
+import { decryptUserRow } from '../auth/user-repository';
 
 // ============================================================================
 // Types
@@ -264,11 +265,13 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
     ])
   );
 
-  return members.map((member) => ({
+  return Promise.all(members.map(async (member) => ({
     ...member,
+    // Decrypt the joined user's PII at the edge (legacy plaintext passes through).
+    user: await decryptUserRow(member.user),
     role: member.role as 'OWNER' | 'ADMIN' | 'MEMBER',
     permissionCounts: permMap.get(member.userId) ?? { view: 0, edit: 0, share: 0 },
-  }));
+  })));
 }
 
 /**
@@ -350,6 +353,8 @@ export async function getDriveMemberDetails(
 
   return {
     ...memberData[0],
+    // Decrypt the joined user's PII at the edge (legacy plaintext passes through).
+    user: await decryptUserRow(memberData[0].user),
     role: memberData[0].role as 'OWNER' | 'ADMIN' | 'MEMBER',
     customRole: null, // Would need to join separately if customRoleId exists
   };

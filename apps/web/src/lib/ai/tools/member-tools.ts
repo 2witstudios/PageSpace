@@ -6,6 +6,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
+import { decryptUserRow, decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
 import type { ToolExecutionContext } from '../core/types';
 import { driveDeniedByAppToken } from './actor-permissions';
@@ -31,7 +32,7 @@ export const memberTools = {
       }
 
       // Fetch owner — stored in drives.ownerId, not in drive_members table
-      const [ownerRow] = await db
+      const [ownerRowRaw] = await db
         .select({
           id: users.id,
           name: users.name,
@@ -44,6 +45,8 @@ export const memberTools = {
         .leftJoin(userProfiles, eq(drives.ownerId, userProfiles.userId))
         .where(eq(drives.id, driveId))
         .limit(1);
+      // Decrypt PII at the edge so the owner identity is plaintext.
+      const ownerRow = ownerRowRaw ? await decryptUserRow(ownerRowRaw) : undefined;
 
       // Fetch accepted members
       const memberRows = await listDriveMembers(driveId);
@@ -118,7 +121,7 @@ export const memberTools = {
       const otherIds = all.map((c) => c.otherId);
       const connectedSinceMap = new Map(all.map((c) => [c.otherId, c.connectedSince]));
 
-      const userRows = await db
+      const userRows = await decryptUserRows(await db
         .select({
           id: users.id,
           name: users.name,
@@ -128,7 +131,7 @@ export const memberTools = {
         })
         .from(users)
         .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
-        .where(inArray(users.id, otherIds));
+        .where(inArray(users.id, otherIds)));
 
       const collaborators = userRows.map((u) => ({
         userId: u.id,

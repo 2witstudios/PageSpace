@@ -19,9 +19,41 @@ import {
   type ChannelMessageAiMeta,
 } from '@pagespace/db/schema/chat';
 import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
+import { decryptField } from '../encryption/field-crypto';
 
 export type ChannelMessageRow = InferSelectModel<typeof channelMessages>;
 export type ChannelReactionRow = InferSelectModel<typeof channelMessageReactions>;
+
+/**
+ * Decrypt the joined author/reactor `name` PII on a loaded message row in place
+ * (GDPR #965). `messageWith` joins `users.name`, which is AES-GCM ciphertext at
+ * rest, so every channel-message read must decrypt it at this seam before the
+ * row reaches a route/AI tool/broadcast. Legacy plaintext passes through
+ * unchanged. Mutates in place to preserve the precise Drizzle-inferred type.
+ */
+async function decryptMessageRowPii(
+  row:
+    | {
+        user?: { name: string | null } | null;
+        reactions?: Array<{ user?: { name: string | null } | null }> | null;
+      }
+    | null
+    | undefined,
+): Promise<void> {
+  if (!row) return;
+  if (row.user && row.user.name != null) {
+    row.user.name = await decryptField(row.user.name);
+  }
+  if (row.reactions) {
+    await Promise.all(
+      row.reactions.map(async (r) => {
+        if (r.user && r.user.name != null) {
+          r.user.name = await decryptField(r.user.name);
+        }
+      }),
+    );
+  }
+}
 
 const messageWith = {
   user: {
@@ -81,12 +113,14 @@ async function listChannelMessages(input: ListChannelMessagesInput) {
     );
   }
 
-  return db.query.channelMessages.findMany({
+  const rows = await db.query.channelMessages.findMany({
     where: and(...conditions),
     with: messageWith,
     orderBy: [desc(channelMessages.createdAt), desc(channelMessages.id)],
     limit: input.limit,
   });
+  await Promise.all(rows.map(decryptMessageRowPii));
+  return rows;
 }
 
 export interface FindChannelMessageInPageInput {
@@ -107,10 +141,12 @@ async function findChannelMessageInPage(
 }
 
 async function loadChannelMessageWithRelations(id: string) {
-  return db.query.channelMessages.findFirst({
+  const row = await db.query.channelMessages.findFirst({
     where: eq(channelMessages.id, id),
     with: messageWith,
   });
+  await decryptMessageRowPii(row);
+  return row;
 }
 
 async function fileExists(fileId: string): Promise<boolean> {
@@ -277,7 +313,7 @@ async function addChannelReaction(
 }
 
 async function loadChannelReactionWithUser(reactionId: string) {
-  return db.query.channelMessageReactions.findFirst({
+  const row = await db.query.channelMessageReactions.findFirst({
     where: eq(channelMessageReactions.id, reactionId),
     with: {
       user: {
@@ -288,6 +324,11 @@ async function loadChannelReactionWithUser(reactionId: string) {
       },
     },
   });
+  // Decrypt the reactor's name PII at the edge (GDPR #965).
+  if (row?.user && row.user.name != null) {
+    row.user.name = await decryptField(row.user.name);
+  }
+  return row;
 }
 
 async function removeChannelReaction(
@@ -468,12 +509,14 @@ async function listChannelThreadReplies(
     );
   }
 
-  return db.query.channelMessages.findMany({
+  const rows = await db.query.channelMessages.findMany({
     where: and(...conditions),
     with: messageWith,
     orderBy: [asc(channelMessages.createdAt), asc(channelMessages.id)],
     limit: input.limit,
   });
+  await Promise.all(rows.map(decryptMessageRowPii));
+  return rows;
 }
 
 async function addChannelThreadFollower(

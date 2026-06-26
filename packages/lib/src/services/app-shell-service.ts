@@ -46,6 +46,7 @@ import type {
 } from '../types';
 import { PageType } from '../utils/enums';
 import { loadPagePayload } from './page-payload-service';
+import { decryptUserRow } from '../auth/user-repository';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -78,7 +79,8 @@ async function fetchUser(tx: Tx, userId: string): Promise<AppShellUser> {
     throw new Error(`loadAppShell: user not found (id=${userId})`);
   }
 
-  const row = rows[0];
+  // Decrypt PII at the edge so the app shell shows plaintext email/name.
+  const row = await decryptUserRow(rows[0]);
   return {
     id: row.id,
     name: row.name,

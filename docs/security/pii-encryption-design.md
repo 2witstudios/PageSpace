@@ -107,25 +107,57 @@ ciphertext preserves the original casing.
 - Idempotent, resumable, dry-run backfill: `scripts/backfill-user-pii-encryption.ts`
   + pure planner `user-pii-backfill.ts`.
 
-**Remaining: live call-site cutover (gated rollout, NOT done in the worktree).**
-Encryption is not yet "on": the app still writes plaintext and looks up by raw
-`email`. Flipping the ~27 `eq(users.email, …)` read sites + user create/update
-writes to the encryption edge changes the passwordless-auth hot path, which
-cannot be safely validated by the unit-only test environment available here
-(integration/React tests do not run in a `.pu` worktree). The cutover is a
-deliberate, separately-tested step and MUST follow this safe order:
+**Live call-site cutover — SHIPPED (encryption-aware user repository edge).**
+The app is now encryption-aware: every user lookup, create/update, and PII read
+flows through `packages/lib/src/auth/user-repository.ts`. This is what makes the
+backfill safe to run. The edge:
 
-1. Deploy migration `0171` (additive, nullable — safe).
-2. Deploy app writing `email` ciphertext + `emailBidx` on create/update while
-   reads use a **dual lookup**: blind index first, fall back to raw-email match.
-   `decryptField` tolerates both encrypted and legacy plaintext, so mixed state
-   is safe.
-3. Run the backfill (dry-run, then live) with `ENCRYPTION_KEY` set.
-4. After 100% backfilled + verified, retire the raw-email fallback and drop the
-   raw `email` unique constraint in favor of `users_email_bidx_idx`.
+- **Read (dual lookup):** `userEmailMatch(email)` resolves by
+  `emailBidx = blindIndex(email)` OR the legacy `eq(users.email, plaintext)`
+  fallback, so ciphertext rows and not-yet-backfilled plaintext rows both match.
+  `userEmailInListMatch` is the IN-list variant (calendar attendee sync).
+- **Write:** `prepareUserWrite(values)` ALWAYS computes the deterministic
+  `emailBidx` (whenever a key is configured) so lookups work even before a row's
+  `email` value is encrypted, and encrypts `email`/`name` only when the ciphertext
+  flag is on (staged).
+- **Read projection:** `decryptUserRow` / `decryptUserRows` / `decryptField`
+  decrypt `email`/`name` at the edge; legacy plaintext passes through unchanged,
+  so a database in mixed plaintext+ciphertext state reads correctly.
 
-Each step is reversible and never leaves auth in a broken state. Until step 2
-ships, the columns added here are inert.
+The raw `email` unique constraint stays for now — `emailBidx` is the new lookup
+key; retiring the raw constraint is a LATER step (out of scope here).
+
+### Flags
+
+| `ENCRYPTION_KEY` | `PII_ENCRYPTION_ENABLED` | read lookup | `emailBidx` write | value write |
+|---|---|---|---|---|
+| absent | — | raw `eq` (today) | none | plaintext (today) |
+| present | unset/false (default) | dual | yes | plaintext (staged) |
+| present | `true` | dual | yes | AES-GCM ciphertext |
+
+With **no key configured, behaviour is byte-identical to today** (plaintext path,
+no blind index, no decrypt). The read dual-lookup and the `emailBidx` write are
+active whenever a key is configured, so lookups never regress; only ciphertext
+writes are gated behind `PII_ENCRYPTION_ENABLED`. Email normalization for the
+blind index is `lower(trim(email))` everywhere (edge + backfill).
+
+### Enable order (ops runbook)
+
+Each step is reversible and never leaves auth in a broken state:
+
+1. **Deploy the migration** (`0175_sharp_tiger_shark`, additive/nullable — safe).
+2. **Deploy this cutover** with `ENCRYPTION_KEY` set and `PII_ENCRYPTION_ENABLED`
+   UNSET. New/updated rows now get `emailBidx`; reads are dual-lookup; values stay
+   plaintext (staged). Verify auth (magic-link, passkey, OAuth, account, invites,
+   Stripe) end-to-end.
+3. **Turn on ciphertext writes:** set `PII_ENCRYPTION_ENABLED=true`. New/updated
+   rows now store ciphertext `email`/`name` + `emailBidx`; existing rows remain
+   plaintext-but-readable (mixed state is safe). Verify again.
+4. **Run the backfill:** set `PII_ENCRYPTION_CUTOVER_DEPLOYED=true` (the script's
+   hard gate) and run `scripts/backfill-user-pii-encryption.ts` dry-run, then live.
+   It encrypts existing rows and populates `emailBidx` idempotently/resumably.
+5. **(Later PR)** after 100% backfilled + verified, retire the raw-email fallback
+   and drop the raw `email` unique constraint in favor of `users_email_bidx_idx`.
 
 ## Out of scope for this design (tracked elsewhere in the epic)
 

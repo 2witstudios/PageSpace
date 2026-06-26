@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
+import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { eq, and, asc, isNotNull, count, max, min, inArray } from '@pagespace/db/operators'
 import { pages, chatMessages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
@@ -457,7 +458,7 @@ export const pageReadTools = {
 
         // Handle CHANNEL pages - return message transcript (lineStart/lineEnd map to message numbers)
         if (page.type === 'CHANNEL') {
-          const messages = await db.query.channelMessages.findMany({
+          const messagesRaw = await db.query.channelMessages.findMany({
             where: and(
               eq(channelMessages.pageId, page.id),
               eq(channelMessages.isActive, true)
@@ -472,6 +473,12 @@ export const pageReadTools = {
             },
             orderBy: [asc(channelMessages.createdAt)],
           });
+          // Decrypt PII at the edge (GDPR #965) so sender names in the tool output
+          // are plaintext (legacy plaintext passes through unchanged).
+          const messages = await Promise.all(messagesRaw.map(async (m) => ({
+            ...m,
+            user: m.user ? { ...m.user, name: await decryptField(m.user.name) } : m.user,
+          })));
 
           const totalMessages = messages.length;
           const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
