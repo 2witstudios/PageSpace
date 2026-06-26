@@ -124,7 +124,7 @@
     "use-debounce": "^10.0.5",
     "use-stick-to-bottom": "^1.1.1",
     "ws": "^8.18.3",
-    "zod": "^4.0.16",
+    "zod": "^4.1.8",
     "zustand": "^5.0.6"
   },
   "devDependencies": {

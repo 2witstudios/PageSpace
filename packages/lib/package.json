@@ -1775,7 +1775,7 @@
     "server-only": "^0.0.1",
     "xlsx": "^0.18.5",
     "yaml": "^2.8.2",
-    "zod": "^4.0.16"
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@react-email/preview-server": "5.1.1",
