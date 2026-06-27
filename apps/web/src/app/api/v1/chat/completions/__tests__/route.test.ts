@@ -1,3 +1,9 @@
+// @vitest-environment node
+// These are API route-handler tests with no DOM needs. The default jsdom env
+// makes AbortController/AbortSignal jsdom globals while Request stays Node's
+// undici, so on Node >=24 `new Request(url, { signal })` throws because the
+// jsdom AbortSignal fails undici's `instanceof AbortSignal` check. Running this
+// file under the node env keeps both on the same (undici) implementation.
 import { describe, test, beforeEach, vi } from 'vitest';
 import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
 
