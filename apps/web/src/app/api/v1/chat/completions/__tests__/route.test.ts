@@ -1,3 +1,14 @@
+// @vitest-environment node
+//
+// This is an API route-handler test: it exercises server code only and has no
+// reason to run under jsdom. It MUST run in the `node` environment because the
+// tests construct `new Request(url, { signal })` with an `AbortSignal`. Under
+// jsdom, `AbortController`/`AbortSignal` are jsdom's implementations, but the
+// global `Request` is Node's (undici). On Node >=24 undici's `Request` does a
+// strict `instanceof` brand check against the *native* AbortSignal and rejects
+// the jsdom signal ("Expected signal to be an instance of AbortSignal"). The
+// node environment uses native AbortSignal throughout, so the check passes on
+// every Node version. See PR: jsdom AbortSignal vs undici Request on Node >=24.
 import { describe, test, beforeEach, vi } from 'vitest';
 import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
 
