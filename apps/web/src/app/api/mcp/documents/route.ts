@@ -238,12 +238,20 @@ export async function POST(req: NextRequest) {
           const completedCount = byGroup.done || 0;
           const progressPercentage = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0;
 
+          // A TASK_LIST page also has its own content body (e.g. an
+          // individual task page whose body holds the description / sub-tasks).
+          // Render both the body and the structured task view.
+          const numberedLines = getNumberedLines(currentContent);
+
           return NextResponse.json({
             pageId,
             pageTitle: page.title,
             pageType: 'TASK_LIST',
             taskListId: taskList.id,
-            tasks: tasks.map(t => serializeTaskItem(t)),
+            totalLines: lines.length,
+            numberedLines,
+            content: currentContent,
+            tasks: tasks.map(t => ({ ...serializeTaskItem(t), description: t.page?.content ?? '' })),
             availableStatuses,
             progress: {
               total: totalTasks,
