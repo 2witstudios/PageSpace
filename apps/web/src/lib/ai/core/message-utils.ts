@@ -3,6 +3,7 @@ import {
   type TextUIPart,
   type FileUIPart,
   type DynamicToolUIPart,
+  type ToolUIPart,
 } from 'ai';
 import { db } from '@pagespace/db/db'
 import { chatMessages } from '@pagespace/db/schema/core'
@@ -61,7 +62,9 @@ interface ToolCall {
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
-  state: 'input-streaming' | 'input-available' | 'output-available' | 'output-error';
+  // Track the SDK's tool-part state directly so it can't drift from the lifecycle
+  // (incl. the v6 human-in-the-loop approval states).
+  state: ToolUIPart['state'];
 }
 
 interface ToolResult {

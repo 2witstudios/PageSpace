@@ -133,7 +133,7 @@ describe('runAgentWithRetry', () => {
   });
 
   it('surfaces a terminal error when ambiguous retries are exhausted (empty result)', async () => {
-    const { result, chunks } = await run([{ finishReason: 'unknown', noContent: true }]);
+    const { result, chunks } = await run([{ finishReason: 'other', noContent: true }]);
     assert({
       given: 'every attempt ends ambiguous with no content streamed',
       should: 'exhaust retries and surface one terminal error (no silent empty message)',

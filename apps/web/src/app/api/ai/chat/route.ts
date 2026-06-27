@@ -938,7 +938,7 @@ export async function POST(request: Request) {
       user: user ? { id: user.id, role: user.role } : null,
     });
     const { scheduleCompaction } = prepared;
-    const { modelMessages, stableBoundaryIndex } = finishModelRequest({
+    const { modelMessages, stableBoundaryIndex } = await finishModelRequest({
       prepared,
       tools: filteredTools,
     });

@@ -400,7 +400,7 @@ export async function POST(request: Request) {
         ? await generateText({
             model,
             system: enhancedSystemPrompt,
-            messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
+            messages: await convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
               role: m.role as 'user' | 'assistant' | 'system',
               content: m.content,
               parts: [{ type: 'text', text: m.content }]
@@ -424,7 +424,7 @@ export async function POST(request: Request) {
         : await generateText({
             model,
             system: enhancedSystemPrompt,
-            messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
+            messages: await convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
               role: m.role as 'user' | 'assistant' | 'system',
               content: m.content,
               parts: [{ type: 'text', text: m.content }]

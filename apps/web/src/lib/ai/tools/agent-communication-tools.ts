@@ -611,7 +611,7 @@ export const agentCommunicationTools = {
           tools: executionTools,
           user: { id: userId, role: callerUserRole },
         });
-        const { modelMessages: agentModelMessages } = finishModelRequest({ prepared, tools: executionTools as ToolSet });
+        const { modelMessages: agentModelMessages } = await finishModelRequest({ prepared, tools: executionTools as ToolSet });
 
         // 11. Process with target agent's configuration (ephemeral - no persistence)
         const response = Object.keys(allAgentTools).length > 0

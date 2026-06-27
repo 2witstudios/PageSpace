@@ -7,7 +7,6 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils/index";
 import type { ToolUIPart } from "ai";
-import type { ExtendedToolState } from "@/types/ai-sdk-extensions";
 import {
   CheckCircleIcon,
   ChevronDownIcon,
@@ -31,11 +30,11 @@ export const Tool = ({ className, ...props }: ToolProps) => (
 export type ToolHeaderProps = {
   title?: string;
   type: ToolUIPart["type"];
-  state: ExtendedToolState;
+  state: ToolUIPart["state"];
   className?: string;
 };
 
-const getStatusIcon = (status: ExtendedToolState): ReactNode => {
+const getStatusIcon = (status: ToolUIPart["state"]): ReactNode => {
   const icons: Record<string, ReactNode> = {
     "input-streaming": <CircleIcon className="size-4 text-muted-foreground" />,
     "input-available": <ClockIcon className="size-4 text-primary animate-pulse" />,

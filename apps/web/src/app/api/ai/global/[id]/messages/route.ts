@@ -909,7 +909,7 @@ MENTION PROCESSING:
             ]
           : (processedTail as UIMessage[]);
 
-        const { modelMessages, stableBoundaryIndex } = finishModelRequest({
+        const { modelMessages, stableBoundaryIndex } = await finishModelRequest({
           prepared,
           tail: processedTail,
           tools: finalTools,
