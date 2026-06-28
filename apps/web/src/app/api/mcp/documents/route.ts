@@ -5,6 +5,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpers';
 import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
+import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
 import { z } from 'zod/v4';
@@ -238,12 +239,26 @@ export async function POST(req: NextRequest) {
           const completedCount = byGroup.done || 0;
           const progressPercentage = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0;
 
+          // A TASK_LIST page also has its own content body (e.g. an
+          // individual task page whose body holds the description / sub-tasks).
+          // This body belongs to `pageId` itself — already authorized above —
+          // so it is safe to return. Render both the body and the task view.
+          const numberedLines = getNumberedLines(currentContent);
+
+          // Each task is a child TASK_LIST page. Page permissions do NOT inherit
+          // to children, and this route only authorizes `pageId`, so we must NOT
+          // return child page bodies here. Mirror the canonical task-list API
+          // (GET /api/pages/[pageId]/tasks) which exposes only a `hasContent`
+          // boolean — read_page the individual task to view its description.
           return NextResponse.json({
             pageId,
             pageTitle: page.title,
             pageType: 'TASK_LIST',
             taskListId: taskList.id,
-            tasks: tasks.map(t => serializeTaskItem(t)),
+            totalLines: lines.length,
+            numberedLines,
+            content: currentContent,
+            tasks: tasks.map(t => ({ ...serializeTaskItem(t), hasContent: computeHasContent(t.page?.content) })),
             availableStatuses,
             progress: {
               total: totalTasks,

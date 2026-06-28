@@ -174,7 +174,9 @@ describe('MCP Documents API — TASK_LIST read', () => {
     mockSerializeTaskItem.mockImplementation((t: unknown) => t);
   });
 
-  it('returns structured task list data (not numberedLines) for TASK_LIST pages', async () => {
+  it('returns structured task list data AND the page body for TASK_LIST pages', async () => {
+    mockFindFirstPage.mockResolvedValue({ ...TASK_LIST_PAGE, content: 'task body line 1\ntask body line 2' });
+
     const { POST } = await import('../route');
     const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
 
@@ -186,8 +188,10 @@ describe('MCP Documents API — TASK_LIST read', () => {
     expect(data.tasks).toBeDefined();
     expect(data.availableStatuses).toBeDefined();
     expect(data.progress).toBeDefined();
-    expect(data.numberedLines).toBeUndefined();
-    expect(data.content).toBeUndefined();
+    // The page's own content body is rendered alongside the task view.
+    expect(data.numberedLines).toBeDefined();
+    expect(data.content).toBe('task body line 1\ntask body line 2');
+    expect(data.totalLines).toBe(2);
   });
 
   it('returns numberedLines for non-TASK_LIST pages (regression guard)', async () => {
@@ -323,8 +327,8 @@ describe('MCP Documents API — TASK_LIST read', () => {
     expect(mockBackfillMissingTaskItems).not.toHaveBeenCalled();
   });
 
-  it('maps enriched tasks through serializeTaskItem', async () => {
-    const raw = [{ id: 't1', status: 'pending', completedAt: null }];
+  it('maps enriched tasks through serializeTaskItem and flags tasks that have a description', async () => {
+    const raw = [{ id: 't1', status: 'pending', completedAt: null, page: { title: 'Task 1', content: 'do the thing' } }];
     const serialized = { id: 't1', title: 'Task 1', status: 'pending' };
     mockFetchEnrichedTasks.mockResolvedValue(raw);
     mockSerializeTaskItem.mockReturnValue(serialized);
@@ -334,6 +338,37 @@ describe('MCP Documents API — TASK_LIST read', () => {
 
     const data = await response.json();
     expect(mockSerializeTaskItem).toHaveBeenCalledWith(raw[0]);
-    expect(data.tasks[0]).toEqual(serialized);
+    // Only a boolean flag is exposed — never the child page body, which belongs
+    // to a page this principal may not be authorized to read.
+    expect(data.tasks[0]).toEqual({ ...serialized, hasContent: true });
+  });
+
+  it('reports hasContent false when the linked task page has no description', async () => {
+    const raw = [{ id: 't1', status: 'pending', completedAt: null }];
+    const serialized = { id: 't1', title: 'Task 1', status: 'pending' };
+    mockFetchEnrichedTasks.mockResolvedValue(raw);
+    mockSerializeTaskItem.mockReturnValue(serialized);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    const data = await response.json();
+    expect(data.tasks[0]).toEqual({ ...serialized, hasContent: false });
+  });
+
+  it('never returns child task page bodies (no inheritance: parent grant must not leak child content)', async () => {
+    const secret = 'SECRET child task body that the caller is not authorized to read';
+    const raw = [{ id: 't1', status: 'pending', completedAt: null, page: { title: 'Task 1', content: `<p>${secret}</p>` } }];
+    mockFetchEnrichedTasks.mockResolvedValue(raw);
+    mockSerializeTaskItem.mockImplementation((t: { id: string; status: string }) => ({ id: t.id, status: t.status }));
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    const data = await response.json();
+    expect(data.tasks[0].hasContent).toBe(true);
+    expect(data.tasks[0].description).toBeUndefined();
+    // The child body must not appear anywhere in the serialized response.
+    expect(JSON.stringify(data)).not.toContain(secret);
   });
 });
