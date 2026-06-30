@@ -22,6 +22,7 @@ import { loggers } from '../../logging/logger-config';
 import type { CanRunCodeResult, CanRunCodeInput, CodeExecutionDenialReason } from './can-run-code';
 import { SANDBOX_EGRESS_ALLOWLIST, SANDBOX_RESOURCE_CAPS } from './execution-policy';
 import { SandboxProvisionError, type SandboxCreateOptions } from './sandbox-options';
+import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
 import { deriveSessionKey } from './session-key';
 import { planSandboxLifecycle, type TeardownReason } from './lifecycle';
 import type { SandboxSessionStore, SandboxSessionRecord } from './session-store';
@@ -51,6 +52,14 @@ export interface AcquireSandboxDeps {
   now: () => Date;
   /** Server-held secret for session-key derivation. */
   secret: string;
+  /**
+   * Optional full-egress enablement gate, consulted ONLY when provisioning a
+   * FRESH sandbox. When provided and it refuses, no VM is created and the denial
+   * reason is surfaced — a full-egress sandbox is never handed out on an
+   * unverified containment boundary. Omitted → no gate (deny-by-default allowlist
+   * provisioning is unaffected). Wired in production from `decideFullEgressEnablement`.
+   */
+  checkFullEgressEnablement?: () => Promise<FullEgressEnablement>;
 }
 
 export interface AcquireSandboxInput {
@@ -71,7 +80,7 @@ export type AcquireSandboxResult =
   | { ok: true; sandboxId: string; resumed: boolean }
   | {
       ok: false;
-      reason: CodeExecutionDenialReason | 'provision_failed' | 'rate_limited';
+      reason: CodeExecutionDenialReason | 'provision_failed' | 'rate_limited' | FullEgressDenialReason;
       /** Set when the provider reported a rate limit (seconds to wait). */
       retryAfterSeconds?: number;
       cause?: unknown;
@@ -140,6 +149,17 @@ async function provisionFresh({
   input: AcquireSandboxInput;
 }): Promise<AcquireSandboxResult> {
   const { deps, tenantId, driveId, conversationId, userId } = input;
+
+  // Full-egress containment gate (fresh provisioning only). If a gate is wired and
+  // refuses, no VM is created — a full-egress sandbox is never handed out while the
+  // isolation boundary is unproven.
+  if (deps.checkFullEgressEnablement) {
+    const enablement = await deps.checkFullEgressEnablement();
+    if (!enablement.ok) {
+      return { ok: false, reason: enablement.reason };
+    }
+  }
+
   const options: SandboxCreateOptions = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST, caps: SANDBOX_RESOURCE_CAPS };
 
   let handle: SandboxHandle;

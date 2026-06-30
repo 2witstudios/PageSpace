@@ -347,6 +347,11 @@
       "import": "./dist/services/sandbox/sandbox-options.js",
       "require": "./dist/services/sandbox/sandbox-options.js"
     },
+    "./services/sandbox/containment": {
+      "types": "./dist/services/sandbox/containment.d.ts",
+      "import": "./dist/services/sandbox/containment.js",
+      "require": "./dist/services/sandbox/containment.js"
+    },
     "./services/sandbox/session-store": {
       "types": "./dist/services/sandbox/session-store.d.ts",
       "import": "./dist/services/sandbox/session-store.js",

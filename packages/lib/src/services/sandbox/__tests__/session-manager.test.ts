@@ -345,3 +345,43 @@ describe('teardownConversationSandbox', () => {
     expect(storeCalls.remove).toBe(0);
   });
 });
+
+describe('acquireConversationSandbox — full-egress containment gate', () => {
+  it('given the enablement check refuses (unverified containment), should deny with containment_unverified and never provision', async () => {
+    const { store, calls: storeCalls } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireConversationSandbox({
+      ...actor,
+      deps: {
+        store,
+        client,
+        authorize: async () => ({ ok: true }),
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: false, reason: 'containment_unverified' }),
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: 'containment_unverified' });
+    // The boundary is unproven — no VM is ever created.
+    expect(calls.getOrCreate).toEqual([]);
+    expect(storeCalls.save).toBe(0);
+  });
+
+  it('given the enablement check passes (verified containment), should provision normally', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireConversationSandbox({
+      ...actor,
+      deps: {
+        store,
+        client,
+        authorize: async () => ({ ok: true }),
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: true }),
+      },
+    });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
+  });
+});
