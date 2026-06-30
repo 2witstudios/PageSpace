@@ -419,4 +419,25 @@ describe('acquireTerminalSandbox — full-egress containment gate', () => {
     expect(result).toMatchObject({ ok: true, resumed: false });
     expect(calls.getOrCreate).toHaveLength(1);
   });
+
+  it('on RECONNECT (resume) of an existing session, must STILL gate — getOrCreate can recreate a destroyed VM with open egress', async () => {
+    // The reconnect path uses getOrCreate (which re-provisions a vanished VM), so it
+    // must be gated too, or a warm/hibernating terminal could mint a fresh
+    // open-egress VM after SANDBOX_CONTAINMENT_VERIFIED is turned off.
+    const { store } = makeStore(seedRecord());
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: {
+        store,
+        client,
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: false, reason: 'containment_unverified' }),
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: 'containment_unverified' });
+    expect(calls.getOrCreate).toEqual([]);
+  });
 });

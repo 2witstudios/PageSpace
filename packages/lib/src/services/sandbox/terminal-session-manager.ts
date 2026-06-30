@@ -251,6 +251,15 @@ export async function acquireTerminalSandbox(
     // path (ensureSpriteAwake), so a hibernated terminal's `bash` spawn lands on
     // an awake VM instead of racing a cold-start drop.
     const reconnectExisting = async (): Promise<AcquireTerminalSandboxResult> => {
+      // Reconnect uses getOrCreate, which RE-PROVISIONS a vanished/reaped VM under
+      // the same name — i.e. it can mint a FRESH open-egress VM. So the containment
+      // gate must run here too, not only on the fresh-create path; otherwise a warm
+      // or hibernating terminal would bypass containment after
+      // SANDBOX_CONTAINMENT_VERIFIED is turned off.
+      const enablement = await deps.checkFullEgressEnablement();
+      if (!enablement.ok) {
+        return { ok: false, reason: enablement.reason };
+      }
       try {
         const handle = await deps.client.getOrCreate({ name: key, options: terminalSandboxOptions() });
         await safeTouch(deps.store, key, deps.now());

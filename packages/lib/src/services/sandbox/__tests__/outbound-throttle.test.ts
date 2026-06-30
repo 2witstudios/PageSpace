@@ -62,6 +62,16 @@ describe('outboundThrottleDecision', () => {
     if (d.action === 'throttle') expect(Number.isFinite(d.retryAfterMs) && d.retryAfterMs >= 0).toBe(true);
   });
 
+  it('should FAIL CLOSED on a malformed LIMIT too (NaN/Infinity/negative limit → throttle, not silent allow)', () => {
+    const usage = { bytes: 1, connections: 1, windowMs: 60_000, elapsedMs: 0 };
+    expect(
+      outboundThrottleDecision({ usage, limits: { maxBytesPerWindow: NaN, maxConnectionsPerWindow: 10 } }).action,
+    ).toBe('throttle');
+    expect(
+      outboundThrottleDecision({ usage, limits: { maxBytesPerWindow: 1000, maxConnectionsPerWindow: -1 } }).action,
+    ).toBe('throttle');
+  });
+
   it('should be deterministic — no ambient clock (same inputs → same output)', () => {
     const input = {
       usage: { bytes: 2000, connections: 1, windowMs: 60_000, elapsedMs: 12_345 },

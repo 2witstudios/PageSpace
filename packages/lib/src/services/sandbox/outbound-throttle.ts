@@ -61,7 +61,12 @@ export function outboundThrottleDecision({
     isValidCounter(usage.bytes) &&
     isValidCounter(usage.connections) &&
     isValidCounter(usage.windowMs) &&
-    isValidCounter(usage.elapsedMs);
+    isValidCounter(usage.elapsedMs) &&
+    // The limits are operator config, but a malformed limit (e.g. NaN) would make
+    // `usage > limit` read false → silent allow, defeating the backstop. Validate
+    // them too: an invalid limit fail-closes to throttle.
+    isValidCounter(limits.maxBytesPerWindow) &&
+    isValidCounter(limits.maxConnectionsPerWindow);
 
   const safeRetryAfterMs = (): number => {
     if (!isValidCounter(usage.windowMs) || !isValidCounter(usage.elapsedMs)) return 0;

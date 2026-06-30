@@ -129,8 +129,13 @@ export async function runGitInSandbox({
     }
 
     const durationMs = deps.now().getTime() - startedAt.getTime();
-    const stdout = truncateToBytes({ text: run.stdout, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
-    const stderr = truncateToBytes({ text: run.stderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
+    // Injection seam (fail-open): screen untrusted git/gh stdout+stderr (fetched
+    // commit messages, file contents, PR bodies, etc.) BEFORE truncation, same as
+    // the bash runner. The screen owns its own fail-open behavior; never blocks.
+    const screenedStdout = deps.screenOutput ? await deps.screenOutput(run.stdout) : run.stdout;
+    const screenedStderr = deps.screenOutput ? await deps.screenOutput(run.stderr) : run.stderr;
+    const stdout = truncateToBytes({ text: screenedStdout, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
+    const stderr = truncateToBytes({ text: screenedStderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
 
     await safeAudit(deps, ctx, {
       cmd: `${cmd} ${args.join(' ')}`,
