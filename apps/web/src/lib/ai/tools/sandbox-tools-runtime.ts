@@ -20,6 +20,14 @@ import { users } from '@pagespace/db/schema/auth';
 import { defaultBuildEnv, type SandboxRunDeps } from '@pagespace/lib/services/sandbox/tool-runners';
 import { isCodeExecutionEnabled, canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
+  decideFullEgressEnablement,
+  isContainmentVerified,
+} from '@pagespace/lib/services/sandbox/containment';
+import {
+  screenToolOutput,
+  heuristicInjectionClassifier,
+} from '@pagespace/lib/services/sandbox/injection-seam';
+import {
   acquireConversationSandbox,
   getSandboxSessionSecret,
 } from '@pagespace/lib/services/sandbox/session-manager';
@@ -102,6 +110,15 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
           authorize: canRunCode,
           now: () => new Date(),
           secret: getSandboxSessionSecret(),
+          // Full-egress G-gate: the agent sandbox runs OPEN egress, so refuse to
+          // provision unless containment is verified for the live topology
+          // (SANDBOX_CONTAINMENT_VERIFIED=true after the G1 probes pass). Admin
+          // gate has precedence. Fail-closed when unset.
+          checkFullEgressEnablement: async () =>
+            decideFullEgressEnablement({
+              adminGateEnabled: isCodeExecutionEnabled(),
+              containment: isContainmentVerified() ? { contained: true } : null,
+            }),
         },
       }),
     reconnect: async (sandboxId) => (await getSandboxClient()).get({ sandboxId }),
@@ -111,6 +128,24 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
+    // Injection seam (DEFENSE-IN-DEPTH, fail-open): screen untrusted tool output
+    // through the built-in heuristic classifier before it becomes a model message.
+    // Annotates flagged content (never blocks); a classifier error fails open. A
+    // model-based classifier can replace `heuristicInjectionClassifier` here.
+    screenOutput: (text) =>
+      screenToolOutput({
+        text,
+        classifier: heuristicInjectionClassifier,
+        onFlagged: (verdict) =>
+          loggers.ai.warn?.('Sandbox tool output flagged by injection seam (annotated, not blocked)', {
+            label: verdict.label,
+          }),
+        onError: (error) =>
+          loggers.ai.error(
+            'Sandbox injection classifier errored (failing open)',
+            error instanceof Error ? error : new Error(String(error)),
+          ),
+      }),
     now: () => new Date(),
     logger: loggers.ai,
   };

@@ -70,6 +70,14 @@ export interface SandboxRunDeps {
   quota: SandboxQuotaDeps;
   buildEnv: () => Record<string, string>;
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
+  /**
+   * Optional injection-detection seam (DEFENSE-IN-DEPTH, fail-open). Applied to
+   * untrusted tool output (bash stdout, file content) BEFORE it returns to the
+   * model. Composed in the app shell from `screenToolOutput` + a real classifier;
+   * it annotates flagged content and NEVER blocks. Omitted → output passes through
+   * unchanged (seam disabled).
+   */
+  screenOutput?: (text: string) => Promise<string>;
   now: () => Date;
   logger?: {
     warn?: (message: string, metadata?: Record<string, unknown>) => void;
@@ -381,8 +389,14 @@ export async function runBashInSandbox({
     }
 
     const durationMs = deps.now().getTime() - startedAt.getTime();
-    const stdout = truncateToBytes({ text: run.stdout, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
-    const stderr = truncateToBytes({ text: run.stderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
+    // Injection seam (fail-open): screen untrusted stdout AND stderr BEFORE
+    // truncation so the annotation marker lands at the head and survives the byte
+    // cap. stderr is screened too — injected instructions can be written there just
+    // as easily as stdout. The screen owns its own fail-open behavior; never blocks.
+    const screenedStdout = deps.screenOutput ? await deps.screenOutput(run.stdout) : run.stdout;
+    const screenedStderr = deps.screenOutput ? await deps.screenOutput(run.stderr) : run.stderr;
+    const stdout = truncateToBytes({ text: screenedStdout, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
+    const stderr = truncateToBytes({ text: screenedStderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
     await safeAudit(deps, ctx, {
       code: command,
       exitCode: run.exitCode,
@@ -513,8 +527,11 @@ export async function readSandboxFile({
       });
       return fail('not_found');
     }
+    // Injection seam (fail-open): screen untrusted file content before truncation.
+    const rawContent = buffer.toString('utf8');
+    const screenedContent = deps.screenOutput ? await deps.screenOutput(rawContent) : rawContent;
     const { text, truncated } = truncateToBytes({
-      text: buffer.toString('utf8'),
+      text: screenedContent,
       maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
     });
     await safeAudit(deps, ctx, {

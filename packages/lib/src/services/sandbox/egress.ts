@@ -50,6 +50,35 @@ const INCLUDE_DEFAULTS: PolicyRule = Object.freeze({ include: 'defaults' });
 
 const DENY_ALL: PolicyRule = Object.freeze({ domain: '*', action: 'deny' });
 
+// The Fly internal surface we deny EXPLICITLY rather than trusting the SDK's
+// `{ include: 'defaults' }` preset — no Sprites doc states that preset blocks the
+// internal surface (it is documented only as an *allowlist* of LLM-friendly
+// destinations), so under full egress we must not assume it does. These are
+// belt-and-suspenders DNS-layer denies; they cannot block IP-literal/6PN egress
+// (a domain rule only matches name-resolved traffic), which is why the real
+// boundary is verified containment (see `containment.ts`), not these rules.
+const INTERNAL_SURFACE_DENY_DOMAINS: readonly string[] = Object.freeze([
+  '_api.internal', // Fly Machines API over 6PN
+  '*.internal', // 6PN app/private-network names
+  'flycast', // Flycast apex (a `*.flycast` wildcard may not match the apex)
+  '*.flycast', // Flycast internal service addresses
+  'fly.storage.tigris.dev', // Tigris authed S3 apex
+  '*.fly.storage.tigris.dev', // Tigris authed S3 subdomains
+  't3.tigrisfiles.io', // Tigris public object-storage apex
+  '*.t3.tigrisfiles.io', // Tigris public object-storage subdomains
+]);
+
+/**
+ * Explicit deny rules for the Fly internal surface, independent of the SDK
+ * `{ include: 'defaults' }` preset. Returns a FRESH array of fresh rule objects on
+ * every call (clone-safe — a caller cannot mutate a shared policy). Ordered so the
+ * internal surface is denied first when composed ahead of any allow under
+ * first-match-wins.
+ */
+export function buildInternalSurfaceDenyRules(): PolicyRule[] {
+  return INTERNAL_SURFACE_DENY_DOMAINS.map((domain): PolicyRule => ({ domain, action: 'deny' }));
+}
+
 // A literal DNS hostname: 1–253 chars, dot-separated labels of letters/digits/
 // hyphens (no leading/trailing hyphen per label). Deliberately strict — only a
 // resolvable host pattern is a valid allow rule for a default-deny egress.
@@ -86,12 +115,21 @@ export function buildSpriteNetworkPolicy({
   egressAllowlist?: readonly string[];
   egressMode?: 'allowlist' | 'open';
 } = {}): NetworkPolicy {
-  // Open mode: allow all public internet while keeping the SDK's internal-surface
-  // preset first (first-match-wins denies *.internal / metadata / Flycast /
-  // Tigris before the catch-all allow fires). The allow-all is emitted directly —
-  // NOT routed through sanitizeEgressAllowlist, which intentionally strips '*'.
+  // Open mode: allow all public internet, but deny the Fly internal surface FIRST
+  // under first-match-wins. We emit our OWN explicit internal denies
+  // (`buildInternalSurfaceDenyRules`) rather than trusting the SDK's
+  // `{ include: 'defaults' }` preset — no Sprites doc states that preset blocks the
+  // internal surface — then keep the preset too (belt-and-suspenders), then the
+  // catch-all allow. The allow-all is emitted directly — NOT routed through
+  // sanitizeEgressAllowlist, which intentionally strips '*'.
   if (egressMode === 'open') {
-    return { rules: [{ ...INCLUDE_DEFAULTS }, { domain: '*', action: 'allow' }] };
+    return {
+      rules: [
+        ...buildInternalSurfaceDenyRules(),
+        { ...INCLUDE_DEFAULTS },
+        { domain: '*', action: 'allow' },
+      ],
+    };
   }
 
   const hosts = sanitizeEgressAllowlist(egressAllowlist);

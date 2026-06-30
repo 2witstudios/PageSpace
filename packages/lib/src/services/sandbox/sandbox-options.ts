@@ -18,6 +18,12 @@ export interface SandboxCreateOptions {
   egressMode?: 'allowlist' | 'open';
   /** Resource caps applied at creation; omitted → provider defaults. */
   caps?: SandboxResourceCaps;
+  /**
+   * Dedicated egress-IP attribution tag (see `egress-ip.ts`). Lets the driver/ops
+   * layer pin sandbox outbound to a dedicated IP separate from prod's shared NAT
+   * pool, so abuse is attributable and prod IP reputation is protected.
+   */
+  egressIpTag?: string;
 }
 
 /**
