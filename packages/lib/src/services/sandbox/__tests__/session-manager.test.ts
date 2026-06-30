@@ -243,7 +243,7 @@ describe('acquireConversationSandbox', () => {
     expect(calls.getOrCreate.length).toBe(1);
   });
 
-  it('agent path: provisions with the tight SANDBOX_EGRESS_ALLOWLIST and no egressMode (open mode must NOT bleed into agent sandbox)', async () => {
+  it('agent path: provisions with OPEN egress via the shared resolver (full-egress unification)', async () => {
     const { store } = makeStore();
     const { client, calls } = makeClient();
     const result = await acquireConversationSandbox({
@@ -252,11 +252,10 @@ describe('acquireConversationSandbox', () => {
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.getOrCreate).toHaveLength(1);
-    // Must use the tight named allowlist, not open egress.
+    // Agent sandbox now uses full (open) egress — the boundary is verified
+    // containment + microVM isolation, not the old tight allowlist.
     const { options } = calls.getOrCreate[0];
-    expect(options.egressMode).toBeUndefined();
-    expect(Array.isArray(options.egressAllowlist)).toBe(true);
-    expect((options.egressAllowlist as string[]).length).toBeGreaterThan(0);
+    expect(options.egressMode).toBe('open');
   });
 
   it('given an empty session secret, should deny without provisioning (fail closed)', async () => {

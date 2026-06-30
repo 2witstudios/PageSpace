@@ -7,6 +7,7 @@ import {
   type TerminalSessionRecord,
 } from '../terminal-session-manager';
 import type { SandboxClient } from '../session-manager';
+import { resolveSandboxNetworkOptions } from '../network-options';
 
 const SECRET = 'x'.repeat(32);
 const NOW = new Date('2026-06-01T12:00:00.000Z');
@@ -339,6 +340,8 @@ describe('acquireTerminalSandbox', () => {
     expect(calls.getOrCreate[0].options).toMatchObject({ egressMode: 'open' });
     // The tight SANDBOX_EGRESS_ALLOWLIST must NOT appear on the terminal path.
     expect(calls.getOrCreate[0].options).not.toHaveProperty('egressAllowlist');
+    // Sourced from the shared resolver (one network posture for agent + terminal).
+    expect(calls.getOrCreate[0].options).toEqual(resolveSandboxNetworkOptions({ surface: 'terminal' }));
   });
 
   it('reconnects also use egressMode: open via getOrCreate (applies policy on every hand-back, not just fresh provisions)', async () => {

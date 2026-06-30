@@ -1,6 +1,6 @@
 import { createHmac } from 'crypto';
-import { SANDBOX_RESOURCE_CAPS } from './execution-policy';
 import type { SandboxCreateOptions } from './sandbox-options';
+import { resolveSandboxNetworkOptions } from './network-options';
 import type { SandboxClient } from './session-manager';
 import { loggers } from '../../logging/logger-config';
 
@@ -150,11 +150,12 @@ async function safeTouch(store: TerminalSessionStore, sessionKey: string, now: D
 
 // Applied on every hand-back (fresh + reconnect) so the open egress policy is
 // always current — handles both normal reconnects and the migration path for
-// sessions created before this egress change was deployed.
-const TERMINAL_SANDBOX_OPTIONS: SandboxCreateOptions = {
-  egressMode: 'open',
-  caps: SANDBOX_RESOURCE_CAPS,
-};
+// sessions created before this egress change was deployed. Resolved from the
+// shared `resolveSandboxNetworkOptions` so agent + terminal share one network
+// posture (open egress, same caps, same internal-surface deny).
+const TERMINAL_SANDBOX_OPTIONS: SandboxCreateOptions = resolveSandboxNetworkOptions({
+  surface: 'terminal',
+});
 
 async function provisionFreshTerminal({
   key,

@@ -20,8 +20,8 @@
 
 import { loggers } from '../../logging/logger-config';
 import type { CanRunCodeResult, CanRunCodeInput, CodeExecutionDenialReason } from './can-run-code';
-import { SANDBOX_EGRESS_ALLOWLIST, SANDBOX_RESOURCE_CAPS } from './execution-policy';
 import { SandboxProvisionError, type SandboxCreateOptions } from './sandbox-options';
+import { resolveSandboxNetworkOptions } from './network-options';
 import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
 import { deriveSessionKey } from './session-key';
 import { planSandboxLifecycle, type TeardownReason } from './lifecycle';
@@ -160,7 +160,10 @@ async function provisionFresh({
     }
   }
 
-  const options: SandboxCreateOptions = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST, caps: SANDBOX_RESOURCE_CAPS };
+  // Full (open) egress via the shared resolver — unified with the human terminal.
+  // The boundary is verified containment + microVM isolation (gated above), not the
+  // old tight allowlist.
+  const options: SandboxCreateOptions = resolveSandboxNetworkOptions({ surface: 'agent' });
 
   let handle: SandboxHandle;
   try {
