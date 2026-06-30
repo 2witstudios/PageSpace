@@ -62,13 +62,50 @@ export function annotateToolOutput({
   return `${UNTRUSTED_HEADER}\n${text}\n${UNTRUSTED_FOOTER}`;
 }
 
-/** A read-only injection classifier. Implemented in the app shell (a small model /
- *  moderation call); the seam only depends on this minimal contract. The
- *  implementation OWNS its own latency budget and rejects on timeout — the seam
- *  treats any rejection as fail-open. */
+/** A read-only injection classifier. May be the built-in heuristic
+ *  ({@link heuristicInjectionClassifier}) or a model/moderation call in the app
+ *  shell; the seam only depends on this minimal contract. The implementation OWNS
+ *  its own latency budget and rejects on timeout — the seam treats any rejection
+ *  as fail-open. */
 export interface InjectionClassifier {
   classify(text: string): Promise<InjectionVerdict>;
 }
+
+// Known prompt-injection phrasings that show up in fetched/untrusted content. This
+// is a CHEAP first layer, not a real boundary — published guards (even ML ones)
+// hit ~100% bypass under adaptive evasion, so the seam stays fail-open/annotate.
+// Each pattern is a single linear scan (no nested/overlapping quantifiers) to stay
+// CodeQL js/polynomial-redos safe. A model-based classifier can replace this by
+// implementing InjectionClassifier in the app shell.
+const INJECTION_PATTERNS: readonly { re: RegExp; label: string }[] = Object.freeze([
+  { re: /ignore\s+(?:all\s+|the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions?|prompts?|messages?)/i, label: 'ignore-previous' },
+  { re: /disregard\s+(?:all\s+|the\s+)?(?:previous|prior|above|earlier|foregoing)/i, label: 'disregard' },
+  { re: /(?:reveal|print|show|repeat|output)\s+(?:your\s+|the\s+)?(?:system\s+prompt|initial\s+instructions|hidden\s+(?:instructions|prompt))/i, label: 'reveal-system-prompt' },
+  { re: /you\s+are\s+now\s+(?:in\s+)?(?:a\s+)?(?:developer|dev|debug|jailbreak|dan|god)\s*mode/i, label: 'mode-switch' },
+  { re: /\bnew\s+instructions?\s*:/i, label: 'new-instructions' },
+  { re: /^\s*system\s*:/im, label: 'fake-system-role' },
+]);
+
+/**
+ * Built-in heuristic injection detector (pure). Flags content matching known
+ * injection phrasings; never throws. Returns the first matched label and a fixed
+ * confidence. Deliberately conservative — false negatives are the EXPECTED failure
+ * mode and acceptable because the seam is fail-open defense-in-depth.
+ */
+export function detectInjectionHeuristic(text: string): InjectionVerdict {
+  if (typeof text !== 'string' || text.length === 0) return { flagged: false };
+  for (const { re, label } of INJECTION_PATTERNS) {
+    if (re.test(text)) return { flagged: true, confidence: 0.5, label };
+  }
+  return { flagged: false };
+}
+
+/** The built-in heuristic wrapped as an {@link InjectionClassifier}, suitable as
+ *  the default `screenOutput` classifier in production (zero external dependency,
+ *  no latency/cost surprise). */
+export const heuristicInjectionClassifier: InjectionClassifier = {
+  classify: async (text) => detectInjectionHeuristic(text),
+};
 
 /**
  * Screen one piece of tool output through the injection seam. FAIL-OPEN by

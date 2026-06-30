@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto';
 import type { SandboxCreateOptions } from './sandbox-options';
 import { resolveSandboxNetworkOptions } from './network-options';
+import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
 import type { SandboxClient } from './session-manager';
 import { loggers } from '../../logging/logger-config';
 
@@ -116,12 +117,18 @@ export interface AcquireTerminalSandboxInput {
     client: SandboxClient;
     now: () => Date;
     secret: string;
+    /**
+     * Optional full-egress enablement gate, consulted ONLY when provisioning a
+     * FRESH terminal. The terminal runs OPEN egress, so when this is wired and it
+     * refuses, no VM is created. Omitted → no gate (unchanged behaviour).
+     */
+    checkFullEgressEnablement?: () => Promise<FullEgressEnablement>;
   };
 }
 
 export type AcquireTerminalSandboxResult =
   | { ok: true; sandboxId: string; sessionKey: string; resumed: boolean }
-  | { ok: false; reason: 'deny' | 'provision_failed' | 'error'; cause?: unknown };
+  | { ok: false; reason: 'deny' | 'provision_failed' | 'error' | FullEgressDenialReason; cause?: unknown };
 
 async function safeStop(client: SandboxClient, sandboxId: string): Promise<boolean> {
   try {
@@ -165,6 +172,16 @@ async function provisionFreshTerminal({
   input: AcquireTerminalSandboxInput;
 }): Promise<AcquireTerminalSandboxResult> {
   const { deps, pageId, userId, driveId } = input;
+
+  // Full-egress containment gate (fresh provisioning only). The terminal runs OPEN
+  // egress; if a gate is wired and refuses, no VM is created.
+  if (deps.checkFullEgressEnablement) {
+    const enablement = await deps.checkFullEgressEnablement();
+    if (!enablement.ok) {
+      return { ok: false, reason: enablement.reason };
+    }
+  }
+
   const options = TERMINAL_SANDBOX_OPTIONS;
 
   let sandboxId: string;

@@ -11,7 +11,11 @@ import { dmConversations } from '@pagespace/db/schema/social';
 import { socketTokens, users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { pages, drives } from '@pagespace/db/schema/core';
-import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import {
+  decideFullEgressEnablement,
+  isContainmentVerified,
+} from '@pagespace/lib/services/sandbox/containment';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/session-manager';
 import { acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
@@ -98,7 +102,19 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
     tenantId,
     userId,
     canRun: true,
-    deps: { store, client, now: () => new Date(), secret: getSandboxSessionSecret() },
+    deps: {
+      store,
+      client,
+      now: () => new Date(),
+      secret: getSandboxSessionSecret(),
+      // Full-egress containment G-gate: the terminal runs OPEN egress, so refuse to
+      // provision unless containment is verified (SANDBOX_CONTAINMENT_VERIFIED=true).
+      checkFullEgressEnablement: async () =>
+        decideFullEgressEnablement({
+          adminGateEnabled: isCodeExecutionEnabled(),
+          containment: isContainmentVerified() ? { contained: true } : null,
+        }),
+    },
   });
 
   if (!sandboxResult.ok) {

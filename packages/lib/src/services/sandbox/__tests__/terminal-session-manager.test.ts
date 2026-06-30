@@ -378,3 +378,41 @@ describe('acquireTerminalSandbox', () => {
     expect(storeCalls.touch).toBe(1);
   });
 });
+
+describe('acquireTerminalSandbox — full-egress containment gate', () => {
+  it('refuses with containment_unverified when the gate denies, never provisioning', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: {
+        store,
+        client,
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: false, reason: 'containment_unverified' }),
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: 'containment_unverified' });
+    expect(calls.getOrCreate).toEqual([]);
+  });
+
+  it('provisions when the containment gate passes', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: {
+        store,
+        client,
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: true }),
+      },
+    });
+    expect(result).toMatchObject({ ok: true, resumed: false });
+    expect(calls.getOrCreate).toHaveLength(1);
+  });
+});

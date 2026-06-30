@@ -18,6 +18,13 @@ it is not load-bearing.
 
 ## HARD G-GATES — all must pass before `CODE_EXECUTION_ENABLED=true` in any env
 
+> **G1 STATUS: ✅ VERIFIED in prod (2026-06-30).** Probes run from a live PageSpace
+> human terminal (already on `egressMode: 'open'`): no `fdaa::/8` 6PN address,
+> `_api.internal` does not resolve, the metadata IP + its decimal/hex encodings are
+> unreachable, and Tigris is unreachable. Sprites are genuinely isolated from the
+> Fly internal surface — containment holds. No per-sandbox custom-6PN work needed.
+> Set `SANDBOX_CONTAINMENT_VERIFIED=true` to reflect this in the enablement gate.
+
 ### G1 — Containment proven (BLOCKING)
 
 Run the containment probes **inside a live Sprite** against the real backing

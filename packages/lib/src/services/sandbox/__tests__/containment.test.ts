@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { afterEach } from 'vitest';
 import {
   parseContainmentProbe,
   assessContainment,
   decideFullEgressEnablement,
+  isContainmentVerified,
   REQUIRED_CONTAINMENT_TARGETS,
   type RawProbe,
   type ProbeResult,
@@ -143,5 +145,30 @@ describe('decideFullEgressEnablement', () => {
     expect(
       decideFullEgressEnablement({ adminGateEnabled: true, containment: { contained: true } }),
     ).toEqual({ ok: true });
+  });
+});
+
+describe('isContainmentVerified', () => {
+  const prev = process.env.SANDBOX_CONTAINMENT_VERIFIED;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.SANDBOX_CONTAINMENT_VERIFIED;
+    else process.env.SANDBOX_CONTAINMENT_VERIFIED = prev;
+  });
+
+  it('is false (fail-closed) when the env flag is unset', () => {
+    delete process.env.SANDBOX_CONTAINMENT_VERIFIED;
+    expect(isContainmentVerified()).toBe(false);
+  });
+
+  it('is false for any value other than the exact string "true"', () => {
+    process.env.SANDBOX_CONTAINMENT_VERIFIED = '1';
+    expect(isContainmentVerified()).toBe(false);
+    process.env.SANDBOX_CONTAINMENT_VERIFIED = 'TRUE';
+    expect(isContainmentVerified()).toBe(false);
+  });
+
+  it('is true only for the exact opt-in string "true"', () => {
+    process.env.SANDBOX_CONTAINMENT_VERIFIED = 'true';
+    expect(isContainmentVerified()).toBe(true);
   });
 });

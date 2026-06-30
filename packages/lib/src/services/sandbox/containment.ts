@@ -143,3 +143,16 @@ export function decideFullEgressEnablement(input: {
   }
   return { ok: true };
 }
+
+/**
+ * Whether containment has been verified for the live backing topology — the
+ * operational G1 gate. An operator sets `SANDBOX_CONTAINMENT_VERIFIED=true` ONLY
+ * after the containment probes pass against real Sprites (see
+ * FULL-EGRESS-ENABLEMENT.md). Fail-closed: anything other than the exact string
+ * `'true'` (including unset) is treated as UNverified, so full egress is refused
+ * until the boundary is proven. Read directly from `process.env` (this also runs
+ * in the realtime service, whose lean env fails full schema validation).
+ */
+export function isContainmentVerified(): boolean {
+  return process.env.SANDBOX_CONTAINMENT_VERIFIED === 'true';
+}
