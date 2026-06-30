@@ -498,3 +498,25 @@ describe('readSandboxFile', () => {
     expect(acquired).toBe(false);
   });
 });
+
+describe('injection seam wiring (screenOutput, fail-open)', () => {
+  it('given a screenOutput hook, bash stdout is screened before it returns to the model', async () => {
+    const { deps } = makeDeps({ screenOutput: async (t) => `[SCREENED]${t}` });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    if (result.success) expect(result.stdout).toBe('[SCREENED]ok');
+  });
+
+  it('given NO screenOutput hook, bash stdout passes through unchanged (seam disabled)', async () => {
+    const { deps } = makeDeps();
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    if (result.success) expect(result.stdout).toBe('ok');
+  });
+
+  it('given a screenOutput hook, readFile content is screened before it returns to the model', async () => {
+    const { deps } = makeDeps({ screenOutput: async (t) => `[SCREENED]${t}` });
+    const result = await readSandboxFile({ path: 'a.txt', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    if (result.success) expect(result.content).toBe('[SCREENED]file-contents');
+  });
+});

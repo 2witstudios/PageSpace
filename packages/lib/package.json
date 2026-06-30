@@ -357,6 +357,11 @@
       "import": "./dist/services/sandbox/network-options.js",
       "require": "./dist/services/sandbox/network-options.js"
     },
+    "./services/sandbox/injection-seam": {
+      "types": "./dist/services/sandbox/injection-seam.d.ts",
+      "import": "./dist/services/sandbox/injection-seam.js",
+      "require": "./dist/services/sandbox/injection-seam.js"
+    },
     "./services/sandbox/session-store": {
       "types": "./dist/services/sandbox/session-store.d.ts",
       "import": "./dist/services/sandbox/session-store.js",
