@@ -26,6 +26,16 @@ import type { SandboxSurface } from './network-options';
 const DEFAULT_EGRESS_TAG = 'sandbox-egress-default';
 
 /**
+ * Read the operator-configured dedicated egress-IP tag from the environment
+ * (`SANDBOX_EGRESS_IP_TAG`), or `null` when unset. Read directly from
+ * `process.env` so it works in both the web and the lean realtime env. Pass the
+ * result to `resolveSandboxNetworkOptions`/`resolveEgressIpTag` at provision time.
+ */
+export function getConfiguredEgressIpTag(): string | null {
+  return process.env.SANDBOX_EGRESS_IP_TAG ?? null;
+}
+
+/**
  * Resolve the egress-IP attribution tag for a sandbox surface. A configured
  * (non-empty) tag is dedicated; an unset/blank tag falls back to a sandbox-scoped
  * default with `dedicated: false` (degraded attribution).

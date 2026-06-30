@@ -12,6 +12,10 @@ import { resolveSandboxNetworkOptions } from '../network-options';
 const SECRET = 'x'.repeat(32);
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
+// Default passing full-egress gate (the gate is required; these tests exercise
+// non-gate paths). Containment-gate behaviour has its own suite.
+const passGate = async (): Promise<{ ok: true }> => ({ ok: true });
+
 const namespacing = { tenantId: 't1', driveId: 'd1', pageId: 'p1' };
 const actor = { userId: 'u1', ...namespacing };
 
@@ -214,7 +218,7 @@ describe('acquireTerminalSandbox', () => {
       ...actor,
       canRun: true,
       pageId: '',
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: false, reason: 'error' });
   });
@@ -225,7 +229,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: '' },
+      deps: { store, client, now: () => NOW, secret: '', checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: false, reason: 'error' });
   });
@@ -236,7 +240,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: false });
     if (result.ok) expect(result.sessionKey).toBe(keyFor());
@@ -250,7 +254,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     if (result.ok) expect(result.sessionKey).toBe(keyFor());
@@ -268,7 +272,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     // getOrCreate handles the VM-gone case transparently — no explicit remove + re-provision.
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
@@ -286,7 +290,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store: failingStore.store, client, now: () => NOW, secret: SECRET },
+      deps: { store: failingStore.store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
     expect(result.ok).toBe(false);
@@ -300,7 +304,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: false,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: false, reason: 'deny' });
     expect(calls.get).toEqual([]);
@@ -318,7 +322,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
@@ -333,7 +337,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.getOrCreate).toHaveLength(1);
@@ -352,7 +356,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toHaveLength(1);
@@ -370,7 +374,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);

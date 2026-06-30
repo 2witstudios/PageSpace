@@ -60,9 +60,12 @@ const DENY_ALL: PolicyRule = Object.freeze({ domain: '*', action: 'deny' });
 const INTERNAL_SURFACE_DENY_DOMAINS: readonly string[] = Object.freeze([
   '_api.internal', // Fly Machines API over 6PN
   '*.internal', // 6PN app/private-network names
+  'flycast', // Flycast apex (a `*.flycast` wildcard may not match the apex)
   '*.flycast', // Flycast internal service addresses
-  '*.fly.storage.tigris.dev', // Tigris authed S3 surface
-  '*.t3.tigrisfiles.io', // Tigris public object-storage surface
+  'fly.storage.tigris.dev', // Tigris authed S3 apex
+  '*.fly.storage.tigris.dev', // Tigris authed S3 subdomains
+  't3.tigrisfiles.io', // Tigris public object-storage apex
+  '*.t3.tigrisfiles.io', // Tigris public object-storage subdomains
 ]);
 
 /**

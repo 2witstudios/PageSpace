@@ -1,6 +1,7 @@
 import { createHmac } from 'crypto';
 import type { SandboxCreateOptions } from './sandbox-options';
 import { resolveSandboxNetworkOptions } from './network-options';
+import { getConfiguredEgressIpTag } from './egress-ip';
 import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
 import type { SandboxClient } from './session-manager';
 import { loggers } from '../../logging/logger-config';
@@ -118,11 +119,12 @@ export interface AcquireTerminalSandboxInput {
     now: () => Date;
     secret: string;
     /**
-     * Optional full-egress enablement gate, consulted ONLY when provisioning a
-     * FRESH terminal. The terminal runs OPEN egress, so when this is wired and it
-     * refuses, no VM is created. Omitted → no gate (unchanged behaviour).
+     * REQUIRED full-egress enablement gate, consulted when provisioning a FRESH
+     * terminal. The terminal runs OPEN egress, so this gate is mandatory: if it
+     * refuses, no VM is created. Required (not optional) so a caller can never
+     * silently bypass containment by forgetting to wire it.
      */
-    checkFullEgressEnablement?: () => Promise<FullEgressEnablement>;
+    checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   };
 }
 
@@ -155,14 +157,17 @@ async function safeTouch(store: TerminalSessionStore, sessionKey: string, now: D
   }
 }
 
-// Applied on every hand-back (fresh + reconnect) so the open egress policy is
-// always current — handles both normal reconnects and the migration path for
-// sessions created before this egress change was deployed. Resolved from the
-// shared `resolveSandboxNetworkOptions` so agent + terminal share one network
-// posture (open egress, same caps, same internal-surface deny).
-const TERMINAL_SANDBOX_OPTIONS: SandboxCreateOptions = resolveSandboxNetworkOptions({
-  surface: 'terminal',
-});
+// Resolved at provision time (not module load) so the configured dedicated
+// egress-IP tag (`SANDBOX_EGRESS_IP_TAG`) is picked up even when set after import.
+// Shared `resolveSandboxNetworkOptions` so agent + terminal share one network
+// posture (open egress, same caps, same internal-surface deny). Applied on every
+// hand-back (fresh + reconnect) so the open egress policy is always current.
+function terminalSandboxOptions(): SandboxCreateOptions {
+  return resolveSandboxNetworkOptions({
+    surface: 'terminal',
+    egressIpTag: getConfiguredEgressIpTag(),
+  });
+}
 
 async function provisionFreshTerminal({
   key,
@@ -173,16 +178,14 @@ async function provisionFreshTerminal({
 }): Promise<AcquireTerminalSandboxResult> {
   const { deps, pageId, userId, driveId } = input;
 
-  // Full-egress containment gate (fresh provisioning only). The terminal runs OPEN
-  // egress; if a gate is wired and refuses, no VM is created.
-  if (deps.checkFullEgressEnablement) {
-    const enablement = await deps.checkFullEgressEnablement();
-    if (!enablement.ok) {
-      return { ok: false, reason: enablement.reason };
-    }
+  // Full-egress containment gate (fresh provisioning only) — MANDATORY. The
+  // terminal runs OPEN egress; if the gate refuses, no VM is created.
+  const enablement = await deps.checkFullEgressEnablement();
+  if (!enablement.ok) {
+    return { ok: false, reason: enablement.reason };
   }
 
-  const options = TERMINAL_SANDBOX_OPTIONS;
+  const options = terminalSandboxOptions();
 
   let sandboxId: string;
   try {
@@ -249,7 +252,7 @@ export async function acquireTerminalSandbox(
     // an awake VM instead of racing a cold-start drop.
     const reconnectExisting = async (): Promise<AcquireTerminalSandboxResult> => {
       try {
-        const handle = await deps.client.getOrCreate({ name: key, options: TERMINAL_SANDBOX_OPTIONS });
+        const handle = await deps.client.getOrCreate({ name: key, options: terminalSandboxOptions() });
         await safeTouch(deps.store, key, deps.now());
         return { ok: true, sandboxId: handle.sandboxId, sessionKey: key, resumed: true };
       } catch (error) {

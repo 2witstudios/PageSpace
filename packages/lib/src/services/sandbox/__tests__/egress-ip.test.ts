@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { resolveEgressIpTag } from '../egress-ip';
+import { describe, it, expect, afterEach } from 'vitest';
+import { resolveEgressIpTag, getConfiguredEgressIpTag } from '../egress-ip';
 
 describe('resolveEgressIpTag', () => {
   it('given a configured tag, should resolve it as the dedicated attribution tag', () => {
@@ -25,5 +25,23 @@ describe('resolveEgressIpTag', () => {
       tag: 't1',
       dedicated: true,
     });
+  });
+});
+
+describe('getConfiguredEgressIpTag', () => {
+  const prev = process.env.SANDBOX_EGRESS_IP_TAG;
+  afterEach(() => {
+    if (prev === undefined) delete process.env.SANDBOX_EGRESS_IP_TAG;
+    else process.env.SANDBOX_EGRESS_IP_TAG = prev;
+  });
+
+  it('returns null when the env var is unset', () => {
+    delete process.env.SANDBOX_EGRESS_IP_TAG;
+    expect(getConfiguredEgressIpTag()).toBeNull();
+  });
+
+  it('returns the configured env value', () => {
+    process.env.SANDBOX_EGRESS_IP_TAG = 'sandbox-egress-iad';
+    expect(getConfiguredEgressIpTag()).toBe('sandbox-egress-iad');
   });
 });

@@ -137,6 +137,14 @@ describe('buildInternalSurfaceDenyRules', () => {
     expect(denied.some((d) => d?.includes('tigris'))).toBe(true);
   });
 
+  it('should deny EXACT apex hostnames as well as wildcard children (apex must not fall through if wildcards do not match it)', () => {
+    const denied = buildInternalSurfaceDenyRules().map((r) => r.domain);
+    // Exact apex hosts — a wildcard like `*.flycast` may not match `flycast` itself.
+    expect(denied).toContain('flycast');
+    expect(denied).toContain('fly.storage.tigris.dev');
+    expect(denied).toContain('t3.tigrisfiles.io');
+  });
+
   it('every rule should be a deny (this builder never allows)', () => {
     expect(buildInternalSurfaceDenyRules().every((r) => r.action === 'deny')).toBe(true);
   });

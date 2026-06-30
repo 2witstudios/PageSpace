@@ -22,6 +22,7 @@ import { loggers } from '../../logging/logger-config';
 import type { CanRunCodeResult, CanRunCodeInput, CodeExecutionDenialReason } from './can-run-code';
 import { SandboxProvisionError, type SandboxCreateOptions } from './sandbox-options';
 import { resolveSandboxNetworkOptions } from './network-options';
+import { getConfiguredEgressIpTag } from './egress-ip';
 import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
 import { deriveSessionKey } from './session-key';
 import { planSandboxLifecycle, type TeardownReason } from './lifecycle';
@@ -53,13 +54,14 @@ export interface AcquireSandboxDeps {
   /** Server-held secret for session-key derivation. */
   secret: string;
   /**
-   * Optional full-egress enablement gate, consulted ONLY when provisioning a
-   * FRESH sandbox. When provided and it refuses, no VM is created and the denial
-   * reason is surfaced — a full-egress sandbox is never handed out on an
-   * unverified containment boundary. Omitted → no gate (deny-by-default allowlist
-   * provisioning is unaffected). Wired in production from `decideFullEgressEnablement`.
+   * REQUIRED full-egress enablement gate, consulted when provisioning a FRESH
+   * sandbox. Agent sandboxes always run OPEN egress, so this gate is mandatory: if
+   * it refuses, no VM is created and the denial reason is surfaced — a full-egress
+   * sandbox is never handed out on an unverified containment boundary. It is not
+   * optional precisely so a caller can never silently bypass containment by
+   * forgetting to wire it. Wired in production from `decideFullEgressEnablement`.
    */
-  checkFullEgressEnablement?: () => Promise<FullEgressEnablement>;
+  checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
 }
 
 export interface AcquireSandboxInput {
@@ -150,20 +152,22 @@ async function provisionFresh({
 }): Promise<AcquireSandboxResult> {
   const { deps, tenantId, driveId, conversationId, userId } = input;
 
-  // Full-egress containment gate (fresh provisioning only). If a gate is wired and
-  // refuses, no VM is created — a full-egress sandbox is never handed out while the
-  // isolation boundary is unproven.
-  if (deps.checkFullEgressEnablement) {
-    const enablement = await deps.checkFullEgressEnablement();
-    if (!enablement.ok) {
-      return { ok: false, reason: enablement.reason };
-    }
+  // Full-egress containment gate (fresh provisioning only) — MANDATORY. A
+  // full-egress sandbox is never handed out while the isolation boundary is
+  // unproven; an absent gate is impossible (the dep is required).
+  const enablement = await deps.checkFullEgressEnablement();
+  if (!enablement.ok) {
+    return { ok: false, reason: enablement.reason };
   }
 
   // Full (open) egress via the shared resolver — unified with the human terminal.
   // The boundary is verified containment + microVM isolation (gated above), not the
-  // old tight allowlist.
-  const options: SandboxCreateOptions = resolveSandboxNetworkOptions({ surface: 'agent' });
+  // old tight allowlist. Thread the configured dedicated egress-IP tag for
+  // attribution (falls back to the sandbox-scoped default when unset).
+  const options: SandboxCreateOptions = resolveSandboxNetworkOptions({
+    surface: 'agent',
+    egressIpTag: getConfiguredEgressIpTag(),
+  });
 
   let handle: SandboxHandle;
   try {

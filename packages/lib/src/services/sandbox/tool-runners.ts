@@ -389,12 +389,14 @@ export async function runBashInSandbox({
     }
 
     const durationMs = deps.now().getTime() - startedAt.getTime();
-    // Injection seam (fail-open): screen untrusted stdout BEFORE truncation so the
-    // annotation marker lands at the head and survives the byte cap. The screen
-    // owns its own fail-open behavior; never blocks.
+    // Injection seam (fail-open): screen untrusted stdout AND stderr BEFORE
+    // truncation so the annotation marker lands at the head and survives the byte
+    // cap. stderr is screened too — injected instructions can be written there just
+    // as easily as stdout. The screen owns its own fail-open behavior; never blocks.
     const screenedStdout = deps.screenOutput ? await deps.screenOutput(run.stdout) : run.stdout;
+    const screenedStderr = deps.screenOutput ? await deps.screenOutput(run.stderr) : run.stderr;
     const stdout = truncateToBytes({ text: screenedStdout, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
-    const stderr = truncateToBytes({ text: run.stderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
+    const stderr = truncateToBytes({ text: screenedStderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
     await safeAudit(deps, ctx, {
       code: command,
       exitCode: run.exitCode,

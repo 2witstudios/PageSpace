@@ -40,6 +40,13 @@ export type OutboundThrottleDecision =
  * resets; usage at-or-under both ceilings is allowed. `retryAfterMs` is the time
  * remaining in the current window, clamped to ≥ 0.
  */
+// A finite, non-negative number. NaN/Infinity/negative accounting input is treated
+// as malformed and forces a fail-closed throttle (this is an abuse backstop, so an
+// invalid counter must never silently read as under-limit).
+function isValidCounter(n: number): boolean {
+  return Number.isFinite(n) && n >= 0;
+}
+
 export function outboundThrottleDecision({
   usage,
   limits,
@@ -47,12 +54,29 @@ export function outboundThrottleDecision({
   usage: OutboundUsageWindow;
   limits: OutboundThrottleLimits;
 }): OutboundThrottleDecision {
+  // Fail closed on malformed accounting: any NaN/Infinity/negative usage counter
+  // throttles, with a safe (finite, non-negative) retry hint derived only from
+  // valid window/elapsed values.
+  const countersValid =
+    isValidCounter(usage.bytes) &&
+    isValidCounter(usage.connections) &&
+    isValidCounter(usage.windowMs) &&
+    isValidCounter(usage.elapsedMs);
+
+  const safeRetryAfterMs = (): number => {
+    if (!isValidCounter(usage.windowMs) || !isValidCounter(usage.elapsedMs)) return 0;
+    return Math.max(0, usage.windowMs - usage.elapsedMs);
+  };
+
+  if (!countersValid) {
+    return { action: 'throttle', retryAfterMs: safeRetryAfterMs() };
+  }
+
   const over =
     usage.bytes > limits.maxBytesPerWindow ||
     usage.connections > limits.maxConnectionsPerWindow;
 
   if (!over) return { action: 'allow' };
 
-  const retryAfterMs = Math.max(0, usage.windowMs - usage.elapsedMs);
-  return { action: 'throttle', retryAfterMs };
+  return { action: 'throttle', retryAfterMs: safeRetryAfterMs() };
 }

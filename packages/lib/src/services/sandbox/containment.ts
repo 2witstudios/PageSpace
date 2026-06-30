@@ -58,11 +58,15 @@ export const REQUIRED_CONTAINMENT_TARGETS: readonly string[] = Object.freeze(
   Object.values(CONTAINMENT_TARGETS),
 );
 
-// Signatures that POSITIVELY prove a target was unreachable. Anything else on a
-// failure is treated as inconclusive → fail-closed (see below). Single linear
-// scan, no nested quantifiers (CodeQL js/polynomial-redos safe).
+// Signatures that POSITIVELY prove a target was unreachable — i.e. NO host
+// answered: name resolution failed, or packets were dropped (timeout / no route).
+// A connection REFUSED is deliberately EXCLUDED: a TCP RST means the host received
+// the packets and answered, which is evidence of a ROUTE to the internal surface,
+// not isolation — so a refused probe falls through to fail-closed `reachable: true`
+// below. Anything else on a failure is also treated as inconclusive → fail-closed.
+// Single linear scan, no nested quantifiers (CodeQL js/polynomial-redos safe).
 const UNREACHABLE_RE =
-  /connection refused|connect: connection refused|\brefused\b|could not resolve|name or service not known|name resolution|\bnxdomain\b|timed out|timeout|no route to host|network is unreachable|host is unreachable|refused to connect/;
+  /could not resolve|name or service not known|name resolution|temporary failure in name resolution|\bnxdomain\b|timed out|timeout|operation timed out|no route to host|network is unreachable|host is unreachable/;
 
 // An actual HTTP response means the target answered — reachable regardless of exit.
 const HTTP_RESPONSE_RE = /http\/\d/;
@@ -107,13 +111,20 @@ export function assessContainment(
   results: readonly ProbeResult[],
   requiredTargets: readonly string[] = REQUIRED_CONTAINMENT_TARGETS,
 ): { contained: boolean; breaches: string[] } {
-  const byTarget = new Map<string, ProbeResult>();
-  for (const r of results) byTarget.set(r.target, r);
+  // Aggregate fail-closed: a target is reachable if ANY probe result says so. A
+  // later "unreachable" duplicate must never overwrite earlier evidence of a route
+  // (order-independent), so we OR the results per target rather than keeping the
+  // last one.
+  const reachableByTarget = new Map<string, boolean>();
+  for (const r of results) {
+    reachableByTarget.set(r.target, (reachableByTarget.get(r.target) ?? false) || r.reachable);
+  }
 
   const breaches: string[] = [];
   for (const target of requiredTargets) {
-    const result = byTarget.get(target);
-    if (!result || result.reachable) breaches.push(target);
+    const reachable = reachableByTarget.get(target);
+    // Missing evidence (undefined) or any reachable result is a breach.
+    if (reachable === undefined || reachable) breaches.push(target);
   }
   return { contained: breaches.length === 0, breaches };
 }

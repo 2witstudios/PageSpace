@@ -513,6 +513,22 @@ describe('injection seam wiring (screenOutput, fail-open)', () => {
     if (result.success) expect(result.stdout).toBe('ok');
   });
 
+  it('given a screenOutput hook, bash STDERR is also screened (injected instructions can be on stderr)', async () => {
+    const sandbox = makeSandbox({
+      runCommand: async () => ({ exitCode: 0, stdout: 'out', stderr: 'err' }),
+    });
+    const { deps } = makeDeps({
+      reconnect: async () => sandbox,
+      screenOutput: async (t) => `[SCREENED]${t}`,
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    if (result.success) {
+      expect(result.stdout).toBe('[SCREENED]out');
+      expect(result.stderr).toBe('[SCREENED]err');
+    }
+  });
+
   it('given a screenOutput hook, readFile content is screened before it returns to the model', async () => {
     const { deps } = makeDeps({ screenOutput: async (t) => `[SCREENED]${t}` });
     const result = await readSandboxFile({ path: 'a.txt', ctx: makeCtx(), deps });

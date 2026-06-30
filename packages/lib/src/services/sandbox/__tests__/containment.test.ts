@@ -33,14 +33,16 @@ describe('parseContainmentProbe', () => {
     ).toBe(true);
   });
 
-  it('given a connection refused, should mark the target NOT reachable', () => {
+  it('given a connection REFUSED, should mark the target REACHABLE (a TCP RST means the host answered — a route exists)', () => {
+    // ECONNREFUSED = packets reached the host and it sent a reset. That is
+    // evidence of a route to the internal surface, NOT isolation.
     expect(
       parseContainmentProbe({
         target: '_api.internal:4280',
         exitCode: 7,
         stderr: 'curl: (7) Failed to connect: Connection refused',
       }).reachable,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('given a DNS resolution failure, should mark the target NOT reachable', () => {
@@ -119,6 +121,20 @@ describe('assessContainment', () => {
     const verdict = assessContainment([]);
     expect(verdict.contained).toBe(false);
     expect(verdict.breaches).toEqual([...REQUIRED_CONTAINMENT_TARGETS]);
+  });
+
+  it('given conflicting duplicate results for a target, should fail closed (ANY reachable = breach, order-independent)', () => {
+    // A later "unreachable" duplicate must NOT overwrite an earlier "reachable".
+    const reachableThenNot = allUnreachable().concat([
+      { target: '_api.internal:4280', reachable: true },
+      { target: '_api.internal:4280', reachable: false },
+    ]);
+    const notThenReachable = allUnreachable().concat([
+      { target: 'tigris', reachable: false },
+      { target: 'tigris', reachable: true },
+    ]);
+    expect(assessContainment(reachableThenNot).breaches).toContain('_api.internal:4280');
+    expect(assessContainment(notThenReachable).breaches).toContain('tigris');
   });
 });
 

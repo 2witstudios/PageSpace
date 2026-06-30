@@ -46,6 +46,22 @@ describe('outboundThrottleDecision', () => {
     expect(decision).toEqual({ action: 'throttle', retryAfterMs: 0 });
   });
 
+  it('should FAIL CLOSED on malformed counters (NaN/Infinity/negative → throttle, never silently under-limit)', () => {
+    const windowMs = 60_000;
+    const base = { connections: 1, windowMs, elapsedMs: 0 };
+    // NaN bytes would make `NaN > limit` false and silently disable throttling.
+    expect(outboundThrottleDecision({ usage: { ...base, bytes: NaN }, limits }).action).toBe('throttle');
+    expect(outboundThrottleDecision({ usage: { ...base, bytes: Infinity }, limits }).action).toBe('throttle');
+    expect(outboundThrottleDecision({ usage: { ...base, bytes: -5 }, limits }).action).toBe('throttle');
+    expect(
+      outboundThrottleDecision({ usage: { bytes: 1, connections: -1, windowMs, elapsedMs: 0 }, limits }).action,
+    ).toBe('throttle');
+    // A malformed window/elapsed must not produce a negative or NaN retryAfterMs.
+    const d = outboundThrottleDecision({ usage: { bytes: 1, connections: 1, windowMs: NaN, elapsedMs: 0 }, limits });
+    expect(d.action).toBe('throttle');
+    if (d.action === 'throttle') expect(Number.isFinite(d.retryAfterMs) && d.retryAfterMs >= 0).toBe(true);
+  });
+
   it('should be deterministic — no ambient clock (same inputs → same output)', () => {
     const input = {
       usage: { bytes: 2000, connections: 1, windowMs: 60_000, elapsedMs: 12_345 },

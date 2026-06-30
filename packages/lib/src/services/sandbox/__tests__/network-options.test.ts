@@ -32,10 +32,13 @@ describe('resolveSandboxNetworkOptions', () => {
     expect((options.egressIpTag as string).toLowerCase()).toContain('sandbox');
   });
 
-  it('resolved options should produce a policy whose internal surface is denied before allow-all', () => {
+  it('resolved options should produce a policy whose internal surface is denied BEFORE allow-all', () => {
     const { rules } = buildSpriteNetworkPolicy(resolveSandboxNetworkOptions({ surface: 'agent' }));
+    const denyInternalIdx = rules.findIndex((r) => r.domain === '_api.internal' && r.action === 'deny');
     const allowAllIdx = rules.findIndex((r) => r.domain === '*' && r.action === 'allow');
-    expect(rules.some((r) => r.domain === '_api.internal' && r.action === 'deny')).toBe(true);
-    expect(allowAllIdx).toBeGreaterThan(0);
+    expect(denyInternalIdx).toBeGreaterThanOrEqual(0);
+    expect(allowAllIdx).toBeGreaterThanOrEqual(0);
+    // The contract: the internal deny must precede the catch-all allow (first-match-wins).
+    expect(denyInternalIdx).toBeLessThan(allowAllIdx);
   });
 });
