@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { buildSpriteNetworkPolicy, sanitizeEgressAllowlist } from '../egress';
+import {
+  buildSpriteNetworkPolicy,
+  sanitizeEgressAllowlist,
+  buildInternalSurfaceDenyRules,
+} from '../egress';
 
 describe('buildSpriteNetworkPolicy', () => {
   it('given an empty allowlist, should be pure deny-all (default-deny egress)', () => {
@@ -63,17 +67,29 @@ describe('buildSpriteNetworkPolicy', () => {
 });
 
 describe('buildSpriteNetworkPolicy — open mode', () => {
-  it('given egressMode: open, should return INCLUDE_DEFAULTS then an allow-all (no terminating deny)', () => {
+  it('given egressMode: open, should deny the explicit internal surface, then defaults, then allow-all (no terminating deny)', () => {
     const { rules } = buildSpriteNetworkPolicy({ egressMode: 'open' });
     expect(rules).toEqual([
+      ...buildInternalSurfaceDenyRules(),
       { include: 'defaults' },
       { domain: '*', action: 'allow' },
     ]);
   });
 
-  it('given egressMode: open, INCLUDE_DEFAULTS must be at index 0 (internal surface denied first)', () => {
+  it('given egressMode: open, the explicit internal denies must come BEFORE the allow-all (first-match-wins)', () => {
     const { rules } = buildSpriteNetworkPolicy({ egressMode: 'open' });
-    expect(rules[0]).toEqual({ include: 'defaults' });
+    const allowAllIdx = rules.findIndex((r) => r.domain === '*' && r.action === 'allow');
+    const lastInternalDenyIdx = rules.reduce(
+      (acc, r, i) => (r.action === 'deny' && r.domain !== '*' ? i : acc),
+      -1,
+    );
+    expect(lastInternalDenyIdx).toBeGreaterThanOrEqual(0);
+    expect(lastInternalDenyIdx).toBeLessThan(allowAllIdx);
+  });
+
+  it('given egressMode: open, should NOT lean solely on the include:defaults preset — explicit _api.internal deny present', () => {
+    const { rules } = buildSpriteNetworkPolicy({ egressMode: 'open' });
+    expect(rules.some((r) => r.domain === '_api.internal' && r.action === 'deny')).toBe(true);
   });
 
   it('given egressMode: open, should include an allow-all domain rule', () => {
@@ -92,6 +108,7 @@ describe('buildSpriteNetworkPolicy — open mode', () => {
       egressAllowlist: ['registry.npmjs.org'],
     });
     expect(rules).toEqual([
+      ...buildInternalSurfaceDenyRules(),
       { include: 'defaults' },
       { domain: '*', action: 'allow' },
     ]);
@@ -106,6 +123,34 @@ describe('buildSpriteNetworkPolicy — open mode', () => {
   it('given egressMode: allowlist and empty allowlist, should be pure deny-all (no change from default)', () => {
     const { rules } = buildSpriteNetworkPolicy({ egressMode: 'allowlist', egressAllowlist: [] });
     expect(rules).toEqual([{ domain: '*', action: 'deny' }]);
+  });
+});
+
+describe('buildInternalSurfaceDenyRules', () => {
+  it('given no input, should emit explicit deny rules for the Fly internal surface', () => {
+    const rules = buildInternalSurfaceDenyRules();
+    const denied = rules.map((r) => r.domain);
+    expect(denied).toContain('_api.internal');
+    expect(denied).toContain('*.internal');
+    expect(denied).toContain('*.flycast');
+    // Tigris / object-storage surface.
+    expect(denied.some((d) => d?.includes('tigris'))).toBe(true);
+  });
+
+  it('every rule should be a deny (this builder never allows)', () => {
+    expect(buildInternalSurfaceDenyRules().every((r) => r.action === 'deny')).toBe(true);
+  });
+
+  it('does NOT depend on the SDK include:defaults preset (explicit denies, belt-and-suspenders)', () => {
+    expect(buildInternalSurfaceDenyRules().some((r) => 'include' in r)).toBe(false);
+  });
+
+  it('returns a fresh, clone-safe array each call (no shared mutation)', () => {
+    const a = buildInternalSurfaceDenyRules();
+    const b = buildInternalSurfaceDenyRules();
+    expect(a).not.toBe(b);
+    a.push({ domain: 'evil.test', action: 'allow' });
+    expect(buildInternalSurfaceDenyRules().some((r) => r.domain === 'evil.test')).toBe(false);
   });
 });
 
