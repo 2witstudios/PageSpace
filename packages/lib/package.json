@@ -362,6 +362,16 @@
       "import": "./dist/services/sandbox/injection-seam.js",
       "require": "./dist/services/sandbox/injection-seam.js"
     },
+    "./services/sandbox/outbound-throttle": {
+      "types": "./dist/services/sandbox/outbound-throttle.d.ts",
+      "import": "./dist/services/sandbox/outbound-throttle.js",
+      "require": "./dist/services/sandbox/outbound-throttle.js"
+    },
+    "./services/sandbox/egress-ip": {
+      "types": "./dist/services/sandbox/egress-ip.d.ts",
+      "import": "./dist/services/sandbox/egress-ip.js",
+      "require": "./dist/services/sandbox/egress-ip.js"
+    },
     "./services/sandbox/session-store": {
       "types": "./dist/services/sandbox/session-store.d.ts",
       "import": "./dist/services/sandbox/session-store.js",

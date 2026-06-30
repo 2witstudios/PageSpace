@@ -21,6 +21,17 @@ describe('resolveSandboxNetworkOptions', () => {
     expect(resolveSandboxNetworkOptions({ surface: 'terminal' }).caps).toEqual(SANDBOX_RESOURCE_CAPS);
   });
 
+  it('given a configured egress-IP tag, should carry it on the options (dedicated attribution)', () => {
+    const options = resolveSandboxNetworkOptions({ surface: 'agent', egressIpTag: 'sandbox-egress-iad' });
+    expect(options.egressIpTag).toBe('sandbox-egress-iad');
+  });
+
+  it('given NO egress-IP tag, should still carry a sandbox-scoped default tag (degraded attribution)', () => {
+    const options = resolveSandboxNetworkOptions({ surface: 'agent' });
+    expect(typeof options.egressIpTag).toBe('string');
+    expect((options.egressIpTag as string).toLowerCase()).toContain('sandbox');
+  });
+
   it('resolved options should produce a policy whose internal surface is denied before allow-all', () => {
     const { rules } = buildSpriteNetworkPolicy(resolveSandboxNetworkOptions({ surface: 'agent' }));
     const allowAllIdx = rules.findIndex((r) => r.domain === '*' && r.action === 'allow');

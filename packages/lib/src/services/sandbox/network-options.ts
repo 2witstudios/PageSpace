@@ -18,6 +18,7 @@
 
 import { SANDBOX_RESOURCE_CAPS } from './execution-policy';
 import type { SandboxCreateOptions } from './sandbox-options';
+import { resolveEgressIpTag } from './egress-ip';
 
 /** The two sandbox surfaces that share the network posture. */
 export type SandboxSurface = 'agent' | 'terminal';
@@ -25,11 +26,20 @@ export type SandboxSurface = 'agent' | 'terminal';
 /**
  * Resolve the create-time network options for a sandbox surface. Both surfaces get
  * open egress + the standard resource caps; the internal-surface deny is applied at
- * policy-construction time from `egressMode: 'open'`.
+ * policy-construction time from `egressMode: 'open'`. The dedicated egress-IP tag
+ * (for abuse attribution / prod reputation isolation) is normalized through
+ * `resolveEgressIpTag` — a configured tag is carried; an unset one falls back to a
+ * sandbox-scoped default.
  */
-export function resolveSandboxNetworkOptions(_input: { surface: SandboxSurface }): SandboxCreateOptions {
+export function resolveSandboxNetworkOptions(input: {
+  surface: SandboxSurface;
+  /** Dedicated egress-IP tag from config/env; unset → sandbox-scoped default. */
+  egressIpTag?: string | null;
+}): SandboxCreateOptions {
+  const { tag } = resolveEgressIpTag({ surface: input.surface, configuredTag: input.egressIpTag });
   return {
     egressMode: 'open',
     caps: SANDBOX_RESOURCE_CAPS,
+    egressIpTag: tag,
   };
 }
