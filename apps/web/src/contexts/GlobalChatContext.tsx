@@ -107,6 +107,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         setCurrentConversationId(conversationId);
         conversationState.setActiveConversationId(conversationId);
         setIsInitialized(true);
+        // Always signal surfaces to re-fetch. When the conversation ID is the
+        // same as before, useChat ignores the new initialMessages (its SWR
+        // cache key hasn't changed), so without this signal the messages
+        // would go stale. When the ID is different, this is a harmless
+        // redundant fetch that guarantees the UI matches the DB.
+        setRefreshSignal((n) => n + 1);
       } else {
         console.error('Failed to load conversation:', conversationId);
         setIsInitialized(true);
@@ -131,6 +137,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
           setConversationId(newConversation.id, 'push');
         }
         setIsInitialized(true);
+        setRefreshSignal((n) => n + 1);
       }
     } catch (error) {
       console.error('Failed to create new conversation:', error);

@@ -114,6 +114,7 @@ const GlobalAssistantView: React.FC = () => {
   const agentConversationId = usePageAgentDashboardStore((state) => state.conversationId);
   const agentInitialMessages = usePageAgentDashboardStore((state) => state.conversationMessages);
   const agentIsLoading = usePageAgentDashboardStore((state) => state.isConversationLoading);
+  const agentConversationLoadSignal = usePageAgentDashboardStore((state) => state.conversationLoadSignal);
   const setAgentStoreMessages = usePageAgentDashboardStore((state) => state.setConversationMessages);
   const createAgentConversation = usePageAgentDashboardStore((state) => state.createNewConversation);
   const loadMostRecentConversation = usePageAgentDashboardStore((state) => state.loadMostRecentConversation);
@@ -703,6 +704,21 @@ const GlobalAssistantView: React.FC = () => {
       setAgentStopStreaming(null);
     };
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
+
+  // Agent-mode load-on-select guarantee: when the dashboard store's
+  // conversationLoadSignal changes (loadConversation or createNewConversation
+  // ran), re-apply the store's messages via setAgentMessages. This is needed
+  // because useChat ignores the messages prop when the id (conversationId)
+  // hasn't changed — so clicking the same conversation from history would show
+  // stale messages without this direct write.
+  const prevAgentLoadSignalRef = useRef(agentConversationLoadSignal);
+  useEffect(() => {
+    if (agentConversationLoadSignal === prevAgentLoadSignalRef.current) return;
+    prevAgentLoadSignalRef.current = agentConversationLoadSignal;
+    if (selectedAgent && agentConversationId) {
+      setAgentMessages(agentInitialMessages);
+    }
+  }, [agentConversationLoadSignal, selectedAgent, agentConversationId, agentInitialMessages, setAgentMessages]);
 
   // Agent-mode multiplayer wiring (Tasks 2 + 5 + 6). No-op when selectedAgent
   // is null. Encapsulates page-room subscription, stream bootstrap/socket
