@@ -29,6 +29,11 @@ interface AgentState {
   conversationMessages: UIMessage[];
   isConversationLoading: boolean;
   conversationAgentId: string | null; // Track which agent the conversation belongs to
+  /** Increments every time conversation state is set by loadConversation,
+   *  createNewConversation, or loadMostRecentConversation.
+   *  GlobalAssistantView watches this to re-apply messages via setAgentMessages
+   *  even when the conversation ID doesn't change (clicking the same conversation). */
+  conversationLoadSignal: number;
 
   // Streaming state (for agent mode sync between GlobalAssistantView and sidebar)
   isAgentStreaming: boolean;
@@ -61,6 +66,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
   conversationMessages: [],
   isConversationLoading: false,
   conversationAgentId: null,
+  conversationLoadSignal: 0,
   isAgentStreaming: false,
   agentStopStreaming: null,
   activeTab: 'history', // Default for dashboard (no chat tab in dashboard context)
@@ -190,6 +196,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
         conversationMessages: result.messages,
         conversationAgentId: agent.id,
         isConversationLoading: false,
+        conversationLoadSignal: get().conversationLoadSignal + 1,
       });
 
       // Update URL for bookmarkability
@@ -218,6 +225,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
         conversationMessages: [],
         conversationAgentId: agent.id,
         isConversationLoading: false,
+        conversationLoadSignal: get().conversationLoadSignal + 1,
       });
 
       // Update URL for bookmarkability
@@ -277,6 +285,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
           conversationMessages: result.messages,
           conversationAgentId: agent.id,
           isConversationLoading: false,
+          conversationLoadSignal: get().conversationLoadSignal + 1,
         });
         return;
       }
@@ -290,6 +299,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
           conversationMessages: result.messages,
           conversationAgentId: agent.id,
           isConversationLoading: false,
+          conversationLoadSignal: get().conversationLoadSignal + 1,
         });
 
         // Update URL (use 'replace' for auto-loading to avoid polluting history)
