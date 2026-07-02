@@ -207,7 +207,6 @@ const SidebarChatTab: React.FC = () => {
   const {
     selectedAgent,
     conversationId: agentConversationId,
-    initialMessages: agentInitialMessages,
     isInitialized: agentIsInitialized,
     selectAgent,
     createNewConversation: createAgentConversation,
@@ -595,20 +594,6 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, loadGlobalMessages]);
 
-  // Load-on-select guarantee for global mode (1B).
-  //
-  // Whenever the active global conversation changes (or the context finishes
-  // initialising), explicitly fetch the latest DB messages and write them
-  // directly to the useChat instance via setGlobalMessages. This does NOT rely
-  // on GlobalChatContext seeding useChat via chatConfig.messages (which only
-  // fires on the useChat `id` prop changing — a path prone to timing gaps when
-  // the conversation id is the same across refreshes).
-  useEffect(() => {
-    if (selectedAgent) return; // agent mode handled by useAgentChannelMultiplayer
-    if (!globalIsInitialized || !globalConversationId) return;
-    loadGlobalMessages(globalConversationId);
-  }, [globalInitialMessages, globalIsInitialized, globalConversationId, selectedAgent, loadGlobalMessages]);
-
   // ============================================
   // Effects: UI State
   // ============================================
@@ -719,10 +704,12 @@ const SidebarChatTab: React.FC = () => {
     loadGlobalMessages(globalConversationId);
   }, [selectedAgent, globalConversationId, globalIsInitialized, loadGlobalMessages]);
 
-  // Global-mode load-on-select guarantee: with a stable useChat id, surfaces
-  // must re-apply messages on conversation load. The sidebar re-fetches via
-  // loadGlobalMessages (includes stale-request guard + own-stream reconciliation).
-  const prevSidebarGlobalMessagesRef = useRef(globalInitialMessages);
+  // Load-on-select guarantee for global mode: with a stable useChat id,
+  // surfaces must explicitly re-apply messages on conversation load/reselect.
+  // The sidebar re-fetches via loadGlobalMessages (includes stale-request
+  // guard + own-stream reconciliation). Seeded to `null` so the initial-mount
+  // load is also covered by this effect (avoids a second, redundant effect).
+  const prevSidebarGlobalMessagesRef = useRef<UIMessage[] | null>(null);
   useEffect(() => {
     if (globalInitialMessages === prevSidebarGlobalMessagesRef.current) return;
     prevSidebarGlobalMessagesRef.current = globalInitialMessages;
