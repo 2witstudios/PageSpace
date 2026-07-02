@@ -641,6 +641,12 @@ export function useVoiceMode({
         const audioId = createId();
         startSpeakingStore(audioId);
 
+        // Clear any pending transition timer from a previous gap-between-chunks
+        if (playbackRefs.current.autoListenTimer) {
+          clearTimeout(playbackRefs.current.autoListenTimer);
+          playbackRefs.current.autoListenTimer = null;
+        }
+
         const audioContext = getAudioContext();
         let audioBuffer: AudioBuffer;
 
@@ -707,6 +713,32 @@ export function useVoiceMode({
               return;
             }
 
+            // If the AI stream is still active, keep 'speaking' state so the UI
+            // doesn't flicker to idle between chunks. Clear the audio ID so
+            // queueSentence knows to trigger playback directly when the next
+            // chunk arrives (no onended will fire to drain the queue).
+            if (isAIStreamingRef.current) {
+              setCurrentAudioId(null);
+              callbacksRef.current.onSpeakComplete?.();
+              // Safety net: if the stream ends without delivering more text,
+              // this timer transitions out of speaking. The isAIStreamingRef
+              // check at fire time makes it a no-op if chunks are still flowing.
+              const { isEnabled: sEnabled, interactionMode: sMode } =
+                useVoiceModeStore.getState();
+              if (sEnabled && sMode === 'conversation') {
+                playbackRefs.current.autoListenTimer = setTimeout(() => {
+                  playbackRefs.current.autoListenTimer = null;
+                  if (!isAIStreamingRef.current && !playbackRefs.current.audioSource) {
+                    stopSpeakingStore();
+                    const { isEnabled: en, interactionMode: md } =
+                      useVoiceModeStore.getState();
+                    if (en && md === 'conversation') void startListening();
+                  }
+                }, 500);
+              }
+              return;
+            }
+
             stopSpeakingStore();
             callbacksRef.current.onSpeakComplete?.();
 
@@ -714,12 +746,12 @@ export function useVoiceMode({
             // but only when the AI stream has fully finished (not mid-tool-call).
             const { isEnabled: liveEnabled, interactionMode: liveMode } =
               useVoiceModeStore.getState();
-            if (liveEnabled && liveMode === 'conversation' && !isAIStreamingRef.current) {
+            if (liveEnabled && liveMode === 'conversation') {
               playbackRefs.current.autoListenTimer = setTimeout(() => {
                 playbackRefs.current.autoListenTimer = null;
                 const { isEnabled: enabledNow, interactionMode: modeNow } =
                   useVoiceModeStore.getState();
-                if (enabledNow && modeNow === 'conversation' && !isAIStreamingRef.current) {
+                if (enabledNow && modeNow === 'conversation') {
                   void startListening();
                 }
               }, 300);
@@ -780,7 +812,14 @@ export function useVoiceMode({
       if (currentState === 'listening' || currentState === 'processing') return;
       if (currentState === 'speaking') {
         speechQueueRef.current.push(text);
-        if (!prefetchedAudioRef.current) {
+        const { currentAudioId } = useVoiceModeStore.getState();
+        if (!currentAudioId) {
+          // Between chunks during streaming — onended fired but we kept
+          // 'speaking' state. No audio is playing or being fetched, so
+          // start playback immediately to minimize the gap.
+          const nextText = speechQueueRef.current.shift()!;
+          void speak(nextText);
+        } else if (!prefetchedAudioRef.current) {
           // Pre-fetch the queue head (index 0), not the just-pushed tail
           prefetchedAudioRef.current = prefetchAudio(speechQueueRef.current[0]);
         }
