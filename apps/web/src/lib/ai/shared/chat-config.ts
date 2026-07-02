@@ -64,24 +64,3 @@ export function buildChatConfig(params: ChatConfigParams): {
 const defaultOnError = (error: Error): void => {
   console.error('Chat error:', error);
 };
-
-/**
- * Determine whether messages should be applied to useChat via setMessages.
- *
- * Pure: given the same inputs, always returns the same boolean.
- * Used by surface effects that watch reference changes from the message source
- * (context initialMessages, store conversationMessages).
- *
- * Returns false when:
- * - No conversation is active (conversationId is null/empty)
- * - The message array reference hasn't changed (same fetch result, no-op)
- */
-export function shouldApplyMessages(
-  prevMessages: UIMessage[] | null,
-  currentMessages: UIMessage[],
-  conversationId: string | null | undefined,
-): boolean {
-  if (!conversationId) return false;
-  if (prevMessages === currentMessages) return false;
-  return true;
-}

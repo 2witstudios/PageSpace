@@ -18,5 +18,4 @@ export {
   AGENT_CHAT_ID,
   SIDEBAR_AGENT_CHAT_ID,
   buildChatConfig,
-  shouldApplyMessages,
 } from '../chat-config';

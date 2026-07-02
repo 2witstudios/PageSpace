@@ -10,7 +10,6 @@ import {
   AGENT_CHAT_ID,
   SIDEBAR_AGENT_CHAT_ID,
   buildChatConfig,
-  shouldApplyMessages,
 } from '../chat-config';
 
 describe('chat-config pure functions', () => {
@@ -63,33 +62,6 @@ describe('chat-config pure functions', () => {
       expect(a.id).toBe(b.id);
       expect(a.transport).toBe(b.transport);
       expect(a.experimental_throttle).toBe(b.experimental_throttle);
-    });
-  });
-
-  describe('shouldApplyMessages', () => {
-    const mockMessages: UIMessage[] = [
-      { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
-    ];
-    const mockMessages2: UIMessage[] = [
-      { id: 'msg-2', role: 'assistant', parts: [{ type: 'text', text: 'Hi!' }] },
-    ];
-
-    it('given a new message array and active conversation, should return true', () => {
-      expect(shouldApplyMessages(null, mockMessages, 'conv-1')).toBe(true);
-    });
-
-    it('given a different message array reference, should return true', () => {
-      expect(shouldApplyMessages(mockMessages, mockMessages2, 'conv-1')).toBe(true);
-    });
-
-    it('given the same message array reference, should return false (no-op)', () => {
-      expect(shouldApplyMessages(mockMessages, mockMessages, 'conv-1')).toBe(false);
-    });
-
-    it('given no conversation ID, should return false even if messages changed', () => {
-      expect(shouldApplyMessages(null, mockMessages, null)).toBe(false);
-      expect(shouldApplyMessages(null, mockMessages, undefined)).toBe(false);
-      expect(shouldApplyMessages(null, mockMessages, '')).toBe(false);
     });
   });
 });
