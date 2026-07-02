@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
@@ -54,6 +54,22 @@ export default function PlanPage() {
 
   // Ref to track subscriptionId for cleanup (avoids stale closure)
   const subscriptionIdRef = useRef<string | null>(null);
+
+  // Stable reference: a fresh object here on every render makes <Elements> keep
+  // re-syncing with Stripe.js, which can loop with its hidden-frame lifecycle
+  const stripeElementsOptions = useMemo(() => (
+    clientSecret
+      ? {
+          clientSecret,
+          appearance: {
+            theme: (resolvedTheme === 'dark' ? 'night' : 'stripe') as 'night' | 'stripe',
+            variables: {
+              colorPrimary: resolvedTheme === 'dark' ? '#818cf8' : '#0F172A',
+            },
+          },
+        }
+      : undefined
+  ), [clientSecret, resolvedTheme]);
 
   const success = searchParams.get('success');
   const canceled = searchParams.get('canceled');
@@ -338,15 +354,7 @@ export default function PlanPage() {
             )}
             <StripeProvider
               key={clientSecret}
-              options={{
-                clientSecret,
-                appearance: {
-                  theme: resolvedTheme === 'dark' ? 'night' : 'stripe',
-                  variables: {
-                    colorPrimary: resolvedTheme === 'dark' ? '#818cf8' : '#0F172A',
-                  },
-                },
-              }}
+              options={stripeElementsOptions}
             >
               <EmbeddedCheckoutForm
                 plan={checkoutPlan}
