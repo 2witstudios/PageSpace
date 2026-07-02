@@ -188,6 +188,7 @@ const SidebarChatTab: React.FC = () => {
     isInitialized: globalIsInitialized,
     createNewConversation: createGlobalConversation,
     refreshSignal,
+    conversationLoadSignal: globalConversationLoadSignal,
     rejoinGlobalStream,
   } = useGlobalChatConversation();
 

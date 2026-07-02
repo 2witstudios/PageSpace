@@ -720,6 +720,18 @@ const GlobalAssistantView: React.FC = () => {
     }
   }, [agentConversationLoadSignal, selectedAgent, agentConversationId, agentInitialMessages, setAgentMessages]);
 
+  // Global-mode load-on-select guarantee: same pattern, different signal.
+  // When globalConversationLoadSignal changes (loadConversation or
+  // createNewConversation ran in GlobalChatContext), re-apply messages.
+  const prevGlobalLoadSignalRef = useRef(globalConversationLoadSignal);
+  useEffect(() => {
+    if (globalConversationLoadSignal === prevGlobalLoadSignalRef.current) return;
+    prevGlobalLoadSignalRef.current = globalConversationLoadSignal;
+    if (!selectedAgent && globalIsInitialized && globalConversationId) {
+      handlePullUpRefresh();
+    }
+  }, [globalConversationLoadSignal, selectedAgent, globalIsInitialized, globalConversationId, handlePullUpRefresh]);
+
   // Agent-mode multiplayer wiring (Tasks 2 + 5 + 6). No-op when selectedAgent
   // is null. Encapsulates page-room subscription, stream bootstrap/socket
   // events, dashboard-store stop-slot single-writer claim, channel-id-keyed

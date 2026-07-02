@@ -84,6 +84,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const [refreshSignal, setRefreshSignal] = useState(0);
+  const [conversationLoadSignal, setConversationLoadSignal] = useState(0);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
   const [latestGlobalConversationAdded, setLatestGlobalConversationAdded] = useState<ChatGlobalConversationAddedPayload | null>(null);

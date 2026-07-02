@@ -29,7 +29,8 @@ interface AgentState {
   conversationMessages: UIMessage[];
   isConversationLoading: boolean;
   conversationAgentId: string | null; // Track which agent the conversation belongs to
-  /** Increments every time loadConversation or createNewConversation runs.
+  /** Increments every time conversation state is set by loadConversation,
+   *  createNewConversation, or loadMostRecentConversation.
    *  GlobalAssistantView watches this to re-apply messages via setAgentMessages
    *  even when the conversation ID doesn't change (clicking the same conversation). */
   conversationLoadSignal: number;
