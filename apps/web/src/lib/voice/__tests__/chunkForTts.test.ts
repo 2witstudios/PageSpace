@@ -7,6 +7,13 @@ import {
 } from '../chunkForTts';
 
 describe('normalizeForSpeech', () => {
+  it('preserves file extensions like .tsx without mangling the period', () => {
+    // normalizeForSpeech should pass Button.tsx through unchanged.
+    // The period in a file extension is NOT a sentence terminator.
+    const out = normalizeForSpeech('Look at Button.tsx for the component.');
+    expect(out).toContain('Button.tsx');
+  });
+
   it('extracts code block body for speaking (strips only fence markers)', () => {
     const input = 'Hello.\n```js\nconst x = 1;\n```\nWorld.';
     const out = normalizeForSpeech(input);
@@ -134,6 +141,57 @@ describe('normalizeForSpeech', () => {
 });
 
 describe('chunkStreamingForTts', () => {
+  it('does not drop content before a file extension period (Button.tsx)', () => {
+    // Regression test: the old regex [^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$ would
+    // match the . in Button.tsx as a sentence boundary, then lose everything
+    // before it. The result would be only "tsx" spoken.
+    const result = chunkStreamingForTts('Let me check Button.tsx more text.');
+    const all = result.ready.join(' ');
+    expect(all).toContain('Button');
+    expect(all).toContain('tsx');
+    // Should NOT be split into "Button." + "tsx more text."
+    expect(all).toContain('Button.tsx');
+  });
+
+  it('preserves a standalone filename at end of text via flush', () => {
+    // "something Button.tsx" with no trailing sentence — the old regex
+    // would return only ["tsx"], silently dropping "something Button"
+    const result = flushForTts('something Button.tsx');
+    const all = result.join(' ');
+    expect(all).toContain('something');
+    expect(all).toContain('Button');
+    expect(all).toContain('tsx');
+  });
+
+  it('preserves multiple file extensions in one sentence', () => {
+    const result = flushForTts('We changed App.tsx, index.ts, and config.json in this PR.');
+    const all = result.join(' ');
+    expect(all).toContain('App.tsx');
+    expect(all).toContain('index.ts');
+    expect(all).toContain('config.json');
+  });
+
+  it('preserves decimal numbers like 3.14', () => {
+    const result = flushForTts('The value is exactly 3.14 in this case.');
+    const all = result.join(' ');
+    expect(all).toContain('3.14');
+  });
+
+  it('preserves version numbers like v1.2.3', () => {
+    const result = flushForTts('We upgraded to v1.2.3 last week.');
+    const all = result.join(' ');
+    expect(all).toContain('v1.2.3');
+  });
+
+  it('preserves a filename at the very end of a complete sentence', () => {
+    const result = chunkStreamingForTts('Look at Button.tsx. Next thing.');
+    const all = result.ready.join(' ');
+    expect(all).toContain('Button.tsx');
+    expect(all).toContain('Next thing');
+    // Button.tsx should NOT be split into separate chunks
+    expect(all).not.toMatch(/Button\.\s+tsx/);
+  });
+
   it('returns the buffer as pending when no terminator is present', () => {
     const result = chunkStreamingForTts('Hello world without a period');
     expect(result.ready).toEqual([]);
@@ -322,6 +380,26 @@ describe('splitOversizedForTts', () => {
 });
 
 describe('streaming end-to-end simulation', () => {
+  it('preserves file extensions across streaming token boundaries', () => {
+    // Simulate tokens arriving: "Check the file " + "Button.tsx" + " for details."
+    let buffer = '';
+    const tokens = ['Check the file ', 'Button.tsx', ' for details. '];
+    const allReady: string[] = [];
+    for (const t of tokens) {
+      buffer += t;
+      const r = chunkStreamingForTts(buffer);
+      allReady.push(...r.ready);
+      buffer = r.pending;
+    }
+    allReady.push(...flushForTts(buffer));
+    const combined = allReady.join(' ');
+    expect(combined).toContain('Button');
+    expect(combined).toContain('tsx');
+    expect(combined).toContain('details');
+    // Button.tsx should not be split into "Button." and "tsx"
+    expect(combined).not.toMatch(/Button\.\s+tsx/);
+  });
+
   it('handles a markdown response with a code block without dropping content', () => {
     let buffer = '';
     const tokens = [
@@ -344,7 +422,10 @@ describe('streaming end-to-end simulation', () => {
     expect(combined).toContain('Here is some code');
     expect(combined).toContain('Done');
     expect(combined).not.toContain('```');
-    expect(combined).not.toContain('const x');
+    // Code body IS spoken — normalizeForSpeech intentionally extracts it.
+    // The old packSentences regex would silently drop content before the
+    // period in "console.log", which is the same bug as the .tsx issue.
+    expect(combined).toContain('const x');
   });
 
   it('handles a long unpunctuated paragraph by flushing it at end', () => {
