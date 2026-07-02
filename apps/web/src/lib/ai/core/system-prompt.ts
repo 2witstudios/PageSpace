@@ -89,11 +89,12 @@ const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 // request (same gate as ai-tools.ts). Deliberately short — the basics that make
 // the sandbox smooth to use, not a wall of instructions.
 const SANDBOX_INSTRUCTIONS = `CODE SANDBOX:
-• Working dir is /workspace; writeFile/readFile/editFile paths are relative to it.
+• Paths always resolve from /workspace, relative or absolute (e.g. "repo/src/x.ts" and "/workspace/repo/src/x.ts" are the same file) — one rule for every tool. Most tools take path (file tools, and git_clone/git_init for their destination); bash and the rest of the git_*/gh_* tools take cwd for their working directory instead. A field from the wrong family (e.g. cwd on writeFile) is rejected, not silently ignored.
 • The /workspace filesystem persists across turns and tool calls in this conversation — your clone, branch checkout, and commits are still there next turn. Check state before recreating it: git_status / git_branch before re-cloning or branching; gh_pr_list / gh_pr_view before opening a PR. To update an open PR, push more commits to its branch (force-push is fine for your PR branch, never to main/master) — don't open a second PR.
-• Each tool call is a fresh process — cd does NOT persist between calls (the filesystem persists, the shell does not). Pass cwd to operate inside a subdirectory (e.g. a cloned repo).
+• Each tool call is a fresh process — cd does NOT persist between calls (the filesystem persists, the shell does not).
 • bash has NO GitHub credentials. For anything touching GitHub (clone/fetch/pull/push, PRs, issues) use the dedicated git_*/gh_* tools — they carry your connected GitHub auth.
 • Use editFile for targeted string edits; writeFile rewrites the whole file.
+• Work on a new branch unless told to work on main/master. Check for AGENTS.md/CLAUDE.md in the repo root and follow it. Install dependencies before running tests or a typecheck — pass bash's timeoutMs if a command needs more than the 120s default.
 • Key tools (call via execute_tool; no need to tool_search these): bash, readFile, writeFile, editFile, git_clone, git_checkout, git_add, git_commit, git_push, gh_pr_create, gh_pr_list, gh_pr_view.`;
 
 /**

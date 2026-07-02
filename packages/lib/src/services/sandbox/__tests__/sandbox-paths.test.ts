@@ -26,4 +26,33 @@ describe('resolveSandboxPath', () => {
     expect(resolveSandboxPath('')).toBeNull();
     expect(resolveSandboxPath(undefined as unknown as string)).toBeNull();
   });
+
+  it('given an absolute path under /workspace, should resolve the same as the equivalent relative path', () => {
+    expect(resolveSandboxPath('/workspace/PageSpace/apps/web/foo.ts')).toBe(
+      resolveSandboxPath('PageSpace/apps/web/foo.ts'),
+    );
+  });
+
+  it('given the bare sandbox root with no trailing content, should resolve to the root', () => {
+    expect(resolveSandboxPath('/workspace')).toBe(SANDBOX_ROOT);
+  });
+
+  it('given an absolute path NOT prefixed with /workspace, should still reject it', () => {
+    expect(resolveSandboxPath('/etc/passwd')).toBeNull();
+    expect(resolveSandboxPath('/workspace-evil/foo.ts')).toBeNull();
+  });
+
+  it('given a traversal attempt appended after the /workspace prefix, should still reject it', () => {
+    expect(resolveSandboxPath('/workspace/../../etc/passwd')).toBeNull();
+  });
+
+  it('given a URL-encoded attempt to smuggle the /workspace prefix, should still reject it', () => {
+    expect(resolveSandboxPath('%2Fworkspace%2F..%2F..%2Fetc%2Fpasswd')).toBeNull();
+  });
+
+  it('given a doubled separator right after the /workspace prefix, should still resolve (not misread the extra slash as a fresh absolute segment)', () => {
+    expect(resolveSandboxPath('/workspace//PageSpace/foo.ts')).toBe(
+      resolveSandboxPath('PageSpace/foo.ts'),
+    );
+  });
 });

@@ -304,6 +304,51 @@ describe('runBashInSandbox', () => {
     await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
     expect(seen).toEqual({ timeoutMs: 120_000, maxBytes: 256 * 1024 });
   });
+
+  it('given an explicit timeoutMs, should forward it to the driver instead of the default', async () => {
+    let seenTimeout: number | undefined;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seenTimeout = a.timeoutMs;
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    await runBashInSandbox({ command: 'bun install', timeoutMs: 180_000, ctx: makeCtx(), deps });
+    expect(seenTimeout).toBe(180_000);
+  });
+
+  it('given a timeoutMs above the max, should clamp it down instead of passing it through raw', async () => {
+    let seenTimeout: number | undefined;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seenTimeout = a.timeoutMs;
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    await runBashInSandbox({ command: 'bun install', timeoutMs: 10_000_000, ctx: makeCtx(), deps });
+    expect(seenTimeout).toBe(200_000);
+  });
+
+  it('given no timeoutMs, should default to SANDBOX_TIMEOUT_MS unchanged', async () => {
+    let seenTimeout: number | undefined;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seenTimeout = a.timeoutMs;
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(seenTimeout).toBe(120_000);
+  });
 });
 
 describe('writeSandboxFile', () => {
