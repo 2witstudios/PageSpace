@@ -35,7 +35,7 @@ import { LocationContext } from '@/lib/ai/shared';
 import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
 import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
-import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, buildChatConfig, SIDEBAR_AGENT_CHAT_ID } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -225,15 +225,14 @@ const SidebarChatTab: React.FC = () => {
   const agentChatConfig = useMemo(() => {
     if (!selectedAgent || !agentConversationId || !agentTransport) return null;
 
-    return {
-      id: selectedAgent.id,
+    return buildChatConfig({
+      id: SIDEBAR_AGENT_CHAT_ID,
       transport: agentTransport,
-      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Sidebar Agent Chat error:', error);
         toast.error('Chat error. Please try again.');
       },
-    };
+    });
   }, [selectedAgent, agentConversationId, agentTransport]);
 
   // ============================================

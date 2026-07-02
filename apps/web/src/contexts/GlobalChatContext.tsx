@@ -5,7 +5,7 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration, buildChatConfig, GLOBAL_CHAT_ID } from '@/lib/ai/shared';
 import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
@@ -278,17 +278,16 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   const chatConfig = useMemo(() => {
     if (!currentConversationId || !transport) return null;
-    return {
-      id: 'global-assistant',
+    return buildChatConfig({
+      id: GLOBAL_CHAT_ID,
       transport,
-      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Global Chat Error:', error);
         if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
           console.error('Authentication failed - user may need to log in again');
         }
       },
-    };
+    });
   }, [currentConversationId, transport]);
 
   // ============================================

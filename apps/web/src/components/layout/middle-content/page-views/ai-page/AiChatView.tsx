@@ -56,6 +56,7 @@ import {
   useChatTransport,
   useStreamingRegistration,
   useSendHandoff,
+  buildChatConfig,
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
@@ -271,10 +272,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }, []);
 
   const chatConfig = useMemo(
-    () => !transport ? null : ({
+    () => !transport ? null : buildChatConfig({
       id: page.id,
       transport,
-      experimental_throttle: 100,
       onError: handleChatError,
     }),
     [page.id, transport, handleChatError]

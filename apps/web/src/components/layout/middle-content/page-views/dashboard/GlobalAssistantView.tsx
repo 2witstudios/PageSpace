@@ -65,6 +65,8 @@ import {
   useChatStop,
   useSendHandoff,
   useStreamRecovery,
+  buildChatConfig,
+  AGENT_CHAT_ID,
   LocationContext,
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
@@ -285,14 +287,13 @@ const GlobalAssistantView: React.FC = () => {
   const agentChatConfig = useMemo(() => {
     if (!selectedAgent || !agentConversationId || !agentTransport) return null;
 
-    return {
-      id: selectedAgent.id,
+    return buildChatConfig({
+      id: AGENT_CHAT_ID,
       transport: agentTransport,
-      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Agent Chat error:', error);
       },
-    };
+    });
   }, [selectedAgent, agentConversationId, agentTransport]);
 
   // Global mode chat
