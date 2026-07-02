@@ -285,6 +285,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
           conversationMessages: result.messages,
           conversationAgentId: agent.id,
           isConversationLoading: false,
+          conversationLoadSignal: get().conversationLoadSignal + 1,
         });
         return;
       }
@@ -298,6 +299,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
           conversationMessages: result.messages,
           conversationAgentId: agent.id,
           isConversationLoading: false,
+          conversationLoadSignal: get().conversationLoadSignal + 1,
         });
 
         // Update URL (use 'replace' for auto-loading to avoid polluting history)

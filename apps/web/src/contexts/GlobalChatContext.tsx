@@ -37,7 +37,9 @@ import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 
 interface GlobalChatConversationContextValue {
   currentConversationId: string | null;
-  /** Seed messages for useChat — set by loadConversation on conversation switch. */
+  /** Fetched messages from the last loadConversation/createNewConversation.
+   *  Surfaces watch this reference and apply via setMessages (not via useChat
+   *  config, which ignores the messages prop after construction). */
   initialMessages: UIMessage[];
   isInitialized: boolean;
   /** Increments when remote events require surfaces to re-fetch messages from DB. */
@@ -58,8 +60,7 @@ interface GlobalChatStreamContextValue {
 
 interface GlobalChatConfigContextValue {
   chatConfig: {
-    id: string | undefined;
-    messages: UIMessage[];
+    id: string;
     transport: DefaultChatTransport<UIMessage>;
     onError: (error: Error) => void;
   } | null;
@@ -84,7 +85,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const [refreshSignal, setRefreshSignal] = useState(0);
-  const [conversationLoadSignal, setConversationLoadSignal] = useState(0);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
   const [latestGlobalConversationAdded, setLatestGlobalConversationAdded] = useState<ChatGlobalConversationAddedPayload | null>(null);
@@ -108,12 +108,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         setCurrentConversationId(conversationId);
         conversationState.setActiveConversationId(conversationId);
         setIsInitialized(true);
-        // Always signal surfaces to re-fetch. When the conversation ID is the
-        // same as before, useChat ignores the new initialMessages (its SWR
-        // cache key hasn't changed), so without this signal the messages
-        // would go stale. When the ID is different, this is a harmless
-        // redundant fetch that guarantees the UI matches the DB.
-        setRefreshSignal((n) => n + 1);
       } else {
         console.error('Failed to load conversation:', conversationId);
         setIsInitialized(true);
@@ -138,7 +132,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
           setConversationId(newConversation.id, 'push');
         }
         setIsInitialized(true);
-        setRefreshSignal((n) => n + 1);
       }
     } catch (error) {
       console.error('Failed to create new conversation:', error);
@@ -286,8 +279,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const chatConfig = useMemo(() => {
     if (!currentConversationId || !transport) return null;
     return {
-      id: currentConversationId,
-      messages: initialMessages,
+      id: 'global-assistant',
       transport,
       experimental_throttle: 100,
       onError: (error: Error) => {
@@ -297,7 +289,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         }
       },
     };
-  }, [currentConversationId, transport, initialMessages]);
+  }, [currentConversationId, transport]);
 
   // ============================================
   // Context Values

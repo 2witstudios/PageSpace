@@ -103,7 +103,7 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   const { chatConfig: globalChatConfig, setIsStreaming: setGlobalIsStreaming, setStopStreaming: setGlobalStopStreaming } = useGlobalChatConfig();
   const { isStreaming: contextIsStreaming, stopStreaming: contextStopStreaming } = useGlobalChatStream();
-  const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, createNewConversation, refreshSignal, rejoinGlobalStream } = useGlobalChatConversation();
+  const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, initialMessages: globalInitialMessages, createNewConversation, refreshSignal, rejoinGlobalStream } = useGlobalChatConversation();
 
   // ============================================
   // AGENT STORE - for agent selection and conversation management
@@ -286,15 +286,14 @@ const GlobalAssistantView: React.FC = () => {
     if (!selectedAgent || !agentConversationId || !agentTransport) return null;
 
     return {
-      id: agentConversationId,
-      messages: agentInitialMessages,
+      id: selectedAgent.id,
       transport: agentTransport,
       experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Agent Chat error:', error);
       },
     };
-  }, [selectedAgent, agentConversationId, agentTransport, agentInitialMessages]);
+  }, [selectedAgent, agentConversationId, agentTransport]);
 
   // Global mode chat
   const {
@@ -705,12 +704,12 @@ const GlobalAssistantView: React.FC = () => {
     };
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
 
-  // Agent-mode load-on-select guarantee: when the dashboard store's
-  // conversationLoadSignal changes (loadConversation or createNewConversation
-  // ran), re-apply the store's messages via setAgentMessages. This is needed
-  // because useChat ignores the messages prop when the id (conversationId)
-  // hasn't changed — so clicking the same conversation from history would show
-  // stale messages without this direct write.
+  // Agent-mode load-on-select guarantee: the store's conversationLoadSignal
+  // fires on explicit load/create (not on streaming updates). We use it rather
+  // than watching conversationMessages directly because the store receives
+  // bidirectional writes during streaming — watching the array would clobber
+  // in-progress parts. With stable useChat id, setMessages has no competing
+  // store recreation, so this is the sole message writer on load.
   const prevAgentLoadSignalRef = useRef(agentConversationLoadSignal);
   useEffect(() => {
     if (agentConversationLoadSignal === prevAgentLoadSignalRef.current) return;
@@ -720,17 +719,14 @@ const GlobalAssistantView: React.FC = () => {
     }
   }, [agentConversationLoadSignal, selectedAgent, agentConversationId, agentInitialMessages, setAgentMessages]);
 
-  // Global-mode load-on-select guarantee: same pattern, different signal.
-  // When globalConversationLoadSignal changes (loadConversation or
-  // createNewConversation ran in GlobalChatContext), re-apply messages.
-  const prevGlobalLoadSignalRef = useRef(globalConversationLoadSignal);
+  // Global-mode load-on-select guarantee: apply messages from context whenever
+  // they change (loadConversation or createNewConversation ran). With a stable
+  // useChat id, setMessages is the sole writer — no race with store recreation.
   useEffect(() => {
-    if (globalConversationLoadSignal === prevGlobalLoadSignalRef.current) return;
-    prevGlobalLoadSignalRef.current = globalConversationLoadSignal;
-    if (!selectedAgent && globalIsInitialized && globalConversationId) {
-      handlePullUpRefresh();
-    }
-  }, [globalConversationLoadSignal, selectedAgent, globalIsInitialized, globalConversationId, handlePullUpRefresh]);
+    if (selectedAgent) return;
+    if (!globalIsInitialized || !globalConversationId) return;
+    setGlobalLocalMessages(globalInitialMessages);
+  }, [globalInitialMessages, globalIsInitialized, globalConversationId, selectedAgent, setGlobalLocalMessages]);
 
   // Agent-mode multiplayer wiring (Tasks 2 + 5 + 6). No-op when selectedAgent
   // is null. Encapsulates page-room subscription, stream bootstrap/socket
