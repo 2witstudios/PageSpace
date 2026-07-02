@@ -726,15 +726,24 @@ export function useVoiceMode({
               const { isEnabled: sEnabled, interactionMode: sMode } =
                 useVoiceModeStore.getState();
               if (sEnabled && sMode === 'conversation') {
-                playbackRefs.current.autoListenTimer = setTimeout(() => {
+                // Re-arming safety timer: checks every 500ms whether the stream
+                // has ended. If stream is still active, re-arms and waits again.
+                // This prevents voice from getting stuck in 'speaking' when the
+                // stream ends after the gap but no new text was delivered.
+                const recheck = () => {
                   playbackRefs.current.autoListenTimer = null;
-                  if (!isAIStreamingRef.current && !playbackRefs.current.audioSource) {
+                  if (playbackRefs.current.audioSource) return; // new audio started
+                  if (!isAIStreamingRef.current) {
                     stopSpeakingStore();
                     const { isEnabled: en, interactionMode: md } =
                       useVoiceModeStore.getState();
                     if (en && md === 'conversation') void startListening();
+                  } else {
+                    // Stream still active, re-arm
+                    playbackRefs.current.autoListenTimer = setTimeout(recheck, 500);
                   }
-                }, 500);
+                };
+                playbackRefs.current.autoListenTimer = setTimeout(recheck, 500);
               }
               return;
             }
