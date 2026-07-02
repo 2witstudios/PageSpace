@@ -56,6 +56,7 @@ import {
   useChatTransport,
   useStreamingRegistration,
   useSendHandoff,
+  buildChatConfig,
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
@@ -82,7 +83,6 @@ type ConversationListResponse = { conversations?: Array<{ id: string }> };
 type ConversationMessagesResponse = { messages: UIMessage[] };
 
 const VOICE_OWNER: VoiceModeOwner = 'ai-page';
-const EMPTY_MESSAGES: UIMessage[] = [];
 
 const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const params = useParams();
@@ -259,21 +259,22 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // ============================================
   // CHAT CONFIGURATION
   // ============================================
-  // Use conversation ID for stream tracking (falls back to page.id before conversation is created)
-  const streamTrackingId = currentConversationId || page.id;
-
-  const transport = useChatTransport(streamTrackingId, '/api/ai/chat');
+  // Stable transport: uses page.id so the transport (and therefore chatConfig)
+  // never changes across conversation switches within the same page. Changing
+  // the transport on every switch caused useChat to reset its internal store,
+  // which clobbered the messages written by loadMessagesForConversation — the
+  // root cause of conversations not loading when clicked from History.
+  const transport = useChatTransport(page.id, '/api/ai/chat');
+  const streamTrackingId = page.id;
 
   const handleChatError = useCallback((error: Error) => {
     console.error('AiChatView: Chat error:', error);
   }, []);
 
   const chatConfig = useMemo(
-    () => !transport ? null : ({
+    () => !transport ? null : buildChatConfig({
       id: page.id,
-      messages: EMPTY_MESSAGES,
       transport,
-      experimental_throttle: 100,
       onError: handleChatError,
     }),
     [page.id, transport, handleChatError]

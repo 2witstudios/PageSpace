@@ -149,6 +149,12 @@ vi.mock('@/lib/ai/shared', () => ({
   useStreamingRegistration: vi.fn(),
   useChatStop: vi.fn(() => mockLocalStop),
   useSendHandoff: vi.fn(() => ({ wrapSend: vi.fn((cb: () => void) => cb()) })),
+  buildChatConfig: vi.fn((params: { id: string; transport: unknown; onError?: (error: Error) => void }) => ({
+    id: params.id,
+    transport: params.transport,
+    experimental_throttle: 100,
+    onError: params.onError ?? vi.fn(),
+  })),
 }));
 
 vi.mock('@/lib/ai/shared/hooks/useImageAttachments', () => {

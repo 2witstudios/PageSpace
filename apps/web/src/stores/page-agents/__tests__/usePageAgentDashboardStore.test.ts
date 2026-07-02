@@ -61,6 +61,7 @@ describe('usePageAgentDashboardStore', () => {
       conversationMessages: [],
       isConversationLoading: false,
       conversationAgentId: null,
+      conversationLoadSignal: 0,
       activeTab: 'history',
     });
 

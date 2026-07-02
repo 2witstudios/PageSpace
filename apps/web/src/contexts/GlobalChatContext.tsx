@@ -5,7 +5,7 @@ import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { useChatTransport, useStreamingRegistration } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration, buildChatConfig, GLOBAL_CHAT_ID } from '@/lib/ai/shared';
 import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
@@ -37,7 +37,9 @@ import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 
 interface GlobalChatConversationContextValue {
   currentConversationId: string | null;
-  /** Seed messages for useChat — set by loadConversation on conversation switch. */
+  /** Fetched messages from the last loadConversation/createNewConversation.
+   *  Surfaces watch this reference and apply via setMessages (not via useChat
+   *  config, which ignores the messages prop after construction). */
   initialMessages: UIMessage[];
   isInitialized: boolean;
   /** Increments when remote events require surfaces to re-fetch messages from DB. */
@@ -58,8 +60,7 @@ interface GlobalChatStreamContextValue {
 
 interface GlobalChatConfigContextValue {
   chatConfig: {
-    id: string | undefined;
-    messages: UIMessage[];
+    id: string;
     transport: DefaultChatTransport<UIMessage>;
     onError: (error: Error) => void;
   } | null;
@@ -277,19 +278,17 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   const chatConfig = useMemo(() => {
     if (!currentConversationId || !transport) return null;
-    return {
-      id: currentConversationId,
-      messages: initialMessages,
+    return buildChatConfig({
+      id: GLOBAL_CHAT_ID,
       transport,
-      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Global Chat Error:', error);
         if (error.message?.includes('Unauthorized') || error.message?.includes('401')) {
           console.error('Authentication failed - user may need to log in again');
         }
       },
-    };
-  }, [currentConversationId, transport, initialMessages]);
+    });
+  }, [currentConversationId, transport]);
 
   // ============================================
   // Context Values

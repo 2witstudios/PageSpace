@@ -11,3 +11,11 @@ export { useStreamingRegistration } from './useStreamingRegistration';
 export { useChatStop } from './useChatStop';
 export { useSendHandoff } from './useSendHandoff';
 export { useStreamRecovery } from './useStreamRecovery';
+
+// Pure functions (no hooks, no side effects)
+export {
+  GLOBAL_CHAT_ID,
+  AGENT_CHAT_ID,
+  SIDEBAR_AGENT_CHAT_ID,
+  buildChatConfig,
+} from '../chat-config';
