@@ -207,6 +207,7 @@ const SidebarChatTab: React.FC = () => {
   const {
     selectedAgent,
     conversationId: agentConversationId,
+    initialMessages: agentInitialMessages,
     isInitialized: agentIsInitialized,
     selectAgent,
     createNewConversation: createAgentConversation,
@@ -717,6 +718,20 @@ const SidebarChatTab: React.FC = () => {
       loadGlobalMessages(globalConversationId);
     }
   }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, loadGlobalMessages]);
+
+  // Load-on-select guarantee for agent mode: with a stable useChat id, the
+  // sidebar's agent Chat instance is never recreated on conversation switch,
+  // so usePageAgentSidebarState's fetched messages must be explicitly applied
+  // via setMessages. Seeded to `null` so the initial-mount/agent-select load
+  // is also covered by this effect.
+  const prevSidebarAgentMessagesRef = useRef<UIMessage[] | null>(null);
+  useEffect(() => {
+    if (agentInitialMessages === prevSidebarAgentMessagesRef.current) return;
+    prevSidebarAgentMessagesRef.current = agentInitialMessages;
+    if (selectedAgent) {
+      setMessages(agentInitialMessages);
+    }
+  }, [agentInitialMessages, selectedAgent, setMessages]);
 
   const handleNewConversation = useCallback(async () => {
     try {

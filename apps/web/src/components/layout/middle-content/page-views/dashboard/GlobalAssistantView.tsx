@@ -711,7 +711,14 @@ const GlobalAssistantView: React.FC = () => {
   // bidirectional writes during streaming — watching the array would clobber
   // in-progress parts. With stable useChat id, setMessages has no competing
   // store recreation, so this is the sole message writer on load.
-  const prevAgentLoadSignalRef = useRef(agentConversationLoadSignal);
+  //
+  // Seeded to `null` (not the current signal value) so a remount with an
+  // already-selected agent/conversation still applies messages to the fresh
+  // useChat instance. usePageAgentDashboardStore is a module-level singleton
+  // that outlives this component's mount — seeding to the live value would
+  // make the effect wrongly believe "nothing changed" on first render after
+  // navigating away and back, leaving the freshly mounted chat blank.
+  const prevAgentLoadSignalRef = useRef<number | null>(null);
   useEffect(() => {
     if (agentConversationLoadSignal === prevAgentLoadSignalRef.current) return;
     prevAgentLoadSignalRef.current = agentConversationLoadSignal;
