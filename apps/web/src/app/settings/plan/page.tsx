@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react';
-import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, getCachedCSRFToken } from '@/lib/auth/auth-fetch';
 import { StripeProvider } from '@/components/billing/StripeProvider';
 import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm';
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
@@ -93,11 +93,8 @@ export default function PlanPage() {
     const handleBeforeUnload = () => {
       if (!subscriptionIdRef.current) return;
 
-      // Get CSRF token from cookie
-      const csrfToken = document.cookie
-        .split('; ')
-        .find((row) => row.startsWith('csrf_token='))
-        ?.split('=')[1];
+      // Reuse the already-fetched in-memory CSRF token (there's no time to await a fresh one here)
+      const csrfToken = getCachedCSRFToken();
 
       // Use fetch with keepalive - continues after page unloads
       fetch('/api/stripe/cancel-checkout', {
