@@ -349,6 +349,21 @@ describe('runBashInSandbox', () => {
     await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
     expect(seenTimeout).toBe(120_000);
   });
+
+  it('given a non-positive timeoutMs (bypassing the zod schema at this exported layer), should clamp to a floor of 1 instead of passing it through raw', async () => {
+    let seenTimeout: number | undefined;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seenTimeout = a.timeoutMs;
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    await runBashInSandbox({ command: 'echo hi', timeoutMs: 0, ctx: makeCtx(), deps });
+    expect(seenTimeout).toBe(1);
+  });
 });
 
 describe('writeSandboxFile', () => {

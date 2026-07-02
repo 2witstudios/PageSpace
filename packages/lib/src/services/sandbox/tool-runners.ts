@@ -366,7 +366,7 @@ export async function runBashInSandbox({
         args: ['-c', command],
         cwd: resolvedCwd,
         env: deps.buildEnv(),
-        timeoutMs: Math.min(timeoutMs ?? SANDBOX_TIMEOUT_MS, SANDBOX_MAX_TIMEOUT_MS),
+        timeoutMs: Math.min(Math.max(timeoutMs ?? SANDBOX_TIMEOUT_MS, 1), SANDBOX_MAX_TIMEOUT_MS),
         maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
       });
     } catch (error) {
