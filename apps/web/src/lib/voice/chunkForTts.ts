@@ -119,7 +119,14 @@ function findLastSafeBoundary(buffer: string): number {
 
 function packSentences(text: string, maxChars: number): string[] {
   const sentences: string[] = [];
-  const re = /[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g;
+  // Lazy quantifier (\S*?) naturally skips past periods that are NOT sentence
+  // terminators — file extensions (Button.tsx), decimals (3.14), version
+  // numbers (v1.2.3) — because [\s\S]*? expands until it finds a [.!?] that
+  // IS followed by whitespace or end-of-string.
+  // The previous regex /[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g used [^.!?]+ which
+  // could only match non-punctuation runs, so a period inside an identifier
+  // (like .tsx) caused everything before it to be silently DROPPED.
+  const re = /[\s\S]*?[.!?]+(?:\s|$)|[\s\S]+$/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const s = m[0].trim();
