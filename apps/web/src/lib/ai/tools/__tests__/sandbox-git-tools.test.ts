@@ -80,18 +80,20 @@ describe('git_clone', () => {
     );
     const calls = getRunCalls(deps);
     expect(calls[0].cmd).toBe('git');
-    expect(calls[0].args).toEqual(['clone', '--depth', '1', 'https://github.com/owner/repo.git', '.']);
+    expect(calls[0].args).toEqual([
+      'clone', '--depth', '1', 'https://github.com/owner/repo.git', '/workspace',
+    ]);
   });
 
-  it('clones into the default working directory when no path is given', async () => {
+  it('clones into the sandbox root when no path is given', async () => {
     const deps = makeDeps();
     const { git_clone } = createSandboxGitTools(deps);
     await git_clone.execute!({ repo_url: 'https://github.com/owner/repo.git' }, {} as never);
     const calls = getRunCalls(deps);
-    expect(calls[0].args).toEqual(['clone', 'https://github.com/owner/repo.git', '.']);
+    expect(calls[0].args).toEqual(['clone', 'https://github.com/owner/repo.git', '/workspace']);
   });
 
-  it('uses the explicit clone path when provided', async () => {
+  it('resolves the explicit clone path under the sandbox root', async () => {
     const deps = makeDeps();
     const { git_clone } = createSandboxGitTools(deps);
     await git_clone.execute!(
@@ -99,19 +101,38 @@ describe('git_clone', () => {
       {} as never,
     );
     const calls = getRunCalls(deps);
-    expect(calls[0].args).toEqual(['clone', 'https://github.com/owner/repo.git', 'repo']);
+    expect(calls[0].args).toEqual(['clone', 'https://github.com/owner/repo.git', '/workspace/repo']);
+  });
+
+  it('rejects a clone destination that escapes the sandbox root', async () => {
+    const deps = makeDeps();
+    const { git_clone } = createSandboxGitTools(deps);
+    const result = await git_clone.execute!(
+      { repo_url: 'https://github.com/owner/repo.git', path: '../../escaped-outside-workspace' },
+      {} as never,
+    );
+    expect(result).toMatchObject({ success: false, reason: 'path_escape' });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
 });
 
 // ── git_init ───────────────────────────────────────────────────────────────
 
 describe('git_init', () => {
-  it('defaults to "." when no path given', async () => {
+  it('defaults to the sandbox root when no path given', async () => {
     const deps = makeDeps();
     const { git_init } = createSandboxGitTools(deps);
     await git_init.execute!({}, {} as never);
     const calls = getRunCalls(deps);
-    expect(calls[0].args).toEqual(['init', '.']);
+    expect(calls[0].args).toEqual(['init', '/workspace']);
+  });
+
+  it('rejects an init path that escapes the sandbox root', async () => {
+    const deps = makeDeps();
+    const { git_init } = createSandboxGitTools(deps);
+    const result = await git_init.execute!({ path: '/etc/foo' }, {} as never);
+    expect(result).toMatchObject({ success: false, reason: 'path_escape' });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
 });
 
@@ -358,6 +379,22 @@ describe('git_push', () => {
     expect(calls[0].args).toContain('-u');
   });
 
+  it('includes -u by default when set_upstream is omitted', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    await git_push.execute!({ branch: 'feature' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('-u');
+  });
+
+  it('omits -u when set_upstream: false is explicit', async () => {
+    const deps = makeDeps();
+    const { git_push } = createSandboxGitTools(deps);
+    await git_push.execute!({ branch: 'feature', set_upstream: false }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).not.toContain('-u');
+  });
+
   it('returns no-connection error without opening sandbox when token is null', async () => {
     const deps = makeDeps(null);
     const { git_push } = createSandboxGitTools(deps);
@@ -476,6 +513,40 @@ describe('cwd threading', () => {
     await git_status.execute!({}, {} as never);
     const calls = getRunCalls(deps);
     expect((calls[0] as unknown as { cwd: string }).cwd).toBe('/workspace');
+  });
+});
+
+// ── schema strictness ────────────────────────────────────────────────────
+
+describe('schema strictness', () => {
+  function safeParse(schema: unknown, value: unknown) {
+    return (schema as { safeParse: (v: unknown) => { success: boolean } }).safeParse(value);
+  }
+
+  it('git_status: given an unrecognized field, should reject instead of silently dropping it', () => {
+    const { git_status } = createSandboxGitTools(makeDeps());
+    expect(safeParse(git_status.inputSchema, { cwd: 'repo', bogus: true }).success).toBe(false);
+    expect(safeParse(git_status.inputSchema, { cwd: 'repo' }).success).toBe(true);
+  });
+
+  it('git_add (refine-wrapped schema): given an unrecognized field, should reject instead of silently dropping it', () => {
+    const { git_add } = createSandboxGitTools(makeDeps());
+    expect(safeParse(git_add.inputSchema, { all: true, bogus: true }).success).toBe(false);
+    expect(safeParse(git_add.inputSchema, { all: true }).success).toBe(true);
+  });
+
+  it('git_clone (field-level refine on repo_url): given an unrecognized field, should reject; a valid HTTPS url still passes', () => {
+    const { git_clone } = createSandboxGitTools(makeDeps());
+    expect(
+      safeParse(git_clone.inputSchema, { repo_url: 'https://github.com/o/r.git', bogus: true }).success,
+    ).toBe(false);
+    expect(safeParse(git_clone.inputSchema, { repo_url: 'https://github.com/o/r.git' }).success).toBe(true);
+  });
+
+  it('gh_pr_create: given an unrecognized field, should reject instead of silently dropping it', () => {
+    const { gh_pr_create } = createSandboxGitTools(makeDeps());
+    expect(safeParse(gh_pr_create.inputSchema, { title: 't', body: 'b', bogus: true }).success).toBe(false);
+    expect(safeParse(gh_pr_create.inputSchema, { title: 't', body: 'b' }).success).toBe(true);
   });
 });
 

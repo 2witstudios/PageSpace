@@ -25,7 +25,7 @@
  */
 
 import type { SubscriptionTier } from '../subscription-utils';
-import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy';
+import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy';
 import { evaluateCommandPolicy } from './command-policy';
 import { truncateToBytes } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
@@ -312,11 +312,14 @@ async function openSession(
 export async function runBashInSandbox({
   command,
   cwd,
+  timeoutMs,
   ctx,
   deps,
 }: {
   command: string;
   cwd?: string;
+  /** Opt-in override for long-running commands (e.g. `bun install`), clamped to `SANDBOX_MAX_TIMEOUT_MS`. Defaults to `SANDBOX_TIMEOUT_MS`. */
+  timeoutMs?: number;
   ctx: SandboxActorContext;
   deps: SandboxRunDeps;
 }): Promise<BashToolResult> {
@@ -363,7 +366,7 @@ export async function runBashInSandbox({
         args: ['-c', command],
         cwd: resolvedCwd,
         env: deps.buildEnv(),
-        timeoutMs: SANDBOX_TIMEOUT_MS,
+        timeoutMs: Math.min(Math.max(timeoutMs ?? SANDBOX_TIMEOUT_MS, 1), SANDBOX_MAX_TIMEOUT_MS),
         maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
       });
     } catch (error) {

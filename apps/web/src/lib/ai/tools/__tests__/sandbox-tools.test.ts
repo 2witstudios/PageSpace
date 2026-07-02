@@ -124,6 +124,40 @@ describe('createSandboxTools', () => {
     expect(schema.safeParse({ command: 'ls' }).success).toBe(true);
   });
 
+  describe('schema strictness', () => {
+    function schemaOf(tools: ReturnType<typeof createSandboxTools>, name: keyof ReturnType<typeof createSandboxTools>) {
+      return tools[name].inputSchema as { safeParse: (v: unknown) => { success: boolean } };
+    }
+
+    it('writeFile inputSchema: given an unrecognized cwd field, should reject instead of silently dropping it', () => {
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const schema = schemaOf(tools, 'writeFile');
+      expect(schema.safeParse({ path: 'a.txt', content: 'x', cwd: 'PageSpace' }).success).toBe(false);
+      expect(schema.safeParse({ path: 'a.txt', content: 'x' }).success).toBe(true);
+    });
+
+    it('readFile inputSchema: given an unrecognized cwd field, should reject instead of silently dropping it', () => {
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const schema = schemaOf(tools, 'readFile');
+      expect(schema.safeParse({ path: 'a.txt', cwd: 'PageSpace' }).success).toBe(false);
+      expect(schema.safeParse({ path: 'a.txt' }).success).toBe(true);
+    });
+
+    it('editFile inputSchema: given an unrecognized cwd field, should reject instead of silently dropping it', () => {
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const schema = schemaOf(tools, 'editFile');
+      expect(schema.safeParse({ path: 'a.txt', oldString: 'x', newString: 'y', cwd: 'PageSpace' }).success).toBe(false);
+      expect(schema.safeParse({ path: 'a.txt', oldString: 'x', newString: 'y' }).success).toBe(true);
+    });
+
+    it('bash inputSchema: given a legitimate extra-looking but unknown field, should reject it', () => {
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const schema = schemaOf(tools, 'bash');
+      expect(schema.safeParse({ command: 'ls', bogus: true }).success).toBe(false);
+      expect(schema.safeParse({ command: 'ls', cwd: 'PageSpace' }).success).toBe(true);
+    });
+  });
+
   it('editFile: should delegate and report replacements', async () => {
     const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.editFile, { path: 'a.txt', oldString: 'data', newString: 'X' }, {});
