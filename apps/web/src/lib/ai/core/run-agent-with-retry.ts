@@ -51,7 +51,12 @@ export interface RunAgentWithRetryParams {
   maxRetries?: number;
   /** `Date.now()` at request start, for the wall-clock budget. */
   startTimeMs: number;
-  /** Stop retrying once elapsed exceeds this (keeps us under the 300s function cap). */
+  /**
+   * Stop retrying once elapsed exceeds this (keeps us under the 300s function cap).
+   * If you change this default (or any route's `maxDuration`), also check
+   * `SANDBOX_MAX_TIMEOUT_MS` (packages/lib/src/services/sandbox/execution-policy.ts)
+   * — its cap is sized to leave headroom under this budget for a single bash call.
+   */
   maxDurationMs?: number;
   /** Backoff before retry attempt N (0-indexed). Default 0.5s then 1.5s. Injectable for tests. */
   backoffMs?: (attempt: number) => number;

@@ -87,6 +87,24 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     runGitInSandbox({ cmd, args, cwd, ctx, deps: gitRunDeps });
 
   /**
+   * Resolves `git_clone`/`git_init`'s optional destination `path` (defaulting to
+   * `SANDBOX_ROOT`), returning a ready-made `path_escape` denial on failure —
+   * the only two tools here that take a destination `path` rather than a `cwd`.
+   */
+  const resolveDestinationPath = (
+    path: string | undefined,
+  ): { ok: true; path: string } | { ok: false; error: { success: false; error: string; reason: 'path_escape' } } => {
+    const resolved = path !== undefined ? resolveSandboxPath(path) : SANDBOX_ROOT;
+    if (!resolved) {
+      return {
+        ok: false,
+        error: { success: false, error: 'The path is invalid or escapes the sandbox root.', reason: 'path_escape' },
+      };
+    }
+    return { ok: true, path: resolved };
+  };
+
+  /**
    * For remote/gh tools: pre-checks the GitHub token before opening a sandbox.
    * Passes the already-resolved token to `runGitInSandbox` to avoid a second DB fetch.
    */
@@ -130,17 +148,11 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       if (!repo_url.startsWith('https://')) {
         return { success: false as const, error: 'Only HTTPS URLs are supported for git clone.' };
       }
-      const resolvedPath = path !== undefined ? resolveSandboxPath(path) : SANDBOX_ROOT;
-      if (!resolvedPath) {
-        return {
-          success: false as const,
-          error: 'The path is invalid or escapes the sandbox root.',
-          reason: 'path_escape' as const,
-        };
-      }
+      const resolved = resolveDestinationPath(path);
+      if (!resolved.ok) return resolved.error;
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      const args = ['clone', ...(depth ? ['--depth', String(depth)] : []), repo_url, resolvedPath];
+      const args = ['clone', ...(depth ? ['--depth', String(depth)] : []), repo_url, resolved.path];
       return git('git', args, opened.ctx);
     },
   });
@@ -149,17 +161,11 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     description: 'Initialize a new git repository in the sandbox.',
     inputSchema: z.object({ path: z.string().optional() }).strict(),
     execute: async ({ path }, options) => {
-      const resolvedPath = path !== undefined ? resolveSandboxPath(path) : SANDBOX_ROOT;
-      if (!resolvedPath) {
-        return {
-          success: false as const,
-          error: 'The path is invalid or escapes the sandbox root.',
-          reason: 'path_escape' as const,
-        };
-      }
+      const resolved = resolveDestinationPath(path);
+      if (!resolved.ok) return resolved.error;
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['init', resolvedPath], opened.ctx);
+      return git('git', ['init', resolved.path], opened.ctx);
     },
   });
 
