@@ -62,34 +62,29 @@ const cellUpdateSchema = z.object({
 
 {
   operation: 'read' | 'replace' | 'insert' | 'delete' | 'edit-cells',
-  pageId?: string,       // optional — see fallback caveat below if omitted
-  startLine?: number,    // replace / insert / delete
-  endLine?: number,      // replace / delete (defaults to startLine)
-  content?: string,      // replace / insert
+  pageId: string,         // required — no "current page" fallback
+  startLine?: number,     // read (ranged) / replace / insert / delete
+  endLine?: number,       // read (ranged) / replace / delete (defaults to startLine)
+  content?: string,       // replace / insert
   cells?: { address: string; value: string }[],  // edit-cells
 }
 ```
 
-**`pageId` omitted:** the route calls `getCurrentPageId(userId)`
-(`route.ts` ~line 21), which is **not** a user-scoped "your most recent
-page" lookup, and as currently written **never resolves to a page at all**.
-Its query filters with `isNull(pages.isTrashed)` — but `pages.isTrashed` is
-`boolean(...).default(false).notNull()` (`packages/db/src/schema/core.ts`),
-so it is never actually `NULL`; that predicate matches zero rows for every
-normal page, on any instance, for any user. The intent was almost certainly
-`eq(pages.isTrashed, false)` ("not trashed"). Until that's fixed,
-`getCurrentPageId` always returns `null` and omitting `pageId` always 404s
-with `{ "error": "No active document found" }`. **Treat `pageId` as
-required** — there is currently no working fallback.
+**`pageId` is required.** There used to be a fallback to
+`getCurrentPageId(userId)` when it was omitted — a broken, unpredictable
+"most recently updated page" lookup with no relation to the calling agent's
+actual target. It has been removed. Omitting `pageId` now fails Zod
+validation and returns `400` with the schema issues, before any page is
+touched.
 
 ## Operations
 
 | Operation | Purpose | Requires |
 |---|---|---|
-| `read` | Return page content with numbered lines. For `TASK_LIST` pages, also returns tasks, `availableStatuses`, and progress rollups. | view |
-| `replace` | Replace lines `startLine`–`endLine` with `content`. | edit |
-| `insert` | Insert `content` before `startLine`. | edit |
-| `delete` | Delete lines `startLine`–`endLine`. | edit |
+| `read` | Return page content with numbered lines. Supports `startLine`/`endLine` for a ranged read (1-indexed, inclusive). `TASK_LIST` pages return tasks, `availableStatuses`, progress rollups, `parentTaskList`, and per-task `subTaskCount`/`subTaskCompletedCount` instead of line content. `CHANNEL` pages return a numbered message transcript (`startLine`/`endLine` address message index, not line number). `FILE` pages surface `processingStatus` (`pending`/`processing`/`failed`/`visual` short-circuit with a status body; `completed` returns content plus `fileMetadata`). | view |
+| `replace` | Replace lines `startLine`–`endLine` with `content`. Rejected on `FILE`/`SHEET` pages (400 — see guardrails below). | edit |
+| `insert` | Insert `content` before `startLine`. Rejected on `FILE`/`SHEET` pages. | edit |
+| `delete` | Delete lines `startLine`–`endLine`. Rejected on `FILE`/`SHEET` pages. | edit |
 | `edit-cells` | Set/clear cells on a `SHEET` page. See below. | edit |
 
 `replace`/`insert`/`delete` all persist through `applyPageMutation` with the
@@ -99,21 +94,53 @@ broadcast a `content-updated` websocket event, and write a
 `data.write`/`data.delete` audit log entry. `read` writes a `data.read` audit
 log entry and does not mutate anything.
 
+### Line numbering
+
+`read` and the line-based write operations number lines from the page's
+content serialized through `serializePageContentForAI`
+(`apps/web/src/lib/ai/core/page-serializer.ts`) — the same normalization the
+in-process `read_page`/`replace_lines` AI tools use. CODE pages and
+`contentMode: 'markdown'` documents pass through raw (their content already
+has natural line structure, and normalizing raw code/markdown would mangle
+it). Everything else (plain HTML documents) is expanded via
+`addLineBreaksForAI` so line numbers correspond to block-level elements
+instead of collapsing the whole stored document into one line. A line number
+seen from a `read` always addresses the same content on a subsequent
+`replace`/`insert`/`delete` against the same page.
+
+Writes mirror that same `isRawText` check: CODE/markdown content is written
+back exactly as spliced, with no re-normalization; HTML documents are
+re-normalized with `addLineBreaksForAI` after the splice.
+
 ## `edit-cells` — sheet editing
 
 This is the intended, cell-aware way to edit `SHEET` page content over the
 MCP HTTP API. There is no separate `/api/mcp/sheets` or similar route —
 sheet edits go through `/api/mcp/documents` with `operation: 'edit-cells'`.
 
-**Caveat:** the `replace`/`insert`/`delete` branches do **not** check
-`isSheetType` before applying their line-based edit to `page.content` — only
-`edit-cells` does. Nothing currently stops an external client from calling
-`replace`/`insert`/`delete` against a `SHEET` page; doing so would apply a
-raw line splice directly to the sheet's serialized text representation
-rather than going through `parseSheetContent`/`updateSheetCells`, which is
-unsafe and unsupported (it can desync rows/columns or produce invalid
-serialized content) even though the API won't reject it. Always use
-`edit-cells` for `SHEET` pages.
+The `replace`/`insert`/`delete` branches check `isSheetType(page.type)` before
+touching content and reject with `400` on a `SHEET` page:
+```json
+{
+  "error": "Cannot use line editing on sheets",
+  "message": "Sheet pages use structured cell data. Use the edit-cells operation instead for cell-level edits.",
+  "suggestion": "Use operation: \"edit-cells\" with cell addresses (A1, B2, etc.) to modify sheet content."
+}
+```
+A raw line splice against a sheet's serialized TOML representation (bypassing
+`parseSheetContent`/`updateSheetCells`) can desync rows/columns or produce
+invalid content — this guardrail mirrors the equivalent check in the
+in-process `replace_lines` AI tool. Always use `edit-cells` for `SHEET` pages.
+
+`FILE` pages are rejected the same way (`400`) from all three line-editing
+operations — uploaded file content is read-only and system-managed:
+```json
+{
+  "error": "Cannot edit FILE pages",
+  "message": "This is an uploaded file. File content is read-only and managed by the system.",
+  "suggestion": "To modify content, create a new document page instead of editing the uploaded file."
+}
+```
 
 ### Validation, in order
 
@@ -232,14 +259,17 @@ Content-Type: application/json
 | Condition | Status | Body |
 |---|---|---|
 | No Bearer token / invalid `mcp_...` token | 401 | auth-error shaped by `authenticateMCPRequest` |
+| `pageId` omitted or any other schema violation | 400 | `{ "error": [...] }` (Zod issues array) — fails before any page lookup |
 | Page's drive not in token's `allowedDriveIds` | 403 | `{ "error": "This token does not have access to this drive" }` |
 | No view access to `pageId` | 403 | `"Forbidden"` (plain text) |
 | Mutating op without edit access | 403 | `{ "error": "Write permission required", "details": "..." }` |
-| Page not found | 404 | `{ "error": "Page not found" }` (or `{ "error": "No active document found" }` — currently **always** returned when `pageId` is omitted, see caveat above) |
+| Page not found | 404 | `{ "error": "Page not found" }` |
+| `replace`/`insert`/`delete` on a `FILE` page | 400 | `{ "error": "Cannot edit FILE pages", "message": "...", "suggestion": "...", "pageInfo": {...} }` |
+| `replace`/`insert`/`delete` on a `SHEET` page | 400 | `{ "error": "Cannot use line editing on sheets", "message": "...", "suggestion": "...", "pageInfo": {...} }` |
 | `edit-cells` on a non-sheet page | 400 | `{ "error": "Page is not a sheet", "message": "...", "pageType": "..." }` |
 | `edit-cells` with empty/missing `cells` | 400 | `{ "error": "cells array is required for edit-cells operation" }` |
 | `edit-cells` with malformed cell address | 400 | `{ "error": "Invalid cell addresses: ..." }` |
-| Zod schema validation failure | 400 | `{ "error": [...] }` (Zod issues array) |
+| Invalid line range on `read`/`replace`/`delete` | 400 | `{ "error": "Invalid line range: ..." }` or `{ "error": "Line number out of range" }` |
 | Revision conflict (rare — only a same-request race; see `edit-cells` above) | 409 | `{ "error": "...", "currentRevision": n, "expectedRevision": n }` |
 | Unrecognized `operation` | 400 | `{ "error": "Invalid operation" }` |
 | Unhandled exception | 500 | `{ "error": "Failed to perform document operation" }` |

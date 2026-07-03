@@ -428,7 +428,7 @@ describe('MCP Documents API — TASK_LIST read', () => {
     expect(mockSerializeTaskItem).toHaveBeenCalledWith(raw[0]);
     // Only a boolean flag is exposed — never the child page body, which belongs
     // to a page this principal may not be authorized to read.
-    expect(data.tasks[0]).toEqual({ ...serialized, hasContent: true });
+    expect(data.tasks[0]).toEqual({ ...serialized, hasContent: true, subTaskCount: 0, subTaskCompletedCount: 0 });
   });
 
   it('reports hasContent false when the linked task page has no description', async () => {
@@ -441,7 +441,7 @@ describe('MCP Documents API — TASK_LIST read', () => {
     const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
 
     const data = await response.json();
-    expect(data.tasks[0]).toEqual({ ...serialized, hasContent: false });
+    expect(data.tasks[0]).toEqual({ ...serialized, hasContent: false, subTaskCount: 0, subTaskCompletedCount: 0 });
   });
 
   it('never returns child task page bodies (no inheritance: parent grant must not leak child content)', async () => {
