@@ -32,12 +32,16 @@ async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
 /**
  * Ensure a TASK_LIST page has its `task_lists` row and default `task_status_configs`
  * seeded. Idempotent — a no-op if the `task_lists` row already exists (status configs
- * are only ever seeded alongside a *new* `task_lists` row, never backfilled onto an
- * existing one here).
+ * are only ever seeded alongside a *new* `task_lists` row here; a legacy `task_lists`
+ * row with zero configs — e.g. one created by a pre-fix lazy-init path — is not
+ * backfilled by this function. The browser Kanban route's `getOrCreateTaskListForPage`
+ * in `app/api/pages/[pageId]/tasks/route.ts` already handles that migration case.
  *
- * This is the single seeding path every page-creation and lazy-init entry point must
- * call for a TASK_LIST page — skipping it is what leaves `taskStatusConfigs` empty and
- * crashes the Kanban UI (`STATUS_GROUP_CONFIG[group]` lookup with no matching group).
+ * Called from every page-creation and lazy-init entry point that seeds a TASK_LIST
+ * page's *own* task list (`page-service.ts`, `page-write-tools.ts`'s `create_page`,
+ * the MCP documents `read` route, and `page-read-tools.ts`'s `read_page`) — skipping
+ * it is what leaves `taskStatusConfigs` empty and crashes the Kanban UI
+ * (`STATUS_GROUP_CONFIG[group]` lookup with no matching group).
  */
 export async function ensureTaskListForPage(
   tx: Tx,
