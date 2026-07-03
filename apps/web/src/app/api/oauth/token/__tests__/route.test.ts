@@ -24,7 +24,21 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn().mockReturnValue('203.0.113.11'),
+}));
+
+const checkDistributedRateLimit = vi.fn();
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: (...args: unknown[]) => checkDistributedRateLimit(...args),
+  DISTRIBUTED_RATE_LIMITS: {
+    OAUTH_TOKEN_EXCHANGE: { maxAttempts: 10, windowMs: 300_000, progressiveDelay: true },
+    OAUTH_DEVICE_POLL: { maxAttempts: 100, windowMs: 300_000, progressiveDelay: false },
+  },
+}));
+
 import { POST } from '../route';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
 const CLIENT_ID = 'pagespace-cli';
@@ -62,9 +76,76 @@ const okTokens = {
   familyExpiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
 };
 
+const ALLOWED = { allowed: true, attemptsRemaining: 9 };
+
 beforeEach(() => {
   vi.clearAllMocks();
   ensureOAuthClientRow.mockResolvedValue(CLIENT_DB_ID);
+  checkDistributedRateLimit.mockResolvedValue(ALLOWED);
+});
+
+describe('POST /api/oauth/token — authorization_code grant, rate limiting', () => {
+  it('blocks with 429 when the per-IP limit is exceeded, never reaching the repository', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-token:exchange:ip:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await POST(tokenRequest(validFields()) as never);
+
+    expect(res.status).toBe(429);
+    expect(exchangeAuthorizationCode).not.toHaveBeenCalled();
+  });
+
+  it('blocks with 429 when the per-client limit is exceeded, never reaching the repository', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-token:exchange:client:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await POST(tokenRequest(validFields()) as never);
+
+    expect(res.status).toBe(429);
+    expect(exchangeAuthorizationCode).not.toHaveBeenCalled();
+  });
+
+  it('checks both the IP and client dimensions', async () => {
+    exchangeAuthorizationCode.mockResolvedValue({
+      outcome: 'ok',
+      userId: 'user-1',
+      scopes: ['account'],
+      tokens: okTokens,
+    });
+
+    await POST(tokenRequest(validFields()) as never);
+
+    const keys = checkDistributedRateLimit.mock.calls.map((c) => c[0] as string);
+    expect(keys.some((k) => k.includes('ip:203.0.113.11'))).toBe(true);
+    expect(keys.some((k) => k.includes(`client:${CLIENT_ID}`))).toBe(true);
+  });
+
+  it('sets Cache-Control: no-store on the rate-limited response', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-token:exchange:ip:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await POST(tokenRequest(validFields()) as never);
+
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('audits the rate-limit trip without leaking token/code material', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-token:exchange:ip:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    await POST(tokenRequest(validFields()) as never);
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'security.rate.limited' }),
+    );
+    const call = vi.mocked(auditRequest).mock.calls[0][1] as { details?: Record<string, unknown> };
+    expect(JSON.stringify(call.details ?? {})).not.toContain('raw-code-value');
+  });
 });
 
 describe('POST /api/oauth/token — form-encoding enforcement', () => {
@@ -370,6 +451,30 @@ describe('POST /api/oauth/token — refresh_token grant, constant-shape failures
   });
 });
 
+describe('POST /api/oauth/token — refresh_token grant, rate limiting', () => {
+  it('blocks with 429 when the per-IP limit is exceeded, never reaching the repository', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-token:exchange:ip:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await POST(tokenRequest(refreshFields()) as never);
+
+    expect(res.status).toBe(429);
+    expect(refreshTokenGrant).not.toHaveBeenCalled();
+  });
+
+  it('blocks with 429 when the per-client limit is exceeded, never reaching the repository', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-token:exchange:client:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await POST(tokenRequest(refreshFields()) as never);
+
+    expect(res.status).toBe(429);
+    expect(refreshTokenGrant).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/oauth/token — unsupported grant_type', () => {
   it('rejects an unrecognized grant_type', async () => {
     const res = await POST(tokenRequest({ grant_type: 'client_credentials' }) as never);
@@ -482,5 +587,54 @@ describe('POST /api/oauth/token — device_code grant, RFC 8628 §3.5 poll outco
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'invalid_request' });
     expect(pollDeviceToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/token — device_code grant, endpoint-level rate limiting', () => {
+  it('responds with the RFC 8628 slow_down contract (not a generic 429) when the endpoint-level limit trips, never reaching the repository', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-token:device_poll:ip:') ? { allowed: false, retryAfter: 30 } : ALLOWED,
+    );
+
+    const res = await POST(tokenRequest(deviceFields()) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'slow_down' });
+    expect(pollDeviceToken).not.toHaveBeenCalled();
+  });
+
+  it('blocks when the per-client limit trips', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-token:device_poll:client:') ? { allowed: false, retryAfter: 30 } : ALLOWED,
+    );
+
+    const res = await POST(tokenRequest(deviceFields()) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'slow_down' });
+  });
+
+  it('checks both the IP and client dimensions, distinct from the exchange-grant keys', async () => {
+    pollDeviceToken.mockResolvedValue({ outcome: 'authorization_pending' });
+
+    await POST(tokenRequest(deviceFields()) as never);
+
+    const keys = checkDistributedRateLimit.mock.calls.map((c) => c[0] as string);
+    expect(keys.some((k) => k.includes('device_poll:ip:203.0.113.11'))).toBe(true);
+    expect(keys.some((k) => k.includes(`device_poll:client:${CLIENT_ID}`))).toBe(true);
+    expect(keys.every((k) => !k.startsWith('oauth-token:exchange:'))).toBe(true);
+  });
+
+  it('audits the rate-limit trip', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-token:device_poll:ip:') ? { allowed: false, retryAfter: 30 } : ALLOWED,
+    );
+
+    await POST(tokenRequest(deviceFields()) as never);
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'security.rate.limited' }),
+    );
   });
 });

@@ -16,7 +16,18 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn().mockReturnValue('203.0.113.13'),
+}));
+
+const checkDistributedRateLimit = vi.fn();
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: (...args: unknown[]) => checkDistributedRateLimit(...args),
+  DISTRIBUTED_RATE_LIMITS: { OAUTH_DEVICE_INIT: { maxAttempts: 10, windowMs: 300_000, progressiveDelay: false } },
+}));
+
 import { POST } from '../route';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const CLIENT_ID = 'pagespace-cli';
 const CLIENT_DB_ID = 'client-db-id-1';
@@ -33,10 +44,50 @@ function deviceAuthRequest(fields: Record<string, string | undefined>, contentTy
   });
 }
 
+const ALLOWED = { allowed: true, attemptsRemaining: 9 };
+
 beforeEach(() => {
   vi.clearAllMocks();
   ensureOAuthClientRow.mockResolvedValue(CLIENT_DB_ID);
   createDeviceAuthorization.mockResolvedValue(undefined);
+  checkDistributedRateLimit.mockResolvedValue(ALLOWED);
+});
+
+describe('POST /api/oauth/device_authorization — per-IP rate limiting', () => {
+  it('blocks with 429 when the per-IP limit is exceeded, never persisting a device code', async () => {
+    checkDistributedRateLimit.mockResolvedValue({ allowed: false, retryAfter: 300 });
+
+    const res = await POST(deviceAuthRequest({ client_id: CLIENT_ID }) as never);
+
+    expect(res.status).toBe(429);
+    expect(createDeviceAuthorization).not.toHaveBeenCalled();
+  });
+
+  it('sets Cache-Control: no-store on the rate-limited response', async () => {
+    checkDistributedRateLimit.mockResolvedValue({ allowed: false, retryAfter: 300 });
+
+    const res = await POST(deviceAuthRequest({ client_id: CLIENT_ID }) as never);
+
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('checks the IP dimension keyed by client IP', async () => {
+    await POST(deviceAuthRequest({ client_id: CLIENT_ID }) as never);
+
+    const keys = checkDistributedRateLimit.mock.calls.map((c) => c[0] as string);
+    expect(keys.some((k) => k.includes('ip:203.0.113.13'))).toBe(true);
+  });
+
+  it('audits the rate-limit trip', async () => {
+    checkDistributedRateLimit.mockResolvedValue({ allowed: false, retryAfter: 300 });
+
+    await POST(deviceAuthRequest({ client_id: CLIENT_ID }) as never);
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'security.rate.limited' }),
+    );
+  });
 });
 
 describe('POST /api/oauth/device_authorization — form-encoding enforcement', () => {

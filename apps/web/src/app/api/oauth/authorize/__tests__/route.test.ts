@@ -10,6 +10,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object),
+  getClientIP: vi.fn().mockReturnValue('203.0.113.9'),
+}));
+
+const checkDistributedRateLimit = vi.fn();
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: (...args: unknown[]) => checkDistributedRateLimit(...args),
+  DISTRIBUTED_RATE_LIMITS: { OAUTH_AUTHORIZE: { maxAttempts: 20, windowMs: 300_000, progressiveDelay: false } },
 }));
 
 vi.mock('@/lib/repositories/oauth-repository', () => ({
@@ -32,10 +39,12 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
 const CODE_CHALLENGE = 'a'.repeat(43);
+const ALLOWED = { allowed: true, attemptsRemaining: 19 };
 
 function authorizeUrl(overrides: Record<string, string | undefined> = {}): string {
   const params: Record<string, string> = {
@@ -65,6 +74,40 @@ function getRequest(overrides: Record<string, string | undefined> = {}): Request
 
 beforeEach(() => {
   vi.clearAllMocks();
+  checkDistributedRateLimit.mockResolvedValue(ALLOWED);
+});
+
+describe('GET /api/oauth/authorize — per-IP rate limiting', () => {
+  it('blocks with 429 when the per-IP limit is exceeded, never checking auth', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-authorize:ip:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await GET(getRequest() as never);
+
+    expect(res.status).toBe(429);
+    expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
+  });
+
+  it('audits the rate-limit trip', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-authorize:ip:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    await GET(getRequest() as never);
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'security.rate.limited' }),
+    );
+  });
+
+  it('checks the IP dimension keyed by client IP', async () => {
+    await GET(getRequest({ client_id: 'evil-client' }) as never);
+
+    const keys = checkDistributedRateLimit.mock.calls.map((c) => c[0] as string);
+    expect(keys.some((k) => k.includes('ip:203.0.113.9'))).toBe(true);
+  });
 });
 
 describe('GET /api/oauth/authorize — open-redirect guard', () => {
@@ -181,6 +224,62 @@ describe('POST /api/oauth/authorize — consent CSRF', () => {
     const res = await POST(postRequest(approvalBody) as never);
     expect(res.status).toBe(403);
     expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/authorize — per-user/per-client rate limiting', () => {
+  beforeEach(() => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      tokenType: 'session',
+      userId: 'user-1',
+      role: 'user',
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      sessionId: 'sess-1',
+    } as never);
+  });
+
+  it('blocks with 429 when the per-user limit is exceeded, never minting a code', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-authorize:user:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await POST(postRequest(approvalBody) as never);
+
+    expect(res.status).toBe(429);
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+
+  it('blocks with 429 when the per-client limit is exceeded, never minting a code', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-authorize:client:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await POST(postRequest(approvalBody) as never);
+
+    expect(res.status).toBe(429);
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+
+  it('checks both the user and client dimensions', async () => {
+    await POST(postRequest(approvalBody) as never);
+
+    const keys = checkDistributedRateLimit.mock.calls.map((c) => c[0] as string);
+    expect(keys.some((k) => k.includes('user:user-1'))).toBe(true);
+    expect(keys.some((k) => k.includes('client:pagespace-cli'))).toBe(true);
+  });
+
+  it('audits the rate-limit trip', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-authorize:user:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    await POST(postRequest(approvalBody) as never);
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'security.rate.limited', userId: 'user-1' }),
+    );
   });
 });
 
