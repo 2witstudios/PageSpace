@@ -1,5 +1,6 @@
 import useSWR from 'swr';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
+import { useAuth } from '@/hooks/useAuth';
 import type { ToastNotificationLevel } from '@/lib/notifications/toast-eligible-types';
 
 interface ToastPreference {
@@ -17,8 +18,9 @@ const fetcher = async (url: string): Promise<ToastPreference> => {
 const defaultPreference: ToastPreference = { level: 'all' };
 
 export function useToastPreferences() {
+  const { user } = useAuth();
   const { data, isLoading, mutate } = useSWR<ToastPreference>(
-    '/api/settings/toast-preferences',
+    user ? '/api/settings/toast-preferences' : null,
     fetcher,
     {
       revalidateOnFocus: false,

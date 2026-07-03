@@ -6,15 +6,12 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 const mockFindFirst = vi.hoisted(() => vi.fn());
 const mockInsert = vi.hoisted(() => vi.fn());
 const mockValues = vi.hoisted(() => vi.fn());
-const mockUpdate = vi.hoisted(() => vi.fn());
-const mockSet = vi.hoisted(() => vi.fn());
-const mockWhere = vi.hoisted(() => vi.fn());
+const mockOnConflictDoUpdate = vi.hoisted(() => vi.fn());
 const mockReturning = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: mockInsert,
-    update: mockUpdate,
     query: {
       userToastNotificationPreferences: {
         findFirst: mockFindFirst,
@@ -104,17 +101,14 @@ describe('PATCH /api/settings/toast-preferences', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockInsert.mockReturnValue({ values: mockValues });
-    mockValues.mockReturnValue({ returning: mockReturning });
-    mockUpdate.mockReturnValue({ set: mockSet });
-    mockSet.mockReturnValue({ where: mockWhere });
-    mockWhere.mockReturnValue({ returning: mockReturning });
+    mockValues.mockReturnValue({ onConflictDoUpdate: mockOnConflictDoUpdate });
+    mockOnConflictDoUpdate.mockReturnValue({ returning: mockReturning });
 
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-1'));
     vi.mocked(isAuthError).mockReturnValue(false);
   });
 
-  it('given no existing preference, creates a new row', async () => {
-    mockFindFirst.mockResolvedValue(null);
+  it('upserts atomically via a single insert...onConflictDoUpdate call (no separate lookup)', async () => {
     mockReturning.mockResolvedValue([{ userId: 'user-1', level: 'mentions' }]);
 
     const request = new Request('https://example.com/api/settings/toast-preferences', {
@@ -128,11 +122,20 @@ describe('PATCH /api/settings/toast-preferences', () => {
 
     expect(response.status).toBe(200);
     expect(mockInsert).toHaveBeenCalledTimes(1);
+    expect(mockOnConflictDoUpdate).toHaveBeenCalledTimes(1);
+    expect(mockOnConflictDoUpdate.mock.calls[0][0]).toMatchObject({
+      target: 'userId',
+      set: { level: 'mentions' },
+    });
+    // No get-then-write race: the route never reads the row before writing it.
+    expect(mockFindFirst).not.toHaveBeenCalled();
     expect(body.preference.level).toBe('mentions');
   });
 
-  it('given an existing preference, updates it', async () => {
-    mockFindFirst.mockResolvedValue({ id: 'pref-1', userId: 'user-1', level: 'all' });
+  it('handles a concurrent-write conflict via the same atomic call (no separate update path)', async () => {
+    // Simulates two requests racing on the same userId: onConflictDoUpdate is
+    // the DB's own atomic resolution, so from the route's perspective this is
+    // just another successful upsert call, not a distinct code path.
     mockReturning.mockResolvedValue([{ userId: 'user-1', level: 'off' }]);
 
     const request = new Request('https://example.com/api/settings/toast-preferences', {
@@ -145,7 +148,6 @@ describe('PATCH /api/settings/toast-preferences', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(mockUpdate).toHaveBeenCalledTimes(1);
     expect(body.preference.level).toBe('off');
   });
 
@@ -160,7 +162,6 @@ describe('PATCH /api/settings/toast-preferences', () => {
 
     expect(response.status).toBe(400);
     expect(mockInsert).not.toHaveBeenCalled();
-    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
   it('given a missing level, returns 400', async () => {

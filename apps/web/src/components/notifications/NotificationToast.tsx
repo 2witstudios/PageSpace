@@ -14,7 +14,9 @@ export interface NotificationToastProps {
 
 export function NotificationToast({ notification, onSelect, onDismiss }: NotificationToastProps) {
   const Icon = getNotificationIcon(notification.type);
-  const timestamp = formatDistanceToNow(new Date(notification.createdAt), { addSuffix: true });
+  const createdAtDate = new Date(notification.createdAt);
+  const hasValidDate = !Number.isNaN(createdAtDate.getTime());
+  const timestamp = hasValidDate ? formatDistanceToNow(createdAtDate, { addSuffix: true }) : null;
   const triggeredByName = notification.triggeredByUser?.name ?? null;
 
   return (
@@ -51,7 +53,9 @@ export function NotificationToast({ notification, onSelect, onDismiss }: Notific
           {notification.message}
         </p>
         <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <time dateTime={new Date(notification.createdAt).toISOString()}>{timestamp}</time>
+          {hasValidDate ? (
+            <time dateTime={createdAtDate.toISOString()}>{timestamp}</time>
+          ) : null}
           {triggeredByName ? (
             <>
               <span aria-hidden>·</span>

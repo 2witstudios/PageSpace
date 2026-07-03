@@ -30,6 +30,18 @@ describe('NotificationToast', () => {
     expect(screen.getByText('Jonathan mentioned you in "Roadmap"')).toBeInTheDocument();
   });
 
+  it('renders without crashing and omits the timestamp when createdAt is unparsable', () => {
+    render(
+      <NotificationToast
+        notification={build({ createdAt: 'not-a-real-date' as unknown as Date })}
+        onSelect={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('You were mentioned')).toBeInTheDocument();
+    expect(screen.queryByText(/ago$/)).not.toBeInTheDocument();
+  });
+
   it('sets data-notification-type for styling/testing hooks', () => {
     render(
       <NotificationToast notification={build({ type: 'TASK_ASSIGNED' })} onSelect={vi.fn()} onDismiss={vi.fn()} />,

@@ -53,6 +53,11 @@ describe('isConnectionRequest', () => {
     expect(isConnectionRequest(n)).toBe(false);
   });
 
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'CONNECTION_REQUEST', metadata: null as unknown as undefined });
+    expect(isConnectionRequest(n)).toBe(false);
+  });
+
   it('returns false when metadata is missing connectionId key', () => {
     const n = base({ type: 'CONNECTION_REQUEST', metadata: { otherId: 'x' } });
     expect(isConnectionRequest(n)).toBe(false);
@@ -75,6 +80,11 @@ describe('isConnectionAccepted', () => {
 
   it('returns false when metadata is undefined', () => {
     const n = base({ type: 'CONNECTION_ACCEPTED', metadata: undefined });
+    expect(isConnectionAccepted(n)).toBe(false);
+  });
+
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'CONNECTION_ACCEPTED', metadata: null as unknown as undefined });
     expect(isConnectionAccepted(n)).toBe(false);
   });
 
@@ -103,6 +113,11 @@ describe('isConnectionRejected', () => {
     expect(isConnectionRejected(n)).toBe(false);
   });
 
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'CONNECTION_REJECTED', metadata: null as unknown as undefined });
+    expect(isConnectionRejected(n)).toBe(false);
+  });
+
   it('returns false when metadata is missing connectionId', () => {
     const n = base({ type: 'CONNECTION_REJECTED', metadata: {} });
     expect(isConnectionRejected(n)).toBe(false);
@@ -125,6 +140,11 @@ describe('isNewDirectMessage', () => {
 
   it('returns false when metadata is undefined', () => {
     const n = base({ type: 'NEW_DIRECT_MESSAGE', metadata: undefined });
+    expect(isNewDirectMessage(n)).toBe(false);
+  });
+
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'NEW_DIRECT_MESSAGE', metadata: null as unknown as undefined });
     expect(isNewDirectMessage(n)).toBe(false);
   });
 
@@ -153,6 +173,11 @@ describe('isPermissionGranted', () => {
     expect(isPermissionGranted(n)).toBe(false);
   });
 
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'PERMISSION_GRANTED', metadata: null as unknown as undefined });
+    expect(isPermissionGranted(n)).toBe(false);
+  });
+
   it('returns false when metadata is missing permissions key', () => {
     const n = base({ type: 'PERMISSION_GRANTED', metadata: { pageName: 'My Page' } });
     expect(isPermissionGranted(n)).toBe(false);
@@ -175,6 +200,11 @@ describe('isPermissionUpdated', () => {
 
   it('returns false when metadata is undefined', () => {
     const n = base({ type: 'PERMISSION_UPDATED', metadata: undefined });
+    expect(isPermissionUpdated(n)).toBe(false);
+  });
+
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'PERMISSION_UPDATED', metadata: null as unknown as undefined });
     expect(isPermissionUpdated(n)).toBe(false);
   });
 
@@ -203,6 +233,11 @@ describe('isPermissionRevoked', () => {
     expect(isPermissionRevoked(n)).toBe(false);
   });
 
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'PERMISSION_REVOKED', metadata: null as unknown as undefined });
+    expect(isPermissionRevoked(n)).toBe(false);
+  });
+
   it('returns false when metadata is missing permissions key', () => {
     const n = base({ type: 'PERMISSION_REVOKED', metadata: { pageName: 'My Page' } });
     expect(isPermissionRevoked(n)).toBe(false);
@@ -225,6 +260,11 @@ describe('isPageShared', () => {
 
   it('returns false when metadata is undefined', () => {
     const n = base({ type: 'PAGE_SHARED', metadata: undefined });
+    expect(isPageShared(n)).toBe(false);
+  });
+
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'PAGE_SHARED', metadata: null as unknown as undefined });
     expect(isPageShared(n)).toBe(false);
   });
 
@@ -253,6 +293,11 @@ describe('isDriveInvited', () => {
     expect(isDriveInvited(n)).toBe(false);
   });
 
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'DRIVE_INVITED', metadata: null as unknown as undefined });
+    expect(isDriveInvited(n)).toBe(false);
+  });
+
   it('returns false when metadata is missing driveName key', () => {
     const n = base({ type: 'DRIVE_INVITED', metadata: { role: 'MEMBER' } });
     expect(isDriveInvited(n)).toBe(false);
@@ -275,6 +320,11 @@ describe('isDriveJoined', () => {
 
   it('returns false when metadata is undefined', () => {
     const n = base({ type: 'DRIVE_JOINED', metadata: undefined });
+    expect(isDriveJoined(n)).toBe(false);
+  });
+
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'DRIVE_JOINED', metadata: null as unknown as undefined });
     expect(isDriveJoined(n)).toBe(false);
   });
 
@@ -303,6 +353,11 @@ describe('isDriveRoleChanged', () => {
     expect(isDriveRoleChanged(n)).toBe(false);
   });
 
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'DRIVE_ROLE_CHANGED', metadata: null as unknown as undefined });
+    expect(isDriveRoleChanged(n)).toBe(false);
+  });
+
   it('returns false when metadata is missing driveName key', () => {
     const n = base({ type: 'DRIVE_ROLE_CHANGED', metadata: { previousRole: 'MEMBER' } });
     expect(isDriveRoleChanged(n)).toBe(false);
@@ -328,6 +383,11 @@ describe('isMention', () => {
     expect(isMention(n)).toBe(false);
   });
 
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'MENTION', metadata: null as unknown as undefined });
+    expect(isMention(n)).toBe(false);
+  });
+
   it('returns false when metadata is missing mentionerName key', () => {
     const n = base({ type: 'MENTION', metadata: { pageTitle: 'Roadmap' } });
     expect(isMention(n)).toBe(false);
@@ -350,6 +410,11 @@ describe('isTaskAssigned', () => {
 
   it('returns false when metadata is undefined', () => {
     const n = base({ type: 'TASK_ASSIGNED', metadata: undefined });
+    expect(isTaskAssigned(n)).toBe(false);
+  });
+
+  it('returns false when metadata is null', () => {
+    const n = base({ type: 'TASK_ASSIGNED', metadata: null as unknown as undefined });
     expect(isTaskAssigned(n)).toBe(false);
   });
 
@@ -380,6 +445,11 @@ describe('hasMetadataField', () => {
 
   it('returns false when metadata is undefined', () => {
     const n = base({ metadata: undefined });
+    expect(hasMetadataField(n, 'connectionId')).toBe(false);
+  });
+
+  it('returns false when metadata is null', () => {
+    const n = base({ metadata: null as unknown as undefined });
     expect(hasMetadataField(n, 'connectionId')).toBe(false);
   });
 

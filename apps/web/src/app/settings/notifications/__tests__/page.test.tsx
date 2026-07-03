@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import NotificationsSettingsPage from '../page';
 
@@ -83,5 +83,20 @@ describe('NotificationsSettingsPage', () => {
     fireEvent.click(screen.getByRole('radio', { name: /^off/i }));
 
     expect(mocks.updateLevel).toHaveBeenCalledWith('off');
+    await waitFor(() =>
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('In-app pop-up preference updated'),
+    );
+  });
+
+  it('shows an error toast and does not throw when updateLevel rejects', async () => {
+    mocks.updateLevel.mockRejectedValueOnce(new Error('network error'));
+    render(<NotificationsSettingsPage />);
+
+    fireEvent.click(screen.getByRole('radio', { name: /^off/i }));
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith('Failed to update in-app pop-up preference'),
+    );
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 });

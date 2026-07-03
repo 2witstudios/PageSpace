@@ -50,34 +50,25 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const existingPreference = await db.query.userToastNotificationPreferences.findFirst({
-      where: eq(userToastNotificationPreferences.userId, userId),
-    });
-
-    if (existingPreference) {
-      const [updated] = await db
-        .update(userToastNotificationPreferences)
-        .set({
+    // Atomic upsert (not get-then-insert/update) so concurrent PATCHes can't
+    // race between the lookup and the write and hit a unique-violation.
+    const [preference] = await db
+      .insert(userToastNotificationPreferences)
+      .values({
+        userId,
+        level: level as ToastLevel,
+      })
+      .onConflictDoUpdate({
+        target: userToastNotificationPreferences.userId,
+        set: {
           level: level as ToastLevel,
           updatedAt: new Date(),
-        })
-        .where(eq(userToastNotificationPreferences.userId, userId))
-        .returning();
+        },
+      })
+      .returning();
 
-      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'toast_notification_preference' });
-      return NextResponse.json({ preference: updated });
-    } else {
-      const [created] = await db
-        .insert(userToastNotificationPreferences)
-        .values({
-          userId,
-          level: level as ToastLevel,
-        })
-        .returning();
-
-      audit({ eventType: 'admin.settings.changed', userId, resourceType: 'toast_notification_preference' });
-      return NextResponse.json({ preference: created });
-    }
+    audit({ eventType: 'admin.settings.changed', userId, resourceType: 'toast_notification_preference' });
+    return NextResponse.json({ preference });
   } catch (error) {
     loggers.api.error('Error updating toast notification preference:', error as Error);
     return NextResponse.json(
