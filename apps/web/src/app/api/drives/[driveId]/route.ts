@@ -25,7 +25,7 @@ const patchSchema = z.object({
   // Drive-wide default OG/share image. "" or null clears it; a non-empty value
   // must be a valid URL.
   publishDefaultOgImageUrl: z.union([z.literal(''), z.string().url()]).nullable().optional(),
-});
+}).strict();
 
 /**
  * GET /api/drives/[driveId]
@@ -230,6 +230,15 @@ export async function PATCH(
     return NextResponse.json(updatedDrive);
   } catch (error) {
     if (error instanceof z.ZodError) {
+      const unrecognizedKeys = error.issues
+        .filter((issue) => issue.code === 'unrecognized_keys')
+        .flatMap((issue) => issue.keys);
+      if (unrecognizedKeys.includes('publishSubdomain')) {
+        return NextResponse.json(
+          { error: 'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.' },
+          { status: 400 }
+        );
+      }
       return NextResponse.json(
         { error: 'Invalid request body', details: error.issues },
         { status: 400 }
