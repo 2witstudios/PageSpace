@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveRoute } from '@pagespace/cli';
-import type { Route } from '@pagespace/cli';
+import { EXIT_SUCCESS, resolveRoute } from '@pagespace/cli';
+import type { ExitCode, Route } from '@pagespace/cli';
 
 function route(path: string[]): Route {
-  return { path, handler: vi.fn(async () => 0) };
+  return { path, handler: vi.fn(async (): Promise<ExitCode> => EXIT_SUCCESS) };
 }
 
 describe('resolveRoute', () => {
