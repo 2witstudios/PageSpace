@@ -1,0 +1,72 @@
+/**
+ * CSRF-protected approve/deny decision for the /activate screen (task
+ * mwexjazwha2uhw5bmvc9a7kw). Re-normalizes, re-rate-limits, and re-validates
+ * the user code from scratch — never trusts an earlier /verify call — then
+ * records the decision via `decideDeviceApproval` (task 4, not
+ * reimplemented).
+ */
+import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod/v4';
+import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
+import { recordDeviceApproval } from '@/lib/repositories/oauth-repository';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+
+const bodySchema = z.object({
+  userCode: z.string().min(1).max(32),
+  action: z.enum(['approve', 'deny']),
+});
+
+export async function POST(req: NextRequest) {
+  const auth = await authenticateRequestWithOptions(req, { allow: ['session'], requireCSRF: true });
+  if (isAuthError(auth)) return auth.error;
+
+  let body: z.infer<typeof bodySchema>;
+  try {
+    body = bodySchema.parse(await req.json());
+  } catch {
+    return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
+  }
+
+  const ip = getClientIP(req);
+  const [ipLimit, sessionLimit] = await Promise.all([
+    checkDistributedRateLimit(`oauth-device-decide:ip:${ip}`, DISTRIBUTED_RATE_LIMITS.OAUTH_VERIFY),
+    checkDistributedRateLimit(`oauth-device-decide:session:${auth.userId}`, DISTRIBUTED_RATE_LIMITS.OAUTH_VERIFY),
+  ]);
+
+  if (!ipLimit.allowed || !sessionLimit.allowed) {
+    auditRequest(req, {
+      eventType: 'security.rate.limited',
+      userId: auth.userId,
+      details: { oauthEvent: 'device_decision_rate_limited' },
+    });
+    const retryAfter = Math.max(ipLimit.retryAfter ?? 0, sessionLimit.retryAfter ?? 0);
+    return NextResponse.json({ error: 'rate_limited', retryAfter }, { status: 429 });
+  }
+
+  const normalized = normalizeUserCode(body.userCode);
+  const result = await recordDeviceApproval({
+    userCode: normalized,
+    action: body.action,
+    userId: auth.userId,
+    now: new Date(),
+  });
+
+  if (result.outcome === 'not_found' || result.outcome === 'invalid') {
+    auditRequest(req, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      details: { oauthEvent: 'device_decision_rejected' },
+    });
+    return NextResponse.json({ error: 'invalid_code' }, { status: 400 });
+  }
+
+  auditRequest(req, {
+    eventType: result.outcome === 'approved' ? 'authz.access.granted' : 'authz.access.denied',
+    userId: auth.userId,
+    details: { oauthEvent: result.outcome === 'approved' ? 'device_approved' : 'device_denied' },
+  });
+
+  return NextResponse.json({ ok: true, action: result.outcome });
+}

@@ -12,10 +12,12 @@ vi.mock('server-only', () => ({}));
 const ensureOAuthClientRow = vi.fn();
 const exchangeAuthorizationCode = vi.fn();
 const refreshTokenGrant = vi.fn();
+const pollDeviceToken = vi.fn();
 vi.mock('@/lib/repositories/oauth-repository', () => ({
   ensureOAuthClientRow: (...args: unknown[]) => ensureOAuthClientRow(...args),
   exchangeAuthorizationCode: (...args: unknown[]) => exchangeAuthorizationCode(...args),
   refreshTokenGrant: (...args: unknown[]) => refreshTokenGrant(...args),
+  pollDeviceToken: (...args: unknown[]) => pollDeviceToken(...args),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -376,5 +378,109 @@ describe('POST /api/oauth/token — unsupported grant_type', () => {
     expect(await res.json()).toEqual({ error: 'unsupported_grant_type' });
     expect(exchangeAuthorizationCode).not.toHaveBeenCalled();
     expect(refreshTokenGrant).not.toHaveBeenCalled();
+  });
+});
+
+const DEVICE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
+
+function deviceFields(overrides: Record<string, string | undefined> = {}) {
+  return {
+    grant_type: DEVICE_GRANT_TYPE,
+    device_code: 'raw-device-code-value',
+    client_id: CLIENT_ID,
+    ...overrides,
+  };
+}
+
+describe('POST /api/oauth/token — device_code grant, happy path', () => {
+  it('returns the RFC 6749 §5.1 token response shape on approval', async () => {
+    pollDeviceToken.mockResolvedValue({ outcome: 'ok', userId: 'user-1', scopes: ['account'], tokens: okTokens });
+
+    const res = await POST(tokenRequest(deviceFields()) as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      access_token: okTokens.accessToken,
+      token_type: 'Bearer',
+      expires_in: 15 * 60,
+      refresh_token: okTokens.refreshToken,
+      scope: 'account',
+    });
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('passes the raw device_code and resolved clientDbId through to the repository', async () => {
+    pollDeviceToken.mockResolvedValue({ outcome: 'ok', userId: 'user-1', scopes: ['account'], tokens: okTokens });
+
+    await POST(tokenRequest(deviceFields()) as never);
+
+    expect(pollDeviceToken).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceCode: 'raw-device-code-value', clientDbId: CLIENT_DB_ID }),
+    );
+  });
+});
+
+describe('POST /api/oauth/token — device_code grant, RFC 8628 §3.5 poll outcomes', () => {
+  it('authorization_pending → distinct error (the CLI must keep polling)', async () => {
+    pollDeviceToken.mockResolvedValue({ outcome: 'authorization_pending' });
+    const res = await POST(tokenRequest(deviceFields()) as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'authorization_pending' });
+  });
+
+  it('slow_down → distinct error (the CLI must back off its poll interval)', async () => {
+    pollDeviceToken.mockResolvedValue({ outcome: 'slow_down' });
+    const res = await POST(tokenRequest(deviceFields()) as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'slow_down' });
+  });
+
+  it('expired_token → distinct error (the CLI must restart the flow)', async () => {
+    pollDeviceToken.mockResolvedValue({ outcome: 'expired_token' });
+    const res = await POST(tokenRequest(deviceFields()) as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'expired_token' });
+  });
+
+  it('access_denied → distinct error (the user said no)', async () => {
+    pollDeviceToken.mockResolvedValue({ outcome: 'access_denied' });
+    const res = await POST(tokenRequest(deviceFields()) as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'access_denied' });
+  });
+
+  it('unknown device_code (not_found) → invalid_grant, same as an unknown auth code', async () => {
+    pollDeviceToken.mockResolvedValue({ outcome: 'not_found' });
+    const res = await POST(tokenRequest(deviceFields()) as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_grant' });
+  });
+
+  it('sets Cache-Control: no-store on every poll outcome', async () => {
+    pollDeviceToken.mockResolvedValue({ outcome: 'authorization_pending' });
+    const res = await POST(tokenRequest(deviceFields()) as never);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('unknown client_id → invalid_grant, never calls the repository', async () => {
+    const res = await POST(tokenRequest(deviceFields({ client_id: 'evil-client' })) as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_grant' });
+    expect(pollDeviceToken).not.toHaveBeenCalled();
+  });
+
+  it('missing device_code → invalid_request', async () => {
+    const res = await POST(tokenRequest(deviceFields({ device_code: undefined })) as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_request' });
+    expect(pollDeviceToken).not.toHaveBeenCalled();
+  });
+
+  it('a client_secret presented for the public CLI client → invalid_request, never calls the repository', async () => {
+    const res = await POST(tokenRequest(deviceFields({ client_secret: 'anything' })) as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_request' });
+    expect(pollDeviceToken).not.toHaveBeenCalled();
   });
 });

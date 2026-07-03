@@ -7,11 +7,18 @@
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, and, isNull } from '@pagespace/db/operators';
-import { oauthClients, oauthAuthorizationCodes, oauthRefreshTokens, oauthAccessTokens } from '@pagespace/db/schema/oauth';
+import { oauthClients, oauthAuthorizationCodes, oauthRefreshTokens, oauthAccessTokens, oauthDeviceCodes } from '@pagespace/db/schema/oauth';
 import { users } from '@pagespace/db/schema/auth';
 import type { RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { decideCodeExchange, type CodeExchangeDecision } from '@pagespace/lib/auth/oauth/code-lifecycle';
+import {
+  decideDevicePoll,
+  decideDeviceApproval,
+  type DeviceCodeRecord,
+  type DeviceApprovalAction,
+  type DeviceApprovalDecision,
+} from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
 import { parseScopeList, isScopeSubset, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
@@ -329,5 +336,281 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
     });
 
     return { outcome: 'ok', userId: row.userId, scopes, tokens };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Device authorization grant (RFC 8628; task mwexjazwha2uhw5bmvc9a7kw).
+// ---------------------------------------------------------------------------
+
+interface DeviceCodeRow {
+  id: string;
+  clientId: string;
+  userId: string | null;
+  scopes: string[];
+  expiresAt: Date;
+  approvedAt: Date | null;
+  deniedAt: Date | null;
+  lastPolledAt: Date | null;
+  pollIntervalSeconds: number;
+}
+
+/** Map a DB row onto task 4's `DeviceCodeRecord` discriminated union. */
+function toDeviceCodeRecord(row: DeviceCodeRow): DeviceCodeRecord {
+  const common = {
+    clientId: row.clientId,
+    scopes: row.scopes,
+    expiresAt: row.expiresAt,
+    lastPolledAt: row.lastPolledAt,
+    pollIntervalSeconds: row.pollIntervalSeconds,
+  };
+
+  if (row.deniedAt !== null) {
+    return { status: 'denied', ...common };
+  }
+  if (row.approvedAt !== null && row.userId !== null) {
+    return { status: 'approved', approvedUserId: row.userId, ...common };
+  }
+  return { status: 'pending', ...common };
+}
+
+export interface CreateDeviceAuthorizationInput {
+  clientDbId: string;
+  scopes: string[];
+  deviceCodeHash: string;
+  deviceCodePrefix: string;
+  userCodeHash: string;
+  userCodePrefix: string;
+  expiresAt: Date;
+  pollIntervalSeconds: number;
+}
+
+export async function createDeviceAuthorization(input: CreateDeviceAuthorizationInput): Promise<void> {
+  await db.insert(oauthDeviceCodes).values({
+    deviceCodeHash: input.deviceCodeHash,
+    deviceCodePrefix: input.deviceCodePrefix,
+    userCodeHash: input.userCodeHash,
+    userCodePrefix: input.userCodePrefix,
+    clientId: input.clientDbId,
+    scopes: input.scopes,
+    expiresAt: input.expiresAt,
+    pollIntervalSeconds: input.pollIntervalSeconds,
+  });
+}
+
+export interface PollDeviceTokenInput {
+  /** Raw device_code from the token request; hashed before any lookup. */
+  deviceCode: string;
+  /** Resolved `oauth_clients.id` — scopes the lookup so a device_code minted
+   * for a different client is indistinguishable from an unknown one. */
+  clientDbId: string;
+  now: Date;
+}
+
+export type PollDeviceTokenResult =
+  | { outcome: 'not_found' }
+  | { outcome: 'authorization_pending' }
+  | { outcome: 'slow_down' }
+  | { outcome: 'expired_token' }
+  | { outcome: 'access_denied' }
+  | { outcome: 'ok'; userId: string; scopes: string[]; tokens: IssuedTokenPair };
+
+/**
+ * Atomically poll a device code (RFC 8628 §3.4-3.5). `FOR UPDATE` locks the
+ * row for the transaction's duration, mirroring `exchangeAuthorizationCode`'s
+ * lock model. `decideDevicePoll` (task 4, not reimplemented) makes the
+ * decision; this function's only added responsibility is persisting
+ * `lastPolledAt` — real persistence is what makes the `slow_down` throttle
+ * enforceable across separate HTTP requests rather than just describable in
+ * memory — and, on `ok`, minting the initial token pair via the exact same
+ * path task 7 uses.
+ *
+ * The anchor only advances on an *allowed* poll (`authorization_pending`),
+ * never on a throttled one: a client hammering the endpoint faster than
+ * `pollIntervalSeconds` must wait out the interval from its last ALLOWED
+ * poll, not get a fresh countdown on every rejected attempt — otherwise
+ * tight retries could push the anchor forward indefinitely and the interval
+ * would never actually elapse from the client's point of view.
+ */
+export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<PollDeviceTokenResult> {
+  const deviceCodeHash = hashToken(input.deviceCode);
+
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        id: oauthDeviceCodes.id,
+        clientId: oauthDeviceCodes.clientId,
+        userId: oauthDeviceCodes.userId,
+        scopes: oauthDeviceCodes.scopes,
+        expiresAt: oauthDeviceCodes.expiresAt,
+        approvedAt: oauthDeviceCodes.approvedAt,
+        deniedAt: oauthDeviceCodes.deniedAt,
+        lastPolledAt: oauthDeviceCodes.lastPolledAt,
+        pollIntervalSeconds: oauthDeviceCodes.pollIntervalSeconds,
+      })
+      .from(oauthDeviceCodes)
+      .where(and(eq(oauthDeviceCodes.deviceCodeHash, deviceCodeHash), eq(oauthDeviceCodes.clientId, input.clientDbId)))
+      .for('update');
+
+    const row = rows[0];
+    if (!row) {
+      return { outcome: 'not_found' };
+    }
+
+    const record = toDeviceCodeRecord(row);
+    const decision = decideDevicePoll(record, input.now);
+
+    if (decision.status === 'authorization_pending') {
+      await tx.update(oauthDeviceCodes).set({ lastPolledAt: input.now }).where(eq(oauthDeviceCodes.id, row.id));
+    }
+
+    if (decision.status !== 'ok') {
+      return { outcome: decision.status };
+    }
+
+    const userRows = await tx
+      .select({ tokenVersion: users.tokenVersion })
+      .from(users)
+      .where(eq(users.id, decision.grant.userId));
+    const tokenVersion = userRows[0]?.tokenVersion ?? 0;
+
+    const tokens = issueInitialTokenPair(input.now);
+
+    await tx.insert(oauthRefreshTokens).values({
+      tokenHash: tokens.refreshTokenHash,
+      tokenPrefix: tokens.refreshTokenPrefix,
+      familyId: tokens.familyId,
+      clientId: input.clientDbId,
+      userId: decision.grant.userId,
+      scopes: decision.grant.scopes,
+      tokenVersion,
+      expiresAt: tokens.refreshExpiresAt,
+      familyExpiresAt: tokens.familyExpiresAt,
+    });
+
+    await tx.insert(oauthAccessTokens).values({
+      tokenHash: tokens.accessTokenHash,
+      tokenPrefix: tokens.accessTokenPrefix,
+      familyId: tokens.familyId,
+      clientId: input.clientDbId,
+      userId: decision.grant.userId,
+      scopes: decision.grant.scopes,
+      tokenVersion,
+      expiresAt: tokens.accessExpiresAt,
+    });
+
+    return { outcome: 'ok', userId: decision.grant.userId, scopes: decision.grant.scopes, tokens };
+  });
+}
+
+export interface VerifyDeviceUserCodeInput {
+  /** Already-normalized user code (uppercased, hyphen-free); hashed here. */
+  userCode: string;
+  now: Date;
+}
+
+export type VerifyDeviceUserCodeResult =
+  | { outcome: 'not_found' }
+  | { outcome: 'ok'; clientId: string; scopes: string[] };
+
+/**
+ * Read-only lookup for the /activate screen: is this user code currently
+ * pending and unexpired? Unknown, expired, and already-settled (approved or
+ * denied) codes all collapse to the same `not_found` outcome — a code that
+ * can no longer be acted on is not this endpoint's business to explain.
+ * Joins to `oauth_clients` to recover the static registry's string
+ * `client_id` (the device-code row only carries the DB id).
+ */
+export async function verifyDeviceUserCode(input: VerifyDeviceUserCodeInput): Promise<VerifyDeviceUserCodeResult> {
+  const userCodeHash = hashToken(input.userCode);
+
+  const rows = await db
+    .select({
+      scopes: oauthDeviceCodes.scopes,
+      expiresAt: oauthDeviceCodes.expiresAt,
+      approvedAt: oauthDeviceCodes.approvedAt,
+      deniedAt: oauthDeviceCodes.deniedAt,
+      clientStringId: oauthClients.clientId,
+    })
+    .from(oauthDeviceCodes)
+    .innerJoin(oauthClients, eq(oauthDeviceCodes.clientId, oauthClients.id))
+    .where(eq(oauthDeviceCodes.userCodeHash, userCodeHash));
+
+  const row = rows[0];
+  if (!row) {
+    return { outcome: 'not_found' };
+  }
+
+  const isSettled = row.approvedAt !== null || row.deniedAt !== null;
+  const isExpired = input.now.getTime() >= row.expiresAt.getTime();
+  if (isSettled || isExpired) {
+    return { outcome: 'not_found' };
+  }
+
+  return { outcome: 'ok', clientId: row.clientStringId, scopes: row.scopes };
+}
+
+export interface RecordDeviceApprovalInput {
+  /** Already-normalized user code; hashed here. */
+  userCode: string;
+  action: DeviceApprovalAction;
+  userId: string;
+  now: Date;
+}
+
+export type RecordDeviceApprovalResult =
+  | { outcome: 'not_found' }
+  | { outcome: 'invalid'; decision: Extract<DeviceApprovalDecision, { status: 'already_settled' } | { status: 'expired' }> }
+  | { outcome: 'approved' }
+  | { outcome: 'denied' };
+
+/**
+ * Atomically record the user's approve/deny decision at /activate.
+ * `decideDeviceApproval` (task 4, not reimplemented) makes the decision under
+ * a `FOR UPDATE` lock, so a double-submit of the same code (double-click,
+ * replayed request) settles exactly once.
+ */
+export async function recordDeviceApproval(input: RecordDeviceApprovalInput): Promise<RecordDeviceApprovalResult> {
+  const userCodeHash = hashToken(input.userCode);
+
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select({
+        id: oauthDeviceCodes.id,
+        clientId: oauthDeviceCodes.clientId,
+        userId: oauthDeviceCodes.userId,
+        scopes: oauthDeviceCodes.scopes,
+        expiresAt: oauthDeviceCodes.expiresAt,
+        approvedAt: oauthDeviceCodes.approvedAt,
+        deniedAt: oauthDeviceCodes.deniedAt,
+        lastPolledAt: oauthDeviceCodes.lastPolledAt,
+        pollIntervalSeconds: oauthDeviceCodes.pollIntervalSeconds,
+      })
+      .from(oauthDeviceCodes)
+      .where(eq(oauthDeviceCodes.userCodeHash, userCodeHash))
+      .for('update');
+
+    const row = rows[0];
+    if (!row) {
+      return { outcome: 'not_found' };
+    }
+
+    const record = toDeviceCodeRecord(row);
+    const decision = decideDeviceApproval(record, input.action, input.userId, input.now);
+
+    if (decision.status === 'approved') {
+      await tx
+        .update(oauthDeviceCodes)
+        .set({ approvedAt: input.now, userId: input.userId })
+        .where(eq(oauthDeviceCodes.id, row.id));
+      return { outcome: 'approved' };
+    }
+
+    if (decision.status === 'denied') {
+      await tx.update(oauthDeviceCodes).set({ deniedAt: input.now }).where(eq(oauthDeviceCodes.id, row.id));
+      return { outcome: 'denied' };
+    }
+
+    return { outcome: 'invalid', decision };
   });
 }
