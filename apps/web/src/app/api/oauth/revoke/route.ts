@@ -15,9 +15,11 @@
  * rejections.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getClientIP } from '@/lib/auth';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { ensureOAuthClientRow, revokeOAuthToken } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 
 function noStoreJson(body: Record<string, unknown>, status: number): NextResponse {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -41,6 +43,22 @@ export async function POST(req: NextRequest) {
 
   if (!token || !clientId) {
     return noStoreJson(INVALID_REQUEST, 400);
+  }
+
+  // Unauthenticated by protocol (RFC 7009 forbids an oracle on outcome, so
+  // there's no credential to gate on) — per-IP + per-claimed-client is the
+  // only defense against endpoint flooding.
+  const ip = getClientIP(req);
+  const [ipLimit, clientLimit] = await Promise.all([
+    checkDistributedRateLimit(`oauth-revoke:ip:${ip}`, DISTRIBUTED_RATE_LIMITS.OAUTH_REVOKE),
+    checkDistributedRateLimit(`oauth-revoke:client:${clientId}`, DISTRIBUTED_RATE_LIMITS.OAUTH_REVOKE),
+  ]);
+  if (!ipLimit.allowed || !clientLimit.allowed) {
+    auditRequest(req, {
+      eventType: 'security.rate.limited',
+      details: { clientId, oauthEvent: 'revoke_rate_limited' },
+    });
+    return noStoreJson({ error: 'rate_limited', retryAfter: Math.max(ipLimit.retryAfter ?? 0, clientLimit.retryAfter ?? 0) }, 429);
   }
 
   const client = getRegisteredClient(clientId);

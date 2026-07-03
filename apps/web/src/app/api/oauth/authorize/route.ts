@@ -18,7 +18,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import {
   validateAuthorizeRequest,
   type AuthorizeRequestParams,
@@ -31,6 +31,11 @@ import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { customRoleBelongsToDrive, getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
 import { ensureOAuthClientRow, createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+
+function rateLimitedResponse(retryAfter: number): NextResponse {
+  return NextResponse.json({ error: 'rate_limited', retryAfter }, { status: 429 });
+}
 
 function extractParams(searchParams: URLSearchParams): AuthorizeRequestParams {
   return {
@@ -60,6 +65,16 @@ function buildRedirectWithParams(redirectUri: string, params: Record<string, str
 }
 
 export async function GET(req: NextRequest) {
+  // Per-IP only: GET is the unauthenticated entry point (no session yet) and
+  // is the open-redirect reconnaissance surface (probing client_id /
+  // redirect_uri combinations), so IP is the only identity available.
+  const ip = getClientIP(req);
+  const ipLimit = await checkDistributedRateLimit(`oauth-authorize:ip:${ip}`, DISTRIBUTED_RATE_LIMITS.OAUTH_AUTHORIZE);
+  if (!ipLimit.allowed) {
+    auditRequest(req, { eventType: 'security.rate.limited', details: { oauthEvent: 'authorize_rate_limited' } });
+    return rateLimitedResponse(ipLimit.retryAfter ?? 0);
+  }
+
   const { searchParams, search } = new URL(req.url);
   const params = extractParams(searchParams);
   const client = params.clientId ? getRegisteredClient(params.clientId) : null;
@@ -110,6 +125,23 @@ export async function POST(req: NextRequest) {
     body = approvalSchema.parse(await req.json());
   } catch {
     return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
+  }
+
+  // Consent decisions have real identity (session user + claimed client_id),
+  // so rate-limit both dimensions: per-user blunts rapid grant/deny cycling
+  // by one compromised session; per-client blunts a malicious client
+  // hammering consent across many victim sessions.
+  const [userLimit, clientLimit] = await Promise.all([
+    checkDistributedRateLimit(`oauth-authorize:user:${auth.userId}`, DISTRIBUTED_RATE_LIMITS.OAUTH_AUTHORIZE),
+    checkDistributedRateLimit(`oauth-authorize:client:${body.clientId}`, DISTRIBUTED_RATE_LIMITS.OAUTH_AUTHORIZE),
+  ]);
+  if (!userLimit.allowed || !clientLimit.allowed) {
+    auditRequest(req, {
+      eventType: 'security.rate.limited',
+      userId: auth.userId,
+      details: { clientId: body.clientId, oauthEvent: 'authorize_rate_limited' },
+    });
+    return rateLimitedResponse(Math.max(userLimit.retryAfter ?? 0, clientLimit.retryAfter ?? 0));
   }
 
   const params: AuthorizeRequestParams = {

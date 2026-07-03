@@ -22,6 +22,16 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+vi.mock('@/lib/auth', () => ({
+  getClientIP: vi.fn().mockReturnValue('203.0.113.15'),
+}));
+
+const checkDistributedRateLimit = vi.fn();
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: (...args: unknown[]) => checkDistributedRateLimit(...args),
+  DISTRIBUTED_RATE_LIMITS: { OAUTH_REVOKE: { maxAttempts: 20, windowMs: 300_000, progressiveDelay: false } },
+}));
+
 import { POST } from '../route';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -40,10 +50,58 @@ function revokeRequest(fields: Record<string, string | undefined>, contentType =
   });
 }
 
+const ALLOWED = { allowed: true, attemptsRemaining: 19 };
+
 beforeEach(() => {
   vi.clearAllMocks();
   ensureOAuthClientRow.mockResolvedValue(CLIENT_DB_ID);
   revokeOAuthToken.mockResolvedValue(undefined);
+  checkDistributedRateLimit.mockResolvedValue(ALLOWED);
+});
+
+describe('POST /api/oauth/revoke — per-IP/per-client rate limiting', () => {
+  it('blocks with 429 when the per-IP limit is exceeded, never calling the repository', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-revoke:ip:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await POST(revokeRequest({ token: 'ps_at_' + 'a'.repeat(43), client_id: CLIENT_ID }) as never);
+
+    expect(res.status).toBe(429);
+    expect(revokeOAuthToken).not.toHaveBeenCalled();
+  });
+
+  it('blocks with 429 when the per-client limit is exceeded, never calling the repository', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-revoke:client:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    const res = await POST(revokeRequest({ token: 'ps_at_' + 'a'.repeat(43), client_id: CLIENT_ID }) as never);
+
+    expect(res.status).toBe(429);
+    expect(revokeOAuthToken).not.toHaveBeenCalled();
+  });
+
+  it('checks both the IP and client dimensions', async () => {
+    await POST(revokeRequest({ token: 'ps_at_' + 'a'.repeat(43), client_id: CLIENT_ID }) as never);
+
+    const keys = checkDistributedRateLimit.mock.calls.map((c) => c[0] as string);
+    expect(keys.some((k) => k.includes('ip:203.0.113.15'))).toBe(true);
+    expect(keys.some((k) => k.includes(`client:${CLIENT_ID}`))).toBe(true);
+  });
+
+  it('audits the rate-limit trip', async () => {
+    checkDistributedRateLimit.mockImplementation(async (key: string) =>
+      key.startsWith('oauth-revoke:ip:') ? { allowed: false, retryAfter: 300 } : ALLOWED,
+    );
+
+    await POST(revokeRequest({ token: 'ps_at_' + 'a'.repeat(43), client_id: CLIENT_ID }) as never);
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'security.rate.limited' }),
+    );
+  });
 });
 
 describe('POST /api/oauth/revoke — form-encoding enforcement', () => {
