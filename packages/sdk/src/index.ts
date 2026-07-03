@@ -56,6 +56,9 @@ export type { OperationRegistry } from './registry/registry.js';
 
 // Domain operations (Phase 3), alphabetical by domain.
 
+// Activity (Phase 3 task 9).
+export { getActivity } from './operations/activity.js';
+
 // Agents (Phase 3 task 5).
 export {
   askAgent,
@@ -82,6 +85,9 @@ export {
   updateCalendarEvent,
 } from './operations/calendar.js';
 export type { FreeSlot } from './operations/calendar.js';
+
+// Channels (Phase 3 task 9).
+export { deleteChannelMessage, sendChannelMessage } from './operations/channels.js';
 
 // Collaborators (Phase 3 task 1).
 export { listCollaborators } from './operations/collaborators.js';
