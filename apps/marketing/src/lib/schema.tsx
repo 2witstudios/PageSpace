@@ -87,7 +87,7 @@ export const productSchema = {
       name: "Free",
       price: "0",
       priceCurrency: "USD",
-      description: `500MB storage, ${MONTHLY_CREDITS.free}/month in AI credits, standard models`,
+      description: `500MB storage, ${MONTHLY_CREDITS.free}/month in credits, standard models`,
       availability: "https://schema.org/InStock",
     },
     {
@@ -101,7 +101,7 @@ export const productSchema = {
         priceCurrency: "USD",
         billingDuration: "P1M",
       },
-      description: `2GB storage, ${MONTHLY_CREDITS.pro}/month in AI credits, standard and Pro models`,
+      description: `2GB storage, ${MONTHLY_CREDITS.pro}/month in credits, standard and Pro models`,
       availability: "https://schema.org/InStock",
     },
     {
@@ -115,7 +115,7 @@ export const productSchema = {
         priceCurrency: "USD",
         billingDuration: "P1M",
       },
-      description: `10GB storage, ${MONTHLY_CREDITS.founder}/month in AI credits, standard and Pro models`,
+      description: `10GB storage, ${MONTHLY_CREDITS.founder}/month in credits, standard and Pro models`,
       availability: "https://schema.org/InStock",
     },
     {
@@ -129,7 +129,7 @@ export const productSchema = {
         priceCurrency: "USD",
         billingDuration: "P1M",
       },
-      description: `50GB storage, ${MONTHLY_CREDITS.business}/month in AI credits, standard and Pro models`,
+      description: `50GB storage, ${MONTHLY_CREDITS.business}/month in credits, standard and Pro models`,
       availability: "https://schema.org/InStock",
     },
   ],

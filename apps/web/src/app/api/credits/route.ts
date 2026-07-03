@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
       resourceId: 'self',
     });
 
-    return NextResponse.json(balance);
+    return NextResponse.json({ ...balance, subscriptionTier: tier });
   } catch (error) {
     console.error('Error fetching credit balance:', error);
     return NextResponse.json({ error: 'Failed to fetch credit balance' }, { status: 500 });

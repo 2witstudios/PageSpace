@@ -13,6 +13,7 @@ import { AlertCircle, Coins } from 'lucide-react';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
+import { UpgradeTierButton } from '@/components/billing/UpgradeTierButton';
 import { centsToCredits, formatCreditCount } from '@/lib/subscription/credits';
 
 /** Percentage of monthly allowance remaining below which we warn the user. */
@@ -68,7 +69,7 @@ export function CreditBalance() {
               type="button"
               onClick={() => router.push('/settings/usage')}
               className="hidden sm:flex items-center gap-1.5"
-              aria-label="View AI credit balance"
+              aria-label="View credit balance"
             >
               <span className="relative inline-flex">
                 <Coins
@@ -126,6 +127,8 @@ export function CreditBalance() {
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
+
+      <UpgradeTierButton />
 
       {showBilling && (
         <div className="hidden sm:flex">

@@ -170,7 +170,7 @@ export const pageMetadata = {
   pricing: createMetadata({
     title: "Pricing",
     description:
-      `Simple, transparent pricing for individuals, teams, and enterprises. Start free with 500MB storage and ${MONTHLY_CREDITS.free}/month of AI credits.`,
+      `Simple, transparent pricing for individuals, teams, and enterprises. Start free with 500MB storage and ${MONTHLY_CREDITS.free}/month of credits.`,
     path: "/pricing",
     keywords: ["pricing", "plans", "free tier", "subscription"],
   }),

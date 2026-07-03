@@ -88,7 +88,7 @@ export function UsageBreakdownCard() {
           Usage this period
         </CardTitle>
         <CardDescription>
-          Where your AI credits are going{renewDate && <> · renews {renewDate.toLocaleDateString()}</>}
+          Where your credits are going{renewDate && <> · renews {renewDate.toLocaleDateString()}</>}
         </CardDescription>
       </CardHeader>
       <CardContent>

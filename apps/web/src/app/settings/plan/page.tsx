@@ -416,7 +416,7 @@ export default function PlanPage() {
                 </thead>
                 <tbody>
                   <tr className="border-b">
-                    <td className="py-4 pr-6">Monthly AI credits</td>
+                    <td className="py-4 pr-6">Monthly credits</td>
                     {plans.map((plan) => (
                       <td key={plan.id} className="text-center py-4 px-4 font-semibold">
                         {formatCreditCount(plan.limits.monthlyCreditsCents)} credits/mo

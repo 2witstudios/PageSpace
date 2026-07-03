@@ -117,21 +117,21 @@ const faqEntries: SearchEntry[] = [
   },
   {
     title: "Is there a free plan?",
-    description: `Yes. Free plan includes 500 MB storage and ${MONTHLY_CREDITS.free}/month of AI credits. No credit card required.`,
+    description: `Yes. Free plan includes 500 MB storage and ${MONTHLY_CREDITS.free}/month of credits. No credit card required.`,
     href: "/faq#is-there-a-free-plan",
     category: "FAQ",
     keywords: "free plan pricing cost no credit card ai credits",
   },
   {
-    title: "How do AI credits work?",
+    title: "How do credits work?",
     description:
-      "Every plan includes a monthly AI-credit allowance. Each AI action draws down credits based on the model's real cost; unused credits roll over and accumulate — they never expire.",
+      "Every plan includes a monthly credit allowance. Each AI action draws down credits based on the model's real cost; unused credits roll over and accumulate — they never expire.",
     href: "/faq#how-ai-credits-work",
     category: "FAQ",
     keywords: "ai credits metered usage allowance rollover monthly billing",
   },
   {
-    title: "What happens when I run out of AI credits?",
+    title: "What happens when I run out of credits?",
     description:
       "Documents, tasks, channels, and collaboration keep working. AI pauses until you buy more credits or your next monthly allowance is added at your billing renewal.",
     href: "/faq#hit-daily-ai-limit",
