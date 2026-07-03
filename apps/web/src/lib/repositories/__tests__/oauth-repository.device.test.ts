@@ -1,0 +1,415 @@
+/**
+ * Device authorization grant persistence (task mwexjazwha2uhw5bmvc9a7kw):
+ * `createDeviceAuthorization`, `pollDeviceToken`, `verifyDeviceUserCode`,
+ * `recordDeviceApproval`. Mirrors the fake-transaction harness in
+ * `oauth-repository.exchange.test.ts` — `eq`/`and` are mocked to structured
+ * markers and `evalPredicate` re-interprets them against an in-memory row, so
+ * client-scoped lookups genuinely exercise the WHERE intent instead of
+ * trusting an unconditional stub.
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+
+const H = vi.hoisted(() => ({
+  oauthDeviceCodes: {
+    __table: 'device_codes',
+    id: 'device_codes.id',
+    deviceCodeHash: 'device_codes.deviceCodeHash',
+    userCodeHash: 'device_codes.userCodeHash',
+    clientId: 'device_codes.clientId',
+    userId: 'device_codes.userId',
+    scopes: 'device_codes.scopes',
+    expiresAt: 'device_codes.expiresAt',
+    approvedAt: 'device_codes.approvedAt',
+    deniedAt: 'device_codes.deniedAt',
+    lastPolledAt: 'device_codes.lastPolledAt',
+    pollIntervalSeconds: 'device_codes.pollIntervalSeconds',
+  } as Record<string, unknown>,
+  oauthClients: {
+    __table: 'clients',
+    id: 'clients.id',
+    clientId: 'clients.clientId',
+  } as Record<string, unknown>,
+  oauthRefreshTokens: { __table: 'refresh', familyId: 'rt.familyId' } as Record<string, unknown>,
+  oauthAccessTokens: { __table: 'access', familyId: 'at.familyId' } as Record<string, unknown>,
+  usersTable: { __table: 'users', id: 'users.id' } as Record<string, unknown>,
+  state: { dbTransactionImpl: null as null | ((cb: (tx: unknown) => unknown) => unknown) },
+}));
+
+const { oauthDeviceCodes, oauthClients, usersTable } = H;
+
+vi.mock('@pagespace/db/schema/oauth', () => ({
+  oauthDeviceCodes: H.oauthDeviceCodes,
+  oauthClients: H.oauthClients,
+  oauthRefreshTokens: H.oauthRefreshTokens,
+  oauthAccessTokens: H.oauthAccessTokens,
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: H.usersTable,
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a: unknown, b: unknown) => ({ _eq: [a, b] })),
+  and: vi.fn((...args: unknown[]) => ({ _and: args })),
+  isNull: vi.fn((a: unknown) => ({ _isNull: a })),
+}));
+
+type Predicate = { _eq: [unknown, unknown] } | { _and: Predicate[] } | { _isNull: unknown };
+
+function columnKey(col: unknown): string {
+  return String(col).split('.').pop() as string;
+}
+
+function evalPredicate(pred: Predicate, row: Record<string, unknown>): boolean {
+  if ('_and' in pred) return pred._and.every((p) => evalPredicate(p, row));
+  if ('_eq' in pred) return row[columnKey(pred._eq[0])] === pred._eq[1];
+  if ('_isNull' in pred) return row[columnKey(pred._isNull)] == null;
+  return true;
+}
+
+interface DeviceRow {
+  id: string;
+  deviceCodeHash: string;
+  userCodeHash: string;
+  clientId: string;
+  userId: string | null;
+  scopes: string[];
+  expiresAt: Date;
+  approvedAt: Date | null;
+  deniedAt: Date | null;
+  lastPolledAt: Date | null;
+  pollIntervalSeconds: number;
+}
+
+interface TokenRow {
+  tokenHash: string;
+  tokenPrefix: string;
+  familyId: string;
+  clientId: string;
+  userId: string;
+  scopes: string[];
+  tokenVersion: number;
+  expiresAt: Date;
+  familyExpiresAt?: Date;
+}
+
+let deviceRow: DeviceRow | null = null;
+let insertedDeviceRows: Record<string, unknown>[] = [];
+let refreshRows: TokenRow[] = [];
+let accessRows: TokenRow[] = [];
+let userTokenVersion = 0;
+let lockChain: Promise<unknown> = Promise.resolve();
+
+function makeTx() {
+  return {
+    select: () => ({
+      from: (table: unknown) => ({
+        where: (predicate: Predicate) => {
+          if (table === usersTable) {
+            return Promise.resolve([{ tokenVersion: userTokenVersion }]);
+          }
+          const matches = deviceRow && evalPredicate(predicate, deviceRow as unknown as Record<string, unknown>);
+          const rows = matches ? [{ ...deviceRow }] : [];
+          const p = Promise.resolve(rows) as Promise<DeviceRow[]> & { for: (mode: string) => Promise<DeviceRow[]> };
+          p.for = () => p;
+          return p;
+        },
+      }),
+    }),
+    update: (table: unknown) => ({
+      set: (patch: Record<string, unknown>) => ({
+        where: () => {
+          if (table === oauthDeviceCodes && deviceRow) {
+            Object.assign(deviceRow, patch);
+          }
+          return Promise.resolve();
+        },
+      }),
+    }),
+    insert: (table: unknown) => ({
+      values: (row: TokenRow) => {
+        if (table === H.oauthRefreshTokens) refreshRows.push({ ...row });
+        else if (table === H.oauthAccessTokens) accessRows.push({ ...row });
+        return Promise.resolve();
+      },
+    }),
+  };
+}
+
+H.state.dbTransactionImpl = ((cb: (tx: ReturnType<typeof makeTx>) => Promise<unknown>) => {
+  const run = lockChain.then(() => cb(makeTx()));
+  lockChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}) as (cb: (tx: unknown) => unknown) => unknown;
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    transaction: (cb: (tx: unknown) => unknown) => H.state.dbTransactionImpl!(cb),
+    insert: (table: unknown) => ({
+      values: (row: Record<string, unknown>) => {
+        if (table === oauthDeviceCodes) insertedDeviceRows.push({ ...row });
+        return Promise.resolve();
+      },
+    }),
+    select: () => ({
+      from: (table: unknown) => ({
+        innerJoin: (_joinTable: unknown, _on: unknown) => ({
+          where: (predicate: Predicate) => {
+            if (table !== oauthDeviceCodes) return Promise.resolve([]);
+            const matches = deviceRow && evalPredicate(predicate, deviceRow as unknown as Record<string, unknown>);
+            if (!matches || !deviceRow) return Promise.resolve([]);
+            return Promise.resolve([
+              {
+                scopes: deviceRow.scopes,
+                expiresAt: deviceRow.expiresAt,
+                approvedAt: deviceRow.approvedAt,
+                deniedAt: deviceRow.deniedAt,
+                clientStringId: 'pagespace-cli',
+              },
+            ]);
+          },
+        }),
+      }),
+    }),
+  },
+}));
+
+import { hashToken } from '@pagespace/lib/auth/token-utils';
+import {
+  createDeviceAuthorization,
+  pollDeviceToken,
+  verifyDeviceUserCode,
+  recordDeviceApproval,
+} from '../oauth-repository';
+
+const DEVICE_CODE = 'raw-device-code-value';
+const USER_CODE = 'ABCDEFGH';
+const CLIENT_DB_ID = 'client-db-id-1';
+const USER_ID = 'user-1';
+
+function seedDeviceRow(overrides: Partial<DeviceRow> = {}): void {
+  deviceRow = {
+    id: 'device-row-1',
+    deviceCodeHash: hashToken(DEVICE_CODE),
+    userCodeHash: hashToken(USER_CODE),
+    clientId: CLIENT_DB_ID,
+    userId: null,
+    scopes: ['account'],
+    expiresAt: new Date(Date.now() + 1800_000),
+    approvedAt: null,
+    deniedAt: null,
+    lastPolledAt: null,
+    pollIntervalSeconds: 5,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  deviceRow = null;
+  insertedDeviceRows = [];
+  refreshRows = [];
+  accessRows = [];
+  userTokenVersion = 0;
+  lockChain = Promise.resolve();
+});
+
+describe('createDeviceAuthorization', () => {
+  it('persists only the hashed device_code and user_code, never raw values', async () => {
+    await createDeviceAuthorization({
+      clientDbId: CLIENT_DB_ID,
+      scopes: ['account'],
+      deviceCodeHash: hashToken(DEVICE_CODE),
+      deviceCodePrefix: 'ps_dc_abcd',
+      userCodeHash: hashToken(USER_CODE),
+      userCodePrefix: 'ABCD',
+      expiresAt: new Date(Date.now() + 1800_000),
+      pollIntervalSeconds: 5,
+    });
+
+    expect(insertedDeviceRows).toHaveLength(1);
+    const row = insertedDeviceRows[0];
+    expect(row.deviceCodeHash).toBe(hashToken(DEVICE_CODE));
+    expect(row.userCodeHash).toBe(hashToken(USER_CODE));
+    expect(JSON.stringify(row)).not.toContain(DEVICE_CODE);
+    expect(JSON.stringify(row)).not.toContain(USER_CODE);
+  });
+});
+
+describe('pollDeviceToken', () => {
+  it('returns not_found for an unknown device_code', async () => {
+    deviceRow = null;
+    const result = await pollDeviceToken({ deviceCode: 'never-issued', clientDbId: CLIENT_DB_ID, now: new Date() });
+    expect(result).toEqual({ outcome: 'not_found' });
+  });
+
+  it('returns not_found when the device_code belongs to a different client (scoped lookup, no oracle)', async () => {
+    seedDeviceRow({ clientId: 'some-other-client-db-id' });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    expect(result).toEqual({ outcome: 'not_found' });
+  });
+
+  it('returns authorization_pending on the first poll and persists lastPolledAt', async () => {
+    seedDeviceRow();
+    const now = new Date();
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now });
+
+    expect(result).toEqual({ outcome: 'authorization_pending' });
+    expect(deviceRow?.lastPolledAt).toEqual(now);
+  });
+
+  it('returns slow_down when polling faster than the interval, and updates lastPolledAt regardless', async () => {
+    const first = new Date();
+    seedDeviceRow({ lastPolledAt: first, pollIntervalSeconds: 5 });
+
+    const tooSoon = new Date(first.getTime() + 2000);
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: tooSoon });
+
+    expect(result).toEqual({ outcome: 'slow_down' });
+    expect(deviceRow?.lastPolledAt).toEqual(tooSoon);
+  });
+
+  it('enforces the throttle across separate polls via the persisted lastPolledAt', async () => {
+    seedDeviceRow({ pollIntervalSeconds: 5 });
+    const t0 = new Date();
+
+    const poll1 = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: t0 });
+    expect(poll1).toEqual({ outcome: 'authorization_pending' });
+
+    const poll2 = await pollDeviceToken({
+      deviceCode: DEVICE_CODE,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(t0.getTime() + 2000),
+    });
+    expect(poll2).toEqual({ outcome: 'slow_down' });
+
+    const poll3 = await pollDeviceToken({
+      deviceCode: DEVICE_CODE,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(t0.getTime() + 5000),
+    });
+    expect(poll3).toEqual({ outcome: 'authorization_pending' });
+  });
+
+  it('returns expired_token once past expiry, regardless of status', async () => {
+    seedDeviceRow({ expiresAt: new Date(Date.now() - 1000) });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    expect(result).toEqual({ outcome: 'expired_token' });
+  });
+
+  it('returns access_denied for a denied device code', async () => {
+    seedDeviceRow({ deniedAt: new Date() });
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    expect(result).toEqual({ outcome: 'access_denied' });
+  });
+
+  it('mints a hashed ps_at_*/ps_rt_* token pair for an approved device code', async () => {
+    seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account', 'offline_access'] });
+
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+    expect(result.outcome).toBe('ok');
+    if (result.outcome !== 'ok') throw new Error('unreachable');
+    expect(result.userId).toBe(USER_ID);
+    expect(result.scopes).toEqual(['account', 'offline_access']);
+    expect(result.tokens.accessToken).toMatch(/^ps_at_/);
+    expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
+    expect(refreshRows).toHaveLength(1);
+    expect(accessRows).toHaveLength(1);
+    expect(refreshRows[0].tokenHash).toBe(hashToken(result.tokens.refreshToken));
+  });
+
+  it('does not persist lastPolledAt for an already-settled (approved) record', async () => {
+    seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, lastPolledAt: null });
+    await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+    expect(deviceRow?.lastPolledAt).toBeNull();
+  });
+});
+
+describe('verifyDeviceUserCode', () => {
+  it('returns not_found for an unknown user code', async () => {
+    deviceRow = null;
+    const result = await verifyDeviceUserCode({ userCode: 'NEVERISSU', now: new Date() });
+    expect(result).toEqual({ outcome: 'not_found' });
+  });
+
+  it('returns ok with the resolved client_id and scopes for a pending, unexpired code', async () => {
+    seedDeviceRow({ scopes: ['account'] });
+    const result = await verifyDeviceUserCode({ userCode: USER_CODE, now: new Date() });
+    expect(result).toEqual({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['account'] });
+  });
+
+  it('returns not_found for an expired code (fail closed, no oracle)', async () => {
+    seedDeviceRow({ expiresAt: new Date(Date.now() - 1000) });
+    const result = await verifyDeviceUserCode({ userCode: USER_CODE, now: new Date() });
+    expect(result).toEqual({ outcome: 'not_found' });
+  });
+
+  it('returns not_found for an already-approved code (settled, cannot re-verify)', async () => {
+    seedDeviceRow({ approvedAt: new Date(), userId: USER_ID });
+    const result = await verifyDeviceUserCode({ userCode: USER_CODE, now: new Date() });
+    expect(result).toEqual({ outcome: 'not_found' });
+  });
+
+  it('returns not_found for an already-denied code (settled, cannot re-verify)', async () => {
+    seedDeviceRow({ deniedAt: new Date() });
+    const result = await verifyDeviceUserCode({ userCode: USER_CODE, now: new Date() });
+    expect(result).toEqual({ outcome: 'not_found' });
+  });
+});
+
+describe('recordDeviceApproval', () => {
+  it('returns not_found for an unknown user code', async () => {
+    deviceRow = null;
+    const result = await recordDeviceApproval({ userCode: 'NEVERISSU', action: 'approve', userId: USER_ID, now: new Date() });
+    expect(result).toEqual({ outcome: 'not_found' });
+  });
+
+  it('approves a pending code exactly once, persisting approvedAt + userId', async () => {
+    seedDeviceRow();
+    const now = new Date();
+
+    const result = await recordDeviceApproval({ userCode: USER_CODE, action: 'approve', userId: USER_ID, now });
+
+    expect(result).toEqual({ outcome: 'approved' });
+    expect(deviceRow?.approvedAt).toEqual(now);
+    expect(deviceRow?.userId).toBe(USER_ID);
+  });
+
+  it('denies a pending code, persisting deniedAt', async () => {
+    seedDeviceRow();
+    const now = new Date();
+
+    const result = await recordDeviceApproval({ userCode: USER_CODE, action: 'deny', userId: USER_ID, now });
+
+    expect(result).toEqual({ outcome: 'denied' });
+    expect(deviceRow?.deniedAt).toEqual(now);
+  });
+
+  it('rejects a repeat decision on an already-approved code (single-settlement)', async () => {
+    seedDeviceRow({ approvedAt: new Date(), userId: USER_ID });
+
+    const result = await recordDeviceApproval({ userCode: USER_CODE, action: 'deny', userId: USER_ID, now: new Date() });
+
+    expect(result).toEqual({ outcome: 'invalid', decision: { status: 'already_settled', existingStatus: 'approved' } });
+  });
+
+  it('rejects a repeat decision on an already-denied code (single-settlement)', async () => {
+    seedDeviceRow({ deniedAt: new Date() });
+
+    const result = await recordDeviceApproval({ userCode: USER_CODE, action: 'approve', userId: USER_ID, now: new Date() });
+
+    expect(result).toEqual({ outcome: 'invalid', decision: { status: 'already_settled', existingStatus: 'denied' } });
+  });
+
+  it('rejects approval of an expired-but-still-pending code', async () => {
+    seedDeviceRow({ expiresAt: new Date(Date.now() - 1000) });
+
+    const result = await recordDeviceApproval({ userCode: USER_CODE, action: 'approve', userId: USER_ID, now: new Date() });
+
+    expect(result).toEqual({ outcome: 'invalid', decision: { status: 'expired' } });
+  });
+});
