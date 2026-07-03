@@ -37,6 +37,10 @@ export const oauthAuthorizationCodes = pgTable('oauth_authorization_codes', {
   scopes: jsonb('scopes').$type<string[]>().notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
   consumedAt: timestamp('consumedAt', { mode: 'date' }),
+  // Set the moment the code is first (and only) successfully exchanged, so a
+  // replay of the same code (ADR 0003 §2 "already_consumed") can revoke every
+  // refresh/access token that family ever issued, not just the code itself.
+  issuedFamilyId: text('issuedFamilyId'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   clientIdx: index('oauth_authorization_codes_client_id_idx').on(table.clientId),
