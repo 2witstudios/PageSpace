@@ -81,7 +81,7 @@ describe('git_clone', () => {
     const calls = getRunCalls(deps);
     expect(calls[0].cmd).toBe('git');
     expect(calls[0].args).toEqual([
-      'clone', '--depth', '1', 'https://github.com/owner/repo.git', '/workspace',
+      'clone', '--no-single-branch', '--depth', '1', 'https://github.com/owner/repo.git', '/workspace',
     ]);
   });
 
@@ -441,6 +441,24 @@ describe('gh_pr_create', () => {
     const calls = getRunCalls(deps);
     expect(calls[0].cmd).toBe('gh');
     expect(calls[0].args).toContain('--draft');
+  });
+
+  it('passes --head <branch> when head is given', async () => {
+    const deps = makeDeps();
+    const { gh_pr_create } = createSandboxGitTools(deps);
+    await gh_pr_create.execute!({ title: 'PR', body: 'b', head: 'feat/x' }, {} as never);
+    const calls = getRunCalls(deps);
+    const headIdx = calls[0].args.indexOf('--head');
+    expect(headIdx).toBeGreaterThan(-1);
+    expect(calls[0].args[headIdx + 1]).toBe('feat/x');
+  });
+
+  it('omits --head when head is not given', async () => {
+    const deps = makeDeps();
+    const { gh_pr_create } = createSandboxGitTools(deps);
+    await gh_pr_create.execute!({ title: 'PR', body: 'b' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).not.toContain('--head');
   });
 
   it('joins labels with comma in --label arg', async () => {
