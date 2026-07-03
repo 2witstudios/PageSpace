@@ -11,6 +11,12 @@ export interface DriveScopeInput {
   customRoleId?: string;
 }
 
+export interface NormalizedDriveScope {
+  id: string;
+  role: 'ADMIN' | 'MEMBER' | null;
+  customRoleId?: string;
+}
+
 /**
  * Normalize drive scope inputs from either the `drives` (preferred) or
  * `driveIds` (legacy) request body shape into a canonical array.
@@ -25,14 +31,14 @@ export interface DriveScopeInput {
 export function normalizeDriveScopes(
   drives?: DriveScopeInput[],
   driveIds?: string[]
-): DriveScopeInput[] {
+): NormalizedDriveScope[] {
   if (drives && driveIds && drives.length > 0 && driveIds.length > 0) {
     throw new Error('Provide drives or driveIds, not both — they are mutually exclusive');
   }
 
   // Legacy: plain drive ID array → scopes with null role (inherit)
   if (driveIds && driveIds.length > 0) {
-    const map = new Map<string, DriveScopeInput>();
+    const map = new Map<string, NormalizedDriveScope>();
     for (const id of driveIds) {
       map.set(id, { id, role: null });
     }
@@ -41,7 +47,7 @@ export function normalizeDriveScopes(
 
   // Preferred: per-drive scope with optional role + customRoleId
   if (drives && drives.length > 0) {
-    const map = new Map<string, DriveScopeInput>();
+    const map = new Map<string, NormalizedDriveScope>();
     for (const scope of drives) {
       map.set(scope.id, {
         id: scope.id,

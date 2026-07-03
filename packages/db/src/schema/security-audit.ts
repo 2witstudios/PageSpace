@@ -38,6 +38,7 @@ export type SecurityEventType =
   | 'auth.token.created'
   | 'auth.token.revoked'
   | 'auth.token.refreshed'
+  | 'auth.token.updated'
   | 'auth.mfa.enabled'
   | 'auth.mfa.disabled'
   | 'auth.mfa.challenged'
