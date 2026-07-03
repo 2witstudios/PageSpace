@@ -23,11 +23,6 @@ describe('parseScopeList', () => {
       expect(result).toEqual({ ok: true, scopes: emptySet({ account: true }) });
     });
 
-    it('parses "offline_access" alone', () => {
-      const result = parseScopeList('offline_access');
-      expect(result).toEqual({ ok: true, scopes: emptySet({ offlineAccess: true }) });
-    });
-
     it('parses "account offline_access" together', () => {
       const result = parseScopeList('account offline_access');
       expect(result).toEqual({ ok: true, scopes: emptySet({ account: true, offlineAccess: true }) });
@@ -203,6 +198,13 @@ describe('parseScopeList', () => {
       expect(parseScopeList('drive:abc:admin drive:abc:member')).toEqual({
         ok: false,
         error: { code: 'duplicate_drive', driveId: 'abc' },
+      });
+    });
+
+    it('rejects "offline_access" alone — no account/drive:* means no access scope to refresh into (rule 10 / F13, Codex #1754)', () => {
+      expect(parseScopeList('offline_access')).toEqual({
+        ok: false,
+        error: { code: 'offline_access_alone' },
       });
     });
   });
