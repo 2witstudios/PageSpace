@@ -49,6 +49,7 @@ export * from './schema/ai-compaction';
 export * from './schema/custom-domains';
 export * from './schema/incidents';
 export * from './schema/data-subject-requests';
+export * from './schema/oauth';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
