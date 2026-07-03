@@ -112,6 +112,22 @@ export {
 export type { CatalogModel, CatalogProvider, ModelCatalogFilter } from './operations/agents.js';
 export { listConversations, readConversation } from './operations/conversations.js';
 
+// Calendar operations (Phase 3 task 6).
+export {
+  computeFreeSlots,
+  createCalendarEvent,
+  deleteCalendarEvent,
+  deleteCalendarTrigger,
+  getCalendarEvent,
+  inviteCalendarAttendees,
+  listCalendarEvents,
+  removeCalendarAttendee,
+  rsvpCalendarEvent,
+  setCalendarTrigger,
+  updateCalendarEvent,
+} from './operations/calendar.js';
+export type { FreeSlot } from './operations/calendar.js';
+
 // Transport primitive types needed to declare custom operations. buildRequest/
 // parseResponse/executeRequest stay internal — the facade is the only caller.
 export type { HttpMethod } from './transport/types.js';
