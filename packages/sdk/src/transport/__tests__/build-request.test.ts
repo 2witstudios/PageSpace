@@ -111,6 +111,15 @@ describe('buildRequest — body and Content-Type', () => {
     expect(request.url).toBe('https://pagespace.ai/api/pages/p1');
   });
 
+  it('preserves nested object fields (sorted-key ordering must not act as a stringify replacer filter)', () => {
+    const request = buildRequest(
+      op({ method: 'POST', path: '/api/pages' }),
+      { cells: [{ address: 'A1', value: '=SUM(B1:B2)' }] },
+      config,
+    );
+    expect(JSON.parse(request.body!)).toEqual({ cells: [{ address: 'A1', value: '=SUM(B1:B2)' }] });
+  });
+
   it('preserves nested object fields whose keys do not appear at the top level', () => {
     // Regression: a plain `JSON.stringify(fields, sortedTopLevelKeys)` replacer-array
     // call filters property names at every nesting level, not just the top, so a

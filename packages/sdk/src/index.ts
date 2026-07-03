@@ -56,7 +56,21 @@ export type { OperationRegistry } from './registry/registry.js';
 
 // Seed operations (Phase 3 grows this list).
 export { listDrives } from './operations/drives.js';
-export { readPage } from './operations/pages.js';
+
+// Pages & content operations (Phase 3 task 2) — full pagespace-mcp page.js/document.js parity.
+export {
+  createPage,
+  getPageDetails,
+  listPages,
+  listTrash,
+  movePage,
+  renamePage,
+  restorePage,
+  trashPage,
+} from './operations/pages.js';
+export { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
+
+// Search operations (Phase 3 task 3).
 export { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
 
 // Drives & members operations (Phase 3 task 1).

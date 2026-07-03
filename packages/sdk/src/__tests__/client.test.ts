@@ -306,13 +306,13 @@ describe('PageSpaceClient — registry-derived namespaces', () => {
     const client = makeClient({ fetch: fetchMock });
 
     expect(typeof client.drives.list).toBe('function');
-    expect(typeof client.pages.read).toBe('function');
+    expect(typeof client.pages.details).toBe('function');
 
     const drives = await client.drives.list({});
     expect(drives).toHaveLength(1);
     expect(drives[0]?.id).toBe('d1');
 
-    const page = await client.pages.read({ pageId: 'p1' });
+    const page = await client.pages.details({ pageId: 'p1' });
     expect(page.id).toBe('p1');
   });
 });
