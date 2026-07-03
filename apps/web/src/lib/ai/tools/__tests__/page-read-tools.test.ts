@@ -497,7 +497,7 @@ describe('page-read-tools', () => {
           { driveId, driveSlug, include: 'content' },
           createAuthContext()
         ) as {
-          pages: Array<{ id: string; content?: string; contentClipped?: boolean }>;
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean; contentClippedAfterLine?: number }>;
           contentClippedCount: number;
           contentCharCapPerPage: number;
           nextSteps: string[];
@@ -506,8 +506,8 @@ describe('page-read-tools', () => {
         const doc = result.pages.find(p => p.id === 'doc-1');
 
         assert({
-          given: 'a page whose content exceeds the per-page char cap',
-          should: 'clip content to the cap length',
+          given: 'a page whose content exceeds the per-page char cap with no newlines to cut at',
+          should: 'fall back to a hard clip at the cap length',
           actual: doc?.content?.length,
           expected: result.contentCharCapPerPage,
         });
@@ -517,6 +517,13 @@ describe('page-read-tools', () => {
           should: 'flag contentClipped: true on that entry',
           actual: doc?.contentClipped,
           expected: true,
+        });
+
+        assert({
+          given: 'a clipped page with no newlines',
+          should: 'report a single-line contentClippedAfterLine',
+          actual: doc?.contentClippedAfterLine,
+          expected: 1,
         });
 
         assert({
@@ -531,6 +538,133 @@ describe('page-read-tools', () => {
           should: 'mention the clip in nextSteps rather than staying silent',
           actual: result.nextSteps.some(s => s.includes('clipped')),
           expected: true,
+        });
+      });
+
+      it('cuts a clipped page at the last newline instead of mid-line', async () => {
+        // 900 lines of 10 chars + newline = 9900 chars, over the 8000 cap.
+        // The clip should land on a line boundary, not mid-line.
+        const lines = Array.from({ length: 900 }, (_, i) => `line${String(i).padStart(5, '0')}`);
+        const longContent = lines.join('\n');
+
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: longContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean; contentClippedAfterLine?: number }>;
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+        const clippedLines = doc?.content?.split('\n') ?? [];
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'not end mid-line (every line is a full "lineNNNNN" token)',
+          actual: clippedLines.every(l => /^line\d{5}$/.test(l)),
+          expected: true,
+        });
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'stay under the char cap',
+          actual: (doc?.content?.length ?? Infinity) <= 8000,
+          expected: true,
+        });
+
+        assert({
+          given: '900 ten-char lines clipped at an 8000-char cap (800 full lines fit exactly)',
+          should: 'keep exactly 800 complete lines',
+          actual: clippedLines.length,
+          expected: 800,
+        });
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'report contentClippedAfterLine matching the number of lines kept',
+          actual: doc?.contentClippedAfterLine,
+          expected: clippedLines.length,
+        });
+      });
+
+      it('does not clip content exactly at the per-page character cap', async () => {
+        const exactContent = 'x'.repeat(8000);
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: exactContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean }>;
+          contentClippedCount: number;
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'content exactly at the per-page char cap (not exceeding it)',
+          should: 'not be clipped',
+          actual: doc?.contentClipped,
+          expected: undefined,
+        });
+
+        assert({
+          given: 'content exactly at the per-page char cap',
+          should: 'keep the full content',
+          actual: doc?.content?.length,
+          expected: 8000,
+        });
+
+        assert({
+          given: 'content exactly at the per-page char cap',
+          should: 'report contentClippedCount of 0',
+          actual: result.contentClippedCount,
+          expected: 0,
+        });
+      });
+
+      it('does not truncate content when exactly at the page-count cap (50 pages)', async () => {
+        const exactlyFiftyPages = Array.from({ length: 50 }, (_, i) => ({
+          id: `page-${i}`,
+          title: `Page ${i}`,
+          type: 'DOCUMENT',
+          parentId: null,
+          position: i,
+          driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        }));
+        const contentRows = exactlyFiftyPages.map(p => ({ id: p.id, content: 'x', contentMode: 'html', type: 'DOCUMENT' }));
+
+        setupDriveAccessWithContent(exactlyFiftyPages, contentRows);
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string }>;
+          contentTruncated: boolean;
+        };
+
+        assert({
+          given: 'exactly 50 pages (the page-count cap) with include=content',
+          should: 'not flag contentTruncated',
+          actual: result.contentTruncated,
+          expected: false,
+        });
+
+        assert({
+          given: 'exactly 50 pages with include=content',
+          should: 'attach content to all 50 pages',
+          actual: result.pages.filter(p => p.content !== undefined).length,
+          expected: 50,
         });
       });
     });

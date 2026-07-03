@@ -38,7 +38,7 @@ export const pageReadTools = {
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
-      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response, avoiding N+1 read_page calls. Capped at ${MAX_CONTENT_INCLUDE_PAGES} pages per call, and each page's content is clipped to ${MAX_CONTENT_CHARS_PER_PAGE} characters (contentClipped: true when clipped) — use read_page with lineStart/lineEnd for the rest. CHANNEL/TASK_LIST/FILE pages get a short summary instead of full content (same as read_page).`),
+      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response, avoiding N+1 read_page calls. Capped at ${MAX_CONTENT_INCLUDE_PAGES} pages per call, and each page's content is clipped near ${MAX_CONTENT_CHARS_PER_PAGE} characters (contentClipped: true, contentClippedAfterLine gives the resume line) — use read_page with lineStart: contentClippedAfterLine + 1 for the rest. CHANNEL/TASK_LIST/FILE pages get a short summary instead of full content (same as read_page).`),
     }),
     execute: async ({ driveSlug, driveId, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -98,6 +98,7 @@ export const pageReadTools = {
           content?: string;
           contentOmitted?: string;
           contentClipped?: boolean;
+          contentClippedAfterLine?: number;
         }
 
         let resultPages: PageEntry[];
@@ -160,8 +161,16 @@ export const pageReadTools = {
             }
             const fullContent = serializePageContentForAI(row);
             if (fullContent.length > MAX_CONTENT_CHARS_PER_PAGE) {
-              entry.content = fullContent.slice(0, MAX_CONTENT_CHARS_PER_PAGE);
+              // Cut at the last newline within the budget rather than an arbitrary
+              // character offset, so we don't split a UTF-16 surrogate pair or sever
+              // an HTML tag mid-way. Falls back to a hard cut only when the window
+              // has no newline at all (e.g. one huge minified line).
+              const hardCut = fullContent.slice(0, MAX_CONTENT_CHARS_PER_PAGE);
+              const lastNewline = hardCut.lastIndexOf('\n');
+              const clipped = lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut;
+              entry.content = clipped;
               entry.contentClipped = true;
+              entry.contentClippedAfterLine = clipped.split('\n').length;
               contentClippedCount++;
             } else {
               entry.content = fullContent;
@@ -200,7 +209,7 @@ export const pageReadTools = {
               `Content was only included for the first ${MAX_CONTENT_INCLUDE_PAGES} of ${resultPages.length} pages — the rest have no "content" field. Narrow with parentId or call read_page directly for the remaining pages.`,
             ] : []),
             ...(contentClippedCount > 0 ? [
-              `${contentClippedCount} page${contentClippedCount === 1 ? '' : 's'} had content clipped to the first ${MAX_CONTENT_CHARS_PER_PAGE} characters (contentClipped: true) — use read_page with lineStart/lineEnd on those pages to read the rest.`,
+              `${contentClippedCount} page${contentClippedCount === 1 ? '' : 's'} had content clipped near the ${MAX_CONTENT_CHARS_PER_PAGE}-character mark (contentClipped: true) — each clipped entry's contentClippedAfterLine tells you where it stopped, so call read_page with lineStart: contentClippedAfterLine + 1 on that page to continue.`,
             ] : []),
           ] : [`"${locationLabel}" is empty — use create_page to add content`],
         };
