@@ -8,3 +8,7 @@ export * from './auth/provider.js';
 export * from './auth/static.js';
 export * from './auth/oauth.js';
 export * from './auth/decide.js';
+export * from './registry/define.js';
+export * from './registry/registry.js';
+export * from './operations/drives.js';
+export * from './operations/pages.js';
