@@ -25,7 +25,7 @@ const patchSchema = z.object({
   // Drive-wide default OG/share image. "" or null clears it; a non-empty value
   // must be a valid URL.
   publishDefaultOgImageUrl: z.union([z.literal(''), z.string().url()]).nullable().optional(),
-});
+}).strict();
 
 /**
  * GET /api/drives/[driveId]
@@ -114,6 +114,18 @@ export async function PATCH(
     const userId = auth.userId;
 
     const body = await request.json();
+
+    // publishSubdomain lives on this schema's reject-list, not its allow-list:
+    // it has its own dedicated endpoint (tier-gating, conflict checks, and
+    // republish/rollback via changePublishSubdomain()) that this generic route
+    // must not bypass or duplicate.
+    if (typeof body === 'object' && body !== null && 'publishSubdomain' in body) {
+      return NextResponse.json(
+        { error: 'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.' },
+        { status: 400 }
+      );
+    }
+
     const validatedBody = patchSchema.parse(body);
 
     // Check drive exists

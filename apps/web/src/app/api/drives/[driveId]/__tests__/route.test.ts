@@ -539,6 +539,47 @@ describe('PATCH /api/drives/[driveId]', () => {
     });
   });
 
+  describe('publishSubdomain', () => {
+    const ownerFixtures = () => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+    };
+
+    it('rejects publishSubdomain with a clear 400 instead of silently dropping it', async () => {
+      ownerFixtures();
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ publishSubdomain: 'my-new-subdomain' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe(
+        'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.'
+      );
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+
+    it('rejects a mixed body containing publishSubdomain alongside a valid field', async () => {
+      ownerFixtures();
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'New Name', publishSubdomain: 'my-new-subdomain' }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe(
+        'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.'
+      );
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+  });
+
   describe('homePageId', () => {
     const ownerFixtures = () => {
       vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
