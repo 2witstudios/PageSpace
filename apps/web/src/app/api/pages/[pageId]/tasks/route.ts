@@ -14,6 +14,7 @@ import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activit
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
 import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
+import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -337,6 +338,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     assigneeAgentId,
     assigneeIds,
     dueDate,
+    note,
+    position,
+    timezone,
     agentTrigger,
   } = body;
 
@@ -429,10 +433,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   });
 
   const nextPosition = (lastChildPage?.position ?? 0) + 1;
+  const taskPosition = typeof position === 'number' ? position : nextPosition;
 
   // Determine primary assignee for backward compat fields (derive from assigneeIds if present)
   const primaryAssigneeId = assigneeId || assigneeIds?.find((a: { type: string }) => a.type === 'user')?.id || null;
   const primaryAgentId = assigneeAgentId || assigneeIds?.find((a: { type: string }) => a.type === 'agent')?.id || null;
+
+  // Resolve the trigger timezone once, up front: explicit body value wins, else
+  // the caller's profile timezone, else UTC — matching the internal create_task tool.
+  const resolvedTimezone = agentTrigger
+    ? (typeof timezone === 'string' && timezone.trim() ? timezone.trim() : (await getUserTimezone(userId)) || 'UTC')
+    : 'UTC';
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
@@ -456,8 +467,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
       dueDate: dueDate ? new Date(dueDate) : null,
-      position: nextPosition,
+      position: taskPosition,
       completedAt: initialCompletedAt,
+      metadata: {
+        createdAt: new Date().toISOString(),
+        note,
+      },
     }).returning();
 
     // Create assignees in junction table
@@ -496,7 +511,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         taskMetadata: newTask.metadata as Record<string, unknown> | null,
         agentTrigger,
         dueDate: dueDate ? new Date(dueDate) : null,
-        timezone: 'UTC',
+        timezone: resolvedTimezone,
       });
     }
 
