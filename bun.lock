@@ -458,6 +458,16 @@
         "typescript": "^5",
       },
     },
+    "packages/cli": {
+      "name": "@pagespace/cli",
+      "version": "0.1.0",
+      "bin": {
+        "pagespace": "./dist/bin.js",
+      },
+      "dependencies": {
+        "@pagespace/sdk": "workspace:*",
+      },
+    },
     "packages/db": {
       "name": "@pagespace/db",
       "version": "0.1.0",
@@ -1191,6 +1201,8 @@
     "@oxc-resolver/binding-win32-x64-msvc": ["@oxc-resolver/binding-win32-x64-msvc@11.16.4", "", { "os": "win32", "cpu": "x64" }, "sha512-qnjQhjHI4TDL3hkidZyEmQRK43w2NHl6TP5Rnt/0XxYuLdEgx/1yzShhYidyqWzdnhGhSPTM/WVP2mK66XLegA=="],
 
     "@pagespace/android": ["@pagespace/android@workspace:apps/android"],
+
+    "@pagespace/cli": ["@pagespace/cli@workspace:packages/cli"],
 
     "@pagespace/db": ["@pagespace/db@workspace:packages/db"],
 
