@@ -6,13 +6,16 @@ import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { Bell, Mail, Loader2, ArrowLeft, Info } from 'lucide-react';
+import { Bell, Mail, MessageSquare, Loader2, ArrowLeft, Info } from 'lucide-react';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useToastPreferences } from '@/hooks/useToastPreferences';
+import type { ToastNotificationLevel } from '@/lib/notifications/toast-eligible-types';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -138,9 +141,39 @@ const PREFERENCE_GROUPS: PreferenceGroup[] = [
   },
 ];
 
+const TOAST_LEVEL_OPTIONS: Array<{ value: ToastNotificationLevel; label: string; description: string }> = [
+  {
+    value: 'all',
+    label: 'All notifications',
+    description: 'Show a pop-up for every notification (mentions, tasks, DMs, permissions, and more).',
+  },
+  {
+    value: 'mentions',
+    label: 'Mentions & DMs only',
+    description: 'Only pop up for things that directly involve you: mentions, direct messages, task assignments, and connection requests.',
+  },
+  {
+    value: 'off',
+    label: 'Off',
+    description: "Don't show pop-ups. You'll still see everything in the notification bell.",
+  },
+];
+
 export default function NotificationsSettingsPage() {
   const { user, isLoading: authLoading } = useAuth();
   const router = useRouter();
+  const { level: toastLevel, isLoading: isToastLevelLoading, updateLevel: updateToastLevel } = useToastPreferences();
+
+  const handleToastLevelChange = async (value: string) => {
+    const level = value as ToastNotificationLevel;
+    try {
+      await updateToastLevel(level);
+      toast.success('In-app pop-up preference updated');
+    } catch (error) {
+      toast.error('Failed to update in-app pop-up preference');
+      console.error('Error updating toast notification level:', error);
+    }
+  };
 
   const { data, mutate, isLoading } = useSWR<{ preferences: NotificationPreference[] }>(
     user ? '/api/settings/notification-preferences' : null,
@@ -200,7 +233,7 @@ export default function NotificationsSettingsPage() {
     }
   };
 
-  if (authLoading || isLoading) {
+  if (authLoading || isLoading || isToastLevelLoading) {
     return (
       <div className="container max-w-4xl mx-auto py-10 px-10 flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -222,12 +255,44 @@ export default function NotificationsSettingsPage() {
         </Button>
         <h1 className="text-3xl font-bold flex items-center gap-2">
           <Bell className="h-8 w-8" />
-          Email Notifications
+          Notifications
         </h1>
         <p className="text-muted-foreground mt-2">
-          Manage which notifications you receive via email. You&apos;ll still see all notifications within PageSpace.
+          Manage how and when PageSpace notifies you.
         </p>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MessageSquare className="h-5 w-5" />
+            In-app Pop-ups
+          </CardTitle>
+          <CardDescription>
+            Choose how live pop-up notifications show up while you&apos;re using PageSpace. This doesn&apos;t affect the notification bell, which always shows everything.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <RadioGroup
+            value={toastLevel}
+            onValueChange={handleToastLevelChange}
+            className="space-y-3"
+          >
+            {TOAST_LEVEL_OPTIONS.map((option) => (
+              <div
+                key={option.value}
+                className="flex items-start gap-3 p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
+              >
+                <RadioGroupItem value={option.value} id={`toast-level-${option.value}`} className="mt-0.5" />
+                <Label htmlFor={`toast-level-${option.value}`} className="flex-1 cursor-pointer font-normal">
+                  <span className="text-sm font-medium">{option.label}</span>
+                  <p className="text-xs text-muted-foreground mt-0.5">{option.description}</p>
+                </Label>
+              </div>
+            ))}
+          </RadioGroup>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

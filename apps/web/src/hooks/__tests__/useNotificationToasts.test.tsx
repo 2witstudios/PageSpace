@@ -9,6 +9,7 @@ const { mockPush, mockToastCustom, mockToastDismiss } = vi.hoisted(() => ({
 }));
 
 let mockPathname = '/dashboard/some-other-page';
+let mockToastLevel: 'all' | 'mentions' | 'off' = 'all';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
@@ -20,6 +21,14 @@ vi.mock('sonner', () => ({
     custom: mockToastCustom,
     dismiss: mockToastDismiss,
   },
+}));
+
+vi.mock('@/hooks/useToastPreferences', () => ({
+  useToastPreferences: () => ({
+    level: mockToastLevel,
+    isLoading: false,
+    updateLevel: vi.fn(),
+  }),
 }));
 
 import { useNotificationToasts } from '../useNotificationToasts';
@@ -47,6 +56,7 @@ describe('useNotificationToasts', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPathname = '/dashboard/some-other-page';
+    mockToastLevel = 'all';
     useNotificationStore.setState({ notifications: [], unreadCount: 0 });
   });
 
@@ -131,6 +141,63 @@ describe('useNotificationToasts', () => {
     expect(mockToastCustom).toHaveBeenCalledTimes(2);
     expect(mockToastCustom.mock.calls[0][1]).toMatchObject({ id: 'notif-dm' });
     expect(mockToastCustom.mock.calls[1][1]).toMatchObject({ id: 'notif-dm' });
+  });
+
+  it('does not toast anything when the preference level is off', () => {
+    mockToastLevel = 'off';
+    renderHook(() => useNotificationToasts());
+
+    act(() => {
+      useNotificationStore.getState().addNotification(build());
+    });
+
+    expect(mockToastCustom).not.toHaveBeenCalled();
+  });
+
+  it('suppresses non-high-signal types when the preference level is mentions', () => {
+    mockToastLevel = 'mentions';
+    renderHook(() => useNotificationToasts());
+
+    act(() => {
+      useNotificationStore.getState().addNotification(
+        build({
+          id: 'notif-page-shared',
+          type: 'PAGE_SHARED',
+          metadata: { permissions: { canView: true }, pageName: 'Roadmap' },
+        }),
+      );
+    });
+
+    expect(mockToastCustom).not.toHaveBeenCalled();
+  });
+
+  it('still shows high-signal types when the preference level is mentions', () => {
+    mockToastLevel = 'mentions';
+    renderHook(() => useNotificationToasts());
+
+    act(() => {
+      useNotificationStore.getState().addNotification(build());
+    });
+
+    expect(mockToastCustom).toHaveBeenCalledTimes(1);
+  });
+
+  it('picks up a preference level change on the next render without a remount', () => {
+    mockToastLevel = 'off';
+    const { rerender } = renderHook(() => useNotificationToasts());
+
+    act(() => {
+      useNotificationStore.getState().addNotification(build({ id: 'notif-a' }));
+    });
+    expect(mockToastCustom).not.toHaveBeenCalled();
+
+    mockToastLevel = 'all';
+    rerender();
+
+    act(() => {
+      useNotificationStore.getState().addNotification(build({ id: 'notif-b' }));
+    });
+    expect(mockToastCustom).toHaveBeenCalledTimes(1);
   });
 
   it('does not re-toast an identical notification for an unrelated store change', () => {

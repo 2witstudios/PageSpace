@@ -7,6 +7,7 @@ import { useNotificationStore } from '@/stores/useNotificationStore';
 import { resolveDestination, type StoredNotification } from '@/lib/notifications/resolve-destination';
 import { isToastEligible } from '@/lib/notifications/toast-eligible-types';
 import { NotificationToast } from '@/components/notifications/NotificationToast';
+import { useToastPreferences } from '@/hooks/useToastPreferences';
 
 /**
  * Shows a live custom toast whenever a new (or updated-in-place, e.g.
@@ -22,6 +23,7 @@ export function useNotificationToasts() {
   const router = useRouter();
   const pathname = usePathname();
   const handleNotificationRead = useNotificationStore((state) => state.handleNotificationRead);
+  const { level } = useToastPreferences();
 
   const mountTimeRef = useRef(Date.now());
   const toastedRef = useRef(new Map<string, string>());
@@ -47,7 +49,7 @@ export function useNotificationToasts() {
       if (toastedRef.current.get(top.id) === signature) return;
       toastedRef.current.set(top.id, signature);
 
-      if (!isToastEligible(top.type)) return;
+      if (!isToastEligible(top.type, level)) return;
 
       const destination = resolveDestination(top);
       if (destination && destination === pathname) return;
@@ -65,5 +67,5 @@ export function useNotificationToasts() {
     });
 
     return unsubscribe;
-  }, [router, pathname, handleNotificationRead]);
+  }, [router, pathname, handleNotificationRead, level]);
 }

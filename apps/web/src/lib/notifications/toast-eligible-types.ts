@@ -10,6 +10,20 @@ export const TOAST_EXCLUDED_TYPES: ReadonlySet<NotificationType> = new Set([
   'TOS_PRIVACY_UPDATED',
 ]);
 
-export function isToastEligible(type: string): boolean {
-  return !TOAST_EXCLUDED_TYPES.has(type as NotificationType);
+export type ToastNotificationLevel = 'all' | 'mentions' | 'off';
+
+// Types treated as "directly involves you" for the Mentions & DMs tier —
+// the PageSpace analog of Discord/Slack's "@mentions only" notification level.
+export const TOAST_HIGH_SIGNAL_TYPES: ReadonlySet<NotificationType> = new Set([
+  'MENTION',
+  'NEW_DIRECT_MESSAGE',
+  'TASK_ASSIGNED',
+  'CONNECTION_REQUEST',
+]);
+
+export function isToastEligible(type: string, level: ToastNotificationLevel = 'all'): boolean {
+  if (level === 'off') return false;
+  if (TOAST_EXCLUDED_TYPES.has(type as NotificationType)) return false;
+  if (level === 'mentions' && !TOAST_HIGH_SIGNAL_TYPES.has(type as NotificationType)) return false;
+  return true;
 }
