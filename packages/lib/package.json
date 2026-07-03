@@ -932,6 +932,11 @@
       "import": "./dist/auth/oauth/scopes.js",
       "require": "./dist/auth/oauth/scopes.js"
     },
+    "./auth/oauth/metadata": {
+      "types": "./dist/auth/oauth/metadata.d.ts",
+      "import": "./dist/auth/oauth/metadata.js",
+      "require": "./dist/auth/oauth/metadata.js"
+    },
     "./auth/account-lockout": {
       "types": "./dist/auth/account-lockout.d.ts",
       "import": "./dist/auth/account-lockout.js",
@@ -1715,6 +1720,9 @@
       ],
       "auth/oauth/pkce": [
         "./dist/auth/oauth/pkce.d.ts"
+      ],
+      "auth/oauth/metadata": [
+        "./dist/auth/oauth/metadata.d.ts"
       ],
       "auth/passkey-service": [
         "./dist/auth/passkey-service.d.ts"
