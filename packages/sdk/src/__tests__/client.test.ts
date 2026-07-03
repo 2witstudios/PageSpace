@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { AuthenticationError, IncompatibleServerError, NetworkError, ValidationError } from '../errors.js';
+import { AuthenticationError, IncompatibleServerError, NetworkError, TimeoutError, ValidationError } from '../errors.js';
 import { defineOperation } from '../registry/define.js';
 import { PageSpaceClient } from '../client.js';
 import type { AuthProvider } from '../auth/provider.js';
@@ -256,6 +256,42 @@ describe('PageSpaceClient — version handshake (ADR 0001)', () => {
   });
 });
 
+describe('PageSpaceClient — per-operation timeoutMsOverride (Phase 3 task 5 agents.ask)', () => {
+  it('times out at the operation override instead of the client default', async () => {
+    vi.useFakeTimers();
+    const slowOp = defineOperation({
+      name: 'widgets.slow',
+      method: 'POST',
+      path: '/api/widgets/slow',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ id: z.string() }),
+      timeoutMsOverride: 5000,
+      description: 'A long-running op.',
+    });
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    // Client default timeoutMs is 1000ms (see makeClient) — the override must win.
+    const client = makeClient({ fetch: fetchMock as unknown as MakeClientOptions['fetch'] });
+
+    let settled = false;
+    const promise = client.invoke(slowOp, {});
+    promise.catch(() => {}).finally(() => {
+      settled = true;
+    });
+
+    // Past the client's own 1000ms default, but still short of the 5000ms override.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(4000);
+    await expect(promise).rejects.toBeInstanceOf(TimeoutError);
+  });
+});
+
 describe('PageSpaceClient — registry-derived namespaces', () => {
   it('exposes the built-in seed operations grouped by namespace, mechanically generated (no hand-written wrappers)', async () => {
     const fetchMock = vi.fn(async (url: string) => {
@@ -314,5 +350,17 @@ describe('PageSpaceClient — registry-derived namespaces', () => {
 
     const page = await client.pages.read({ pageId: 'p1' });
     expect(page.id).toBe('p1');
+  });
+
+  it('exposes the Phase 3 agents & conversations namespaces', () => {
+    const client = makeClient({ fetch: vi.fn() });
+
+    expect(typeof client.agents.list).toBe('function');
+    expect(typeof client.agents.listMultiDrive).toBe('function');
+    expect(typeof client.agents.updateConfig).toBe('function');
+    expect(typeof client.agents.ask).toBe('function');
+    expect(typeof client.agents.listModels).toBe('function');
+    expect(typeof client.conversations.list).toBe('function');
+    expect(typeof client.conversations.read).toBe('function');
   });
 });

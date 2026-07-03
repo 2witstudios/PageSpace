@@ -54,6 +54,29 @@ describe('defineOperation — runtime shape', () => {
     expect(op.requiredScope).toBeUndefined();
     expect(op.textResponse).toBeUndefined();
   });
+
+  it('captures an explicit timeoutMsOverride, defaulting to undefined otherwise (facade override, Phase 3 task 5 agents.ask)', () => {
+    const slow = defineOperation({
+      name: 'test.slow',
+      method: 'POST',
+      path: '/api/widgets/slow',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      timeoutMsOverride: 120_000,
+      description: 'A long-running op.',
+    });
+    expect(slow.timeoutMsOverride).toBe(120_000);
+
+    const fast = defineOperation({
+      name: 'test.fast',
+      method: 'GET',
+      path: '/api/widgets',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      description: 'A regular op.',
+    });
+    expect(fast.timeoutMsOverride).toBeUndefined();
+  });
 });
 
 describe('defineOperation — static type inference', () => {

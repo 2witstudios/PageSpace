@@ -43,6 +43,13 @@ export interface OperationConfig<
   readonly requiredScope?: RequiredScope;
   /** Set for export-style operations whose 2xx body is raw text, not JSON. */
   readonly textResponse?: boolean;
+  /**
+   * Overrides the client's default request timeout for this operation only
+   * (e.g. `agents.ask`, whose consult loop can run up to 20 tool-calling
+   * steps). Facade-enforced (client.ts `#invoke`); absent, the client's own
+   * `timeoutMs` applies.
+   */
+  readonly timeoutMsOverride?: number;
   /** Mandatory: becomes the MCP tool description in Phase 6. */
   readonly description: string;
 }
@@ -82,6 +89,7 @@ export interface Operation<
   readonly outputSchema: TOutputSchema;
   readonly requiredScope: RequiredScope | undefined;
   readonly textResponse: boolean | undefined;
+  readonly timeoutMsOverride: number | undefined;
   readonly description: string;
 }
 
@@ -93,7 +101,7 @@ export function defineOperation<
 >(
   config: ValidOperationConfig<TPath, TInputSchema, TOutputSchema>,
 ): Operation<TPath, TInputSchema, TOutputSchema> {
-  const { name, method, path, inputSchema, outputSchema, requiredScope, textResponse, description } =
+  const { name, method, path, inputSchema, outputSchema, requiredScope, textResponse, timeoutMsOverride, description } =
     config as OperationConfig<TPath, TInputSchema, TOutputSchema>;
 
   return Object.freeze({
@@ -104,6 +112,7 @@ export function defineOperation<
     outputSchema,
     requiredScope,
     textResponse,
+    timeoutMsOverride,
     description,
   });
 }

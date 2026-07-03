@@ -86,6 +86,18 @@ export {
 } from './operations/tasks.js';
 export type { TaskCompletionGatedError } from './operations/tasks.js';
 
+// Agents & conversations operations (Phase 3 task 5).
+export {
+  askAgent,
+  filterModelCatalog,
+  listAgents,
+  listModels,
+  multiDriveListAgents,
+  updateAgentConfig,
+} from './operations/agents.js';
+export type { CatalogModel, CatalogProvider, ModelCatalogFilter } from './operations/agents.js';
+export { listConversations, readConversation } from './operations/conversations.js';
+
 // Transport primitive types needed to declare custom operations. buildRequest/
 // parseResponse/executeRequest stay internal — the facade is the only caller.
 export type { HttpMethod } from './transport/types.js';
