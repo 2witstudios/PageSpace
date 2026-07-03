@@ -447,6 +447,16 @@ export function getAllowedDriveIds(auth: AuthResult): string[] {
 }
 
 /**
+ * Whether this AuthResult carries an MCP drive-scope restriction (a non-empty
+ * allowedDriveIds). Mirrors isMcpScoped() in
+ * apps/web/src/lib/ai/tools/actor-permissions.ts, which does the same check on
+ * the AI-tool-execution ToolExecutionContext shape rather than AuthResult.
+ */
+export function isScopedMcpAuth(auth: AuthResult): boolean {
+  return getAllowedDriveIds(auth).length > 0;
+}
+
+/**
  * Check if an MCP token has access to a specific drive.
  * Returns null if access is allowed, or a 403 response if denied.
  *
