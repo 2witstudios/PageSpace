@@ -4,3 +4,7 @@ export * from './transport/types.js';
 export * from './transport/build-request.js';
 export * from './transport/parse-response.js';
 export * from './transport/execute.js';
+export * from './auth/provider.js';
+export * from './auth/static.js';
+export * from './auth/oauth.js';
+export * from './auth/decide.js';
