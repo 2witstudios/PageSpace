@@ -70,6 +70,36 @@ export {
 } from './operations/pages.js';
 export { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
 
+// Search operations (Phase 3 task 3).
+export { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
+
+// Drives & members operations (Phase 3 task 1).
+export {
+  assertDriveNameConfirmed,
+  createDrive,
+  renameDrive,
+  restoreDrive,
+  trashDrive,
+  updateDriveContext,
+} from './operations/drives.js';
+export type { ConfirmMismatch, Result } from './operations/drives.js';
+export { listDriveMembers } from './operations/members.js';
+export { listCollaborators } from './operations/collaborators.js';
+
+// Tasks & statuses operations (Phase 3 task 4).
+export {
+  classifyTaskCompletionGate,
+  createTask,
+  createTaskStatus,
+  deleteTask,
+  deleteTaskTrigger,
+  getAssignedTasks,
+  reorderTask,
+  setTaskTrigger,
+  updateTask,
+} from './operations/tasks.js';
+export type { TaskCompletionGatedError } from './operations/tasks.js';
+
 // Transport primitive types needed to declare custom operations. buildRequest/
 // parseResponse/executeRequest stay internal — the facade is the only caller.
 export type { HttpMethod } from './transport/types.js';
