@@ -50,11 +50,30 @@ function serializeQuery(params: Readonly<Record<string, unknown>>): string {
   return query.length > 0 ? `?${query}` : '';
 }
 
-/** Serializes a plain object as JSON with a stable (sorted) top-level key order. */
+/**
+ * Recursively rebuilds an object/array with object keys in sorted order, so
+ * `JSON.stringify` (no replacer) produces a deterministic body. A replacer
+ * *array* would look like the obvious way to get sorted keys, but per spec
+ * it filters property names at every nesting level, not just the top —
+ * `JSON.stringify({a:{b:1}}, ['a'])` silently drops `b`. Any nested object
+ * field (e.g. an operation's `agentTrigger`) would come out empty.
+ */
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value !== null && typeof value === 'object') {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[key] = sortKeysDeep((value as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+/** Serializes a plain object as JSON with a stable (sorted) key order at every nesting level. */
 function serializeBody(fields: Readonly<Record<string, unknown>>): string | undefined {
-  const keys = Object.keys(fields).sort();
-  if (keys.length === 0) return undefined;
-  return JSON.stringify(fields, keys);
+  if (Object.keys(fields).length === 0) return undefined;
+  return JSON.stringify(sortKeysDeep(fields));
 }
 
 /**

@@ -110,6 +110,27 @@ describe('buildRequest — body and Content-Type', () => {
     const request = buildRequest(op({ method: 'PATCH', path: '/api/pages/:id' }), { id: 'p1', title: 'Hi' }, config);
     expect(request.url).toBe('https://pagespace.ai/api/pages/p1');
   });
+
+  it('preserves nested object fields whose keys do not appear at the top level', () => {
+    // Regression: a plain `JSON.stringify(fields, sortedTopLevelKeys)` replacer-array
+    // call filters property names at every nesting level, not just the top, so a
+    // nested field like `agentTrigger: { agentPageId, prompt }` would serialize as `{}`.
+    const request = buildRequest(
+      op({ method: 'POST', path: '/api/pages/:pageId/tasks' }),
+      { pageId: 'pg1', title: 'Hi', agentTrigger: { agentPageId: 'ag1', prompt: 'Do it' } },
+      config,
+    );
+    expect(request.body).toBe(JSON.stringify({ agentTrigger: { agentPageId: 'ag1', prompt: 'Do it' }, title: 'Hi' }));
+  });
+
+  it('preserves fields inside an array of nested objects', () => {
+    const request = buildRequest(
+      op({ method: 'POST', path: '/api/pages/:pageId/tasks' }),
+      { pageId: 'pg1', assigneeIds: [{ type: 'user', id: 'u1' }] },
+      config,
+    );
+    expect(request.body).toBe(JSON.stringify({ assigneeIds: [{ id: 'u1', type: 'user' }] }));
+  });
 });
 
 describe('buildRequest — version header (ADR 0001)', () => {
