@@ -39,6 +39,16 @@ import {
 import type { AuthProvider } from './auth/provider.js';
 import { listDrives } from './operations/drives.js';
 import { readPage } from './operations/pages.js';
+import {
+  createTask,
+  createTaskStatus,
+  deleteTask,
+  deleteTaskTrigger,
+  getAssignedTasks,
+  reorderTask,
+  setTaskTrigger,
+  updateTask,
+} from './operations/tasks.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
 import { buildRequest } from './transport/build-request.js';
@@ -51,6 +61,16 @@ import { checkServerCompatibility, MIN_SERVER_API_VERSION } from './version.js';
 const DEFAULT_OPERATIONS_MAP = {
   drives: { list: listDrives },
   pages: { read: readPage },
+  tasks: {
+    create: createTask,
+    update: updateTask,
+    delete: deleteTask,
+    reorder: reorderTask,
+    createStatus: createTaskStatus,
+    setTrigger: setTaskTrigger,
+    deleteTrigger: deleteTaskTrigger,
+    getAssigned: getAssignedTasks,
+  },
 } as const;
 
 type OperationsMap = Record<string, Record<string, Operation>>;
