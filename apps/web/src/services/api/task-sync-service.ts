@@ -30,12 +30,28 @@ async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
 }
 
 /**
+ * Seed the default `task_status_configs` for a `task_lists` row. Swallows a
+ * unique-constraint violation on `(taskListId, slug)` — a concurrent caller may have
+ * seeded the same list a moment earlier; the caller only needed the configs to exist.
+ */
+export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): Promise<void> {
+  try {
+    await tx.insert(taskStatusConfigs).values(
+      DEFAULT_TASK_STATUSES.map(s => ({ taskListId, ...s }))
+    )
+  } catch (err) {
+    const message = err instanceof Error ? err.message : ''
+    if (!message.includes('unique') && !message.includes('duplicate')) throw err
+  }
+}
+
+/**
  * Ensure a TASK_LIST page has its `task_lists` row and default `task_status_configs`
- * seeded. Idempotent — a no-op if the `task_lists` row already exists (status configs
- * are only ever seeded alongside a *new* `task_lists` row here; a legacy `task_lists`
- * row with zero configs — e.g. one created by a pre-fix lazy-init path — is not
- * backfilled by this function. The browser Kanban route's `getOrCreateTaskListForPage`
- * in `app/api/pages/[pageId]/tasks/route.ts` already handles that migration case.
+ * seeded. Idempotent — a no-op if the `task_lists` row already exists. Callers that
+ * separately look up `task_status_configs` for display (the MCP documents `read` route,
+ * `page-read-tools.ts`'s `read_page`) also call `seedDefaultTaskStatusConfigs` when that
+ * lookup comes back empty, so a legacy `task_lists` row missed by a pre-fix lazy-init
+ * path gets backfilled on next read instead of staying half-initialized forever.
  *
  * Called from every page-creation and lazy-init entry point that seeds a TASK_LIST
  * page's *own* task list (`page-service.ts`, `page-write-tools.ts`'s `create_page`,
@@ -63,9 +79,7 @@ export async function ensureTaskListForPage(
     }).returning()
     taskList = created
 
-    await tx.insert(taskStatusConfigs).values(
-      DEFAULT_TASK_STATUSES.map(s => ({ taskListId: created.id, ...s }))
-    )
+    await seedDefaultTaskStatusConfigs(tx, created.id)
   }
 
   return taskList

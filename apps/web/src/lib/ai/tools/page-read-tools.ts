@@ -12,7 +12,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI } from '../core/page-serializer';
-import { ensureTaskListForPage } from '@/services/api/task-sync-service';
+import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 
 export const pageReadTools = {
   /**
@@ -305,6 +305,12 @@ export const pageReadTools = {
             where: eq(taskStatusConfigs.taskListId, taskList.id),
             orderBy: [asc(taskStatusConfigs.position)],
           });
+
+          // Legacy task_lists row (e.g. seeded by a pre-fix lazy-init path) with no
+          // configs — backfill now instead of leaving it half-initialized forever.
+          if (statusConfigs.length === 0) {
+            await seedDefaultTaskStatusConfigs(db, taskList.id);
+          }
 
           const availableStatuses = statusConfigs.length > 0
             ? statusConfigs.map(c => ({

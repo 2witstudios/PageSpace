@@ -23,6 +23,7 @@ vi.mock('@pagespace/db/db', () => ({ db: {} }));
 import {
   ensureTaskItemForPage,
   ensureTaskListForPage,
+  seedDefaultTaskStatusConfigs,
   syncTaskItemOnMove,
   backfillMissingTaskItems,
 } from '../task-sync-service';
@@ -88,6 +89,36 @@ function makeTx(config: {
 
   return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds };
 }
+
+describe('seedDefaultTaskStatusConfigs', () => {
+  it('inserts the 4 default status configs linked to the given task_lists id', async () => {
+    const { tx, taskStatusConfigInserts } = makeTx();
+    await seedDefaultTaskStatusConfigs(tx as never, 'list-1');
+    expect(taskStatusConfigInserts).toEqual([
+      { taskListId: 'list-1', slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
+    ]);
+  });
+
+  it('swallows a unique-constraint violation (concurrent caller already seeded this list)', async () => {
+    const { taskStatusConfigInserts } = makeTx();
+    const tx = {
+      insert: vi.fn(() => ({
+        values: () => Promise.reject(new Error('duplicate key value violates unique constraint "task_status_configs_task_list_slug"')),
+      })),
+    };
+    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).resolves.toBeUndefined();
+    expect(taskStatusConfigInserts).toHaveLength(0);
+  });
+
+  it('rethrows an unrelated error', async () => {
+    const tx = {
+      insert: vi.fn(() => ({
+        values: () => Promise.reject(new Error('connection reset')),
+      })),
+    };
+    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).rejects.toThrow('connection reset');
+  });
+});
 
 describe('ensureTaskListForPage', () => {
   it('is a no-op when a task_lists row already exists for the page', async () => {

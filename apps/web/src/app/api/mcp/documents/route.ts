@@ -4,7 +4,7 @@ import { eq, asc, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpers';
-import { backfillMissingTaskItems, ensureTaskListForPage } from '@/services/api/task-sync-service';
+import { backfillMissingTaskItems, ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
@@ -212,6 +212,12 @@ export async function POST(req: NextRequest) {
               orderBy: [asc(taskStatusConfigs.position)],
             }),
           ]);
+
+          // Legacy task_lists row (e.g. seeded by a pre-fix lazy-init path) with no
+          // configs — backfill now instead of leaving it half-initialized forever.
+          if (statusConfigs.length === 0) {
+            await seedDefaultTaskStatusConfigs(db, taskList.id);
+          }
 
           const availableStatuses = statusConfigs.length > 0
             ? statusConfigs.map(c => ({ slug: c.slug, label: c.name, group: c.group, position: c.position, color: c.color }))
