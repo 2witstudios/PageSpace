@@ -18,6 +18,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
+  isScopedMCPAuth: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
