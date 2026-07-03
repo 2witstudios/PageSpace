@@ -72,13 +72,15 @@ const cellUpdateSchema = z.object({
 
 **`pageId` omitted:** the route calls `getCurrentPageId(userId)`
 (`route.ts` ~line 21), which is **not** a user-scoped "your most recent
-page" lookup. It queries for the single most-recently-updated,
-non-trashed page across the *entire instance*, and only returns it if that
-one page's drive happens to be owned by the calling user — otherwise it
-returns `null` and the request 404s with `{ "error": "No active document
-found" }`. On any multi-user instance, omitting `pageId` will very often
-fail even when the caller owns other, slightly-older pages. Treat `pageId`
-as effectively required; don't rely on the fallback.
+page" lookup, and as currently written **never resolves to a page at all**.
+Its query filters with `isNull(pages.isTrashed)` — but `pages.isTrashed` is
+`boolean(...).default(false).notNull()` (`packages/db/src/schema/core.ts`),
+so it is never actually `NULL`; that predicate matches zero rows for every
+normal page, on any instance, for any user. The intent was almost certainly
+`eq(pages.isTrashed, false)` ("not trashed"). Until that's fixed,
+`getCurrentPageId` always returns `null` and omitting `pageId` always 404s
+with `{ "error": "No active document found" }`. **Treat `pageId` as
+required** — there is currently no working fallback.
 
 ## Operations
 
@@ -99,9 +101,19 @@ log entry and does not mutate anything.
 
 ## `edit-cells` — sheet editing
 
-This is the only way to edit `SHEET` page content over the MCP HTTP API.
-There is no separate `/api/mcp/sheets` or similar route — sheet edits go
-through `/api/mcp/documents` with `operation: 'edit-cells'`.
+This is the intended, cell-aware way to edit `SHEET` page content over the
+MCP HTTP API. There is no separate `/api/mcp/sheets` or similar route —
+sheet edits go through `/api/mcp/documents` with `operation: 'edit-cells'`.
+
+**Caveat:** the `replace`/`insert`/`delete` branches do **not** check
+`isSheetType` before applying their line-based edit to `page.content` — only
+`edit-cells` does. Nothing currently stops an external client from calling
+`replace`/`insert`/`delete` against a `SHEET` page; doing so would apply a
+raw line splice directly to the sheet's serialized text representation
+rather than going through `parseSheetContent`/`updateSheetCells`, which is
+unsafe and unsupported (it can desync rows/columns or produce invalid
+serialized content) even though the API won't reject it. Always use
+`edit-cells` for `SHEET` pages.
 
 ### Validation, in order
 
@@ -223,7 +235,7 @@ Content-Type: application/json
 | Page's drive not in token's `allowedDriveIds` | 403 | `{ "error": "This token does not have access to this drive" }` |
 | No view access to `pageId` | 403 | `"Forbidden"` (plain text) |
 | Mutating op without edit access | 403 | `{ "error": "Write permission required", "details": "..." }` |
-| Page not found | 404 | `{ "error": "Page not found" }` (or `{ "error": "No active document found" }` if `pageId` omitted and no fallback page exists) |
+| Page not found | 404 | `{ "error": "Page not found" }` (or `{ "error": "No active document found" }` — currently **always** returned when `pageId` is omitted, see caveat above) |
 | `edit-cells` on a non-sheet page | 400 | `{ "error": "Page is not a sheet", "message": "...", "pageType": "..." }` |
 | `edit-cells` with empty/missing `cells` | 400 | `{ "error": "cells array is required for edit-cells operation" }` |
 | `edit-cells` with malformed cell address | 400 | `{ "error": "Invalid cell addresses: ..." }` |
