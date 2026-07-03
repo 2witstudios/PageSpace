@@ -485,6 +485,54 @@ describe('page-read-tools', () => {
           expected: true,
         });
       });
+
+      it('clips a single page whose content exceeds the per-page character cap', async () => {
+        const hugeContent = 'x'.repeat(10000);
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: hugeContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean }>;
+          contentClippedCount: number;
+          contentCharCapPerPage: number;
+          nextSteps: string[];
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'a page whose content exceeds the per-page char cap',
+          should: 'clip content to the cap length',
+          actual: doc?.content?.length,
+          expected: result.contentCharCapPerPage,
+        });
+
+        assert({
+          given: 'a clipped page',
+          should: 'flag contentClipped: true on that entry',
+          actual: doc?.contentClipped,
+          expected: true,
+        });
+
+        assert({
+          given: 'a batch with one clipped page',
+          should: 'report contentClippedCount',
+          actual: result.contentClippedCount,
+          expected: 1,
+        });
+
+        assert({
+          given: 'a batch with a clipped page',
+          should: 'mention the clip in nextSteps rather than staying silent',
+          actual: result.nextSteps.some(s => s.includes('clipped')),
+          expected: true,
+        });
+      });
     });
 
   });

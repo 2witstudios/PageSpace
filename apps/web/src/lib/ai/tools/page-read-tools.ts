@@ -19,6 +19,14 @@ import { serializePageContentForAI, isTextSerializablePageType } from '../core/p
 // folder/audit pass while keeping the batched content query and payload size bounded.
 const MAX_CONTENT_INCLUDE_PAGES = 50;
 
+// The page-count cap above bounds how many pages get content, but not how
+// large any single page is — a folder of 50 long CODE/DOCUMENT pages could
+// still return a multi-megabyte response. Cap each page's content the same
+// way read_conversation already truncates long messages, so one huge page
+// can't blow up the whole batch; callers needing the rest can page through it
+// with read_page's lineStart/lineEnd.
+const MAX_CONTENT_CHARS_PER_PAGE = 8000;
+
 export const pageReadTools = {
   /**
    * Explore the folder structure and find content within a workspace
@@ -30,7 +38,7 @@ export const pageReadTools = {
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
-      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response, avoiding N+1 read_page calls. Capped at ${MAX_CONTENT_INCLUDE_PAGES} pages per call — CHANNEL/TASK_LIST/FILE pages get a short summary instead of full content (same as read_page).`),
+      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response, avoiding N+1 read_page calls. Capped at ${MAX_CONTENT_INCLUDE_PAGES} pages per call, and each page's content is clipped to ${MAX_CONTENT_CHARS_PER_PAGE} characters (contentClipped: true when clipped) — use read_page with lineStart/lineEnd for the rest. CHANNEL/TASK_LIST/FILE pages get a short summary instead of full content (same as read_page).`),
     }),
     execute: async ({ driveSlug, driveId, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -89,6 +97,7 @@ export const pageReadTools = {
           path: string;
           content?: string;
           contentOmitted?: string;
+          contentClipped?: boolean;
         }
 
         let resultPages: PageEntry[];
@@ -131,6 +140,7 @@ export const pageReadTools = {
         // this endpoint to lean on for a size limit, so cap explicitly here and
         // report what was dropped instead of silently truncating.
         let contentTruncated = false;
+        let contentClippedCount = 0;
         if (include === 'content' && resultPages.length > 0) {
           const pagesForContent = resultPages.slice(0, MAX_CONTENT_INCLUDE_PAGES);
           contentTruncated = resultPages.length > MAX_CONTENT_INCLUDE_PAGES;
@@ -148,7 +158,14 @@ export const pageReadTools = {
               entry.contentOmitted = `${row.type} pages return structured data, not inline text — use read_page with this page's ID instead.`;
               continue;
             }
-            entry.content = serializePageContentForAI(row);
+            const fullContent = serializePageContentForAI(row);
+            if (fullContent.length > MAX_CONTENT_CHARS_PER_PAGE) {
+              entry.content = fullContent.slice(0, MAX_CONTENT_CHARS_PER_PAGE);
+              entry.contentClipped = true;
+              contentClippedCount++;
+            } else {
+              entry.content = fullContent;
+            }
           }
         }
 
@@ -169,6 +186,8 @@ export const pageReadTools = {
             contentIncluded: true,
             contentPageCap: MAX_CONTENT_INCLUDE_PAGES,
             contentTruncated,
+            contentCharCapPerPage: MAX_CONTENT_CHARS_PER_PAGE,
+            contentClippedCount,
           }),
           summary: recursive
             ? `Found ${resultPages.length} page${resultPages.length === 1 ? '' : 's'} in "${driveLabel}" (full tree)`
@@ -179,6 +198,9 @@ export const pageReadTools = {
             'Use create_page to add new content',
             ...(contentTruncated ? [
               `Content was only included for the first ${MAX_CONTENT_INCLUDE_PAGES} of ${resultPages.length} pages — the rest have no "content" field. Narrow with parentId or call read_page directly for the remaining pages.`,
+            ] : []),
+            ...(contentClippedCount > 0 ? [
+              `${contentClippedCount} page${contentClippedCount === 1 ? '' : 's'} had content clipped to the first ${MAX_CONTENT_CHARS_PER_PAGE} characters (contentClipped: true) — use read_page with lineStart/lineEnd on those pages to read the rest.`,
             ] : []),
           ] : [`"${locationLabel}" is empty — use create_page to add content`],
         };
