@@ -6,8 +6,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { normalizeDriveScopes } from '@pagespace/lib/auth/mcp-token-scopes';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import { customRoleBelongsToDrive, getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
+import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -95,31 +94,8 @@ export async function PATCH(
 
     // Validate drive access for each scope (same logic as POST /create)
     if (driveScopes.length > 0) {
-      const invalidDriveIds: string[] = [];
-      const unauthorizedRoles: string[] = [];
-      const invalidCustomRoles: string[] = [];
-      const unauthorizedCustomRoles: string[] = [];
-
-      for (const scope of driveScopes) {
-        const access = await getDriveAccess(scope.id, userId);
-        if (!access.isOwner && !access.isMember) {
-          invalidDriveIds.push(scope.id);
-          continue;
-        }
-        if (scope.role === 'ADMIN' && !access.isAdmin) {
-          unauthorizedRoles.push(scope.id);
-        }
-        if (scope.customRoleId && !await customRoleBelongsToDrive(scope.customRoleId, scope.id)) {
-          invalidCustomRoles.push(scope.id);
-          continue;
-        }
-        if (scope.customRoleId && !access.isAdmin && !access.isOwner) {
-          const callerCustomRoleId = await getMemberCustomRoleId(scope.id, userId);
-          if (scope.customRoleId !== callerCustomRoleId) {
-            unauthorizedCustomRoles.push(scope.id);
-          }
-        }
-      }
+      const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles } =
+        await validateDriveScopeAccess(driveScopes, userId);
 
       if (invalidDriveIds.length > 0) {
         return NextResponse.json(

@@ -54,12 +54,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
-  getDriveAccess: vi.fn(),
-}));
-
-vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
-  customRoleBelongsToDrive: vi.fn().mockResolvedValue(true),
-  getMemberCustomRoleId: vi.fn().mockResolvedValue(null),
+  validateDriveScopeAccess: vi.fn(),
 }));
 
 import { DELETE, PATCH } from '../route';
@@ -67,7 +62,7 @@ import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 
 const createContext = (tokenId = 'token-123') => ({
   params: Promise.resolve({ tokenId }),
@@ -205,11 +200,12 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
     vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([
       { id: 'drive-1', name: 'My Drive' },
     ]);
-    vi.mocked(getDriveAccess).mockResolvedValue({
-      isOwner: true,
-      isMember: true,
-      isAdmin: true,
-    } as never);
+    vi.mocked(validateDriveScopeAccess).mockResolvedValue({
+      invalidDriveIds: [],
+      unauthorizedRoles: [],
+      invalidCustomRoles: [],
+      unauthorizedCustomRoles: [],
+    });
   });
 
   it('returns 404 when token not found', async () => {
@@ -265,11 +261,12 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
   });
 
   it('returns 403 when user lacks access to a drive', async () => {
-    vi.mocked(getDriveAccess).mockResolvedValueOnce({
-      isOwner: false,
-      isMember: false,
-      isAdmin: false,
-    } as never);
+    vi.mocked(validateDriveScopeAccess).mockResolvedValueOnce({
+      invalidDriveIds: ['forbidden-drive'],
+      unauthorizedRoles: [],
+      invalidCustomRoles: [],
+      unauthorizedCustomRoles: [],
+    });
 
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
       method: 'PATCH',
@@ -285,11 +282,12 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
   });
 
   it('returns 403 when member tries to grant ADMIN', async () => {
-    vi.mocked(getDriveAccess).mockResolvedValueOnce({
-      isOwner: false,
-      isMember: true,
-      isAdmin: false,
-    } as never);
+    vi.mocked(validateDriveScopeAccess).mockResolvedValueOnce({
+      invalidDriveIds: [],
+      unauthorizedRoles: ['drive-1'],
+      invalidCustomRoles: [],
+      unauthorizedCustomRoles: [],
+    });
 
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
       method: 'PATCH',
