@@ -159,6 +159,56 @@ export const sessionRepository = {
       .set({ revokedAt: new Date() })
       .where(and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)));
   },
+
+  /**
+   * Replace all drive scopes on an existing MCP token transactionally.
+   *
+   * Once a token is scoped, it stays scoped (isScoped is never set to false).
+   * If drives is empty, all existing scopes are removed but the token remains
+   * scoped (fail-closed: scoped + no drives = deny all access).
+   *
+   * Returns the updated token record, or null if the token doesn't belong
+   * to the given user.
+   */
+  async updateMcpTokenDriveScopes(
+    tokenId: string,
+    userId: string,
+    drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[]
+  ): Promise<McpToken | null> {
+    // Ownership check — must match both tokenId AND userId
+    const existing = await db.query.mcpTokens.findFirst({
+      where: and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)),
+      columns: { id: true },
+    });
+    if (!existing) return null;
+
+    return db.transaction(async (tx) => {
+      // Delete all existing drive scopes for this token
+      await tx.delete(mcpTokenDrives).where(eq(mcpTokenDrives.tokenId, tokenId));
+
+      // Insert new scopes
+      if (drives.length > 0) {
+        await tx.insert(mcpTokenDrives).values(
+          drives.map(({ id: driveId, role, customRoleId }) => ({
+            tokenId,
+            driveId,
+            role,
+            customRoleId: customRoleId ?? null,
+            addedBy: userId,
+          }))
+        );
+      }
+
+      // Ensure token stays scoped (once scoped, always scoped)
+      const [updated] = await tx
+        .update(mcpTokens)
+        .set({ isScoped: true })
+        .where(eq(mcpTokens.id, tokenId))
+        .returning();
+
+      return updated;
+    });
+  },
 };
 
 export type SessionRepository = typeof sessionRepository;

@@ -18,7 +18,7 @@ import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monito
 import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
 import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
-import { ensureTaskItemForPage } from './task-sync-service';
+import { ensureTaskItemForPage, ensureTaskListForPage } from './task-sync-service';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -801,6 +801,17 @@ export const pageService = {
         parentId: page.parentId,
         userId,
       });
+
+      // Every TASK_LIST page needs its own `task_lists` + default status configs
+      // seeded immediately, not lazily on first UI load — a bare top-level TASK_LIST
+      // (no TASK_LIST parent) isn't covered by ensureTaskItemForPage above.
+      if (page.type === PageTypeEnum.TASK_LIST) {
+        await ensureTaskListForPage(tx, {
+          pageId: page.id,
+          title: page.title ?? 'Task List',
+          userId,
+        });
+      }
 
       if (isAIChatPage(params.type as PageTypeEnum)) {
         await tx.insert(driveAgentMembers).values({

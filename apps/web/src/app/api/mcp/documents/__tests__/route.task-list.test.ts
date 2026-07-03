@@ -7,6 +7,7 @@ const mockFindFirstPage = vi.fn();
 const mockFindFirstTaskList = vi.fn();
 const mockFindManyStatusConfigs = vi.fn();
 const mockInsertReturning = vi.fn();
+const mockInsertStatusConfigValues = vi.fn();
 const mockSelectChildPages = vi.fn();
 const mockBackfillMissingTaskItems = vi.fn();
 const mockFetchEnrichedTasks = vi.fn();
@@ -71,10 +72,14 @@ vi.mock('@pagespace/db/db', () => ({
       taskLists: { findFirst: (...args: unknown[]) => mockFindFirstTaskList(...args) },
       taskStatusConfigs: { findMany: (...args: unknown[]) => mockFindManyStatusConfigs(...args) },
     },
-    insert: () => ({
-      values: () => ({
-        returning: (...args: unknown[]) => mockInsertReturning(...args),
-      }),
+    insert: (table: { pageId?: string }) => ({
+      values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+        if (table?.pageId === 'taskLists.pageId') {
+          return { returning: (...args: unknown[]) => mockInsertReturning(...args) };
+        }
+        mockInsertStatusConfigValues(vals);
+        return Promise.resolve(undefined);
+      },
     }),
     select: () => ({
       from: () => ({
@@ -84,14 +89,25 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 
-vi.mock('@/services/api/task-sync-service', () => ({
-  backfillMissingTaskItems: (...args: unknown[]) => mockBackfillMissingTaskItems(...args),
-}));
+// ensureTaskListForPage is real (not mocked) — it's the fix under test, exercised
+// against the mocked `db` above so we can assert the status configs actually persist.
+vi.mock('@/services/api/task-sync-service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/api/task-sync-service')>();
+  return {
+    ...actual,
+    backfillMissingTaskItems: (...args: unknown[]) => mockBackfillMissingTaskItems(...args),
+  };
+});
 
+// task-sync-service (real, unmocked below) also imports `desc`/`inArray` for its
+// other exports (addTaskItemUnderParent, backfillMissingTaskItems); include them
+// even though the code paths under test here don't call them.
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   asc: vi.fn(),
   and: vi.fn(),
+  desc: vi.fn(),
+  inArray: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -100,6 +116,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
+  taskItems: { pageId: 'taskItems.pageId' },
   taskStatusConfigs: { taskListId: 'taskStatusConfigs.taskListId', position: 'taskStatusConfigs.position' },
   DEFAULT_TASK_STATUSES: [
     { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
@@ -227,6 +244,57 @@ describe('MCP Documents API — TASK_LIST read', () => {
     await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
 
     expect(mockInsertReturning).not.toHaveBeenCalled();
+  });
+
+  it('persists the default task_status_configs (not just the response fallback) when auto-creating', async () => {
+    mockFindFirstTaskList.mockResolvedValue(null);
+    mockInsertReturning.mockResolvedValue([{ ...EXISTING_TASK_LIST, id: 'tl_new' }]);
+    // Simulates the findMany the route runs right after creation seeing the rows
+    // ensureTaskListForPage just inserted, so the separate empty-configs backfill
+    // check below doesn't also fire and double-insert.
+    mockFindManyStatusConfigs.mockResolvedValue([
+      { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
+    ]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockInsertStatusConfigValues).toHaveBeenCalledTimes(1);
+    const inserted = mockInsertStatusConfigValues.mock.calls[0][0];
+    expect(inserted).toHaveLength(4);
+    expect(inserted.map((c: { slug: string }) => c.slug)).toEqual([
+      'pending', 'in_progress', 'blocked', 'completed',
+    ]);
+    expect(inserted.every((c: { taskListId: string }) => c.taskListId === 'tl_new')).toBe(true);
+  });
+
+  it('does not insert status configs when the task list already has configs', async () => {
+    mockFindManyStatusConfigs.mockResolvedValue([
+      { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
+    ]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockInsertStatusConfigValues).not.toHaveBeenCalled();
+  });
+
+  it('backfills status configs for a legacy task_lists row that exists but has none', async () => {
+    // Reproduces the gap flagged in review: a task_lists row created by a pre-fix
+    // lazy-init path (or one seeded before this fix shipped) has zero configs.
+    // ensureTaskListForPage no-ops since the row already exists, so the read path
+    // itself must backfill once it observes the empty configs, instead of leaving
+    // that row permanently half-initialized.
+    mockFindFirstTaskList.mockResolvedValue(EXISTING_TASK_LIST);
+    mockFindManyStatusConfigs.mockResolvedValue([]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockInsertStatusConfigValues).toHaveBeenCalledTimes(1);
+    const inserted = mockInsertStatusConfigValues.mock.calls[0][0];
+    expect(inserted).toHaveLength(4);
+    expect(inserted.every((c: { taskListId: string }) => c.taskListId === EXISTING_TASK_LIST.id)).toBe(true);
   });
 
   it('uses custom status configs when present', async () => {

@@ -30,6 +30,62 @@ async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
 }
 
 /**
+ * Seed the default `task_status_configs` for a `task_lists` row. Swallows a
+ * unique-constraint violation on `(taskListId, slug)` — a concurrent caller may have
+ * seeded the same list a moment earlier; the caller only needed the configs to exist.
+ */
+export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): Promise<void> {
+  try {
+    await tx.insert(taskStatusConfigs).values(
+      DEFAULT_TASK_STATUSES.map(s => ({ taskListId, ...s }))
+    )
+  } catch (err) {
+    const message = err instanceof Error ? err.message : ''
+    if (!message.includes('unique') && !message.includes('duplicate')) throw err
+  }
+}
+
+/**
+ * Ensure a TASK_LIST page has its `task_lists` row and default `task_status_configs`
+ * seeded. Idempotent — a no-op if the `task_lists` row already exists. Callers that
+ * separately look up `task_status_configs` for display (the MCP documents `read` route,
+ * `page-read-tools.ts`'s `read_page`) also call `seedDefaultTaskStatusConfigs` when that
+ * lookup comes back empty, so a legacy `task_lists` row missed by a pre-fix lazy-init
+ * path gets backfilled on next read instead of staying half-initialized forever.
+ *
+ * Called from every page-creation and lazy-init entry point that seeds a TASK_LIST
+ * page's *own* task list (`page-service.ts`, `page-write-tools.ts`'s `create_page`,
+ * the MCP documents `read` route, and `page-read-tools.ts`'s `read_page`) — skipping
+ * it is what leaves `taskStatusConfigs` empty and crashes the Kanban UI
+ * (`STATUS_GROUP_CONFIG[group]` lookup with no matching group).
+ */
+export async function ensureTaskListForPage(
+  tx: Tx,
+  params: { pageId: string; title: string; userId: string; metadata?: Record<string, unknown> },
+): Promise<typeof taskLists.$inferSelect> {
+  const { pageId, title, userId, metadata } = params
+
+  let taskList = await tx.query.taskLists.findFirst({
+    where: eq(taskLists.pageId, pageId),
+  })
+
+  if (!taskList) {
+    const [created] = await tx.insert(taskLists).values({
+      userId,
+      pageId,
+      title,
+      status: 'pending',
+      ...(metadata ? { metadata } : {}),
+    }).returning()
+    taskList = created
+
+    await seedDefaultTaskStatusConfigs(tx, created.id)
+  }
+
+  return taskList
+}
+
+/**
  * Create the `task_items` row for a page under a known TASK_LIST parent.
  * Idempotent — does nothing if the row already exists. Ensures the parent's
  * `task_lists` row and default status configs exist first.
@@ -40,23 +96,7 @@ async function addTaskItemUnderParent(
 ): Promise<void> {
   const { pageId, parentId, userId } = params
 
-  let taskList = await tx.query.taskLists.findFirst({
-    where: eq(taskLists.pageId, parentId),
-  })
-
-  if (!taskList) {
-    const [created] = await tx.insert(taskLists).values({
-      userId,
-      pageId: parentId,
-      title: 'Task List',
-      status: 'pending',
-    }).returning()
-    taskList = created
-
-    await tx.insert(taskStatusConfigs).values(
-      DEFAULT_TASK_STATUSES.map(s => ({ taskListId: created.id, ...s }))
-    )
-  }
+  await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
 
   const existing = await tx.query.taskItems.findFirst({
     where: eq(taskItems.pageId, pageId),

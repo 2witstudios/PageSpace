@@ -93,6 +93,13 @@ export const WRITE_TOOLS = new Set([
 // Web search tools (excluded when web search is disabled)
 const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
 
+// Tools that require account-level (unscoped) access — excluded entirely from
+// a drive-scoped MCP token's tool list, mirroring the isMcpScoped() call-time
+// guard in the tool's own execute() (e.g. drive-tools.ts create_drive). This
+// hides the tool from listing instead of only rejecting it after the model
+// tries to call it.
+export const ACCOUNT_LEVEL_ONLY_TOOLS = new Set(['create_drive']);
+
 /**
  * Check if a tool modifies content
  */
@@ -120,6 +127,29 @@ export function filterToolsForReadOnly<T>(
  */
 export function isWebSearchTool(toolName: string): boolean {
   return WEB_SEARCH_TOOLS.has(toolName);
+}
+
+/**
+ * Check if a tool requires account-level (unscoped) access
+ */
+export function isAccountLevelOnlyTool(toolName: string): boolean {
+  return ACCOUNT_LEVEL_ONLY_TOOLS.has(toolName);
+}
+
+/**
+ * Filter tools based on MCP drive scope.
+ * A drive-scoped token (isScoped) cannot see account-level-only tools like
+ * create_drive — they would fail at call time anyway, so hide them from listing.
+ */
+export function filterToolsForMcpScope<T>(
+  tools: Record<string, T>,
+  isScoped: boolean
+): Record<string, T> {
+  if (!isScoped) return tools;
+
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !isAccountLevelOnlyTool(name))
+  );
 }
 
 /**

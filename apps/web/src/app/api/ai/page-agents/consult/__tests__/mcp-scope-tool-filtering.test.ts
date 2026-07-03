@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
+import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth';
 
 // ============================================================================
-// Prepaid credit-gate enforcement for POST /api/ai/page-agents/consult
+// Account-level-only tool listing for POST /api/ai/page-agents/consult
 //
-// The gate is consulted after the view-permission check and before the model
-// is invoked: an out-of-credits user gets a 402 and generateText never runs.
+// Verifies that create_drive (account-level-only, cannot be used by a
+// drive-scoped MCP token) is excluded from availableTools for a scoped MCP
+// token, while session/unscoped auth still sees it. Spies on the REAL
+// filterToolsForMcpScope (via importOriginal) rather than stubbing it away.
 // ============================================================================
 
 vi.mock('@/lib/auth', () => ({
@@ -13,7 +15,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   isMCPAuthResult: vi.fn((r: { tokenType?: string }) => r?.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
-  getAllowedDriveIds: vi.fn(() => []),
+  getAllowedDriveIds: vi.fn((auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? []),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -37,9 +39,8 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
-// Single row returned for every query in this test's db mock — so it carries both
-// the agent-page fields and the gate user's subscriptionTier/role.
-const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat', systemPrompt: 'You help.', enabledTools: [], subscriptionTier: 'pro', role: 'user' };
+// enabledTools includes create_drive so filtering behavior is observable.
+const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat', systemPrompt: 'You help.', enabledTools: ['create_drive', 'list_pages'], subscriptionTier: 'pro', role: 'user' };
 
 vi.mock('@pagespace/db/db', () => {
   type QueryBuilder = {
@@ -62,7 +63,6 @@ vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id' }, drives: { id: 'id' }, chatMessages: { pageId: 'pageId', createdAt: 'createdAt' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', subscriptionTier: 'subscriptionTier' } }));
 
-// The credit gate under test. Default: allowed. Individual tests override.
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
@@ -75,9 +75,20 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
   isProviderError: vi.fn().mockReturnValue(false),
 }));
+// pageSpaceTools includes create_drive so filtering behavior is observable.
 vi.mock('@/lib/ai/core/ai-tools', () => ({
-  pageSpaceTools: {},
+  pageSpaceTools: {
+    create_drive: { description: 'create_drive' },
+    list_pages: { description: 'list_pages' },
+  },
 }));
+vi.mock('@/lib/ai/core/tool-filtering', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/ai/core/tool-filtering')>();
+  return {
+    ...actual,
+    filterToolsForMcpScope: vi.fn(actual.filterToolsForMcpScope),
+  };
+});
 vi.mock('@/lib/ai/core/timestamp-utils', () => ({
   buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
 }));
@@ -96,6 +107,9 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
 
 vi.mock('@/lib/ai/core/tool-utils', () => ({ mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })) }));
 vi.mock('@/lib/ai/tools/finish-tool', () => ({ finishTool: {}, FINISH_TOOL_NAME: 'finish' }));
+vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
+  resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
+}));
 
 vi.mock('ai', () => ({
   generateText: vi.fn().mockResolvedValue({
@@ -110,17 +124,25 @@ vi.mock('ai', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { createAIProvider } from '@/lib/ai/core/provider-factory';
-import { generateText } from 'ai';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 
-const mockAuth = (): SessionAuthResult => ({
+const mockWebAuth = (): SessionAuthResult => ({
   userId: 'user-1',
   tokenVersion: 0,
   tokenType: 'session',
   sessionId: 'sess-1',
   role: 'user',
   adminRoleVersion: 0,
+});
+
+const mockMCPAuth = (allowedDriveIds: string[]): MCPAuthResult => ({
+  userId: 'user-1',
+  tokenVersion: 0,
+  tokenType: 'mcp',
+  tokenId: 'mcp-token-1',
+  role: 'user',
+  adminRoleVersion: 0,
+  allowedDriveIds,
 });
 
 const makeRequest = () =>
@@ -130,62 +152,33 @@ const makeRequest = () =>
     body: JSON.stringify({ agentId: 'agent-1', question: 'What is up?' }),
   });
 
-describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
+describe('POST /api/ai/page-agents/consult - account-level-only tool listing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
-    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-    // Reset the shared row to a non-admin, public-provider default each test.
     agentPage.aiProvider = 'openai';
     agentPage.aiModel = 'openai/gpt-5.3-chat';
     agentPage.role = 'user';
   });
 
-  it('returns 402 out_of_credits and never configures a provider or invokes the model', async () => {
-    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+  it('excludes create_drive from availableTools for a drive-scoped MCP token', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockMCPAuth(['drive-1']));
 
-    const response = await POST(makeRequest());
+    await POST(makeRequest());
 
-    expect(response.status).toBe(402);
-    const body = await response.json();
-    expect(body.error).toBe('out_of_credits');
-    expect(createAIProvider).not.toHaveBeenCalled();
-    expect(generateText).not.toHaveBeenCalled();
+    expect(filterToolsForMcpScope).toHaveBeenCalledWith(expect.anything(), true);
+    const filtered = vi.mocked(filterToolsForMcpScope).mock.results[0]?.value as Record<string, unknown>;
+    expect(filtered).not.toHaveProperty('create_drive');
+    expect(filtered).toHaveProperty('list_pages');
   });
 
-  it('does not block with a 402 when the gate allows', async () => {
-    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
+  it('includes create_drive in availableTools for session (unscoped) auth', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth());
 
-    const response = await POST(makeRequest());
+    await POST(makeRequest());
 
-    expect(canConsumeAI).toHaveBeenCalled();
-    expect(response.status).not.toBe(402);
-  });
-
-  it('rejects a non-admin consulting an admin-only (glm) agent with 403 and never invokes the model', async () => {
-    // P1#2 — the admin Z.ai Coder Plan is unmetered; a non-admin viewer of a
-    // glm-configured shared agent must NOT be able to consume it.
-    agentPage.aiProvider = 'glm';
-    agentPage.aiModel = 'glm-4.7';
-    agentPage.role = 'user';
-
-    const response = await POST(makeRequest());
-
-    expect(response.status).toBe(403);
-    expect(canConsumeAI).not.toHaveBeenCalled();
-    expect(generateText).not.toHaveBeenCalled();
-  });
-
-  it('lets an admin consult a glm agent and skips the credit gate (unmetered)', async () => {
-    agentPage.aiProvider = 'glm';
-    agentPage.aiModel = 'glm-4.7';
-    agentPage.role = 'admin';
-
-    const response = await POST(makeRequest());
-
-    expect(response.status).not.toBe(403);
-    // Exempt provider: the gate is skipped entirely (no hold, no balance check).
-    expect(canConsumeAI).not.toHaveBeenCalled();
-    expect(generateText).toHaveBeenCalled();
+    expect(filterToolsForMcpScope).toHaveBeenCalledWith(expect.anything(), false);
+    const filtered = vi.mocked(filterToolsForMcpScope).mock.results[0]?.value as Record<string, unknown>;
+    expect(filtered).toHaveProperty('create_drive');
+    expect(filtered).toHaveProperty('list_pages');
   });
 });

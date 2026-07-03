@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
@@ -343,10 +344,13 @@ export async function POST(request: Request) {
       mcpTokenId: isMCPAuthResult(auth) ? auth.tokenId : undefined,
     };
 
+    // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.
+    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, getAllowedDriveIds(auth).length > 0);
+
     // Filter tools based on agent's enabled tools
     const availableTools = Array.isArray(enabledTools) && enabledTools.length > 0
       ? Object.fromEntries(
-          Object.entries(pageSpaceTools).filter(([toolName]) =>
+          Object.entries(scopedPageSpaceTools).filter(([toolName]) =>
             enabledTools.includes(toolName)
           )
         )
