@@ -972,6 +972,11 @@
       "import": "./dist/auth/token-utils.js",
       "require": "./dist/auth/token-utils.js"
     },
+    "./auth/mcp-token-scopes": {
+      "types": "./dist/auth/mcp-token-scopes.d.ts",
+      "import": "./dist/auth/mcp-token-scopes.js",
+      "require": "./dist/auth/mcp-token-scopes.js"
+    },
     "./auth/exchange-codes": {
       "types": "./dist/auth/exchange-codes.d.ts",
       "import": "./dist/auth/exchange-codes.js",

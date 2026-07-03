@@ -21,6 +21,7 @@ vi.mock('@/lib/repositories/session-repository', () => ({
     findUserMcpTokensWithDrives: vi.fn(),
     findMcpTokenByIdAndUser: vi.fn(),
     revokeMcpToken: vi.fn(),
+    updateMcpTokenDriveScopes: vi.fn(),
   },
 }));
 
@@ -52,11 +53,21 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logTokenActivity: vi.fn(),
 }));
 
-import { DELETE } from '../route';
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
+  customRoleBelongsToDrive: vi.fn().mockResolvedValue(true),
+  getMemberCustomRoleId: vi.fn().mockResolvedValue(null),
+}));
+
+import { DELETE, PATCH } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 
 const createContext = (tokenId = 'token-123') => ({
   params: Promise.resolve({ tokenId }),
@@ -158,5 +169,177 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
       'Error revoking MCP token:',
       new Error('DB connection error')
     );
+  });
+});
+
+describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      userId: 'test-user-id',
+      role: 'user',
+      tokenVersion: 0,
+      tokenType: 'session',
+      sessionId: 'test-session-id',
+    } as never);
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockResolvedValue({
+      id: 'token-123',
+      name: 'My Token',
+    });
+    vi.mocked(sessionRepository.updateMcpTokenDriveScopes).mockResolvedValue({
+      id: 'token-123',
+      userId: 'test-user-id',
+      tokenHash: 'hash',
+      tokenPrefix: 'mcp_test',
+      name: 'My Token',
+      isScoped: true,
+      lastUsed: null,
+      createdAt: new Date(),
+      revokedAt: null,
+    } as never);
+    vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([
+      { id: 'drive-1', name: 'My Drive' },
+    ]);
+    vi.mocked(getDriveAccess).mockResolvedValue({
+      isOwner: true,
+      isMember: true,
+      isAdmin: true,
+    } as never);
+  });
+
+  it('returns 404 when token not found', async () => {
+    vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockResolvedValueOnce(null);
+
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ drives: [{ id: 'drive-1' }] }),
+    });
+
+    const response = await PATCH(request, createContext());
+    expect(response.status).toBe(404);
+  });
+
+  it('returns 400 when both drives and driveIds are provided', async () => {
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({
+        drives: [{ id: 'drive-1' }],
+        driveIds: ['drive-2'],
+      }),
+    });
+
+    const response = await PATCH(request, createContext());
+    expect(response.status).toBe(400);
+  });
+
+  it('returns 403 when user lacks access to a drive', async () => {
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({
+      isOwner: false,
+      isMember: false,
+      isAdmin: false,
+    } as never);
+
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ drives: [{ id: 'forbidden-drive' }] }),
+    });
+
+    const response = await PATCH(request, createContext());
+    expect(response.status).toBe(403);
+  });
+
+  it('returns 403 when member tries to grant ADMIN', async () => {
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({
+      isOwner: false,
+      isMember: true,
+      isAdmin: false,
+    } as never);
+
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ drives: [{ id: 'drive-1', role: 'ADMIN' }] }),
+    });
+
+    const response = await PATCH(request, createContext());
+    expect(response.status).toBe(403);
+  });
+
+  it('updates scopes and returns 200 on valid input', async () => {
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ drives: [{ id: 'drive-1', role: 'ADMIN' }] }),
+    });
+
+    const response = await PATCH(request, createContext());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.id).toBe('token-123');
+    expect(body.name).toBe('My Token');
+    expect(body.driveScopes).toEqual([{ id: 'drive-1', name: 'My Drive' }]);
+    expect(sessionRepository.updateMcpTokenDriveScopes).toHaveBeenCalledWith(
+      'token-123',
+      'test-user-id',
+      [{ id: 'drive-1', role: 'ADMIN', customRoleId: undefined }]
+    );
+  });
+
+  it('handles legacy driveIds format', async () => {
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ driveIds: ['drive-1'] }),
+    });
+
+    const response = await PATCH(request, createContext());
+    expect(response.status).toBe(200);
+    expect(sessionRepository.updateMcpTokenDriveScopes).toHaveBeenCalledWith(
+      'token-123',
+      'test-user-id',
+      [{ id: 'drive-1', role: null, customRoleId: undefined }]
+    );
+  });
+
+  it('returns 500 when db throws', async () => {
+    vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockRejectedValueOnce(
+      new Error('DB error')
+    );
+
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ drives: [{ id: 'drive-1' }] }),
+    });
+
+    const response = await PATCH(request, createContext());
+    expect(response.status).toBe(500);
   });
 });
