@@ -339,6 +339,337 @@ describe('page-read-tools', () => {
       });
     });
 
+    describe('include=content', () => {
+      const driveSlug = 'my-drive';
+      const driveId = 'drive-1';
+
+      const docPage = { id: 'doc-1', title: 'README', type: 'DOCUMENT', parentId: null, position: 1, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const codePage = { id: 'code-1', title: 'index.ts', type: 'CODE', parentId: null, position: 2, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const taskListPage = { id: 'tasks-1', title: 'Sprint Tasks', type: 'TASK_LIST', parentId: null, position: 3, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const channelPage = { id: 'channel-1', title: 'General', type: 'CHANNEL', parentId: null, position: 4, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const filePage = { id: 'file-1', title: 'report.pdf', type: 'FILE', parentId: null, position: 5, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+
+      const setupDriveAccessWithContent = (
+        visiblePages: unknown[],
+        contentRows: Array<{ id: string; content: string; contentMode: string; type: string }>,
+      ) => {
+        mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+        mockGetUserAccessiblePagesInDrive.mockResolvedValue(visiblePages as unknown as never);
+        (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(contentRows),
+          }),
+        });
+      };
+
+      it('returns content for a DOCUMENT and CODE page', async () => {
+        setupDriveAccessWithContent(
+          [docPage, codePage],
+          [
+            { id: 'doc-1', content: 'Hello world', contentMode: 'html', type: 'DOCUMENT' },
+            { id: 'code-1', content: 'export const x = 1;', contentMode: 'markdown', type: 'CODE' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string; contentOmitted?: string }> };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+        const code = result.pages.find(p => p.id === 'code-1');
+
+        assert({
+          given: 'include=content with a DOCUMENT page',
+          should: 'attach serialized content',
+          actual: doc?.content,
+          expected: 'Hello world',
+        });
+
+        assert({
+          given: 'include=content with a CODE page',
+          should: 'attach raw content untouched',
+          actual: code?.content,
+          expected: 'export const x = 1;',
+        });
+
+        assert({
+          given: 'text-serializable pages',
+          should: 'not set contentOmitted',
+          actual: [doc?.contentOmitted, code?.contentOmitted],
+          expected: [undefined, undefined],
+        });
+      });
+
+      it('omits content with a reason for TASK_LIST, CHANNEL, and FILE pages', async () => {
+        setupDriveAccessWithContent(
+          [taskListPage, channelPage, filePage],
+          [
+            { id: 'tasks-1', content: '', contentMode: 'html', type: 'TASK_LIST' },
+            { id: 'channel-1', content: '', contentMode: 'html', type: 'CHANNEL' },
+            { id: 'file-1', content: '', contentMode: 'html', type: 'FILE' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string; contentOmitted?: string }> };
+
+        for (const id of ['tasks-1', 'channel-1', 'file-1']) {
+          const entry = result.pages.find(p => p.id === id);
+          assert({
+            given: `a structured page type (${id})`,
+            should: 'not include a content field',
+            actual: entry?.content,
+            expected: undefined,
+          });
+          assert({
+            given: `a structured page type (${id})`,
+            should: 'include a contentOmitted explanation',
+            actual: typeof entry?.contentOmitted,
+            expected: 'string',
+          });
+        }
+      });
+
+      it('reports the guardrail when the page count exceeds the content cap', async () => {
+        const manyPages = Array.from({ length: 60 }, (_, i) => ({
+          id: `page-${i}`,
+          title: `Page ${i}`,
+          type: 'DOCUMENT',
+          parentId: null,
+          position: i,
+          driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        }));
+        const contentRows = manyPages
+          .slice(0, 50)
+          .map(p => ({ id: p.id, content: 'x', contentMode: 'html', type: 'DOCUMENT' }));
+
+        setupDriveAccessWithContent(manyPages, contentRows);
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string }>;
+          contentTruncated: boolean;
+          contentPageCap: number;
+          nextSteps: string[];
+        };
+
+        assert({
+          given: '60 pages with include=content and a cap of 50',
+          should: 'flag contentTruncated as true',
+          actual: result.contentTruncated,
+          expected: true,
+        });
+
+        assert({
+          given: '60 pages with include=content',
+          should: 'only attach content to the first 50 pages',
+          actual: result.pages.filter(p => p.content !== undefined).length,
+          expected: 50,
+        });
+
+        assert({
+          given: 'truncated content batch',
+          should: 'report what was dropped in nextSteps rather than staying silent',
+          actual: result.nextSteps.some(s => s.includes('50') && s.includes('60')),
+          expected: true,
+        });
+      });
+
+      it('clips a single page whose content exceeds the per-page character cap', async () => {
+        const hugeContent = 'x'.repeat(10000);
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: hugeContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean; contentClippedAfterLine?: number }>;
+          contentClippedCount: number;
+          contentCharCapPerPage: number;
+          nextSteps: string[];
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'a page whose content exceeds the per-page char cap with no newlines to cut at',
+          should: 'fall back to a hard clip at the cap length',
+          actual: doc?.content?.length,
+          expected: result.contentCharCapPerPage,
+        });
+
+        assert({
+          given: 'a clipped page',
+          should: 'flag contentClipped: true on that entry',
+          actual: doc?.contentClipped,
+          expected: true,
+        });
+
+        assert({
+          given: 'a clipped page with no newlines',
+          should: 'report a single-line contentClippedAfterLine',
+          actual: doc?.contentClippedAfterLine,
+          expected: 1,
+        });
+
+        assert({
+          given: 'a batch with one clipped page',
+          should: 'report contentClippedCount',
+          actual: result.contentClippedCount,
+          expected: 1,
+        });
+
+        assert({
+          given: 'a batch with a clipped page',
+          should: 'mention the clip in nextSteps rather than staying silent',
+          actual: result.nextSteps.some(s => s.includes('clipped')),
+          expected: true,
+        });
+      });
+
+      it('cuts a clipped page at the last newline instead of mid-line', async () => {
+        // 900 lines of 10 chars + newline = 9900 chars, over the 8000 cap.
+        // The clip should land on a line boundary, not mid-line.
+        const lines = Array.from({ length: 900 }, (_, i) => `line${String(i).padStart(5, '0')}`);
+        const longContent = lines.join('\n');
+
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: longContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean; contentClippedAfterLine?: number }>;
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+        const clippedLines = doc?.content?.split('\n') ?? [];
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'not end mid-line (every line is a full "lineNNNNN" token)',
+          actual: clippedLines.every(l => /^line\d{5}$/.test(l)),
+          expected: true,
+        });
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'stay under the char cap',
+          actual: (doc?.content?.length ?? Infinity) <= 8000,
+          expected: true,
+        });
+
+        assert({
+          given: '900 ten-char lines clipped at an 8000-char cap (800 full lines fit exactly)',
+          should: 'keep exactly 800 complete lines',
+          actual: clippedLines.length,
+          expected: 800,
+        });
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'report contentClippedAfterLine matching the number of lines kept',
+          actual: doc?.contentClippedAfterLine,
+          expected: clippedLines.length,
+        });
+      });
+
+      it('does not clip content exactly at the per-page character cap', async () => {
+        const exactContent = 'x'.repeat(8000);
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: exactContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean }>;
+          contentClippedCount: number;
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'content exactly at the per-page char cap (not exceeding it)',
+          should: 'not be clipped',
+          actual: doc?.contentClipped,
+          expected: undefined,
+        });
+
+        assert({
+          given: 'content exactly at the per-page char cap',
+          should: 'keep the full content',
+          actual: doc?.content?.length,
+          expected: 8000,
+        });
+
+        assert({
+          given: 'content exactly at the per-page char cap',
+          should: 'report contentClippedCount of 0',
+          actual: result.contentClippedCount,
+          expected: 0,
+        });
+      });
+
+      it('does not truncate content when exactly at the page-count cap (50 pages)', async () => {
+        const exactlyFiftyPages = Array.from({ length: 50 }, (_, i) => ({
+          id: `page-${i}`,
+          title: `Page ${i}`,
+          type: 'DOCUMENT',
+          parentId: null,
+          position: i,
+          driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        }));
+        const contentRows = exactlyFiftyPages.map(p => ({ id: p.id, content: 'x', contentMode: 'html', type: 'DOCUMENT' }));
+
+        setupDriveAccessWithContent(exactlyFiftyPages, contentRows);
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string }>;
+          contentTruncated: boolean;
+        };
+
+        assert({
+          given: 'exactly 50 pages (the page-count cap) with include=content',
+          should: 'not flag contentTruncated',
+          actual: result.contentTruncated,
+          expected: false,
+        });
+
+        assert({
+          given: 'exactly 50 pages with include=content',
+          should: 'attach content to all 50 pages',
+          actual: result.pages.filter(p => p.content !== undefined).length,
+          expected: 50,
+        });
+      });
+    });
+
   });
 
   describe('read_page', () => {
