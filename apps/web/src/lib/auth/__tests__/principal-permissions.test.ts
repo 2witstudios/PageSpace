@@ -19,10 +19,16 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   getAppDriveAccessLevel: vi.fn(),
   getAppAccessiblePagesInDrive: vi.fn(),
   hasAppDriveMembership: vi.fn(),
+  getScopedAccessLevel: vi.fn(),
+  getScopedDriveMembership: vi.fn(),
+  getScopedDriveAccessLevel: vi.fn(),
+  getScopedAccessiblePagesInDrive: vi.fn(),
+  hasScopedDriveMembership: vi.fn(),
 }));
 
 import {
   isScopedMCPAuth,
+  isScopedOAuthAuth,
   getPrincipalAccessLevel,
   canPrincipalViewPage,
   canPrincipalEditPage,
@@ -54,6 +60,10 @@ import {
   getAppDriveMembership,
   getAppAccessiblePagesInDrive,
   hasAppDriveMembership,
+  getScopedAccessLevel,
+  getScopedDriveMembership,
+  getScopedAccessiblePagesInDrive,
+  hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
 
 const USER_ID = 'user_aaaaaaaaaaaaaaaaaaaaaa';
@@ -66,6 +76,18 @@ const sessionAuth: AuthResult = { ...base, userId: USER_ID, tokenType: 'session'
 const unscopedMcpAuth: AuthResult = { ...base, userId: USER_ID, tokenType: 'mcp', tokenId: TOKEN_ID, allowedDriveIds: [] };
 const scopedMcpAuth: AuthResult = { ...base, userId: USER_ID, tokenType: 'mcp', tokenId: TOKEN_ID, allowedDriveIds: [DRIVE_ID] };
 
+const DRIVE_SCOPES = [{ driveId: DRIVE_ID, role: null, customRoleId: null }];
+const accountOAuthAuth: AuthResult = {
+  ...base, userId: USER_ID, tokenType: 'oauth', tokenId: TOKEN_ID,
+  scopes: { account: true, offlineAccess: false, drives: new Map() },
+  driveScopes: [], allowedDriveIds: [],
+};
+const scopedOAuthAuth: AuthResult = {
+  ...base, userId: USER_ID, tokenType: 'oauth', tokenId: TOKEN_ID,
+  scopes: { account: false, offlineAccess: false, drives: new Map([[DRIVE_ID, { kind: 'drive' as const, driveId: DRIVE_ID, role: { kind: 'inherit' as const } }]]) },
+  driveScopes: DRIVE_SCOPES, allowedDriveIds: [DRIVE_ID],
+};
+
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
 const VIEW_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
 
@@ -74,6 +96,21 @@ describe('isScopedMCPAuth', () => {
     expect(isScopedMCPAuth(sessionAuth)).toBe(false);
     expect(isScopedMCPAuth(unscopedMcpAuth)).toBe(false);
     expect(isScopedMCPAuth(scopedMcpAuth)).toBe(true);
+  });
+
+  it('is false for OAuth auth (even drive-scoped)', () => {
+    expect(isScopedMCPAuth(accountOAuthAuth)).toBe(false);
+    expect(isScopedMCPAuth(scopedOAuthAuth)).toBe(false);
+  });
+});
+
+describe('isScopedOAuthAuth', () => {
+  it('is true only for OAuth auth without the account scope', () => {
+    expect(isScopedOAuthAuth(sessionAuth)).toBe(false);
+    expect(isScopedOAuthAuth(unscopedMcpAuth)).toBe(false);
+    expect(isScopedOAuthAuth(scopedMcpAuth)).toBe(false);
+    expect(isScopedOAuthAuth(accountOAuthAuth)).toBe(false);
+    expect(isScopedOAuthAuth(scopedOAuthAuth)).toBe(true);
   });
 });
 
@@ -131,6 +168,34 @@ describe('dispatch matrix — page-level checks', () => {
     expect(await canPrincipalSharePage(scopedMcpAuth, PAGE_ID)).toBe(true);
     expect(canUserDeletePage).not.toHaveBeenCalled();
     expect(canUserSharePage).not.toHaveBeenCalled();
+  });
+
+  it('getPrincipalAccessLevel: drive-scoped OAuth token → scoped path with driveScopes+userId, indistinguishable from a scoped MCP token', async () => {
+    vi.mocked(getScopedAccessLevel).mockResolvedValue(VIEW_ONLY);
+    expect(await getPrincipalAccessLevel(scopedOAuthAuth, PAGE_ID)).toEqual(VIEW_ONLY);
+    expect(getScopedAccessLevel).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, PAGE_ID);
+    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    expect(getAppAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('getPrincipalAccessLevel: account-scoped OAuth token → user path (full-user credential, like an unscoped MCP token)', async () => {
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+    expect(await getPrincipalAccessLevel(accountOAuthAuth, PAGE_ID)).toEqual(FULL);
+    expect(getUserAccessLevel).toHaveBeenCalledWith(USER_ID, PAGE_ID);
+    expect(getScopedAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canPrincipalEditPage: scoped OAuth MEMBER-equivalent denied even though the user could edit', async () => {
+    vi.mocked(getScopedAccessLevel).mockResolvedValue(VIEW_ONLY);
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    expect(await canPrincipalEditPage(scopedOAuthAuth, PAGE_ID)).toBe(false);
+    expect(canUserEditPage).not.toHaveBeenCalled();
+  });
+
+  it('canPrincipalDeletePage / canPrincipalSharePage: scoped OAuth token keyed to scoped-app flags', async () => {
+    vi.mocked(getScopedAccessLevel).mockResolvedValue({ ...FULL, canDelete: false, canShare: true });
+    expect(await canPrincipalDeletePage(scopedOAuthAuth, PAGE_ID)).toBe(false);
+    expect(await canPrincipalSharePage(scopedOAuthAuth, PAGE_ID)).toBe(true);
   });
 });
 
@@ -203,6 +268,55 @@ describe('dispatch matrix — drive-level checks', () => {
     await getPrincipalAccessiblePagesInDrive(sessionAuth, DRIVE_ID);
     expect(getUserAccessiblePagesInDriveWithDetails).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
   });
+
+  it('isPrincipalDriveMember: drive-scoped OAuth token → scoped membership via driveScopes+userId', async () => {
+    vi.mocked(hasScopedDriveMembership).mockResolvedValue(true);
+    expect(await isPrincipalDriveMember(scopedOAuthAuth, DRIVE_ID)).toBe(true);
+    expect(hasScopedDriveMembership).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, DRIVE_ID);
+    expect(isUserDriveMember).not.toHaveBeenCalled();
+  });
+
+  it('getPrincipalDriveAccess: account-scoped OAuth token → user access (full-user credential)', async () => {
+    vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+    expect(await getPrincipalDriveAccess(accountOAuthAuth, DRIVE_ID)).toBe(true);
+    expect(getUserDriveAccess).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+  });
+
+  it('isPrincipalDriveOwnerOrAdmin: scoped OAuth token with explicit ADMIN role → true; MEMBER → false', async () => {
+    vi.mocked(getScopedDriveMembership).mockReturnValue({ role: 'MEMBER', customRoleId: null });
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true); // owning user IS admin — must not leak through
+    expect(await isPrincipalDriveOwnerOrAdmin(scopedOAuthAuth, DRIVE_ID)).toBe(false);
+    expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+
+    vi.mocked(getScopedDriveMembership).mockReturnValue({ role: 'ADMIN', customRoleId: null });
+    expect(await isPrincipalDriveOwnerOrAdmin(scopedOAuthAuth, DRIVE_ID)).toBe(true);
+  });
+
+  it('isPrincipalDriveOwnerOrAdmin: INHERITED OAuth scope row (role null) uses the owner\'s own authority', async () => {
+    vi.mocked(getScopedDriveMembership).mockReturnValue({ role: null, customRoleId: null });
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+    expect(await isPrincipalDriveOwnerOrAdmin(scopedOAuthAuth, DRIVE_ID)).toBe(true);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+  });
+
+  it('isPrincipalDriveOwnerOrAdmin: no matching OAuth scope row → false (no user fallback)', async () => {
+    vi.mocked(getScopedDriveMembership).mockReturnValue(null);
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+    expect(await isPrincipalDriveOwnerOrAdmin(scopedOAuthAuth, DRIVE_ID)).toBe(false);
+    expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+
+  it('getPrincipalDriveIds: drive-scoped OAuth token → its allowedDriveIds, NOT the user drive list', async () => {
+    vi.mocked(getDriveIdsForUser).mockResolvedValue(['other-drive']);
+    expect(await getPrincipalDriveIds(scopedOAuthAuth)).toEqual([DRIVE_ID]);
+    expect(getDriveIdsForUser).not.toHaveBeenCalled();
+  });
+
+  it('getPrincipalAccessiblePagesInDrive: drive-scoped OAuth token dispatches to getScopedAccessiblePagesInDrive', async () => {
+    vi.mocked(getScopedAccessiblePagesInDrive).mockResolvedValue([]);
+    await getPrincipalAccessiblePagesInDrive(scopedOAuthAuth, DRIVE_ID);
+    expect(getScopedAccessiblePagesInDrive).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, DRIVE_ID);
+  });
 });
 
 describe('getPrincipalBatchPagePermissions', () => {
@@ -230,5 +344,24 @@ describe('getPrincipalBatchPagePermissions', () => {
     const result = await getPrincipalBatchPagePermissions(scopedMcpAuth, []);
     expect(result.size).toBe(0);
     expect(getAppAccessiblePagesInDrive).not.toHaveBeenCalled();
+  });
+
+  it('drive-scoped OAuth token → resolves via getScopedAccessiblePagesInDrive, denying everything else', async () => {
+    vi.mocked(getScopedAccessiblePagesInDrive).mockResolvedValue([
+      { id: PAGE_ID, title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: VIEW_ONLY },
+    ]);
+
+    const result = await getPrincipalBatchPagePermissions(scopedOAuthAuth, [PAGE_ID, 'page_outside']);
+    expect(result.get(PAGE_ID)).toEqual(VIEW_ONLY);
+    expect(result.get('page_outside')).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+    expect(getScopedAccessiblePagesInDrive).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, DRIVE_ID);
+    expect(getBatchPagePermissions).not.toHaveBeenCalled();
+  });
+
+  it('account-scoped OAuth token → user batch path (full-user credential)', async () => {
+    const expected = new Map([[PAGE_ID, FULL]]);
+    vi.mocked(getBatchPagePermissions).mockResolvedValue(expected);
+    expect(await getPrincipalBatchPagePermissions(accountOAuthAuth, [PAGE_ID])).toBe(expected);
+    expect(getBatchPagePermissions).toHaveBeenCalledWith(USER_ID, [PAGE_ID]);
   });
 });
