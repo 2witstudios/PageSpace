@@ -59,6 +59,19 @@ export { listDrives } from './operations/drives.js';
 export { readPage } from './operations/pages.js';
 export { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
 
+// Drives & members operations (Phase 3 task 1).
+export {
+  assertDriveNameConfirmed,
+  createDrive,
+  renameDrive,
+  restoreDrive,
+  trashDrive,
+  updateDriveContext,
+} from './operations/drives.js';
+export type { ConfirmMismatch, Result } from './operations/drives.js';
+export { listDriveMembers } from './operations/members.js';
+export { listCollaborators } from './operations/collaborators.js';
+
 // Transport primitive types needed to declare custom operations. buildRequest/
 // parseResponse/executeRequest stay internal — the facade is the only caller.
 export type { HttpMethod } from './transport/types.js';
