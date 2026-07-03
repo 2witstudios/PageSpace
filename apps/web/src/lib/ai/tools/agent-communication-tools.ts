@@ -8,7 +8,8 @@ import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, isMcpScoped } from './actor-permissions';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
@@ -534,8 +535,14 @@ export const agentCommunicationTools = {
             aiModel: targetAgent.aiModel
           });
         
-        // 9. Filter tools for agent
-        const agentTools = filterToolsForAgent(targetAgent.enabledTools as string[] | null);
+        // 9. Filter tools for agent. Nested calls inherit the top-level caller's MCP
+        // drive scope via nestedContext below, so a scoped token must not be able to
+        // reach create_drive (or other account-level-only tools) through a consulted
+        // agent's enabledTools either — same listing gate as the top-level routes.
+        const agentTools = filterToolsForMcpScope(
+          filterToolsForAgent(targetAgent.enabledTools as string[] | null),
+          isMcpScoped(executionContext),
+        );
 
         // try/catch: resolver failures degrade to built-in tools only rather than hard-failing the call
         let integrationTools: Record<string, unknown> = {};
