@@ -78,7 +78,7 @@ async function addTaskItemUnderParent(
 ): Promise<void> {
   const { pageId, parentId, userId } = params
 
-  const taskList = await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
+  await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
 
   const existing = await tx.query.taskItems.findFirst({
     where: eq(taskItems.pageId, pageId),
