@@ -8,7 +8,7 @@ import type { UIMessage } from 'ai';
 import type { TextPart, FilePart, ToolPart, ProcessedToolPart, GroupedPart } from './message-types';
 import { isValidToolState } from './message-types';
 import { FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { isDiffTool, resolveEffectiveToolName } from './tool-calls/tool-significance';
+import { isDiffTool, isHiddenTool, resolveEffectiveToolName } from './tool-calls/tool-significance';
 
 /**
  * Groups message parts for rendering.
@@ -92,6 +92,16 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
           return;
         }
 
+        const effectiveToolName = resolveEffectiveToolName(toolName, toolPart.input);
+
+        // Skip hidden tool-discovery calls (tool_search, including when
+        // wrapped in execute_tool) the same way — ToolCallRenderer/
+        // CompactToolCallRenderer already render these as invisible, so they
+        // must never become a phantom entry in a run's count or summary.
+        if (isHiddenTool(toolName) || isHiddenTool(effectiveToolName)) {
+          return;
+        }
+
         flushTextGroup();
         flushFileGroup();
 
@@ -105,7 +115,6 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
           state,
         };
 
-        const effectiveToolName = resolveEffectiveToolName(toolName, toolPart.input);
         if (isDiffTool(effectiveToolName)) {
           // Diff-producing edits always stand alone, breaking any run.
           flushToolRun();

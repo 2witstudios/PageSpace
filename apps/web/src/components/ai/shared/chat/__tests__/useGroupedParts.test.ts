@@ -283,4 +283,57 @@ describe('useGroupedParts', () => {
     }
     expect(isToolRunGroupPart(result.current[2])).toBe(true);
   });
+
+  it('given a hidden tool_search call between visible tool calls, should skip it entirely and merge the run across it', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-tool_search', toolCallId: 'tc-2', toolName: 'tool_search', state: 'output-available', input: { query: 'edit' }, output: '[]' },
+      { type: 'tool-bash', toolCallId: 'tc-3', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    // tool_search is invisible: the two bash calls merge into one run of 2,
+    // and the search call must not appear anywhere in the output.
+    expect(result.current).toHaveLength(1);
+    const group = result.current[0];
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts).toHaveLength(2);
+      expect(group.parts.every(p => p.toolName !== 'tool_search')).toBe(true);
+    }
+  });
+
+  it('given a run consisting only of tool_search calls, should produce no group at all', () => {
+    const parts = asMessageParts([
+      { type: 'tool-tool_search', toolCallId: 'tc-1', toolName: 'tool_search', state: 'output-available', input: { query: 'a' }, output: '[]' },
+      { type: 'tool-tool_search', toolCallId: 'tc-2', toolName: 'tool_search', state: 'output-available', input: { query: 'b' }, output: '[]' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(0);
+  });
+
+  it('given an execute_tool-wrapped tool_search, should also skip it', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      {
+        type: 'tool-execute_tool',
+        toolCallId: 'tc-2',
+        toolName: 'execute_tool',
+        state: 'output-available',
+        input: { tool_name: 'tool_search', parameters: { query: 'edit' } },
+        output: '[]',
+      },
+      { type: 'tool-bash', toolCallId: 'tc-3', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(1);
+    const group = result.current[0];
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts).toHaveLength(2);
+      expect(group.parts.every(p => p.toolName !== 'execute_tool')).toBe(true);
+    }
+  });
 });

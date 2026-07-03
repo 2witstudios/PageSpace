@@ -13,6 +13,21 @@ export function isDiffTool(toolName: string): boolean {
   return DIFF_TOOL_NAMES.has(toolName);
 }
 
+/**
+ * Tool discovery calls the model makes internally (`tool_search`) that
+ * ToolCallRenderer/CompactToolCallRenderer already render as invisible
+ * (return null). Shared here so useGroupedParts can skip them the same way
+ * it skips FINISH_TOOL_NAME — otherwise a hidden search call could get
+ * counted into a ToolRunGroup's summary ("Ran 3 commands (tool_search x1, ...)")
+ * or, if a run were entirely searches, collapse into a group that expands to
+ * nothing visible.
+ */
+export const HIDDEN_TOOL_NAMES = new Set(['tool_search']);
+
+export function isHiddenTool(toolName: string): boolean {
+  return HIDDEN_TOOL_NAMES.has(toolName);
+}
+
 const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
   if (typeof value === 'string') {
     try {
