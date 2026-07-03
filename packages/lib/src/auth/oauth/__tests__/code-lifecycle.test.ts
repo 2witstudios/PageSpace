@@ -13,7 +13,7 @@ function s256(verifier: string): string {
 }
 
 const NOW = new Date('2026-07-03T12:00:00.000Z');
-const VERIFIER = 'a-valid-code-verifier-value-1234567890';
+const VERIFIER = 'a-valid-code-verifier-value-1234567890-abcdef';
 const CHALLENGE = s256(VERIFIER);
 
 function authCode(overrides: Partial<AuthorizationCodeRecord> = {}): AuthorizationCodeRecord {

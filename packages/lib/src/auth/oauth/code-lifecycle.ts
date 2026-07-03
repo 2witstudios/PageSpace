@@ -12,7 +12,7 @@
  * unions instead of booleans-with-meanings, fail-closed at every boundary.
  */
 
-import { createHash } from 'crypto';
+import { verifyPkceChallenge } from './pkce';
 
 // ---------------------------------------------------------------------------
 // Policy constants — named, not buried as literals in the branches below.
@@ -64,12 +64,6 @@ export type CodeExchangeDecision =
   | { status: 'redirect_mismatch' }
   | { status: 'pkce_failed' };
 
-function verifyPkceS256(codeVerifier: string, codeChallenge: string): boolean {
-  if (!codeVerifier) return false;
-  const computed = createHash('sha256').update(codeVerifier).digest('base64url');
-  return computed === codeChallenge;
-}
-
 /**
  * Decide the outcome of exchanging an authorization code.
  *
@@ -97,7 +91,7 @@ export function decideCodeExchange(
     return { status: 'redirect_mismatch' };
   }
 
-  if (!verifyPkceS256(input.codeVerifier, record.codeChallenge)) {
+  if (!verifyPkceChallenge(input.codeVerifier, record.codeChallenge, 'S256')) {
     return { status: 'pkce_failed' };
   }
 
