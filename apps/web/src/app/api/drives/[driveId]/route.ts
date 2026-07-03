@@ -114,6 +114,18 @@ export async function PATCH(
     const userId = auth.userId;
 
     const body = await request.json();
+
+    // publishSubdomain lives on this schema's reject-list, not its allow-list:
+    // it has its own dedicated endpoint (tier-gating, conflict checks, and
+    // republish/rollback via changePublishSubdomain()) that this generic route
+    // must not bypass or duplicate.
+    if (typeof body === 'object' && body !== null && 'publishSubdomain' in body) {
+      return NextResponse.json(
+        { error: 'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.' },
+        { status: 400 }
+      );
+    }
+
     const validatedBody = patchSchema.parse(body);
 
     // Check drive exists
@@ -230,15 +242,6 @@ export async function PATCH(
     return NextResponse.json(updatedDrive);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      const unrecognizedKeys = error.issues
-        .filter((issue) => issue.code === 'unrecognized_keys')
-        .flatMap((issue) => issue.keys);
-      if (unrecognizedKeys.includes('publishSubdomain')) {
-        return NextResponse.json(
-          { error: 'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.' },
-          { status: 400 }
-        );
-      }
       return NextResponse.json(
         { error: 'Invalid request body', details: error.issues },
         { status: 400 }
