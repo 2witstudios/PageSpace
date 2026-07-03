@@ -10,6 +10,7 @@ vi.mock('@pagespace/db/db', () => ({
     where: vi.fn(),
     orderBy: vi.fn().mockReturnThis(),
     groupBy: vi.fn().mockReturnThis(),
+    insert: vi.fn(),
     query: {
       pages: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       drives: { findFirst: vi.fn() },
@@ -641,6 +642,12 @@ describe('page-read-tools', () => {
         mockDb.query.taskStatusConfigs = {
           findMany: vi.fn().mockResolvedValue(opts.statusConfigs ?? []),
         } as unknown as typeof mockDb.query.taskStatusConfigs;
+        // Default no-op insert: most of these tests aren't asserting on the
+        // legacy-backfill insert this triggers when statusConfigs is empty
+        // (see the dedicated backfill test below, which overrides this).
+        mockDb.insert = vi.fn(() => ({
+          values: () => Promise.resolve(undefined),
+        })) as unknown as typeof mockDb.insert;
 
         // db.select().from().innerJoin().where().orderBy() for tasks (title joined from pages)
         // db.select().from().innerJoin().where().groupBy() for sub-task count aggregates
@@ -765,6 +772,95 @@ describe('page-read-tools', () => {
           should: 'compute percentage from the done group',
           actual: result.progress.percentage,
           expected: 67,
+        });
+      });
+
+      it('persists a task_lists row AND seeds task_status_configs when auto-creating (not just the response fallback)', async () => {
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }] });
+
+        // No taskLists row exists yet for this page.
+        mockDb.query.taskLists = {
+          findFirst: vi.fn().mockResolvedValue(undefined),
+        } as unknown as typeof mockDb.query.taskLists;
+        // Simulates the findMany the tool runs right after creation seeing the rows
+        // ensureTaskListForPage just inserted, so the separate empty-configs backfill
+        // check doesn't also fire and double-insert.
+        mockDb.query.taskStatusConfigs = {
+          findMany: vi.fn().mockResolvedValue([
+            { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
+          ]),
+        } as unknown as typeof mockDb.query.taskStatusConfigs;
+
+        const taskListInserts: Array<Record<string, unknown>> = [];
+        const statusConfigInserts: Array<Record<string, unknown>> = [];
+        mockDb.insert = vi.fn((table: { pageId?: string }) => ({
+          values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+            if (table?.pageId === 'pageId') {
+              taskListInserts.push(vals as Record<string, unknown>);
+              return { returning: () => Promise.resolve([{ id: 'list-new', pageId: 'page-1', title: 'My Tasks' }]) };
+            }
+            statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
+            return Promise.resolve(undefined);
+          },
+        })) as unknown as typeof mockDb.insert;
+
+        await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'a TASK_LIST page with no task_lists row yet',
+          should: 'insert exactly one task_lists row',
+          actual: taskListInserts.length,
+          expected: 1,
+        });
+        assert({
+          given: 'a newly auto-created task_lists row',
+          should: 'persist the 4 default task_status_configs (not just return them in the response)',
+          actual: statusConfigInserts.map(c => c.slug),
+          expected: ['pending', 'in_progress', 'blocked', 'completed'],
+        });
+        assert({
+          given: 'the persisted status configs',
+          should: 'link each row to the new task_lists id',
+          actual: statusConfigInserts.every(c => c.taskListId === 'list-new'),
+          expected: true,
+        });
+      });
+
+      it('backfills status configs for a legacy task_lists row that exists but has none', async () => {
+        // Reproduces the gap flagged in review: a task_lists row created by a pre-fix
+        // lazy-init path (or one seeded before this fix shipped) has zero configs.
+        // ensureTaskListForPage no-ops since the row already exists, so read_page
+        // itself must backfill once it observes the empty configs, instead of
+        // leaving that row permanently half-initialized.
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
+
+        const statusConfigInserts: Array<Record<string, unknown>> = [];
+        mockDb.insert = vi.fn(() => ({
+          values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+            statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
+            return Promise.resolve(undefined);
+          },
+        })) as unknown as typeof mockDb.insert;
+
+        await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'a task_lists row that already exists but has zero status configs',
+          should: 'backfill the 4 default status configs',
+          actual: statusConfigInserts.map(c => c.slug),
+          expected: ['pending', 'in_progress', 'blocked', 'completed'],
+        });
+        assert({
+          given: 'the backfilled status configs',
+          should: 'link each row to the existing task_lists id',
+          actual: statusConfigInserts.every(c => c.taskListId === 'list-1'),
+          expected: true,
         });
       });
     });

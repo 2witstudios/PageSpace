@@ -22,6 +22,8 @@ vi.mock('@pagespace/db/db', () => ({ db: {} }));
 
 import {
   ensureTaskItemForPage,
+  ensureTaskListForPage,
+  seedDefaultTaskStatusConfigs,
   syncTaskItemOnMove,
   backfillMissingTaskItems,
 } from '../task-sync-service';
@@ -49,6 +51,7 @@ function makeTx(config: {
 
   const taskItemInserts: Array<Record<string, unknown>> = [];
   const taskListInserts: Array<Record<string, unknown>> = [];
+  const taskStatusConfigInserts: Array<Record<string, unknown>> = [];
   const deletedPageIds: string[] = [];
 
   // getPageType: tx.select(...).from(pages).where(eq(pages.id, X)).limit(1)
@@ -69,6 +72,7 @@ function makeTx(config: {
         const isTaskItems = table?.pageId === 'taskItems.pageId';
         if (isTaskItems) taskItemInserts.push(vals as Record<string, unknown>);
         else if (table?.pageId === 'taskLists.pageId') taskListInserts.push(vals as Record<string, unknown>);
+        else taskStatusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
         // taskItems insert is awaited via .onConflictDoNothing(); taskLists via .returning().
         return { onConflictDoNothing: () => Promise.resolve(), returning: () => Promise.resolve([{ id: 'tasklist-1' }]) };
       },
@@ -83,8 +87,74 @@ function makeTx(config: {
     },
   };
 
-  return { tx, taskItemInserts, taskListInserts, deletedPageIds };
+  return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds };
 }
+
+describe('seedDefaultTaskStatusConfigs', () => {
+  it('inserts the 4 default status configs linked to the given task_lists id', async () => {
+    const { tx, taskStatusConfigInserts } = makeTx();
+    await seedDefaultTaskStatusConfigs(tx as never, 'list-1');
+    expect(taskStatusConfigInserts).toEqual([
+      { taskListId: 'list-1', slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
+    ]);
+  });
+
+  it('swallows a unique-constraint violation (concurrent caller already seeded this list)', async () => {
+    const { taskStatusConfigInserts } = makeTx();
+    const tx = {
+      insert: vi.fn(() => ({
+        values: () => Promise.reject(new Error('duplicate key value violates unique constraint "task_status_configs_task_list_slug"')),
+      })),
+    };
+    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).resolves.toBeUndefined();
+    expect(taskStatusConfigInserts).toHaveLength(0);
+  });
+
+  it('rethrows an unrelated error', async () => {
+    const tx = {
+      insert: vi.fn(() => ({
+        values: () => Promise.reject(new Error('connection reset')),
+      })),
+    };
+    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).rejects.toThrow('connection reset');
+  });
+});
+
+describe('ensureTaskListForPage', () => {
+  it('is a no-op when a task_lists row already exists for the page', async () => {
+    const { tx, taskListInserts, taskStatusConfigInserts } = makeTx({ existingTaskList: true });
+    const result = await ensureTaskListForPage(tx as never, { pageId: 'page-1', title: 'My List', userId: 'u' });
+    expect(result).toEqual({ id: 'tasklist-1' });
+    expect(taskListInserts).toHaveLength(0);
+    expect(taskStatusConfigInserts).toHaveLength(0);
+  });
+
+  it('seeds task_lists AND the default task_status_configs when none exist', async () => {
+    const { tx, taskListInserts, taskStatusConfigInserts } = makeTx({ existingTaskList: false });
+    const result = await ensureTaskListForPage(tx as never, { pageId: 'page-1', title: 'My List', userId: 'u' });
+
+    expect(result).toEqual({ id: 'tasklist-1' });
+    expect(taskListInserts).toEqual([
+      { userId: 'u', pageId: 'page-1', title: 'My List', status: 'pending' },
+    ]);
+    // This is the crux of the bug fix: previously only task_lists was seeded and
+    // task_status_configs was left empty, which is what crashes the Kanban UI.
+    expect(taskStatusConfigInserts).toEqual([
+      { taskListId: 'tasklist-1', slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
+    ]);
+  });
+
+  it('passes through optional metadata on the new task_lists row', async () => {
+    const { tx, taskListInserts } = makeTx({ existingTaskList: false });
+    await ensureTaskListForPage(tx as never, {
+      pageId: 'page-1',
+      title: 'My List',
+      userId: 'u',
+      metadata: { autoCreated: true },
+    });
+    expect(taskListInserts[0]).toMatchObject({ metadata: { autoCreated: true } });
+  });
+});
 
 describe('ensureTaskItemForPage', () => {
   it('does nothing for a non-TASK_LIST page (no parent lookup, no insert)', async () => {

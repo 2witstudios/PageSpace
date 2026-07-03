@@ -20,6 +20,7 @@ import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, create
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { ensureTaskListForPage } from '@/services/api/task-sync-service';
 import { replaceLines } from '@/lib/editor/line-edit';
 import { insertAtAnchor } from '@/lib/editor/text-edit';
 
@@ -623,6 +624,18 @@ export const pageWriteTools = {
             agentPageId: newPage.id,
             role: 'MEMBER',
             addedBy: userId,
+          });
+        }
+
+        // TASK_LIST pages need their `task_lists` + default status configs seeded
+        // immediately — unlike the browser's page-creation flow, this repository-level
+        // create() bypasses pageService.createPage()'s seeding, so without this the
+        // Kanban UI crashes on first load with no status-group config to render.
+        if (type === 'TASK_LIST') {
+          await ensureTaskListForPage(db, {
+            pageId: newPage.id,
+            title: newPage.title,
+            userId,
           });
         }
 
