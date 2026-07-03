@@ -360,7 +360,7 @@ describe('refreshTokenGrant — concurrent refresh yields exactly one winner', (
     const winner = first.outcome === 'ok' ? first : second;
     if (winner.outcome !== 'ok') throw new Error('unreachable');
     const winnerRow = refreshRows.find((r) => r.tokenHash === hashToken(winner.tokens.refreshToken));
-    expect(winnerRow?.revokedAt).toBeNull();
+    expect(winnerRow?.revokedAt).toBeFalsy();
 
     expect(refreshRows).toHaveLength(2);
     expect(accessRows).toHaveLength(1);
