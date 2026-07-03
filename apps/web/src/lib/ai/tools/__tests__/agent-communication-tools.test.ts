@@ -927,6 +927,10 @@ describe('agent-communication-tools', () => {
 
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(scopedAgent);
+        // vi.clearAllMocks() (outer beforeEach) clears call history but not a
+        // mockReturnValue override, so pin this back to the module's default
+        // (unscoped) each test regardless of execution order.
+        vi.mocked(isMcpScoped).mockReturnValue(false);
       });
 
       it('excludes create_drive from the nested agent tool list when the calling context is a drive-scoped MCP token', async () => {

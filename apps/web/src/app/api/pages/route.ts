@@ -6,8 +6,10 @@ import { getCreatablePageTypes } from '@pagespace/lib/content/page-types.config'
 import { PageType } from '@pagespace/lib/utils/enums'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult, canPrincipalEditPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult, isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth';
 import { pageService, type CreatePageParams } from '@/services/api';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const creatablePageTypes = [
@@ -59,6 +61,19 @@ export async function POST(request: Request) {
     const scopeError = checkMCPCreateScope(auth, validatedData.driveId);
     if (scopeError) {
       return scopeError;
+    }
+
+    // A drive-scoped MCP token cannot newly enable an account-level-only tool
+    // (e.g. create_drive) — mirrors the runtime chat/consult tool-list filtering.
+    if (validatedData.enabledTools && validatedData.enabledTools.length > 0) {
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const invalidTools = validatedData.enabledTools.filter((toolName) => !availableToolNames.includes(toolName));
+      if (invalidTools.length > 0) {
+        return NextResponse.json(
+          { error: `Invalid tools: ${invalidTools.join(', ')}` },
+          { status: 400 }
+        );
+      }
     }
 
     // Track MCP source so the unread indicator (blue dot) shows for MCP-created pages.

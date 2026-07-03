@@ -15,6 +15,7 @@ vi.mock('@/lib/auth', () => ({
   isMCPAuthResult: vi.fn((r: unknown) => (r as { tokenType?: string })?.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
+  isScopedMCPAuth: vi.fn(() => false),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));

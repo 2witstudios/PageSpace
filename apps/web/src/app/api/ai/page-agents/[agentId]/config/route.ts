@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
@@ -127,9 +128,11 @@ export async function PUT(
       parseEnabledToolsInput(agent.enabledTools).value
     );
 
-    // Validate enabled tools if provided
+    // Validate enabled tools if provided. A drive-scoped MCP token cannot
+    // newly enable an account-level-only tool (e.g. create_drive) — mirrors
+    // the runtime chat/consult tool-list filtering.
     if (Array.isArray(requestedEnabledTools.sanitized) && requestedEnabledTools.sanitized.length > 0) {
-      const availableToolNames = Object.keys(pageSpaceTools);
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
       const invalidTools = requestedEnabledTools.sanitized.filter(
         (toolName: string) => !availableToolNames.includes(toolName)
       );

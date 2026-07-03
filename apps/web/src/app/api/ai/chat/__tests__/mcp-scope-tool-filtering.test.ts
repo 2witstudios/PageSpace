@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../route';
 import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
@@ -16,10 +15,11 @@ import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result: any) => 'error' in result),
-  isMCPAuthResult: vi.fn((result: any) => result.tokenType === 'mcp'),
+  isAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
+  isMCPAuthResult: vi.fn((result: { tokenType?: string }) => result?.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
-  getAllowedDriveIds: vi.fn((auth: any) => auth.allowedDriveIds ?? []),
+  getAllowedDriveIds: vi.fn((auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? []),
+  isScopedMCPAuth: vi.fn((auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));

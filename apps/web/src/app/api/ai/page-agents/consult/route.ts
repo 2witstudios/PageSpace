@@ -3,7 +3,7 @@ import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from '
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -345,7 +345,7 @@ export async function POST(request: Request) {
     };
 
     // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.
-    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, getAllowedDriveIds(auth).length > 0);
+    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth));
 
     // Filter tools based on agent's enabled tools
     const availableTools = Array.isArray(enabledTools) && enabledTools.length > 0
