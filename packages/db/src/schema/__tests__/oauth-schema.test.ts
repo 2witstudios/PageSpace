@@ -106,6 +106,10 @@ describe('oauthAuthorizationCodes', () => {
     expect(columns.consumedAt.notNull).toBe(false);
   });
 
+  it('issuedFamilyId is nullable (set only once the code is successfully exchanged, for reuse revocation)', () => {
+    expect(columns.issuedFamilyId.notNull).toBe(false);
+  });
+
   it('exports relations to client and user', () => {
     expect(oauthAuthorizationCodesRelations).toBeDefined();
   });

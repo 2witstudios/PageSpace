@@ -37,6 +37,8 @@ describe('Opaque Token Generation', () => {
     expect(isValidTokenFormat('ps_svc_' + 'b'.repeat(43))).toBe(true);
     expect(isValidTokenFormat('ps_mcp_' + 'c'.repeat(43))).toBe(true);
     expect(isValidTokenFormat('ps_dev_' + 'd'.repeat(43))).toBe(true);
+    expect(isValidTokenFormat('ps_at_' + 'e'.repeat(43))).toBe(true);
+    expect(isValidTokenFormat('ps_rt_' + 'f'.repeat(43))).toBe(true);
   });
 
   it('rejects invalid token formats', () => {
@@ -52,6 +54,8 @@ describe('Opaque Token Generation', () => {
     expect(getTokenType('ps_svc_abc123')).toBe('svc');
     expect(getTokenType('ps_mcp_abc123')).toBe('mcp');
     expect(getTokenType('ps_dev_abc123')).toBe('dev');
+    expect(getTokenType('ps_at_abc123')).toBe('at');
+    expect(getTokenType('ps_rt_abc123')).toBe('rt');
     expect(getTokenType('invalid_token')).toBe(null);
   });
 
