@@ -175,9 +175,11 @@ Error response example:
 
 `400 Bad Request`.
 
-Setting a status whose `group` is `'done'` (or, for a task list with no
-custom configs yet, a literal `status === 'completed'`) stamps
-`completedAt` on the task.
+Setting an initial `status` at creation time whose `group` is `'done'` (or,
+for a task list with no custom configs yet, a literal `status === 'completed'`)
+stamps `completedAt` on the new task. This route only creates tasks (`GET`
+and `POST` are the only handlers here) — it does not cover status changes on
+an existing task.
 
 ### `POST /api/mcp/documents` (`operation: 'read'`, `TASK_LIST` pages)
 
