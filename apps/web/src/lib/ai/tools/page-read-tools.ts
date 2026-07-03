@@ -6,7 +6,7 @@ import { pages, chatMessages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
-import { getActorAccessiblePagesInDrive, canActorViewPage, canActorAccessDrive } from './actor-permissions';
+import { getActorAccessiblePagesInDrive, canActorViewPage, canActorAccessDrive, canActorManageDrive } from './actor-permissions';
 import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
@@ -836,8 +836,10 @@ export const pageReadTools = {
       }
 
       try {
-        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
-          throw new Error(`You don't have access to the "${driveSlug}" workspace`);
+        // Trash listing requires drive owner/admin — mirrors GET
+        // /api/drives/[driveId]/trash, which gates on the same bar.
+        if (!await canActorManageDrive(context as ToolExecutionContext, driveId)) {
+          throw new Error(`Only drive owners and admins can view the "${driveSlug}" workspace's trash`);
         }
 
         // Get all trashed pages in the drive (flat list)

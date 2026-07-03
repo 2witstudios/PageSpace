@@ -14,13 +14,19 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     audit: vi.fn(),
     auditRequest: vi.fn(),
 }));
-vi.mock('@pagespace/lib/services/drive-role-service', () => ({
-    checkDriveAccessForRoles: vi.fn(),
-    getRoleById: vi.fn(),
-    updateDriveRole: vi.fn(),
-    deleteDriveRole: vi.fn(),
-    validateRolePermissions: vi.fn(),
-}));
+vi.mock('@pagespace/lib/services/drive-role-service', async () => {
+    const actual = await vi.importActual<typeof import('@pagespace/lib/services/drive-role-service')>(
+      '@pagespace/lib/services/drive-role-service'
+    );
+    return {
+      ...actual,
+      checkDriveAccessForRoles: vi.fn(),
+      getRoleById: vi.fn(),
+      updateDriveRole: vi.fn(),
+      deleteDriveRole: vi.fn(),
+      validateRolePermissions: vi.fn(),
+    };
+});
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -444,6 +450,122 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
         isDefault: true,
         permissions: undefined,
       });
+    });
+  });
+
+  // ==========================================================================
+  // permissionsPatch (read-merge-write) — regression coverage for #1765:
+  // a single-page PATCH must never wipe another page's per-page grant.
+  // ==========================================================================
+  describe('permissionsPatch (read-merge-write)', () => {
+    beforeEach(() => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(updateDriveRole).mockResolvedValue({
+        role: createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId }),
+        wasDefault: false,
+      });
+    });
+
+    it('merges a single-page patch into the existing map instead of replacing it — page_1 survives a page_2-only PATCH', async () => {
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({
+          id: mockRoleId,
+          name: 'Original',
+          driveId: mockDriveId,
+          permissions: {
+            page_1: { canView: true, canEdit: true, canShare: false },
+          },
+        })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          permissionsPatch: {
+            page_2: { canView: true, canEdit: false, canShare: false },
+          },
+        }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+
+      expect(response.status).toBe(200);
+      expect(updateDriveRole).toHaveBeenCalledWith(mockDriveId, mockRoleId, expect.objectContaining({
+        permissions: {
+          page_1: { canView: true, canEdit: true, canShare: false },
+          page_2: { canView: true, canEdit: false, canShare: false },
+        },
+      }));
+    });
+
+    it('a null patch entry prunes the page key (falls back to drive-wide) instead of writing an all-false entry', async () => {
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({
+          id: mockRoleId,
+          name: 'Original',
+          driveId: mockDriveId,
+          permissions: {
+            page_1: { canView: true, canEdit: true, canShare: false },
+            page_2: { canView: true, canEdit: false, canShare: false },
+          },
+        })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          permissionsPatch: { page_1: null },
+        }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+
+      expect(response.status).toBe(200);
+      expect(updateDriveRole).toHaveBeenCalledWith(mockDriveId, mockRoleId, expect.objectContaining({
+        permissions: {
+          page_2: { canView: true, canEdit: false, canShare: false },
+        },
+      }));
+    });
+
+    it('rejects a request specifying both permissions and permissionsPatch', async () => {
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          permissions: { page_1: { canView: true, canEdit: false, canShare: false } },
+          permissionsPatch: { page_2: { canView: true, canEdit: false, canShare: false } },
+        }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Cannot specify both permissions and permissionsPatch');
+      expect(updateDriveRole).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid permissionsPatch structure', async () => {
+      vi.mocked(getRoleById).mockResolvedValue(
+        createRoleFixture({ id: mockRoleId, name: 'Original', driveId: mockDriveId })
+      );
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/${mockRoleId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          permissionsPatch: { page_1: { canView: 'yes' } },
+        }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockRoleId));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Invalid permissionsPatch structure');
+      expect(updateDriveRole).not.toHaveBeenCalled();
     });
   });
 

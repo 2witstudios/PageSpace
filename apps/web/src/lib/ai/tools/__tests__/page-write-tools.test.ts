@@ -118,6 +118,7 @@ vi.mock('@/lib/logging/mask', () => ({
 
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
+  checkDriveAccess: vi.fn(),
 }));
 
 vi.mock('@/services/api/task-sync-service', () => ({
@@ -131,6 +132,7 @@ import { getAgentAccessLevel } from '@pagespace/lib/permissions/agent-permission
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -140,6 +142,11 @@ const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockApplyPageMutation = vi.mocked(applyPageMutation);
 const mockEnsureTaskListForPage = vi.mocked(ensureTaskListForPage);
+const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
+
+const ownerAccess = { isOwner: true, isAdmin: true, isMember: true, drive: null };
+const adminAccess = { isOwner: false, isAdmin: true, isMember: true, drive: null };
+const deniedAccess = { isOwner: false, isAdmin: false, isMember: true, drive: null };
 
 describe('page-write-tools', () => {
   beforeEach(() => {
@@ -824,7 +831,8 @@ describe('page-write-tools', () => {
 
     it('trashes a drive when confirmDriveName matches', async () => {
       // Arrange
-      mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+      mockCheckDriveAccess.mockResolvedValue(ownerAccess);
+      mockDriveRepo.findById.mockResolvedValue({
         id: 'drive-1',
         name: 'My Drive',
         slug: 'my-drive',
@@ -854,7 +862,8 @@ describe('page-write-tools', () => {
     });
 
     it('rejects when confirmDriveName does not match the drive name', async () => {
-      mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+      mockCheckDriveAccess.mockResolvedValue(ownerAccess);
+      mockDriveRepo.findById.mockResolvedValue({
         id: 'drive-1',
         name: 'My Drive',
         slug: 'my-drive',
@@ -902,6 +911,52 @@ describe('page-write-tools', () => {
       const ok = schema.safeParse({ id: 'drive-1', confirmDriveName: '  My Drive  ' });
       expect(ok.success).toBe(true);
       expect(ok.data?.confirmDriveName).toBe('My Drive');
+    });
+
+    // Regression coverage for #1772: trash_drive was owner-only, unlike
+    // DELETE /api/drives/[driveId] which allows owner OR admin.
+    it('allows a drive admin (not just the owner) to trash the drive — matches DELETE /api/drives/[driveId]', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockDriveRepo.findById.mockResolvedValue({
+        id: 'drive-1',
+        name: 'My Drive',
+        slug: 'my-drive',
+        ownerId: 'owner-999',
+        kind: 'STANDARD' as const,
+        isTrashed: false,
+        trashedAt: null,
+      });
+      mockDriveRepo.trash.mockResolvedValue(undefined);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'admin-user' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.trash_drive.execute!(
+        { id: 'drive-1', confirmDriveName: 'My Drive' },
+        context
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(mockDriveRepo.trash).toHaveBeenCalledWith('drive-1');
+    });
+
+    it('denies a plain member (not owner or admin) from trashing the drive', async () => {
+      mockCheckDriveAccess.mockResolvedValue(deniedAccess);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.trash_drive.execute!(
+          { id: 'drive-1', confirmDriveName: 'My Drive' },
+          context
+        )
+      ).rejects.toThrow('do not have permission');
+      expect(mockDriveRepo.trash).not.toHaveBeenCalled();
     });
   });
 
@@ -1065,6 +1120,60 @@ describe('page-write-tools', () => {
           context
         )
       ).rejects.toThrow('User authentication required');
+    });
+
+    // Regression coverage for #1772: move_page only required per-page edit
+    // permission, unlike /api/pages/reorder which requires drive owner/admin
+    // for the same move+position operation. The bars must agree.
+    it('denies a member with page-edit access but no drive owner/admin role', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1', title: 'Test Page', type: 'DOCUMENT',
+        content: '', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      // Edit permission is granted, but the actor is a plain member — under
+      // the aligned bar this must NOT be enough to move the page.
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockCheckDriveAccess.mockResolvedValue(deniedAccess);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'Test Page', pageId: 'page-1', position: 1 },
+          context
+        )
+      ).rejects.toThrow('Only drive owners and admins can move pages');
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('allows a drive admin to move a page, matching /api/pages/reorder', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1', title: 'Test Page', type: 'DOCUMENT',
+        content: '', contentMode: 'html' as const,
+        driveId: 'drive-1', parentId: null, position: 1,
+        isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'admin-user' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', position: 2 },
+        context
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ pageId: 'page-1', operation: 'move' })
+      );
     });
   });
 
@@ -1254,7 +1363,8 @@ describe('trash_drive — Home drive guard', () => {
   });
 
   it('throws when trying to trash a Home drive', async () => {
-    mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+    mockCheckDriveAccess.mockResolvedValue(ownerAccess);
+    mockDriveRepo.findById.mockResolvedValue({
       id: 'home-drive',
       name: 'Home',
       slug: 'home',
@@ -1272,11 +1382,12 @@ describe('trash_drive — Home drive guard', () => {
     ).rejects.toThrow();
   });
 
-  it('driveRepository.findByIdAndOwner selects kind column', async () => {
+  it('driveRepository.findById selects kind column', async () => {
     // This test verifies kind is included in the drive record returned by
-    // findByIdAndOwner so guards can fire. If kind is missing, Home drives
-    // would be silently treated as STANDARD.
-    mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+    // findById so guards can fire. If kind is missing, Home drives would be
+    // silently treated as STANDARD.
+    mockCheckDriveAccess.mockResolvedValue(ownerAccess);
+    mockDriveRepo.findById.mockResolvedValue({
       id: 'home-drive',
       name: 'Home',
       slug: 'home',
@@ -1295,8 +1406,8 @@ describe('trash_drive — Home drive guard', () => {
       // Expected to throw
     }
 
-    // The key assertion: findByIdAndOwner was called (proving kind flows through)
-    expect(mockDriveRepo.findByIdAndOwner).toHaveBeenCalledWith('home-drive', 'user-123');
+    // The key assertion: findById was called (proving kind flows through)
+    expect(mockDriveRepo.findById).toHaveBeenCalledWith('home-drive');
   });
 });
 

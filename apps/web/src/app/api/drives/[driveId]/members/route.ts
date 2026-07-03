@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
-import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
+import { checkDriveAccess, listDriveMembers, getDriveOwnerAsMember } from '@pagespace/lib/services/drive-member-service';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -32,8 +32,17 @@ export async function GET(
       return NextResponse.json({ error: 'You must be a drive member to view members' }, { status: 403 });
     }
 
-    // Get all members with their profiles and permission counts
-    const members = await listDriveMembers(driveId);
+    // Get all members with their profiles and permission counts. The owner
+    // is never a drive_members row (ownership lives on drives.ownerId), so
+    // prepend it explicitly; unaccepted invitees are pending, not members.
+    const [rawMembers, ownerMember] = await Promise.all([
+      listDriveMembers(driveId),
+      getDriveOwnerAsMember(driveId),
+    ]);
+    const acceptedMembers = rawMembers.filter(
+      (m) => m.acceptedAt !== null && m.userId !== ownerMember?.userId
+    );
+    const members = ownerMember ? [ownerMember, ...acceptedMembers] : acceptedMembers;
 
     // Pending invites are visible to OWNER/ADMIN only. The field is always an
     // array (never undefined) so client-side SWR cache shape stays stable as
