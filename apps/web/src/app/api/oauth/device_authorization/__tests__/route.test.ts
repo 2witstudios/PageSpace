@@ -14,6 +14,8 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
   createDeviceAuthorization: (...args: unknown[]) => createDeviceAuthorization(...args),
 }));
 
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
 import { POST } from '../route';
 
 const CLIENT_ID = 'pagespace-cli';

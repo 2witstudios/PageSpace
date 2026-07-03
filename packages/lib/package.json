@@ -967,6 +967,11 @@
       "import": "./dist/auth/oauth/refresh-rotation.js",
       "require": "./dist/auth/oauth/refresh-rotation.js"
     },
+    "./auth/oauth/user-code": {
+      "types": "./dist/auth/oauth/user-code.d.ts",
+      "import": "./dist/auth/oauth/user-code.js",
+      "require": "./dist/auth/oauth/user-code.js"
+    },
     "./auth/account-lockout": {
       "types": "./dist/auth/account-lockout.d.ts",
       "import": "./dist/auth/account-lockout.js",

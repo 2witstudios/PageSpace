@@ -69,6 +69,8 @@ describe('POST /api/oauth/device_authorization/decision — CSRF/session gate', 
   });
 
   it('requires requireCSRF: true on the authentication call', async () => {
+    recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
+
     await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
     expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
       expect.anything(),

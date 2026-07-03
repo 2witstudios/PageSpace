@@ -103,6 +103,8 @@ describe('POST /api/oauth/device_authorization/verify — brute-force rate limit
   });
 
   it('checks both the IP and the session identity as distinct rate-limit keys', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'not_found' });
+
     await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never);
 
     const keys = checkDistributedRateLimit.mock.calls.map((c) => c[0] as string);

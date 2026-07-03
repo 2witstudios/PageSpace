@@ -37,7 +37,7 @@ const H = vi.hoisted(() => ({
   state: { dbTransactionImpl: null as null | ((cb: (tx: unknown) => unknown) => unknown) },
 }));
 
-const { oauthDeviceCodes, oauthClients, usersTable } = H;
+const { oauthDeviceCodes, usersTable } = H;
 
 vi.mock('@pagespace/db/schema/oauth', () => ({
   oauthDeviceCodes: H.oauthDeviceCodes,
@@ -261,7 +261,7 @@ describe('pollDeviceToken', () => {
     expect(deviceRow?.lastPolledAt).toEqual(now);
   });
 
-  it('returns slow_down when polling faster than the interval, and updates lastPolledAt regardless', async () => {
+  it('returns slow_down when polling faster than the interval, and does NOT reset the anchor', async () => {
     const first = new Date();
     seedDeviceRow({ lastPolledAt: first, pollIntervalSeconds: 5 });
 
@@ -269,7 +269,9 @@ describe('pollDeviceToken', () => {
     const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: tooSoon });
 
     expect(result).toEqual({ outcome: 'slow_down' });
-    expect(deviceRow?.lastPolledAt).toEqual(tooSoon);
+    // The anchor stays at `first` — a throttled poll must not buy the client
+    // a fresh countdown, or tight retries could push it forward forever.
+    expect(deviceRow?.lastPolledAt).toEqual(first);
   });
 
   it('enforces the throttle across separate polls via the persisted lastPolledAt', async () => {
