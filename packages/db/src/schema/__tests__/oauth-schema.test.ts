@@ -22,6 +22,7 @@ import {
   oauthAccessTokens,
   oauthAccessTokensRelations,
 } from '../oauth';
+import { schema } from '../../schema';
 
 function fkOnColumn(config: ReturnType<typeof getTableConfig>, columnName: string) {
   const fk = config.foreignKeys.find((candidate) =>
@@ -235,6 +236,24 @@ describe('oauthAccessTokens', () => {
 
   it('exports relations to client and user', () => {
     expect(oauthAccessTokensRelations).toBeDefined();
+  });
+});
+
+describe('drizzle relational schema registration', () => {
+  it('registers every oauth table on the schema const consumed by drizzle(pool, { schema })', () => {
+    expect(schema.oauthClients).toBe(oauthClients);
+    expect(schema.oauthAuthorizationCodes).toBe(oauthAuthorizationCodes);
+    expect(schema.oauthDeviceCodes).toBe(oauthDeviceCodes);
+    expect(schema.oauthRefreshTokens).toBe(oauthRefreshTokens);
+    expect(schema.oauthAccessTokens).toBe(oauthAccessTokens);
+  });
+
+  it('registers every oauth relations definition on the schema const', () => {
+    expect(schema.oauthClientsRelations).toBe(oauthClientsRelations);
+    expect(schema.oauthAuthorizationCodesRelations).toBe(oauthAuthorizationCodesRelations);
+    expect(schema.oauthDeviceCodesRelations).toBe(oauthDeviceCodesRelations);
+    expect(schema.oauthRefreshTokensRelations).toBe(oauthRefreshTokensRelations);
+    expect(schema.oauthAccessTokensRelations).toBe(oauthAccessTokensRelations);
   });
 });
 

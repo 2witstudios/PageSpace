@@ -102,6 +102,7 @@ import * as aiCompaction from './schema/ai-compaction';
 import * as customDomains from './schema/custom-domains';
 import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
+import * as oauth from './schema/oauth';
 
 export const schema = {
   ...auth,
@@ -155,4 +156,5 @@ export const schema = {
   ...customDomains,
   ...incidents,
   ...dataSubjectRequests,
+  ...oauth,
 };
