@@ -11,21 +11,28 @@ import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-type
 import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
-import { serializePageContentForAI } from '../core/page-serializer';
+import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
+
+// Batching raw content onto list_pages has no pagination to lean on (recursive
+// listing is already unbounded), so this caps how many pages can have content
+// fetched in one call. Chosen to comfortably cover a single small-to-medium
+// folder/audit pass while keeping the batched content query and payload size bounded.
+const MAX_CONTENT_INCLUDE_PAGES = 50;
 
 export const pageReadTools = {
   /**
    * Explore the folder structure and find content within a workspace
    */
   list_pages: tool({
-    description: 'List pages at a location in a workspace. Defaults to direct children of the drive root (ls-style). Pass parentId to navigate into a folder. Set recursive: true to return the full subtree. Each result includes hasChildren so you know whether to drill in further.',
+    description: 'List pages at a location in a workspace. Defaults to direct children of the drive root (ls-style). Pass parentId to navigate into a folder. Set recursive: true to return the full subtree. Each result includes hasChildren so you know whether to drill in further. Pass include: "content" to batch each page\'s content into the response instead of calling read_page per page — capped at ' + MAX_CONTENT_INCLUDE_PAGES + ' pages per call.',
     inputSchema: z.object({
       driveSlug: z.string().optional().describe('The human-readable slug of the drive (for semantic understanding)'),
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
+      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response, avoiding N+1 read_page calls. Capped at ${MAX_CONTENT_INCLUDE_PAGES} pages per call — CHANNEL/TASK_LIST/FILE pages get a short summary instead of full content (same as read_page).`),
     }),
-    execute: async ({ driveSlug, driveId, parentId, recursive = false }, { experimental_context: context }) => {
+    execute: async ({ driveSlug, driveId, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -80,6 +87,8 @@ export const pageReadTools = {
           hasChildren: boolean;
           isTaskLinked: boolean;
           path: string;
+          content?: string;
+          contentOmitted?: string;
         }
 
         let resultPages: PageEntry[];
@@ -117,6 +126,32 @@ export const pageReadTools = {
           resultPages = collectSubtree(parentId ?? null);
         }
 
+        // Batch content onto the result set in one additional query, rather than
+        // making callers do N read_page calls. There's no pagination anywhere on
+        // this endpoint to lean on for a size limit, so cap explicitly here and
+        // report what was dropped instead of silently truncating.
+        let contentTruncated = false;
+        if (include === 'content' && resultPages.length > 0) {
+          const pagesForContent = resultPages.slice(0, MAX_CONTENT_INCLUDE_PAGES);
+          contentTruncated = resultPages.length > MAX_CONTENT_INCLUDE_PAGES;
+
+          const contentRows = await db
+            .select({ id: pages.id, content: pages.content, contentMode: pages.contentMode, type: pages.type })
+            .from(pages)
+            .where(inArray(pages.id, pagesForContent.map(p => p.id)));
+          const contentMap = new Map(contentRows.map(r => [r.id, r]));
+
+          for (const entry of pagesForContent) {
+            const row = contentMap.get(entry.id);
+            if (!row) continue;
+            if (!isTextSerializablePageType(row.type)) {
+              entry.contentOmitted = `${row.type} pages return structured data, not inline text — use read_page with this page's ID instead.`;
+              continue;
+            }
+            entry.content = serializePageContentForAI(row);
+          }
+        }
+
         const driveLabel = driveSlug || driveId;
         const breadcrumb = buildBreadcrumb(parentId);
         const location = parentId ? buildPath(parentId) : `/${driveLabel}`;
@@ -130,13 +165,21 @@ export const pageReadTools = {
           pages: resultPages,
           count: resultPages.length,
           totalInDrive: visiblePages.length,
+          ...(include === 'content' && {
+            contentIncluded: true,
+            contentPageCap: MAX_CONTENT_INCLUDE_PAGES,
+            contentTruncated,
+          }),
           summary: recursive
             ? `Found ${resultPages.length} page${resultPages.length === 1 ? '' : 's'} in "${driveLabel}" (full tree)`
             : `Found ${resultPages.length} page${resultPages.length === 1 ? '' : 's'} in "${locationLabel}"`,
           nextSteps: resultPages.length > 0 ? [
-            'Use read_page with a page ID to read its content',
+            ...(include === 'content' ? [] : ['Use read_page with a page ID to read its content']),
             'Pass parentId with a folder ID to navigate into it',
             'Use create_page to add new content',
+            ...(contentTruncated ? [
+              `Content was only included for the first ${MAX_CONTENT_INCLUDE_PAGES} of ${resultPages.length} pages — the rest have no "content" field. Narrow with parentId or call read_page directly for the remaining pages.`,
+            ] : []),
           ] : [`"${locationLabel}" is empty — use create_page to add content`],
         };
       } catch (error) {

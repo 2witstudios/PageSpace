@@ -338,6 +338,155 @@ describe('page-read-tools', () => {
       });
     });
 
+    describe('include=content', () => {
+      const driveSlug = 'my-drive';
+      const driveId = 'drive-1';
+
+      const docPage = { id: 'doc-1', title: 'README', type: 'DOCUMENT', parentId: null, position: 1, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const codePage = { id: 'code-1', title: 'index.ts', type: 'CODE', parentId: null, position: 2, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const taskListPage = { id: 'tasks-1', title: 'Sprint Tasks', type: 'TASK_LIST', parentId: null, position: 3, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const channelPage = { id: 'channel-1', title: 'General', type: 'CHANNEL', parentId: null, position: 4, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const filePage = { id: 'file-1', title: 'report.pdf', type: 'FILE', parentId: null, position: 5, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+
+      const setupDriveAccessWithContent = (
+        visiblePages: unknown[],
+        contentRows: Array<{ id: string; content: string; contentMode: string; type: string }>,
+      ) => {
+        mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+        mockGetUserAccessiblePagesInDrive.mockResolvedValue(visiblePages as unknown as never);
+        (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(contentRows),
+          }),
+        });
+      };
+
+      it('returns content for a DOCUMENT and CODE page', async () => {
+        setupDriveAccessWithContent(
+          [docPage, codePage],
+          [
+            { id: 'doc-1', content: 'Hello world', contentMode: 'html', type: 'DOCUMENT' },
+            { id: 'code-1', content: 'export const x = 1;', contentMode: 'markdown', type: 'CODE' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string; contentOmitted?: string }> };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+        const code = result.pages.find(p => p.id === 'code-1');
+
+        assert({
+          given: 'include=content with a DOCUMENT page',
+          should: 'attach serialized content',
+          actual: doc?.content,
+          expected: 'Hello world',
+        });
+
+        assert({
+          given: 'include=content with a CODE page',
+          should: 'attach raw content untouched',
+          actual: code?.content,
+          expected: 'export const x = 1;',
+        });
+
+        assert({
+          given: 'text-serializable pages',
+          should: 'not set contentOmitted',
+          actual: [doc?.contentOmitted, code?.contentOmitted],
+          expected: [undefined, undefined],
+        });
+      });
+
+      it('omits content with a reason for TASK_LIST, CHANNEL, and FILE pages', async () => {
+        setupDriveAccessWithContent(
+          [taskListPage, channelPage, filePage],
+          [
+            { id: 'tasks-1', content: '', contentMode: 'html', type: 'TASK_LIST' },
+            { id: 'channel-1', content: '', contentMode: 'html', type: 'CHANNEL' },
+            { id: 'file-1', content: '', contentMode: 'html', type: 'FILE' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string; contentOmitted?: string }> };
+
+        for (const id of ['tasks-1', 'channel-1', 'file-1']) {
+          const entry = result.pages.find(p => p.id === id);
+          assert({
+            given: `a structured page type (${id})`,
+            should: 'not include a content field',
+            actual: entry?.content,
+            expected: undefined,
+          });
+          assert({
+            given: `a structured page type (${id})`,
+            should: 'include a contentOmitted explanation',
+            actual: typeof entry?.contentOmitted,
+            expected: 'string',
+          });
+        }
+      });
+
+      it('reports the guardrail when the page count exceeds the content cap', async () => {
+        const manyPages = Array.from({ length: 60 }, (_, i) => ({
+          id: `page-${i}`,
+          title: `Page ${i}`,
+          type: 'DOCUMENT',
+          parentId: null,
+          position: i,
+          driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        }));
+        const contentRows = manyPages
+          .slice(0, 50)
+          .map(p => ({ id: p.id, content: 'x', contentMode: 'html', type: 'DOCUMENT' }));
+
+        setupDriveAccessWithContent(manyPages, contentRows);
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string }>;
+          contentTruncated: boolean;
+          contentPageCap: number;
+          nextSteps: string[];
+        };
+
+        assert({
+          given: '60 pages with include=content and a cap of 50',
+          should: 'flag contentTruncated as true',
+          actual: result.contentTruncated,
+          expected: true,
+        });
+
+        assert({
+          given: '60 pages with include=content',
+          should: 'only attach content to the first 50 pages',
+          actual: result.pages.filter(p => p.content !== undefined).length,
+          expected: 50,
+        });
+
+        assert({
+          given: 'truncated content batch',
+          should: 'report what was dropped in nextSteps rather than staying silent',
+          actual: result.nextSteps.some(s => s.includes('50') && s.includes('60')),
+          expected: true,
+        });
+      });
+    });
+
   });
 
   describe('read_page', () => {
