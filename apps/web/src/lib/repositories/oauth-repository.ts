@@ -208,6 +208,61 @@ export async function exchangeAuthorizationCode(
   });
 }
 
+export interface RevokeOAuthTokenInput {
+  /** Raw token from the revocation request; hashed before any lookup. */
+  token: string;
+  /** Resolved `oauth_clients.id` for the request's client_id — a token issued
+   * to a different client is indistinguishable from an unknown token: the
+   * update's WHERE clause simply matches nothing (no oracle). */
+  clientDbId: string;
+  now: Date;
+}
+
+const OAUTH_REFRESH_TOKEN_PREFIX = 'ps_rt_';
+const OAUTH_ACCESS_TOKEN_PREFIX = 'ps_at_';
+
+/**
+ * RFC 7009 revocation (task qyqgrjbvntpsdh578k0yiwgr). A refresh token
+ * revokes its whole family (reusing `revokeTokenFamily`, the same helper the
+ * reuse-detection paths above use); an access token revokes only itself. An
+ * unknown token, a foreign token (different client), an already-revoked
+ * token, or a token in neither opaque format is a silent no-op — the route
+ * layer always returns 200 regardless, so nothing here needs to report which
+ * case occurred.
+ */
+export async function revokeOAuthToken(input: RevokeOAuthTokenInput): Promise<void> {
+  const tokenHash = hashToken(input.token);
+
+  if (input.token.startsWith(OAUTH_REFRESH_TOKEN_PREFIX)) {
+    const rows = await db
+      .select({ familyId: oauthRefreshTokens.familyId })
+      .from(oauthRefreshTokens)
+      .where(and(eq(oauthRefreshTokens.tokenHash, tokenHash), eq(oauthRefreshTokens.clientId, input.clientDbId)));
+
+    const row = rows[0];
+    if (row) {
+      await revokeTokenFamily(db, row.familyId, input.now, 'client_revoked');
+    }
+    return;
+  }
+
+  if (input.token.startsWith(OAUTH_ACCESS_TOKEN_PREFIX)) {
+    await db
+      .update(oauthAccessTokens)
+      .set({ revokedAt: input.now, revokedReason: 'client_revoked' })
+      .where(
+        and(
+          eq(oauthAccessTokens.tokenHash, tokenHash),
+          eq(oauthAccessTokens.clientId, input.clientDbId),
+          isNull(oauthAccessTokens.revokedAt),
+        ),
+      );
+    return;
+  }
+
+  // Neither opaque format — foreign/garbage token, no-op (no oracle upstream).
+}
+
 export interface RefreshTokenGrantInput {
   /** Raw refresh token from the token request; hashed before any lookup. */
   refreshToken: string;
