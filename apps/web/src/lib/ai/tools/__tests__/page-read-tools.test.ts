@@ -104,16 +104,21 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  checkDriveAccess: vi.fn(),
+}));
 
 import { pageReadTools } from '../page-read-tools';
 import { db } from '@pagespace/db/db';
 import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
 const mockGetUserAccessLevel = vi.mocked(getUserAccessLevel);
 const mockGetUserAccessiblePagesInDrive = vi.mocked(getUserAccessiblePagesInDriveWithDetails);
 const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
+const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
 
 const createMockPage = (content: string, type = 'DOCUMENT') => ({
   id: 'page-1',
@@ -690,7 +695,7 @@ describe('page-read-tools', () => {
     // agent that just listed trash had nothing to pass to restore_page (which
     // requires { id }) — it could see a trashed page but not restore it.
     it('includes the page id for each trashed page, so restore_page can act on it', async () => {
-      mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, drive: null });
       (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
@@ -721,6 +726,50 @@ describe('page-read-tools', () => {
         actual: trashedPages[0]?.id,
         expected: 'page-trashed-1',
       });
+    });
+
+    // ========================================================================
+    // Regression coverage for #1772: list_trash only required drive
+    // membership, unlike GET /api/drives/[driveId]/trash which requires
+    // owner/admin. The bars must agree.
+    // ========================================================================
+    it('denies a plain drive member (not owner or admin) from listing trash', async () => {
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false, isMember: true, drive: null });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageReadTools.list_trash.execute!(
+          { driveSlug: 'my-drive', driveId: 'drive-1' },
+          context
+        )
+      ).rejects.toThrow('Only drive owners and admins');
+    });
+
+    it('allows the drive owner to list trash', async () => {
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, drive: null });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'owner-user' } as ToolExecutionContext,
+      };
+
+      const result = await pageReadTools.list_trash.execute!(
+        { driveSlug: 'my-drive', driveId: 'drive-1' },
+        context
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
     });
   });
 
