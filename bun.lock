@@ -520,6 +520,9 @@
       "dependencies": {
         "zod": "^4.1.8",
       },
+      "devDependencies": {
+        "@pagespace/lib": "workspace:*",
+      },
     },
   },
   "trustedDependencies": [

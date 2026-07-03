@@ -50,6 +50,14 @@ export interface OperationConfig<
    * `timeoutMs` applies.
    */
   readonly timeoutMsOverride?: number;
+  /**
+   * Marks a non-idempotent operation whose effect is destructive/irreversible
+   * (deletes a resource, prunes a grant). The CLI layer (Phase 5) requires
+   * `--yes` before invoking any operation with this flag set; `isIdempotentMethod`
+   * (retry.ts) already blocks auto-retry for these methods, so this is purely a
+   * confirmation-gate signal, not a retry-safety one.
+   */
+  readonly destructive?: boolean;
   /** Mandatory: becomes the MCP tool description in Phase 6. */
   readonly description: string;
 }
@@ -90,6 +98,7 @@ export interface Operation<
   readonly requiredScope: RequiredScope | undefined;
   readonly textResponse: boolean | undefined;
   readonly timeoutMsOverride: number | undefined;
+  readonly destructive: boolean | undefined;
   readonly description: string;
 }
 
@@ -101,8 +110,18 @@ export function defineOperation<
 >(
   config: ValidOperationConfig<TPath, TInputSchema, TOutputSchema>,
 ): Operation<TPath, TInputSchema, TOutputSchema> {
-  const { name, method, path, inputSchema, outputSchema, requiredScope, textResponse, timeoutMsOverride, description } =
-    config as OperationConfig<TPath, TInputSchema, TOutputSchema>;
+  const {
+    name,
+    method,
+    path,
+    inputSchema,
+    outputSchema,
+    requiredScope,
+    textResponse,
+    timeoutMsOverride,
+    destructive,
+    description,
+  } = config as OperationConfig<TPath, TInputSchema, TOutputSchema>;
 
   return Object.freeze({
     name,
@@ -113,6 +132,7 @@ export function defineOperation<
     requiredScope,
     textResponse,
     timeoutMsOverride,
+    destructive,
     description,
   });
 }
