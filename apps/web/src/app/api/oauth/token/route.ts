@@ -28,6 +28,7 @@
  * device_code falls back to the shared invalid_grant.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getClientIP } from '@/lib/auth';
 import { getRegisteredClient, type RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { ACCESS_TOKEN_TTL_SECONDS } from '@pagespace/lib/auth/oauth/issue-tokens';
 import {
@@ -37,6 +38,7 @@ import {
   pollDeviceToken,
 } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 
 function noStoreJson(body: Record<string, unknown>, status: number): NextResponse {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
@@ -45,6 +47,52 @@ function noStoreJson(body: Record<string, unknown>, status: number): NextRespons
 const INVALID_REQUEST = { error: 'invalid_request' };
 const INVALID_GRANT = { error: 'invalid_grant' };
 const INVALID_SCOPE = { error: 'invalid_scope' };
+
+/**
+ * authorization_code + refresh_token grants both present a high-entropy
+ * secret exactly once per legitimate use — real traffic is rare, so a tight
+ * per-IP + per-client limit blunts brute-forcing a code/refresh token.
+ * Returns a generic 429 (no oracle: rate-limiting isn't a credential-guessing
+ * signal, unlike the grant's own invalid_grant/invalid_scope split).
+ */
+async function checkTokenExchangeRateLimit(req: NextRequest, clientId: string): Promise<NextResponse | null> {
+  const ip = getClientIP(req);
+  const [ipLimit, clientLimit] = await Promise.all([
+    checkDistributedRateLimit(`oauth-token:exchange:ip:${ip}`, DISTRIBUTED_RATE_LIMITS.OAUTH_TOKEN_EXCHANGE),
+    checkDistributedRateLimit(`oauth-token:exchange:client:${clientId}`, DISTRIBUTED_RATE_LIMITS.OAUTH_TOKEN_EXCHANGE),
+  ]);
+  if (ipLimit.allowed && clientLimit.allowed) return null;
+
+  auditRequest(req, {
+    eventType: 'security.rate.limited',
+    details: { clientId, oauthEvent: 'token_exchange_rate_limited' },
+  });
+  return noStoreJson({ error: 'rate_limited', retryAfter: Math.max(ipLimit.retryAfter ?? 0, clientLimit.retryAfter ?? 0) }, 429);
+}
+
+/**
+ * device_code polling is a distinct risk profile: RFC 8628 legitimate
+ * traffic is ~1 poll per pollIntervalSeconds from a single flow, already
+ * throttled per-device-code by decideDevicePoll's own slow_down. This is an
+ * endpoint-level backstop against a client ignoring slow_down or scanning
+ * device codes wholesale — set generous enough to never trip on real
+ * traffic. Responds with the RFC 8628 slow_down contract, not a bare 429,
+ * so a compliant polling client backs off instead of erroring out.
+ */
+async function checkDevicePollRateLimit(req: NextRequest, clientId: string): Promise<NextResponse | null> {
+  const ip = getClientIP(req);
+  const [ipLimit, clientLimit] = await Promise.all([
+    checkDistributedRateLimit(`oauth-token:device_poll:ip:${ip}`, DISTRIBUTED_RATE_LIMITS.OAUTH_DEVICE_POLL),
+    checkDistributedRateLimit(`oauth-token:device_poll:client:${clientId}`, DISTRIBUTED_RATE_LIMITS.OAUTH_DEVICE_POLL),
+  ]);
+  if (ipLimit.allowed && clientLimit.allowed) return null;
+
+  auditRequest(req, {
+    eventType: 'security.rate.limited',
+    details: { clientId, oauthEvent: 'device_poll_rate_limited' },
+  });
+  return noStoreJson({ error: 'slow_down' }, 400);
+}
 
 type ResolvedClient = { client: RegisteredClient; clientDbId: string };
 type ClientResolution = ResolvedClient | { rejection: NextResponse };
@@ -82,6 +130,9 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
   if (!code || !redirectUri || !clientId || !codeVerifier) {
     return noStoreJson(INVALID_REQUEST, 400);
   }
+
+  const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
+  if (rateLimited) return rateLimited;
 
   const resolved = await resolveClient(form, clientId);
   if ('rejection' in resolved) return resolved.rejection;
@@ -128,6 +179,9 @@ async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams):
   if (!refreshToken || !clientId) {
     return noStoreJson(INVALID_REQUEST, 400);
   }
+
+  const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
+  if (rateLimited) return rateLimited;
 
   const resolved = await resolveClient(form, clientId);
   if ('rejection' in resolved) return resolved.rejection;
@@ -197,6 +251,9 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
   if (!deviceCode || !clientId) {
     return noStoreJson(INVALID_REQUEST, 400);
   }
+
+  const rateLimited = await checkDevicePollRateLimit(req, clientId);
+  if (rateLimited) return rateLimited;
 
   const resolved = await resolveClient(form, clientId);
   if ('rejection' in resolved) return resolved.rejection;
