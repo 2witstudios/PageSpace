@@ -96,7 +96,10 @@ export function useCreditBalance() {
 
     const handleCreditsUpdated = (payload: CreditsEventPayload) => {
       mutate(
-        (prev) => ({ ...applyCreditsPayload(payload), subscriptionTier: prev?.subscriptionTier ?? 'free' }),
+        // Skip the merge if the initial fetch hasn't resolved yet — defaulting
+        // subscriptionTier to 'free' here would briefly mis-show the upgrade CTA
+        // to a paid user until the next revalidation corrected it.
+        (prev) => (prev ? { ...applyCreditsPayload(payload), subscriptionTier: prev.subscriptionTier } : prev),
         CREDITS_PUSH_MUTATE_OPTIONS,
       );
     };

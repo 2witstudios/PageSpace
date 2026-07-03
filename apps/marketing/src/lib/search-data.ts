@@ -120,7 +120,7 @@ const faqEntries: SearchEntry[] = [
     description: `Yes. Free plan includes 500 MB storage and ${MONTHLY_CREDITS.free}/month of credits. No credit card required.`,
     href: "/faq#is-there-a-free-plan",
     category: "FAQ",
-    keywords: "free plan pricing cost no credit card ai credits",
+    keywords: "free plan pricing cost no credit card credits",
   },
   {
     title: "How do credits work?",
@@ -128,7 +128,7 @@ const faqEntries: SearchEntry[] = [
       "Every plan includes a monthly credit allowance. Each AI action draws down credits based on the model's real cost; unused credits roll over and accumulate — they never expire.",
     href: "/faq#how-ai-credits-work",
     category: "FAQ",
-    keywords: "ai credits metered usage allowance rollover monthly billing",
+    keywords: "credits metered usage allowance rollover monthly billing",
   },
   {
     title: "What happens when I run out of credits?",

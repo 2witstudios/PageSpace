@@ -11,7 +11,7 @@ const isSubscriptionTier = (value: string): value is SubscriptionTier =>
   value === 'free' || value === 'pro' || value === 'founder' || value === 'business';
 
 /**
- * GET /api/credits — the authenticated user's prepaid AI-credit balance.
+ * GET /api/credits — the authenticated user's prepaid credit balance.
  *
  * Returns the monthly allowance bucket (rolls over each period), the never-expiring
  * top-up bucket, the spendable total (net of in-flight reservations), and the
