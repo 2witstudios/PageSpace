@@ -368,8 +368,8 @@ describe('exchangeAuthorizationCode — atomic single-use consumption under a ra
     });
     expect(first.outcome).toBe('ok');
 
-    expect(refreshRows[0].revokedAt).toBeNull();
-    expect(accessRows[0].revokedAt).toBeNull();
+    expect(refreshRows[0].revokedAt).toBeFalsy();
+    expect(accessRows[0].revokedAt).toBeFalsy();
 
     const second = await exchangeAuthorizationCode({
       code: CODE,

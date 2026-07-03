@@ -16,6 +16,10 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
   exchangeAuthorizationCode: (...args: unknown[]) => exchangeAuthorizationCode(...args),
 }));
 
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
+
 import { POST } from '../route';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
