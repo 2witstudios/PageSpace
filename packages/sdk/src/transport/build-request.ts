@@ -50,11 +50,23 @@ function serializeQuery(params: Readonly<Record<string, unknown>>): string {
   return query.length > 0 ? `?${query}` : '';
 }
 
-/** Serializes a plain object as JSON with a stable (sorted) top-level key order. */
+/**
+ * Serializes a plain object as JSON with a stable (sorted) top-level key
+ * order. Rebuilds the object with keys inserted in sorted order rather than
+ * passing the sorted-keys array as `JSON.stringify`'s replacer — a replacer
+ * array is an allow-list applied at every nesting level, so it would also
+ * silently strip properties from nested objects/array-of-object fields
+ * (e.g. `editSheetCells`'s `cells: [{address, value}]`) whose keys aren't
+ * themselves top-level field names.
+ */
 function serializeBody(fields: Readonly<Record<string, unknown>>): string | undefined {
   const keys = Object.keys(fields).sort();
   if (keys.length === 0) return undefined;
-  return JSON.stringify(fields, keys);
+  const ordered: Record<string, unknown> = {};
+  for (const key of keys) {
+    ordered[key] = fields[key];
+  }
+  return JSON.stringify(ordered);
 }
 
 /**

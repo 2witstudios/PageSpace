@@ -38,7 +38,17 @@ import {
 } from './errors.js';
 import type { AuthProvider } from './auth/provider.js';
 import { listDrives } from './operations/drives.js';
-import { readPage } from './operations/pages.js';
+import {
+  createPage,
+  getPageDetails,
+  listPages,
+  listTrash,
+  movePage,
+  renamePage,
+  restorePage,
+  trashPage,
+} from './operations/pages.js';
+import { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
 import { buildRequest } from './transport/build-request.js';
@@ -50,7 +60,21 @@ import { checkServerCompatibility, MIN_SERVER_API_VERSION } from './version.js';
 
 const DEFAULT_OPERATIONS_MAP = {
   drives: { list: listDrives },
-  pages: { read: readPage },
+  pages: {
+    list: listPages,
+    listTrash: listTrash,
+    read: readDocument,
+    details: getPageDetails,
+    create: createPage,
+    rename: renamePage,
+    move: movePage,
+    trash: trashPage,
+    restore: restorePage,
+    replaceLines: replaceLines,
+    insertLines: insertLines,
+    deleteLines: deleteLines,
+    editCells: editSheetCells,
+  },
 } as const;
 
 type OperationsMap = Record<string, Record<string, Operation>>;
