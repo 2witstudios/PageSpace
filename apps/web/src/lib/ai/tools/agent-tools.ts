@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canActorEditPage } from './actor-permissions';
+import { canActorEditPage, isMcpScoped } from './actor-permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentRepository } from '@pagespace/lib/repositories/agent-repository';
@@ -8,6 +8,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { ToolExecutionContext } from '../core/types';
 import { pageSpaceTools } from '../core/ai-tools';
+import { filterToolsForMcpScope } from '../core/tool-filtering';
 import { validateAgentModelSelection } from '../core/ai-providers-config';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 
@@ -53,9 +54,11 @@ export const agentTools = {
           throw new Error('Insufficient permissions to update this AI agent');
         }
 
-        // Validate enabled tools if provided
+        // Validate enabled tools if provided. A drive-scoped MCP token cannot
+        // newly enable an account-level-only tool (e.g. create_drive) —
+        // mirrors the runtime chat/consult tool-list filtering.
         if (enabledTools && enabledTools.length > 0) {
-          const availableToolNames = Object.keys(pageSpaceTools);
+          const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isMcpScoped(context as ToolExecutionContext)));
           const invalidTools = enabledTools.filter(toolName => !availableToolNames.includes(toolName));
           if (invalidTools.length > 0) {
             throw new Error(`Invalid tools specified: ${invalidTools.join(', ')}. Available tools: ${availableToolNames.join(', ')}`);

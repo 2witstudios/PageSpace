@@ -37,6 +37,15 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
   cancelTaskDueDateTrigger: vi.fn().mockResolvedValue(undefined),
   fireCompletionTrigger: vi.fn().mockResolvedValue(undefined),
   disableTaskTriggers: vi.fn().mockResolvedValue(undefined),
+  createTaskTriggerWorkflow: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/ai/tools/task-helpers', () => ({
+  reorderTaskPeers: vi.fn().mockResolvedValue(0),
+}));
+
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/lib/utils/enums', () => ({
@@ -160,6 +169,9 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createTaskAssignedNotification, createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
+import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
+import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
+import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 
 // ---------- Helpers ----------
 
@@ -1124,6 +1136,100 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(createMentionNotification).not.toHaveBeenCalled();
   });
 
+  it('stores note (and status change) in task metadata lastUpdate', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce({ ...baseTask, status: 'pending', metadata: { existing: true } } as never) // existingTask lookup
+      .mockResolvedValueOnce({ ...baseTask, status: 'completed', assignee: null, assigneeAgent: null, user: null, assignees: [] } as never); // relations lookup
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+
+    let capturedUpdateArgs: Record<string, unknown> | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (vi.mocked(db.transaction) as any).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const txUpdateReturning = vi.fn().mockResolvedValue([{ ...baseTask, status: 'completed' }]);
+      const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
+      const txUpdateSet = vi.fn((vals: Record<string, unknown>) => {
+        capturedUpdateArgs = vals;
+        return { where: txUpdateWhere };
+      });
+      const tx = {
+        update: vi.fn(() => ({ set: txUpdateSet })),
+        delete: vi.fn(() => ({ where: vi.fn() })),
+        insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn() })) })),
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })) })),
+        })),
+      };
+      return callback(tx);
+    });
+
+    const response = await PATCH(createPatchRequest({ status: 'completed', note: 'done early' }), context);
+    expect(response.status).toBe(200);
+    expect(capturedUpdateArgs).toMatchObject({
+      metadata: {
+        existing: true,
+        lastUpdate: expect.objectContaining({
+          note: 'done early',
+          statusChange: { from: 'pending', to: 'completed' },
+        }),
+      },
+    });
+  });
+
+  it('delegates position updates to reorderTaskPeers for clamping and re-densification', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup();
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupTransaction(baseTask);
+    setupRelationsLookup({ ...baseTask, position: 2, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    vi.mocked(reorderTaskPeers).mockResolvedValue(2);
+
+    const response = await PATCH(createPatchRequest({ position: 99 }), context);
+    expect(response.status).toBe(200);
+    expect(reorderTaskPeers).toHaveBeenCalledWith(mockPageId, mockTaskId, 99);
+  });
+
+  it('creates an agent trigger workflow when agentTrigger is provided', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, dueDate: new Date('2025-06-01') });
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupTransaction({ ...baseTask, dueDate: new Date('2025-06-01') });
+    setupRelationsLookup({ ...baseTask, dueDate: new Date('2025-06-01'), assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    vi.mocked(getUserTimezone).mockResolvedValue('America/New_York');
+
+    const response = await PATCH(createPatchRequest({
+      agentTrigger: { agentPageId: 'agent-1', prompt: 'go', triggerType: 'due_date' },
+    }), context);
+
+    expect(response.status).toBe(200);
+    expect(createTaskTriggerWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      driveId: 'drive-1',
+      taskId: mockTaskId,
+      agentTrigger: expect.objectContaining({ agentPageId: 'agent-1', triggerType: 'due_date' }),
+      timezone: 'America/New_York',
+    }));
+  });
+
+  it('returns 400 for a due_date agentTrigger when the task has no due date', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, dueDate: null });
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+
+    const response = await PATCH(createPatchRequest({
+      agentTrigger: { agentPageId: 'agent-1', prompt: 'go', triggerType: 'due_date' },
+    }), context);
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toMatch(/due date/i);
+    expect(createTaskTriggerWorkflow).not.toHaveBeenCalled();
+  });
+
   it('returns 200 even when createMentionNotification throws during task update', async () => {
     setupAuth();
     setupCanEdit(true);
@@ -1321,6 +1427,61 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(response.status).toBe(200);
     expect(applyPageMutation).not.toHaveBeenCalled();
     expect(broadcastPageEvent).not.toHaveBeenCalled();
+  });
+
+  it('hard-deletes the taskItems row after trashing the linked page (no resurrection on restore)', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
+      ...baseTask, pageId: 'linked-page-1',
+    } as never);
+
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn().mockResolvedValue([{ revision: 3 }]),
+        })),
+      })),
+    } as never);
+    vi.mocked(applyPageMutation).mockResolvedValue({ deferredTrigger: undefined } as never);
+
+    let deleteWhereArg: unknown = null;
+    vi.mocked(db.delete).mockReturnValue({
+      where: vi.fn((cond: unknown) => {
+        deleteWhereArg = cond;
+        return Promise.resolve(undefined);
+      }),
+    } as never);
+
+    const response = await DELETE(createDeleteRequest(), context);
+    expect(response.status).toBe(200);
+    expect(db.delete).toHaveBeenCalledTimes(1);
+    expect(deleteWhereArg).toBeTruthy();
+  });
+
+  it('does not hard-delete the taskItems row when trashing hits a revision conflict', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
+      ...baseTask, pageId: 'linked-page-1',
+    } as never);
+
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn().mockResolvedValue([{ revision: 3 }]),
+        })),
+      })),
+    } as never);
+
+    const { PageRevisionMismatchError: PRME } = await import('@/services/api/page-mutation-service');
+    vi.mocked(applyPageMutation).mockRejectedValueOnce(new PRME('Conflict', 5, 3));
+
+    const response = await DELETE(createDeleteRequest(), context);
+    expect(response.status).toBe(409);
+    expect(db.delete).not.toHaveBeenCalled();
   });
 
   it('skips page broadcast when taskListPage is null but linkedPage exists', async () => {

@@ -11,7 +11,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
-const VALID_PAGE_TYPES = ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET', 'CODE'] as const;
+const VALID_PAGE_TYPES = ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET', 'CODE', 'TASK_LIST'] as const;
 type PageType = (typeof VALID_PAGE_TYPES)[number];
 
 /**

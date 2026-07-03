@@ -27,7 +27,7 @@ import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -52,7 +52,7 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
-import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
@@ -607,8 +607,12 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Step 1: Apply isReadOnly filter to PageSpace baseline tools.
-    const baseTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+    // Step 1: Apply isReadOnly filter, then hide account-level-only tools
+    // (e.g. create_drive) from drive-scoped MCP tokens' tool list.
+    const baseTools = filterToolsForMcpScope(
+      filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
+      isScopedMCPAuth(authResult)
+    );
 
     // Step 2: Extract web_search so it can be handled as a runtime-toggle override
     // independently of the per-agent allowlist.

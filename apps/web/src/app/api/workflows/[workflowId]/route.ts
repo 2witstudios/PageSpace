@@ -19,6 +19,7 @@ const updateWorkflowSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   agentPageId: z.string().min(1).optional(),
   prompt: z.string().min(1).optional(),
+  instructionPageId: z.string().nullable().optional(),
   contextPageIds: z.array(z.string()).optional(),
   cronExpression: z.string().min(1).optional().nullable(),
   timezone: z.string().optional(),
@@ -98,6 +99,18 @@ export async function PATCH(
 
     if (!agent || agent.type !== 'AI_CHAT') {
       return NextResponse.json({ error: 'Invalid agent page' }, { status: 400 });
+    }
+  }
+
+  // If changing the instruction page, validate it exists, is not trashed, and is in the same drive
+  if (data.instructionPageId) {
+    const [instructionPage] = await db
+      .select()
+      .from(pages)
+      .where(and(eq(pages.id, data.instructionPageId), eq(pages.driveId, workflow.driveId), eq(pages.isTrashed, false)));
+
+    if (!instructionPage) {
+      return NextResponse.json({ error: 'Instruction page not found in this drive' }, { status: 400 });
     }
   }
 

@@ -59,18 +59,21 @@ export const searchTools = {
           whereConditions = and(
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
+            eq(pages.excludeFromSearch, false),
             sql`${pages.content} ~ ${pgPattern}`
           );
         } else if (searchIn === 'title') {
           whereConditions = and(
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
+            eq(pages.excludeFromSearch, false),
             sql`${pages.title} ~ ${pgPattern}`
           );
         } else {
           whereConditions = and(
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
+            eq(pages.excludeFromSearch, false),
             sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
           );
         }
@@ -348,7 +351,7 @@ export const searchTools = {
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to search in'),
       pattern: z.string().describe('Glob pattern to match page titles/paths (e.g., "**/README*", "docs/**/*.md", "meeting-*")'),
-      includeTypes: z.array(z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET', 'CODE'])).optional().describe('Filter by page types'),
+      includeTypes: z.array(z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET', 'CODE', 'TASK_LIST'])).optional().describe('Filter by page types'),
       maxResults: z.number().optional().default(100).describe('Maximum number of results to return'),
     }),
     execute: async ({ driveId, pattern, includeTypes, maxResults = 100 }, { experimental_context: context }) => {
@@ -373,11 +376,13 @@ export const searchTools = {
           ? and(
               eq(pages.driveId, driveId),
               eq(pages.isTrashed, false),
+              eq(pages.excludeFromSearch, false),
               inArray(pages.type, includeTypes)
             )
           : and(
               eq(pages.driveId, driveId),
-              eq(pages.isTrashed, false)
+              eq(pages.isTrashed, false),
+              eq(pages.excludeFromSearch, false)
             );
 
         // Get all pages in drive
@@ -528,6 +533,7 @@ export const searchTools = {
             searchWhereConditions = and(
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
+              eq(pages.excludeFromSearch, false),
               sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
             );
           } else {
@@ -535,6 +541,7 @@ export const searchTools = {
             searchWhereConditions = and(
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
+              eq(pages.excludeFromSearch, false),
               sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern}`
             );
           }

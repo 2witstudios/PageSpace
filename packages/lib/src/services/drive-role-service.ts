@@ -34,6 +34,10 @@ export interface DriveRole {
 
 export type RolePermissions = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
 
+// Per-page permission patch: a value merges/overwrites that page's entry, `null` prunes it
+// (falls back to driveWidePermissions) rather than writing an explicit all-false entry.
+export type RolePermissionsPatch = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean } | null>;
+
 export interface CreateRoleInput {
   name: string;
   description?: string | null;
@@ -357,4 +361,46 @@ export function validateRolePermissions(permissions: unknown): permissions is Ro
   }
 
   return true;
+}
+
+/**
+ * Validate a per-page permissions patch structure (same as RolePermissions,
+ * except each entry may also be `null` to signal "prune this page's override").
+ */
+export function validateRolePermissionsPatch(patch: unknown): patch is RolePermissionsPatch {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return false;
+
+  for (const [pageId, perms] of Object.entries(patch)) {
+    if (typeof pageId !== 'string') return false;
+    if (perms === null) continue;
+    if (!perms || typeof perms !== 'object') return false;
+    const p = perms as Record<string, unknown>;
+    if (typeof p.canView !== 'boolean' ||
+        typeof p.canEdit !== 'boolean' ||
+        typeof p.canShare !== 'boolean') return false;
+  }
+
+  return true;
+}
+
+/**
+ * Merge a per-page permissions patch into an existing permissions map.
+ * Read-merge-write: pages not named in the patch are left untouched (unlike a
+ * full `permissions` replace, which wipes everything not in the payload).
+ * A `null` entry prunes the key so resolution falls back to
+ * driveWidePermissions, rather than persisting an explicit all-false entry.
+ */
+export function mergeRolePermissionsPatch(
+  existing: RolePermissions,
+  patch: RolePermissionsPatch,
+): RolePermissions {
+  const merged = { ...existing };
+  for (const [pageId, perms] of Object.entries(patch)) {
+    if (perms === null) {
+      delete merged[pageId];
+    } else {
+      merged[pageId] = perms;
+    }
+  }
+  return merged;
 }

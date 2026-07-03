@@ -14,6 +14,7 @@ import {
   isMCPAuthResult,
   checkMCPPageScope,
   getAllowedDriveIds,
+  isScopedMCPAuth,
   canPrincipalViewPage,
   canPrincipalEditPage,
 } from '@/lib/auth';
@@ -21,7 +22,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
@@ -239,9 +240,12 @@ export async function POST(request: Request): Promise<Response> {
       ? [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)]
       : [stepCountIs(100)];
 
+    // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.
+    const isMcpScopedRequest = isScopedMCPAuth(authResult);
+
     if (inServerOnlyMode) {
       // server-only: existing pipeline unchanged
-      const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
+      const baseTools = filterToolsForMcpScope(filterToolsForReadOnly(pageSpaceTools, false), isMcpScopedRequest);
       let filteredTools: ToolSet =
         agentEnabledTools != null
           ? (Object.fromEntries(
@@ -257,7 +261,7 @@ export async function POST(request: Request): Promise<Response> {
       finalTools = clientToolSet;
     } else {
       // both: server tools + client tools; client wins on name collision
-      const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
+      const baseTools = filterToolsForMcpScope(filterToolsForReadOnly(pageSpaceTools, false), isMcpScopedRequest);
       let filteredTools: ToolSet =
         agentEnabledTools != null
           ? (Object.fromEntries(

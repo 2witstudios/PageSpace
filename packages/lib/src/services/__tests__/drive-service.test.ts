@@ -48,9 +48,14 @@ vi.mock('@pagespace/db/operators', () => ({
   gt: vi.fn((a, b) => ({ op: 'gt', a, b })),
   asc: vi.fn(() => ({ op: 'asc' })),
 }));
+vi.mock('../../permissions/membership-queries', () => ({
+  customRoleBelongsToDrive: vi.fn().mockResolvedValue(true),
+  getMemberCustomRoleId: vi.fn().mockResolvedValue(null),
+}));
 
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
+import { customRoleBelongsToDrive, getMemberCustomRoleId } from '../../permissions/membership-queries';
 
 // Drizzle transaction callback receives a tx whose type is the inner parameter of db.transaction.
 type MockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -65,6 +70,7 @@ import {
   trashDrive,
   restoreDrive,
   isValidDriveHomePage,
+  validateDriveScopeAccess,
 } from '../drive-service';
 
 // ============================================================================
@@ -376,6 +382,121 @@ describe('getDriveAccess', () => {
       isMember: false,
       role: null,
     });
+  });
+});
+
+// ============================================================================
+// validateDriveScopeAccess
+// ============================================================================
+
+describe('validateDriveScopeAccess', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(customRoleBelongsToDrive).mockResolvedValue(true);
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue(null);
+  });
+
+  const mockOwnerAccess = (driveId: string, userId: string) => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+      createMockDrive({ id: driveId, name: 'Test', ownerId: userId })
+    );
+  };
+
+  const mockMemberAccess = (driveId: string, role: 'ADMIN' | 'MEMBER') => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+      createMockDrive({ id: driveId, name: 'Test', ownerId: 'other_user' })
+    );
+    const limitMock = vi.fn().mockResolvedValue([{ role }]);
+    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
+    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+  };
+
+  const mockNoAccess = (driveId: string) => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+      createMockDrive({ id: driveId, name: 'Test', ownerId: 'other_user' })
+    );
+    const limitMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
+    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+  };
+
+  it('returns all-empty for a valid owner-scoped drive', async () => {
+    mockOwnerAccess('drive_123', 'user_123');
+
+    const result = await validateDriveScopeAccess([{ id: 'drive_123', role: null }], 'user_123');
+
+    expect(result).toEqual({
+      invalidDriveIds: [],
+      unauthorizedRoles: [],
+      invalidCustomRoles: [],
+      unauthorizedCustomRoles: [],
+    });
+  });
+
+  it('flags drives the user has no access to', async () => {
+    mockNoAccess('forbidden-drive');
+
+    const result = await validateDriveScopeAccess([{ id: 'forbidden-drive', role: null }], 'user_123');
+
+    expect(result.invalidDriveIds).toEqual(['forbidden-drive']);
+  });
+
+  it('flags a MEMBER attempting to grant ADMIN', async () => {
+    mockMemberAccess('drive_123', 'MEMBER');
+
+    const result = await validateDriveScopeAccess([{ id: 'drive_123', role: 'ADMIN' }], 'user_123');
+
+    expect(result.unauthorizedRoles).toEqual(['drive_123']);
+  });
+
+  it('flags a custom role that does not belong to the drive', async () => {
+    mockOwnerAccess('drive_123', 'user_123');
+    vi.mocked(customRoleBelongsToDrive).mockResolvedValue(false);
+
+    const result = await validateDriveScopeAccess(
+      [{ id: 'drive_123', role: 'MEMBER', customRoleId: 'role-other-drive' }],
+      'user_123'
+    );
+
+    expect(result.invalidCustomRoles).toEqual(['drive_123']);
+  });
+
+  it('flags a MEMBER using a custom role not assigned to them', async () => {
+    mockMemberAccess('drive_123', 'MEMBER');
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-assigned');
+
+    const result = await validateDriveScopeAccess(
+      [{ id: 'drive_123', role: 'MEMBER', customRoleId: 'role-other' }],
+      'user_123'
+    );
+
+    expect(result.unauthorizedCustomRoles).toEqual(['drive_123']);
+  });
+
+  it('allows a MEMBER to use their own assigned custom role', async () => {
+    mockMemberAccess('drive_123', 'MEMBER');
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-xyz');
+
+    const result = await validateDriveScopeAccess(
+      [{ id: 'drive_123', role: 'MEMBER', customRoleId: 'role-xyz' }],
+      'user_123'
+    );
+
+    expect(result.unauthorizedCustomRoles).toEqual([]);
+  });
+
+  it('allows an ADMIN to use any custom role without checking assignment', async () => {
+    mockMemberAccess('drive_123', 'ADMIN');
+
+    const result = await validateDriveScopeAccess(
+      [{ id: 'drive_123', role: 'MEMBER', customRoleId: 'any-role' }],
+      'user_123'
+    );
+
+    expect(result.unauthorizedCustomRoles).toEqual([]);
+    expect(getMemberCustomRoleId).not.toHaveBeenCalled();
   });
 });
 

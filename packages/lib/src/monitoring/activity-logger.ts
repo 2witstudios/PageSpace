@@ -255,6 +255,7 @@ export type ActivityOperation =
   | 'email_change'
   | 'token_create'
   | 'token_revoke'
+  | 'token_update'
   // File operations
   | 'upload'
   | 'convert'
@@ -1051,7 +1052,7 @@ export function logUserActivity(
  */
 export function logTokenActivity(
   userId: string,
-  operation: 'token_create' | 'token_revoke',
+  operation: 'token_create' | 'token_revoke' | 'token_update',
   data: {
     tokenId: string;
     tokenType: 'device' | 'mcp' | 'api';

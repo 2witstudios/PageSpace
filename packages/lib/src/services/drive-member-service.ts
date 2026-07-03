@@ -272,6 +272,46 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
 }
 
 /**
+ * Build a MemberWithDetails-shaped entry for the drive owner. The owner is
+ * never a row in drive_members (ownership lives on drives.ownerId), so
+ * listDriveMembers alone omits them — callers that need a complete roster
+ * (e.g. the members list API) must prepend this. Returns null only if the
+ * drive itself doesn't exist.
+ */
+export async function getDriveOwnerAsMember(driveId: string): Promise<MemberWithDetails | null> {
+  const [row] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      username: userProfiles.username,
+      displayName: userProfiles.displayName,
+      avatarUrl: userProfiles.avatarUrl,
+    })
+    .from(drives)
+    .innerJoin(users, eq(drives.ownerId, users.id))
+    .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
+    .where(eq(drives.id, driveId))
+    .limit(1);
+
+  if (!row) return null;
+
+  return {
+    id: `owner-${row.id}`,
+    userId: row.id,
+    role: 'OWNER',
+    invitedBy: null,
+    invitedAt: null,
+    acceptedAt: null,
+    lastAccessedAt: null,
+    user: { id: row.id, email: row.email, name: row.name },
+    profile: { username: row.username, displayName: row.displayName, avatarUrl: row.avatarUrl },
+    customRole: null,
+    permissionCounts: { view: 0, edit: 0, share: 0 },
+  };
+}
+
+/**
  * Check if a user is already a member of a drive
  */
 export async function isMemberOfDrive(driveId: string, userId: string): Promise<boolean> {

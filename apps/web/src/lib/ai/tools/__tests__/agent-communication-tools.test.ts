@@ -34,6 +34,7 @@ vi.mock('../actor-permissions', () => ({
   canActorAccessDrive: vi.fn(),
   getActorAccessiblePagesInDrive: vi.fn(),
   getAgentPageId: vi.fn(),
+  isMcpScoped: vi.fn(() => false),
 }));
 vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   getAgentAccessLevel: vi.fn(),
@@ -71,7 +72,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
 
 // Mock sibling tools to avoid circular imports
 vi.mock('../drive-tools', () => ({
-  driveTools: { list_drives: { name: 'list_drives' } },
+  driveTools: { list_drives: { name: 'list_drives' }, create_drive: { name: 'create_drive' } },
 }));
 vi.mock('../page-read-tools', () => ({
   pageReadTools: { list_pages: { name: 'list_pages' } },
@@ -152,7 +153,7 @@ vi.mock('../../core/ai-providers-config', () => ({
 
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
-import { canActorViewPage } from '../actor-permissions';
+import { canActorViewPage, isMcpScoped } from '../actor-permissions';
 import { createAIProvider } from '../../core/provider-factory';
 import { saveMessageToDatabase } from '../../core/message-utils';
 import type { ToolExecutionContext } from '../../core/types';
@@ -908,6 +909,72 @@ describe('agent-communication-tools', () => {
         const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown> | undefined;
         // When built-in tool set is empty, generateText is called with no tools at all
         expect(toolsArg?.github_list_repos).toBeUndefined();
+      });
+    });
+
+    describe('MCP scope tool filtering (nested agent)', () => {
+      const scopedAgent = {
+        id: 'agent-1',
+        title: 'Test Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: ['create_drive', 'list_drives'],
+        aiProvider: null,
+        aiModel: null,
+        isTrashed: false,
+      };
+
+      beforeEach(() => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(scopedAgent);
+        // vi.clearAllMocks() (outer beforeEach) clears call history but not a
+        // mockReturnValue override, so pin this back to the module's default
+        // (unscoped) each test regardless of execution order.
+        vi.mocked(isMcpScoped).mockReturnValue(false);
+      });
+
+      it('excludes create_drive from the nested agent tool list when the calling context is a drive-scoped MCP token', async () => {
+        vi.mocked(isMcpScoped).mockReturnValue(true);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            mcpAllowedDriveIds: ['drive-1'],
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'Make me a new drive' },
+          context
+        );
+
+        expect(isMcpScoped).toHaveBeenCalled();
+        expect(generateText).toHaveBeenCalled();
+        const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown> | undefined;
+        expect(toolsArg?.create_drive).toBeUndefined();
+        expect(toolsArg?.list_drives).toBeDefined();
+      });
+
+      it('includes create_drive in the nested agent tool list for an unscoped (session) calling context', async () => {
+        vi.mocked(isMcpScoped).mockReturnValue(false);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'Make me a new drive' },
+          context
+        );
+
+        expect(generateText).toHaveBeenCalled();
+        const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown> | undefined;
+        expect(toolsArg?.create_drive).toBeDefined();
+        expect(toolsArg?.list_drives).toBeDefined();
       });
     });
   });

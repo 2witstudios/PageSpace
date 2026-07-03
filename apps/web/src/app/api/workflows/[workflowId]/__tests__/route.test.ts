@@ -341,6 +341,44 @@ describe('PATCH /api/workflows/[workflowId]', () => {
 
     expect(response!.status).toBe(200);
   });
+
+  // The DB column and internal update_workflow tool both support
+  // instructionPageId (agentTriggerBaseSchema.partial()). The route's
+  // .strict() schema previously rejected the field outright.
+  it('should return 400 when instructionPageId page is not found in the drive', async () => {
+    mockSelectWhere
+      .mockResolvedValueOnce([mockWorkflow]) // getWorkflowWithAuth
+      .mockResolvedValueOnce([]); // instruction page lookup
+
+    const request = new Request('https://example.com/api/workflows/wf_1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instructionPageId: 'page_missing' }),
+    });
+    const response = await PATCH(request, createContext('wf_1'));
+
+    expect(response!.status).toBe(400);
+    const body = await response!.json();
+    expect(body.error).toBe('Instruction page not found in this drive');
+  });
+
+  it('should accept instructionPageId and persist it on the workflow', async () => {
+    mockSelectWhere
+      .mockResolvedValueOnce([mockWorkflow]) // getWorkflowWithAuth
+      .mockResolvedValueOnce([{ id: 'page_instr', driveId: 'drive_abc', isTrashed: false }]); // instruction page lookup
+
+    const request = new Request('https://example.com/api/workflows/wf_1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instructionPageId: 'page_instr' }),
+    });
+    const response = await PATCH(request, createContext('wf_1'));
+
+    expect(response!.status).toBe(200);
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      instructionPageId: 'page_instr',
+    }));
+  });
 });
 
 // ============================================================================
