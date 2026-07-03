@@ -101,6 +101,9 @@ export { listConversations, readConversation } from './operations/conversations.
 // Documents / content (Phase 3 task 2) — full pagespace-mcp document.js parity.
 export { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
 
+// Export (Phase 3 task 10) — page -> Markdown, sheet -> CSV text exports.
+export { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
+
 // Drives (Phase 2 seed op + Phase 3 task 1 — full pagespace-mcp drive.js parity).
 export { listDrives } from './operations/drives.js';
 export {

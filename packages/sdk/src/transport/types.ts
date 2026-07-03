@@ -15,6 +15,13 @@ export interface TransportOperation<TOutput = unknown> {
   readonly outputSchema: z.ZodType<TOutput>;
   /** Set for export-style operations whose 2xx body is raw text, not JSON. */
   readonly textResponse?: boolean;
+  /**
+   * Required media type (no `; charset=...` suffix) a `textResponse` 2xx body
+   * must arrive with, e.g. `"text/markdown"`. Only consulted when
+   * `textResponse` is true; a mismatch or missing header becomes a typed
+   * `ResponseValidationError` instead of the body being passed through blind.
+   */
+  readonly expectedContentType?: string;
 }
 
 /**

@@ -1,4 +1,11 @@
-import { classifyHttpError, type HttpErrorHeaders, type PageSpaceError, ResponseValidationError, type ValidationIssue } from '../errors.js';
+import {
+  classifyHttpError,
+  getHeaderValue,
+  type HttpErrorHeaders,
+  type PageSpaceError,
+  ResponseValidationError,
+  type ValidationIssue,
+} from '../errors.js';
 import type { TransportOperation } from './types.js';
 
 /** Parses JSON when possible; on empty/malformed input, returns a value the schema will reject rather than throwing. */
@@ -20,6 +27,13 @@ function toValidationIssues(issues: ReadonlyArray<{ path: PropertyKey[]; message
 
 export type ParsedResponse<TOutput> = TOutput | PageSpaceError;
 
+/** The media type portion of a Content-Type header, lowercased, `; charset=...` stripped. */
+function mediaTypeOf(headers: HttpErrorHeaders): string | null {
+  const raw = getHeaderValue(headers, 'Content-Type');
+  if (raw === null) return null;
+  return raw.split(';')[0]!.trim().toLowerCase();
+}
+
 /**
  * Pure: raw response parts → validated output or a classified error, as a
  * value (never thrown). Non-2xx statuses delegate to classifyHttpError
@@ -37,6 +51,15 @@ export function parseResponse<TOutput>(
   }
 
   if (op.textResponse) {
+    if (op.expectedContentType !== undefined && mediaTypeOf(headers) !== op.expectedContentType.toLowerCase()) {
+      const actual = getHeaderValue(headers, 'Content-Type');
+      return new ResponseValidationError(op.name, [
+        {
+          path: ['Content-Type'],
+          message: `Expected content-type "${op.expectedContentType}" for operation "${op.name}", received "${actual ?? '(missing)'}"`,
+        },
+      ]);
+    }
     return bodyText as TOutput;
   }
 
