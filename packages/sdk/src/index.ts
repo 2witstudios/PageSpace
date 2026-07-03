@@ -86,6 +86,9 @@ export type { FreeSlot } from './operations/calendar.js';
 // Collaborators (Phase 3 task 1).
 export { listCollaborators } from './operations/collaborators.js';
 
+// Commands (Phase 3 task 8).
+export { createCommand, deleteCommand, listCommands, updateCommand } from './operations/commands.js';
+
 // Conversations (Phase 3 task 5).
 export { listConversations, readConversation } from './operations/conversations.js';
 
@@ -155,6 +158,9 @@ export {
   updateTask,
 } from './operations/tasks.js';
 export type { TaskCompletionGatedError } from './operations/tasks.js';
+
+// Workflows (Phase 3 task 8).
+export { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 
 // Transport primitive types needed to declare custom operations. buildRequest/
 // parseResponse/executeRequest stay internal — the facade is the only caller.
