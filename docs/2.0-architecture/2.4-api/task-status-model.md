@@ -86,8 +86,7 @@ paths that validate it.
 
 ## Default statuses
 
-`DEFAULT_TASK_STATUSES` (`packages/db/src/schema/tasks.ts`) is auto-seeded for
-every new task list:
+`DEFAULT_TASK_STATUSES` (`packages/db/src/schema/tasks.ts`):
 
 | slug | name | group |
 |---|---|---|
@@ -99,6 +98,30 @@ every new task list:
 Note `blocked` maps to the `in_progress` group, not its own group — "blocked"
 is UI/workflow nuance, not a distinct lifecycle stage as far as completion
 tracking is concerned.
+
+**This is not unconditionally seeded into `taskStatusConfigs` for every task
+list.** Whether rows actually get written to the database depends on which
+code path first creates the `task_lists` row:
+
+- Paths that create the list via `getOrCreateTaskListForPage` /
+  `addTaskItemUnderParent` (`apps/web/src/services/api/task-sync-service.ts`)
+  — e.g. `POST /api/pages/[pageId]/tasks` — **do** insert
+  `DEFAULT_TASK_STATUSES` as real `taskStatusConfigs` rows at creation time.
+- Paths that auto-create a bare `task_lists` row on **read**
+  (`POST /api/mcp/documents` with `operation: 'read'` on a `TASK_LIST` page,
+  `route.ts` ~lines 187–199; and the equivalent in-app read tool in
+  `apps/web/src/lib/ai/tools/page-read-tools.ts` ~lines 272–284) insert only
+  the `task_lists` row — no `taskStatusConfigs` rows. These code paths
+  compute `availableStatuses` by reading `taskStatusConfigs` and, if that
+  query comes back empty, fall back to `DEFAULT_TASK_STATUSES` **in memory**
+  for the response, without persisting anything.
+
+Practically: a task list first materialized by a read can have zero
+`taskStatusConfigs` rows in the database even though `read` responses look
+identical either way (real rows or in-memory fallback). Don't write code or
+migrations that assume every `task_lists` row has corresponding
+`taskStatusConfigs` rows — query for them and use the same
+`DEFAULT_TASK_STATUSES` fallback the read paths use.
 
 ## Customizing statuses
 

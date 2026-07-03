@@ -62,14 +62,23 @@ const cellUpdateSchema = z.object({
 
 {
   operation: 'read' | 'replace' | 'insert' | 'delete' | 'edit-cells',
-  pageId?: string,       // optional — falls back to the user's most recently
-                          // modified owned page if omitted
+  pageId?: string,       // optional — see fallback caveat below if omitted
   startLine?: number,    // replace / insert / delete
   endLine?: number,      // replace / delete (defaults to startLine)
   content?: string,      // replace / insert
   cells?: { address: string; value: string }[],  // edit-cells
 }
 ```
+
+**`pageId` omitted:** the route calls `getCurrentPageId(userId)`
+(`route.ts` ~line 21), which is **not** a user-scoped "your most recent
+page" lookup. It queries for the single most-recently-updated,
+non-trashed page across the *entire instance*, and only returns it if that
+one page's drive happens to be owned by the calling user — otherwise it
+returns `null` and the request 404s with `{ "error": "No active document
+found" }`. On any multi-user instance, omitting `pageId` will very often
+fail even when the caller owns other, slightly-older pages. Treat `pageId`
+as effectively required; don't rely on the fallback.
 
 ## Operations
 
