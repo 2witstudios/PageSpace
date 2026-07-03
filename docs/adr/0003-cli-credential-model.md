@@ -45,8 +45,8 @@ All claims carry `file:line` citations from this monorepo (branch `pu/cli-login`
 ### 1.4 Device-token rotation exists but lacks reuse detection
 
 - Rotation: on refresh, when <60 days of the 90-day lifetime remain, the token is atomically rotated (FOR UPDATE, old revoked, new linked via `replacedByTokenId`) (`apps/web/src/app/api/auth/device/refresh/route.ts:101-139`; `packages/db/src/transactions/auth-transactions.ts:55-62`).
-- A 30-second grace window returns the replacement to concurrent retries (`auth-transactions.ts:24,147-174`).
-- **After the grace window, presenting a rotated-away token is a silent 401 — the replacement token stays valid and nothing is revoked.** There is no token *family* concept (single `replacedByTokenId` hop only) and no theft alarm. That is below the bar this epic sets for a fresh credential (§3.4).
+- A 30-second grace window lets a *second* concurrent request that hits the already-rotated old token succeed instead of hard-failing — but it does **not** hand that caller a usable token. `atomicDeviceTokenRotation`'s grace branch returns only the replacement's id/metadata (`deviceTokenId`, `deviceName`, `userAgent`, `location`), never `newToken` (`auth-transactions.ts:147-174`, comment at :164-166: *"client already has it from the first request"*); the refresh route only overwrites `activeDeviceToken` when `rotated.newToken` is truthy (`route.ts:135-137`), so a grace replay echoes back the **stale, already-revoked** token. This narrowly covers true double-fire races (client fires two requests near-simultaneously, both land inside the same 30s window) where the *first* request's response is assumed to still be in flight and will deliver the real token. It does **not** recover a caller whose first response was genuinely lost (dropped connection, client crash mid-response) — that caller is left holding a dead token with no path back except full re-auth.
+- **After the grace window** (or for a genuinely lost-response caller within it), presenting a rotated-away token is a silent 401 — the replacement token stays valid and nothing is revoked. There is no token *family* concept (single `replacedByTokenId` hop only) and no theft alarm. Both the missing-recovery-path and the missing-theft-alarm are below the bar this epic sets for a fresh credential; §3.4 does not inherit either gap.
 
 ### 1.5 What refresh actually yields: full-scope sessions
 
@@ -102,7 +102,7 @@ The `client_id` for the first-party CLI, redirect-URI rules for the loopback cal
 | Access token TTL | **15 minutes** | existing `ACCESS_TOKEN: '15m'` convention, `device-auth-utils.ts:14` |
 | Refresh token per-token TTL | **30 days** (each rotation issues a fresh 30-day token) | `REFRESH_TOKEN_REMEMBERED: '30d'`, `device-auth-utils.ts:16` |
 | Refresh family absolute cap | **90 days** from initial grant; refresh past cap → full re-login | `DEVICE_TOKEN: '90d'`, `device-auth-utils.ts:17` |
-| Concurrent-refresh grace window | **30 seconds**, returns the replacement token, does not extend any TTL | device-token precedent, `auth-transactions.ts:24` |
+| Concurrent-refresh grace window | **30 seconds**, returns the *actual* replacement token pair (not just a success signal — see §3.4), does not extend any TTL | device-token precedent for the window duration, `auth-transactions.ts:24`; token delivery deliberately improves on that precedent (§1.4) |
 | Client proactive-refresh skew buffer | **60 seconds** (treat access token as expired when ≤60s remain) | new; absorbs clock skew + request latency |
 
 An idle CLI therefore stays logged in for up to 30 days between uses, and even a daily-active CLI re-authenticates at least every 90 days.
@@ -111,9 +111,13 @@ An idle CLI therefore stays logged in for up to 30 days between uses, and even a
 
 Refresh tokens are **single-use and rotate on every `/token` refresh call**: each successful refresh atomically (FOR UPDATE, per `auth-transactions.ts:55-62` precedent) revokes the presented `ps_rt_*`, links it via `replacedByTokenId`, and issues a new `ps_at_*` + `ps_rt_*` pair in the same family. `familyExpiresAt` is fixed at first issuance and never extended.
 
-### 3.4 Reuse detection and family revocation
+### 3.4 Reuse detection, family revocation, and grace replay
 
-Presenting a refresh token that is revoked/rotated-away and **outside** the 30-second grace window is treated as theft evidence: the **entire family is revoked immediately** (every descendant refresh token and every access token issued from the family), the event is security-logged, and the response is a constant-shape 401. Within the grace window, the concurrent-retry semantics follow the device-token precedent (`auth-transactions.ts:147-174`). This deliberately exceeds what device tokens do today (§1.4).
+Presenting a refresh token that is revoked/rotated-away and **outside** the 30-second grace window is treated as theft evidence: the **entire family is revoked immediately** (every descendant refresh token and every access token issued from the family), the event is security-logged, and the response is a constant-shape 401.
+
+**Within** the grace window, the CLI must actually recover — inheriting the device-token precedent's "the first caller already has it" assumption (§1.4) is not acceptable here, since a dropped connection on the CLI's first response is exactly the case a developer will hit on a flaky ssh/CI network. Rotation therefore writes the new plaintext `ps_at_*`/`ps_rt_*` pair to a **short-lived, single-purpose grace cache** (e.g. Redis), keyed by the *old* token's hash, TTL = 30s, in addition to the permanent hash-only DB row. A grace-window replay looks up that cache by the presented (old, now-revoked) token's hash and returns the cached pair verbatim; the cache entry outlives the window only long enough to expire on its own (no delete-on-first-read, since a second dropped response must also be recoverable). This is a narrow, explicit, time-boxed exception to "plaintext never stored at rest" (§3.1): it lives only in the ephemeral cache, never the primary token table, and is unreachable after 30s or after the family is otherwise revoked.
+
+If the grace window is open by DB timestamp (`revokedAt` within 30s, `replacedByTokenId` set) but the cache entry is **missing** — e.g. cache eviction, cache-tier restart — that is an infrastructure gap, not attacker behavior: the family is **not** revoked, but the caller cannot be handed a token either. This is `grace_cache_miss` (§6): a distinct, non-punitive failure the CLI maps to `reauth`, never to `purge-and-reauth`'s implicit "your credential was rejected as invalid" framing (F2).
 
 ### 3.5 Client-side storage (contract for Phase 4's credential store)
 
@@ -140,9 +144,10 @@ Every decision above, restated as its failure behavior:
 |---|---|---|
 | F1 | Access-token validation (format, hash lookup, expiry, revocation, `tokenVersion`, suspension) | 401, constant shape; no partial identity |
 | F2 | Refresh with revoked token outside grace window | Revoke entire family, security-log, 401 |
+| F2a | Refresh with revoked token *inside* grace window but the grace-cache entry is missing (`grace_cache_miss`) | 401 distinct from F2: family is NOT revoked (not attacker behavior), CLI treats as `reauth`, not `purge-and-reauth` |
 | F3 | Refresh past `familyExpiresAt` or per-token `expiresAt` | 401; CLI purges stored credential and requires `pagespace login` |
-| F4 | Refresh network failure / 5xx | Bounded retry with backoff; access token is NOT used past its expiry while retrying; surfaced as auth error, never a silent unauthenticated call |
-| F5 | Refresh 4xx (definitive rejection) | Purge stored credential, require re-login; no retry loop |
+| F4 | Refresh network failure / 5xx / 429 rate-limited | Bounded retry with backoff (honor `Retry-After` on 429, F11); access token is NOT used past its expiry while retrying; surfaced as auth error, never a silent unauthenticated call; credential is NEVER purged for a transient failure |
+| F5 | Refresh 4xx that is a definitive rejection (400 invalid_grant/invalid_request, 401 invalid_client/invalid_token) | Purge stored credential, require re-login; no retry loop. **429 is explicitly excluded from this bucket** — see F4 |
 | F6 | Client persist-after-rotation failure | Discard in-memory pair, credential treated as lost (re-login) |
 | F7 | Provider-side PKCE (Phase 1) | Missing/mismatched `code_verifier` → grant refused. Fail-closed, unlike the fail-open client-side `pkce.ts:9-11` which MUST NOT be reused for the provider |
 | F8 | Scoped token with zero live scope targets | Deny all (existing precedent `index.ts:129-135`) |
@@ -168,8 +173,9 @@ export interface RefreshTokenRecord {
 
 export type RefreshDecision =
   | { ok: true; action: 'rotate' }
-  | { ok: true; action: 'grace-replay'; replacementTokenId: string }
+  | { ok: true; action: 'grace-replay' } // caller fulfills from the ephemeral grace cache (§3.4)
   | { ok: false; reason: 'expired' | 'family_expired' | 'version_mismatch'; revokeFamily: false }
+  | { ok: false; reason: 'grace_cache_miss'; revokeFamily: false } // in-window but cache lost the pair — infra gap, not theft
   | { ok: false; reason: 'reuse_detected'; revokeFamily: true };
 
 export function decideRefresh(
@@ -177,6 +183,9 @@ export function decideRefresh(
   userTokenVersion: number,
   now: Date,
   graceWindowMs: number, // 30_000
+  // Fact supplied by the impure shell (it already did the Redis GET before calling in —
+  // this function stays pure by taking the *result* of that I/O, not performing it).
+  graceCacheHit: boolean,
 ): RefreshDecision;
 
 export function issuedTokenLifetimes(
@@ -220,27 +229,34 @@ export function decideAccess(
 
 export function classifyRefreshFailure(
   outcome: { kind: 'http'; status: number } | { kind: 'network' },
-): 'retryable' | 'purge-and-reauth'; // 4xx → purge; network/5xx → retryable (bounded)
+): 'retryable' | 'purge-and-reauth';
+// network → retryable; 429 → retryable (F11 rate limit, NOT a credential judgment — never purge);
+// 5xx → retryable; remaining 4xx (400/401/403 — definitive rejection) → purge-and-reauth.
+// Reference body:
+//   if (outcome.kind === 'network') return 'retryable';
+//   if (outcome.status === 429 || outcome.status >= 500) return 'retryable';
+//   return 'purge-and-reauth';
 ```
 
 ## 7. Testable assertions (each becomes a RED test in Phase 1/4)
 
 1. `decideAccess(cred, now)` returns `use` iff `now + 60s < accessExpiresAt`; exactly 60s remaining → `refresh`.
 2. `decideAccess` with expired access + valid refresh → `refresh`; with `refreshExpiresAt` past → `reauth('refresh_expired')`; with `familyExpiresAt` past → `reauth('family_expired')`; with `null` → `reauth('no_credential')`.
-3. `decideRefresh` on a revoked token 29s after revocation with a `replacedByTokenId` → `grace-replay`; 31s after → `{ reason: 'reuse_detected', revokeFamily: true }`.
+3. `decideRefresh` on a revoked token 29s after revocation with a `replacedByTokenId` and `graceCacheHit: true` → `grace-replay`; same inputs with `graceCacheHit: false` → `{ reason: 'grace_cache_miss', revokeFamily: false }` (not theft); 31s after revocation (outside window) regardless of `graceCacheHit` → `{ reason: 'reuse_detected', revokeFamily: true }`.
 4. After family revocation, an access token issued earlier from that family fails validation (401).
 5. `issuedTokenLifetimes` never returns `refreshExpiresAt > familyExpiresAt` (cap clamps), and always returns `accessExpiresAt = now + 15m`.
 6. `decideRefresh` with `record.tokenVersion !== userTokenVersion` → refuse without family revocation ("logout all devices" is not theft).
 7. `resolveCredentialSource('mcp_x', 'ps_at_y', profile)` → flag wins; `resolveCredentialSource(undefined, '  ', profile)` → profile (whitespace env is absent); `resolveCredentialSource(undefined, 'mcp_bad', profile)` with `mcp_bad` rejected by the server → auth error naming `PAGESPACE_TOKEN`, profile untouched and unused.
 8. A flag/env credential is never refreshed and never written to the profile store (store write count = 0 across a full command run).
 9. Profile store file is created 0600 and rewritten atomically (no window where the file is absent or partial — verifiable via injected fs).
-10. `classifyRefreshFailure({kind:'http', status: 401})` → `purge-and-reauth`; `{status: 503}` and `{kind:'network'}` → `retryable`; retries are bounded and the stale access token is never presented after `accessExpiresAt`.
+10. `classifyRefreshFailure({kind:'http', status: 401})` → `purge-and-reauth`; `{status: 429}`, `{status: 503}`, and `{kind:'network'}` → `retryable`; a 429 result never triggers a credential purge; retries are bounded and honor `Retry-After` when present; the stale access token is never presented after `accessExpiresAt`.
 11. `isValidTokenFormat` accepts `ps_at_*`/`ps_rt_*` post-extension; `authenticateRequest` given `Bearer ps_rt_*` on any API route → 401 (refresh tokens are not API credentials).
 12. Provider `/token` refresh grant with a syntactically valid but unknown `ps_rt_*` → constant-shape 401 with no timing/shape oracle distinguishing "never existed" from "revoked".
 
 ## 8. Consequences
 
 - Phase 1 adds refresh-token-family tables and the `at`/`rt` prefixes; **no refresh-token table exists today** (verified: `packages/db/src/schema/` greps for `refresh_tokens`/`refreshTokens` are empty — the `'ps_refresh'` string in `token-utils.ts:69-77` is a docstring example only), so this is greenfield with no legacy-data migration.
+- Phase 1 also adds a narrow, 30s-TTL ephemeral grace cache (§3.4) — a new infra dependency beyond the primary hash-only token tables, scoped to exactly one purpose (recovering a dropped rotation response) and holding plaintext for no longer than the grace window.
 - `authenticateRequest`'s `TokenType` union (`'mcp' | 'session'`, `apps/web/src/lib/auth/index.ts:15`) gains an `'oauth'` member; routes opt in via the existing `allow` allow-list — unchanged routes keep rejecting the new type (fail closed by default).
 - Device tokens stay exactly as they are: an Electron/mobile-only mechanism. No `platform` enum change, no CLI coupling to `trustScore` columns, and the vestigial fingerprint machinery (§1.2) can be activated for browsers later without touching CLI auth.
 - The devices/settings UI gains a sibling surface in Phase 1: active OAuth grants (CLI logins) listed and revocable per family.
