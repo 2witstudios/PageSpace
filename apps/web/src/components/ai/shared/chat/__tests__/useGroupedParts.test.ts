@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { useGroupedParts } from '../useGroupedParts';
-import { isTextGroupPart, isFileGroupPart, isProcessedToolPart } from '../message-types';
+import { isTextGroupPart, isFileGroupPart, isProcessedToolPart, isToolRunGroupPart } from '../message-types';
 
 type Parts = UIMessage['parts'];
 
@@ -209,5 +209,78 @@ describe('useGroupedParts', () => {
     if (isFileGroupPart(group)) {
       expect(group.parts).toHaveLength(2);
     }
+  });
+
+  it('given 2+ consecutive non-diff tool calls, should collapse into one tool-run-group', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: { command: 'ls' }, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: { command: 'pwd' }, output: '/' },
+      { type: 'tool-gh', toolCallId: 'tc-3', toolName: 'gh', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(1);
+    const group = result.current[0];
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts).toHaveLength(3);
+      expect(group.parts.map(p => p.toolName)).toEqual(['bash', 'bash', 'gh']);
+    }
+  });
+
+  it('given a single non-diff tool call, should render it standalone (no group wrapper)', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(1);
+    expect(isProcessedToolPart(result.current[0])).toBe(true);
+    expect(isToolRunGroupPart(result.current[0])).toBe(false);
+  });
+
+  it('given a diff tool call in the middle of a run, should break the run in two', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-edit', toolCallId: 'tc-3', toolName: 'edit', state: 'output-available', input: { file_path: 'foo.ts' }, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-4', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-5', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(3);
+    expect(isToolRunGroupPart(result.current[0])).toBe(true);
+    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    if (isProcessedToolPart(result.current[1])) {
+      expect(result.current[1].toolName).toBe('edit');
+    }
+    expect(isToolRunGroupPart(result.current[2])).toBe(true);
+  });
+
+  it('given an execute_tool-wrapped diff tool, should still break a run by the inner tool name', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      {
+        type: 'tool-execute_tool',
+        toolCallId: 'tc-3',
+        toolName: 'execute_tool',
+        state: 'output-available',
+        input: { tool_name: 'replace_lines', parameters: { pageId: 'p1' } },
+        output: 'ok',
+      },
+      { type: 'tool-bash', toolCallId: 'tc-4', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-5', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(3);
+    expect(isToolRunGroupPart(result.current[0])).toBe(true);
+    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    if (isProcessedToolPart(result.current[1])) {
+      expect(result.current[1].toolName).toBe('execute_tool');
+    }
+    expect(isToolRunGroupPart(result.current[2])).toBe(true);
   });
 });

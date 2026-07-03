@@ -42,7 +42,7 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
 };
 
 // Tool name mapping (display labels for the collapsible header)
-const TOOL_NAME_MAP: Record<string, string> = {
+export const TOOL_NAME_MAP: Record<string, string> = {
   // Drive tools
   'list_drives': 'Workspaces',
   'create_drive': 'Create Workspace',

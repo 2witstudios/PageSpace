@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
-import { ToolCallRenderer } from './tool-calls';
+import { ToolCallRenderer, ToolRunGroup } from './tool-calls';
 
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
@@ -13,7 +13,7 @@ import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
 import { ImageMessageContent } from './ImageMessageContent';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 
@@ -258,7 +258,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   const groupedParts = useGroupedParts(message.parts);
 
   // Check if this message has tool calls (for showing undo button on assistant messages)
-  const hasToolCalls = message.role === 'assistant' && groupedParts.some(isProcessedToolPart);
+  const hasToolCalls = message.role === 'assistant' && groupedParts.some(g => isProcessedToolPart(g) || isToolRunGroupPart(g));
 
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
@@ -380,6 +380,12 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 key={`${message.id}-file-${index}`}
                 parts={group.parts}
               />
+            );
+          } else if (isToolRunGroupPart(group)) {
+            return (
+              <div key={`${message.id}-toolrun-${index}`} className="mr-2 sm:mr-8">
+                <ToolRunGroup parts={group.parts} />
+              </div>
             );
           } else if (isProcessedToolPart(group)) {
             return (

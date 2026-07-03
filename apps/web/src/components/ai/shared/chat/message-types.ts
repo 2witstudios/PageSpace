@@ -87,9 +87,19 @@ export interface CommandExecutionPart {
 }
 
 /**
+ * A run of 2+ consecutive non-diff tool calls, collapsed into one summary
+ * card. Diff-producing tool calls (see tool-calls/tool-significance.ts)
+ * always break a run and render standalone instead.
+ */
+export interface ToolRunGroupPart {
+  type: 'tool-run-group';
+  parts: ProcessedToolPart[];
+}
+
+/**
  * Union type for processed message parts
  */
-export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart | CommandExecutionPart;
+export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart | CommandExecutionPart | ToolRunGroupPart;
 
 /**
  * Valid tool states for type checking
@@ -122,7 +132,7 @@ export function isFileGroupPart(part: GroupedPart): part is FileGroupPart {
  * Type guard for ProcessedToolPart
  */
 export function isProcessedToolPart(part: GroupedPart): part is ProcessedToolPart {
-  return part.type.startsWith('tool-');
+  return part.type !== 'tool-run-group' && part.type.startsWith('tool-');
 }
 
 /**
@@ -130,4 +140,11 @@ export function isProcessedToolPart(part: GroupedPart): part is ProcessedToolPar
  */
 export function isCommandExecutionPart(part: GroupedPart): part is CommandExecutionPart {
   return part.type === 'data-command-execution';
+}
+
+/**
+ * Type guard for ToolRunGroupPart
+ */
+export function isToolRunGroupPart(part: GroupedPart): part is ToolRunGroupPart {
+  return part.type === 'tool-run-group';
 }

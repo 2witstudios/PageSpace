@@ -83,7 +83,7 @@ const getSendChannelMessagePreview = (
 };
 
 // Tool name mapping (moved outside component to avoid recreation)
-const TOOL_NAME_MAP: Record<string, string> = {
+export const TOOL_NAME_MAP: Record<string, string> = {
   'ask_agent': 'Ask Agent',
   'list_drives': 'List Drives',
   'list_pages': 'List Pages',

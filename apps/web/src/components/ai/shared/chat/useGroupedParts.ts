@@ -5,15 +5,18 @@
 
 import { useMemo } from 'react';
 import type { UIMessage } from 'ai';
-import type { TextPart, FilePart, ToolPart, GroupedPart } from './message-types';
+import type { TextPart, FilePart, ToolPart, ProcessedToolPart, GroupedPart } from './message-types';
 import { isValidToolState } from './message-types';
 import { FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
+import { isDiffTool, resolveEffectiveToolName } from './tool-calls/tool-significance';
 
 /**
  * Groups message parts for rendering.
  * - Consecutive text parts are grouped together
  * - Consecutive file parts are grouped together
- * - Each tool call is rendered individually (no grouping)
+ * - Runs of 2+ consecutive non-diff tool calls are grouped into one
+ *   ToolRunGroupPart; a lone non-diff call renders as before; diff-producing
+ *   calls (see tool-calls/tool-significance.ts) always stand alone
  * - Skips step-start and reasoning parts
  */
 export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedPart[] {
@@ -25,6 +28,7 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
     const groups: GroupedPart[] = [];
     let currentTextGroup: TextPart[] = [];
     let currentFileGroup: FilePart[] = [];
+    let currentToolRun: ProcessedToolPart[] = [];
 
     const flushTextGroup = () => {
       if (currentTextGroup.length > 0) {
@@ -40,6 +44,15 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
       }
     };
 
+    const flushToolRun = () => {
+      if (currentToolRun.length >= 2) {
+        groups.push({ type: 'tool-run-group', parts: currentToolRun });
+      } else if (currentToolRun.length === 1) {
+        groups.push(currentToolRun[0]);
+      }
+      currentToolRun = [];
+    };
+
     parts.forEach((part) => {
       // Skip step-start and reasoning parts
       if (part.type === 'step-start' || part.type === 'reasoning') {
@@ -48,16 +61,19 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
 
       if (part.type === 'text') {
         flushFileGroup();
+        flushToolRun();
         currentTextGroup.push(part as TextPart);
       } else if (part.type === 'data-command-execution') {
         // Universal Commands execution indicator (UX spec §7) — rendered
         // standalone, above the content it precedes.
         flushTextGroup();
         flushFileGroup();
+        flushToolRun();
         const dataPart = part as { type: 'data-command-execution'; id?: string; data?: unknown };
         groups.push({ type: 'data-command-execution', id: dataPart.id, data: dataPart.data });
       } else if (part.type === 'file') {
         flushTextGroup();
+        flushToolRun();
         const filePart = part as FilePart & Record<string, unknown>;
         currentFileGroup.push({
           type: 'file',
@@ -80,22 +96,30 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
         flushFileGroup();
 
         const state = isValidToolState(toolPart.state) ? toolPart.state : 'input-available';
-
-        // Add each tool individually (no grouping)
-        groups.push({
+        const processedPart: ProcessedToolPart = {
           type: part.type,
           toolCallId,
           toolName,
           input: toolPart.input,
           output: toolPart.output,
           state,
-        });
+        };
+
+        const effectiveToolName = resolveEffectiveToolName(toolName, toolPart.input);
+        if (isDiffTool(effectiveToolName)) {
+          // Diff-producing edits always stand alone, breaking any run.
+          flushToolRun();
+          groups.push(processedPart);
+        } else {
+          currentToolRun.push(processedPart);
+        }
       }
     });
 
     // Flush any remaining groups
     flushTextGroup();
     flushFileGroup();
+    flushToolRun();
 
     return groups;
   }, [parts]);
