@@ -127,7 +127,10 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
     });
 
     const response = await DELETE(request, createContext('nonexistent'));
+    const body = await response.json();
+
     expect(response.status).toBe(404);
+    expect(body.error).toBe('Token not found');
   });
 
   it('returns 200 on successful revocation', async () => {
@@ -222,7 +225,26 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
     });
 
     const response = await PATCH(request, createContext());
+    const body = await response.json();
+
     expect(response.status).toBe(404);
+    expect(body.error).toBe('Token not found');
+  });
+
+  it('returns 400 when neither drives nor driveIds is provided', async () => {
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ name: 'renamed' }),
+    });
+
+    const response = await PATCH(request, createContext());
+
+    expect(response.status).toBe(400);
+    expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
   });
 
   it('returns 400 when both drives and driveIds are provided', async () => {

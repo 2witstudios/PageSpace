@@ -13,7 +13,6 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 // Schema for PATCH (editing drive scopes on an existing token)
 const updateTokenScopesSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
   // Legacy: plain drive IDs — scope only, role inherits from owner
   driveIds: z.array(z.string()).optional(),
   // Preferred: per-drive scope with optional role downgrade
@@ -24,6 +23,8 @@ const updateTokenScopesSchema = z.object({
   })).optional(),
 }).refine(d => !(d.drives && d.driveIds), {
   message: 'Provide drives or driveIds, not both',
+}).refine(d => d.drives !== undefined || d.driveIds !== undefined, {
+  message: 'Provide drives or driveIds',
 });
 
 // DELETE: Revoke an MCP token
@@ -42,7 +43,7 @@ export async function DELETE(
     const existingToken = await sessionRepository.findMcpTokenByIdAndUser(tokenId, userId);
 
     if (!existingToken) {
-      return new NextResponse('Token not found', { status: 404 });
+      return NextResponse.json({ error: 'Token not found' }, { status: 404 });
     }
 
     // Verify the token belongs to the user and revoke it
@@ -89,7 +90,7 @@ export async function PATCH(
     // Ownership check — token must belong to the requesting user
     const existingToken = await sessionRepository.findMcpTokenByIdAndUser(tokenId, userId);
     if (!existingToken) {
-      return new NextResponse('Token not found', { status: 404 });
+      return NextResponse.json({ error: 'Token not found' }, { status: 404 });
     }
 
     // Validate drive access for each scope (same logic as POST /create)
