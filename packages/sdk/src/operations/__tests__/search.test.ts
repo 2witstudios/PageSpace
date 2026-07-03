@@ -245,7 +245,7 @@ describe('search.multiDrive — request shape', () => {
   it('builds a GET to /api/search/multi-drive with no path params', () => {
     const request = buildRequest(multiDriveSearch, { searchQuery: 'quarterly report' }, config);
     expect(request.method).toBe('GET');
-    expect(request.url).toBe('https://pagespace.ai/api/search/multi-drive?searchQuery=quarterly%20report');
+    expect(request.url).toBe('https://pagespace.ai/api/search/multi-drive?searchQuery=quarterly+report');
     expect(request.body).toBeUndefined();
   });
 

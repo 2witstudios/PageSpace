@@ -57,6 +57,7 @@ export type { OperationRegistry } from './registry/registry.js';
 // Seed operations (Phase 3 grows this list).
 export { listDrives } from './operations/drives.js';
 export { readPage } from './operations/pages.js';
+export { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
 
 // Transport primitive types needed to declare custom operations. buildRequest/
 // parseResponse/executeRequest stay internal — the facade is the only caller.
