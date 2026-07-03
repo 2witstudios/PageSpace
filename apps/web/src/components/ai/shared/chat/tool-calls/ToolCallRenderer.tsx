@@ -9,6 +9,7 @@ import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { TaskRenderer } from './TaskRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { renderToolContent } from './registry';
+import { isHiddenTool } from './tool-significance';
 import { parseIntegrationToolName, isIntegrationTool } from '@pagespace/lib/integrations/converter/ai-sdk';
 import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 
@@ -232,7 +233,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
   let toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
   let resolvedPart = part;
 
-  if (toolName === 'tool_search') return null;
+  if (isHiddenTool(toolName)) return null;
 
   if (toolName === 'execute_tool') {
     const raw = safeJsonParse(part.input);
@@ -243,7 +244,7 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
     }
   }
 
-  if (toolName === 'tool_search') return null;
+  if (isHiddenTool(toolName)) return null;
 
   if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
   if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;

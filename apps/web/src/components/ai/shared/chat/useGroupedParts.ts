@@ -8,15 +8,16 @@ import type { UIMessage } from 'ai';
 import type { TextPart, FilePart, ToolPart, ProcessedToolPart, GroupedPart } from './message-types';
 import { isValidToolState } from './message-types';
 import { FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
-import { isDiffTool, isHiddenTool, resolveEffectiveToolName } from './tool-calls/tool-significance';
+import { isStandaloneTool, isHiddenTool, resolveEffectiveToolName } from './tool-calls/tool-significance';
 
 /**
  * Groups message parts for rendering.
  * - Consecutive text parts are grouped together
  * - Consecutive file parts are grouped together
- * - Runs of 2+ consecutive non-diff tool calls are grouped into one
- *   ToolRunGroupPart; a lone non-diff call renders as before; diff-producing
- *   calls (see tool-calls/tool-significance.ts) always stand alone
+ * - Runs of 2+ consecutive non-standalone tool calls are grouped into one
+ *   ToolRunGroupPart; a lone call renders as before; standalone tools (diff-
+ *   producing edits, task tools, ask_agent — see
+ *   tool-calls/tool-significance.ts) always stand alone, breaking any run
  * - Skips step-start and reasoning parts
  */
 export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedPart[] {
@@ -115,8 +116,9 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
           state,
         };
 
-        if (isDiffTool(effectiveToolName)) {
-          // Diff-producing edits always stand alone, breaking any run.
+        if (isStandaloneTool(effectiveToolName)) {
+          // Diff-producing edits and SPECIAL_HANDLED_TOOLS (tasks, ask_agent)
+          // always stand alone, breaking any run.
           flushToolRun();
           groups.push(processedPart);
         } else {

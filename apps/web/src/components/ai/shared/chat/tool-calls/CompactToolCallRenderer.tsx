@@ -25,6 +25,7 @@ import { TaskRenderer } from './TaskRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { renderToolContent } from './registry';
+import { isHiddenTool } from './tool-significance';
 import { parseIntegrationToolName, isIntegrationTool } from '@pagespace/lib/integrations/converter/ai-sdk';
 import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 
@@ -349,7 +350,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
   let toolName = part.toolName || part.type?.replace('tool-', '') || '';
   let resolvedPart = part;
 
-  if (toolName === 'tool_search') return null;
+  if (isHiddenTool(toolName)) return null;
 
   if (toolName === 'execute_tool') {
     const raw = safeJsonParse(part.input);
@@ -360,7 +361,7 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
     }
   }
 
-  if (toolName === 'tool_search') return null;
+  if (isHiddenTool(toolName)) return null;
 
   if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
   if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;

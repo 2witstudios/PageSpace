@@ -336,4 +336,45 @@ describe('useGroupedParts', () => {
       expect(group.parts.every(p => p.toolName !== 'execute_tool')).toBe(true);
     }
   });
+
+  it('given consecutive task tool calls, should NOT collapse them (SPECIAL_HANDLED_TOOLS stand alone)', () => {
+    const parts = asMessageParts([
+      { type: 'tool-update_task', toolCallId: 'tc-1', toolName: 'update_task', state: 'output-available', input: { taskId: 't1' }, output: 'ok' },
+      { type: 'tool-update_task', toolCallId: 'tc-2', toolName: 'update_task', state: 'output-available', input: { taskId: 't2' }, output: 'ok' },
+      { type: 'tool-create_task', toolCallId: 'tc-3', toolName: 'create_task', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    // Each task tool call renders standalone — TaskRenderer's own aggregated
+    // list view is how these should be scanned, not a generic run summary.
+    expect(result.current).toHaveLength(3);
+    result.current.forEach((group) => {
+      expect(isProcessedToolPart(group)).toBe(true);
+      expect(isToolRunGroupPart(group)).toBe(false);
+    });
+  });
+
+  it('given consecutive ask_agent calls sandwiched by bash calls, should keep ask_agent standalone and group the bash calls around it', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-ask_agent', toolCallId: 'tc-3', toolName: 'ask_agent', state: 'output-available', input: { question: 'q' }, output: 'ok' },
+      { type: 'tool-ask_agent', toolCallId: 'tc-4', toolName: 'ask_agent', state: 'output-available', input: { question: 'q2' }, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-5', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-6', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    // bash run, then two standalone ask_agent calls (each its own entry, not
+    // merged with each other), then another bash run.
+    expect(result.current).toHaveLength(4);
+    expect(isToolRunGroupPart(result.current[0])).toBe(true);
+    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    expect(isProcessedToolPart(result.current[2])).toBe(true);
+    if (isProcessedToolPart(result.current[1]) && isProcessedToolPart(result.current[2])) {
+      expect(result.current[1].toolName).toBe('ask_agent');
+      expect(result.current[2].toolName).toBe('ask_agent');
+    }
+    expect(isToolRunGroupPart(result.current[3])).toBe(true);
+  });
 });
