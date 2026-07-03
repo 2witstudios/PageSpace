@@ -927,6 +927,11 @@
       "import": "./dist/auth/constants.js",
       "require": "./dist/auth/constants.js"
     },
+    "./auth/oauth/scopes": {
+      "types": "./dist/auth/oauth/scopes.d.ts",
+      "import": "./dist/auth/oauth/scopes.js",
+      "require": "./dist/auth/oauth/scopes.js"
+    },
     "./auth/account-lockout": {
       "types": "./dist/auth/account-lockout.d.ts",
       "import": "./dist/auth/account-lockout.js",
