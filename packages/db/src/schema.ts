@@ -49,6 +49,7 @@ export * from './schema/ai-compaction';
 export * from './schema/custom-domains';
 export * from './schema/incidents';
 export * from './schema/data-subject-requests';
+export * from './schema/oauth';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -101,6 +102,7 @@ import * as aiCompaction from './schema/ai-compaction';
 import * as customDomains from './schema/custom-domains';
 import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
+import * as oauth from './schema/oauth';
 
 export const schema = {
   ...auth,
@@ -154,4 +156,5 @@ export const schema = {
   ...customDomains,
   ...incidents,
   ...dataSubjectRequests,
+  ...oauth,
 };
