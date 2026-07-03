@@ -16,16 +16,25 @@ const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: fal
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
 
+// Matches agentTriggerBaseSchema's fallback (create_workflow / update_workflow
+// internal tools) so instructionPageId-only workflows still satisfy the
+// NOT NULL prompt column identically whether created via REST or the AI tool.
+const DEFAULT_TRIGGER_PROMPT = 'Execute instructions from linked page.';
+
 const createWorkflowSchema = z.object({
   driveId: z.string().min(1),
   name: z.string().min(1).max(200),
   agentPageId: z.string().min(1),
-  prompt: z.string().min(1),
+  prompt: z.string().min(1).optional(),
+  instructionPageId: z.string().nullable().optional(),
   contextPageIds: z.array(z.string()).default([]),
   cronExpression: z.string().min(1),
   timezone: z.string().default('UTC'),
   isEnabled: z.boolean().default(true),
-}).strict();
+}).strict().refine(
+  (data) => Boolean(data.prompt?.trim()) || Boolean(data.instructionPageId),
+  { message: 'Either prompt or instructionPageId is required' },
+);
 
 // GET /api/workflows?driveId=xxx - List scheduled workflows for a drive
 export async function GET(request: Request) {
@@ -146,6 +155,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Selected page is not an AI agent' }, { status: 400 });
   }
 
+  // Validate instruction page exists, is not trashed, and is in the same drive
+  if (data.instructionPageId) {
+    const [instructionPage] = await db
+      .select()
+      .from(pages)
+      .where(and(eq(pages.id, data.instructionPageId), eq(pages.driveId, data.driveId), eq(pages.isTrashed, false)));
+
+    if (!instructionPage) {
+      return NextResponse.json({ error: 'Instruction page not found in this drive' }, { status: 400 });
+    }
+  }
+
   // Validate timezone
   const tzValidation = validateTimezone(data.timezone);
   if (!tzValidation.valid) {
@@ -165,7 +186,8 @@ export async function POST(request: Request) {
     createdBy: userId,
     name: data.name,
     agentPageId: data.agentPageId,
-    prompt: data.prompt,
+    prompt: data.prompt?.trim() || DEFAULT_TRIGGER_PROMPT,
+    instructionPageId: data.instructionPageId ?? null,
     contextPageIds: data.contextPageIds,
     triggerType: MANAGEABLE_TRIGGER_TYPE,
     cronExpression: data.cronExpression,
