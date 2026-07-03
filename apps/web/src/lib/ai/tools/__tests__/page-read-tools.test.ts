@@ -10,6 +10,7 @@ vi.mock('@pagespace/db/db', () => ({
     where: vi.fn(),
     orderBy: vi.fn().mockReturnThis(),
     groupBy: vi.fn().mockReturnThis(),
+    insert: vi.fn(),
     query: {
       pages: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       drives: { findFirst: vi.fn() },
@@ -765,6 +766,52 @@ describe('page-read-tools', () => {
           should: 'compute percentage from the done group',
           actual: result.progress.percentage,
           expected: 67,
+        });
+      });
+
+      it('persists a task_lists row AND seeds task_status_configs when auto-creating (not just the response fallback)', async () => {
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }] });
+
+        // No taskLists row exists yet for this page.
+        mockDb.query.taskLists = {
+          findFirst: vi.fn().mockResolvedValue(undefined),
+        } as unknown as typeof mockDb.query.taskLists;
+
+        const taskListInserts: Array<Record<string, unknown>> = [];
+        const statusConfigInserts: Array<Record<string, unknown>> = [];
+        mockDb.insert = vi.fn((table: { pageId?: string }) => ({
+          values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+            if (table?.pageId === 'pageId') {
+              taskListInserts.push(vals as Record<string, unknown>);
+              return { returning: () => Promise.resolve([{ id: 'list-new', pageId: 'page-1', title: 'My Tasks' }]) };
+            }
+            statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
+            return Promise.resolve(undefined);
+          },
+        })) as unknown as typeof mockDb.insert;
+
+        await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'a TASK_LIST page with no task_lists row yet',
+          should: 'insert exactly one task_lists row',
+          actual: taskListInserts.length,
+          expected: 1,
+        });
+        assert({
+          given: 'a newly auto-created task_lists row',
+          should: 'persist the 4 default task_status_configs (not just return them in the response)',
+          actual: statusConfigInserts.map(c => c.slug),
+          expected: ['pending', 'in_progress', 'blocked', 'completed'],
+        });
+        assert({
+          given: 'the persisted status configs',
+          should: 'link each row to the new task_lists id',
+          actual: statusConfigInserts.every(c => c.taskListId === 'list-new'),
+          expected: true,
         });
       });
     });

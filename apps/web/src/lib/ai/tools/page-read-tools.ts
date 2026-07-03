@@ -12,6 +12,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI } from '../core/page-serializer';
+import { ensureTaskListForPage } from '@/services/api/task-sync-service';
 
 export const pageReadTools = {
   /**
@@ -264,25 +265,17 @@ export const pageReadTools = {
 
         // Handle TASK_LIST pages - return structured task data
         if (page.type === 'TASK_LIST') {
-          // Find or create task_list record for this page
-          let taskList = await db.query.taskLists.findFirst({
-            where: eq(taskLists.pageId, page.id),
+          // Find or create task_list record for this page, seeding default status
+          // configs alongside it so the DB is never left half-initialized.
+          const taskList = await ensureTaskListForPage(db, {
+            pageId: page.id,
+            title: page.title,
+            userId,
+            metadata: {
+              createdAt: new Date().toISOString(),
+              autoCreated: true,
+            },
           });
-
-          if (!taskList) {
-            // Auto-create task_list record
-            const [newTaskList] = await db.insert(taskLists).values({
-              userId,
-              pageId: page.id,
-              title: page.title,
-              status: 'pending',
-              metadata: {
-                createdAt: new Date().toISOString(),
-                autoCreated: true,
-              },
-            }).returning();
-            taskList = newTaskList;
-          }
 
           // Get all non-trashed tasks ordered by position. Title lives on the linked page.
           const tasks = await db

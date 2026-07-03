@@ -120,7 +120,12 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock('@/services/api/task-sync-service', () => ({
+  ensureTaskListForPage: vi.fn().mockResolvedValue({ id: 'tasklist-1' }),
+}));
+
 import { pageWriteTools } from '../page-write-tools';
+import { ensureTaskListForPage } from '@/services/api/task-sync-service';
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { getAgentAccessLevel } from '@pagespace/lib/permissions/agent-permissions';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
@@ -134,6 +139,7 @@ const mockGetAgentAccessLevel = vi.mocked(getAgentAccessLevel);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockApplyPageMutation = vi.mocked(applyPageMutation);
+const mockEnsureTaskListForPage = vi.mocked(ensureTaskListForPage);
 
 describe('page-write-tools', () => {
   beforeEach(() => {
@@ -475,6 +481,56 @@ describe('page-write-tools', () => {
           context
         )
       ).rejects.toThrow('Insufficient permissions to create pages in this drive');
+    });
+
+    it('seeds task_lists + default task_status_configs when creating a TASK_LIST page', async () => {
+      // Reproduces the bug: create_page uses pageRepository.create() directly (not
+      // pageService.createPage()), so without an explicit TASK_LIST branch the new
+      // page has no taskLists/taskStatusConfigs rows and the Kanban UI crashes on
+      // first load with "Cannot read properties of undefined (reading 'color')".
+      mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-999' });
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockPageRepo.getNextPosition.mockResolvedValue(1);
+      mockPageRepo.create.mockResolvedValue({
+        id: 'new-tasklist-1',
+        title: 'New Task List',
+        type: 'TASK_LIST',
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.create_page.execute!(
+        { driveId: 'drive-1', title: 'New Task List', type: 'TASK_LIST' },
+        context
+      );
+
+      if ('error' in result) throw new Error('Expected success');
+      expect(mockEnsureTaskListForPage).toHaveBeenCalledWith(
+        expect.anything(),
+        { pageId: 'new-tasklist-1', title: 'New Task List', userId: 'user-123' }
+      );
+    });
+
+    it('does not seed task_lists for non-TASK_LIST page types', async () => {
+      mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-999' });
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockPageRepo.getNextPosition.mockResolvedValue(1);
+      mockPageRepo.create.mockResolvedValue({ id: 'new-page-1', title: 'New Page', type: 'DOCUMENT' });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await pageWriteTools.create_page.execute!(
+        { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT' },
+        context
+      );
+
+      expect(mockEnsureTaskListForPage).not.toHaveBeenCalled();
     });
   });
 

@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, asc, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
+import { taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpers';
-import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
+import { backfillMissingTaskItems, ensureTaskListForPage } from '@/services/api/task-sync-service';
 import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
@@ -180,23 +180,15 @@ export async function POST(req: NextRequest) {
         auditRequest(req, { eventType: 'data.read', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation: 'read' } });
 
         if (page.type === PageType.TASK_LIST) {
-          let taskList = await db.query.taskLists.findFirst({
-            where: eq(taskLists.pageId, pageId),
+          const taskList = await ensureTaskListForPage(db, {
+            pageId,
+            title: page.title,
+            userId,
+            metadata: {
+              createdAt: new Date().toISOString(),
+              autoCreated: true,
+            },
           });
-
-          if (!taskList) {
-            const [newTaskList] = await db.insert(taskLists).values({
-              userId,
-              pageId,
-              title: page.title,
-              status: 'pending',
-              metadata: {
-                createdAt: new Date().toISOString(),
-                autoCreated: true,
-              },
-            }).returning();
-            taskList = newTaskList;
-          }
 
           // Self-heal: ensure every child TASK_LIST page has a task_items row.
           // Mirrors the same call in /api/pages/[pageId]/tasks/route.ts:143.

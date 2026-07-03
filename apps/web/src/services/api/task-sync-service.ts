@@ -30,6 +30,44 @@ async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
 }
 
 /**
+ * Ensure a TASK_LIST page has its `task_lists` row and default `task_status_configs`
+ * seeded. Idempotent — a no-op if the `task_lists` row already exists (status configs
+ * are only ever seeded alongside a *new* `task_lists` row, never backfilled onto an
+ * existing one here).
+ *
+ * This is the single seeding path every page-creation and lazy-init entry point must
+ * call for a TASK_LIST page — skipping it is what leaves `taskStatusConfigs` empty and
+ * crashes the Kanban UI (`STATUS_GROUP_CONFIG[group]` lookup with no matching group).
+ */
+export async function ensureTaskListForPage(
+  tx: Tx,
+  params: { pageId: string; title: string; userId: string; metadata?: Record<string, unknown> },
+): Promise<typeof taskLists.$inferSelect> {
+  const { pageId, title, userId, metadata } = params
+
+  let taskList = await tx.query.taskLists.findFirst({
+    where: eq(taskLists.pageId, pageId),
+  })
+
+  if (!taskList) {
+    const [created] = await tx.insert(taskLists).values({
+      userId,
+      pageId,
+      title,
+      status: 'pending',
+      ...(metadata ? { metadata } : {}),
+    }).returning()
+    taskList = created
+
+    await tx.insert(taskStatusConfigs).values(
+      DEFAULT_TASK_STATUSES.map(s => ({ taskListId: created.id, ...s }))
+    )
+  }
+
+  return taskList
+}
+
+/**
  * Create the `task_items` row for a page under a known TASK_LIST parent.
  * Idempotent — does nothing if the row already exists. Ensures the parent's
  * `task_lists` row and default status configs exist first.
@@ -40,23 +78,7 @@ async function addTaskItemUnderParent(
 ): Promise<void> {
   const { pageId, parentId, userId } = params
 
-  let taskList = await tx.query.taskLists.findFirst({
-    where: eq(taskLists.pageId, parentId),
-  })
-
-  if (!taskList) {
-    const [created] = await tx.insert(taskLists).values({
-      userId,
-      pageId: parentId,
-      title: 'Task List',
-      status: 'pending',
-    }).returning()
-    taskList = created
-
-    await tx.insert(taskStatusConfigs).values(
-      DEFAULT_TASK_STATUSES.map(s => ({ taskListId: created.id, ...s }))
-    )
-  }
+  const taskList = await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
 
   const existing = await tx.query.taskItems.findFirst({
     where: eq(taskItems.pageId, pageId),

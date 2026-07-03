@@ -7,6 +7,7 @@ const mockFindFirstPage = vi.fn();
 const mockFindFirstTaskList = vi.fn();
 const mockFindManyStatusConfigs = vi.fn();
 const mockInsertReturning = vi.fn();
+const mockInsertStatusConfigValues = vi.fn();
 const mockSelectChildPages = vi.fn();
 const mockBackfillMissingTaskItems = vi.fn();
 const mockFetchEnrichedTasks = vi.fn();
@@ -71,10 +72,14 @@ vi.mock('@pagespace/db/db', () => ({
       taskLists: { findFirst: (...args: unknown[]) => mockFindFirstTaskList(...args) },
       taskStatusConfigs: { findMany: (...args: unknown[]) => mockFindManyStatusConfigs(...args) },
     },
-    insert: () => ({
-      values: () => ({
-        returning: (...args: unknown[]) => mockInsertReturning(...args),
-      }),
+    insert: (table: { pageId?: string }) => ({
+      values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+        if (table?.pageId === 'taskLists.pageId') {
+          return { returning: (...args: unknown[]) => mockInsertReturning(...args) };
+        }
+        mockInsertStatusConfigValues(vals);
+        return Promise.resolve(undefined);
+      },
     }),
     select: () => ({
       from: () => ({
@@ -84,9 +89,15 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 
-vi.mock('@/services/api/task-sync-service', () => ({
-  backfillMissingTaskItems: (...args: unknown[]) => mockBackfillMissingTaskItems(...args),
-}));
+// ensureTaskListForPage is real (not mocked) — it's the fix under test, exercised
+// against the mocked `db` above so we can assert the status configs actually persist.
+vi.mock('@/services/api/task-sync-service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/api/task-sync-service')>();
+  return {
+    ...actual,
+    backfillMissingTaskItems: (...args: unknown[]) => mockBackfillMissingTaskItems(...args),
+  };
+});
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
@@ -227,6 +238,29 @@ describe('MCP Documents API — TASK_LIST read', () => {
     await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
 
     expect(mockInsertReturning).not.toHaveBeenCalled();
+  });
+
+  it('persists the default task_status_configs (not just the response fallback) when auto-creating', async () => {
+    mockFindFirstTaskList.mockResolvedValue(null);
+    mockInsertReturning.mockResolvedValue([{ ...EXISTING_TASK_LIST, id: 'tl_new' }]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockInsertStatusConfigValues).toHaveBeenCalledTimes(1);
+    const inserted = mockInsertStatusConfigValues.mock.calls[0][0];
+    expect(inserted).toHaveLength(4);
+    expect(inserted.map((c: { slug: string }) => c.slug)).toEqual([
+      'pending', 'in_progress', 'blocked', 'completed',
+    ]);
+    expect(inserted.every((c: { taskListId: string }) => c.taskListId === 'tl_new')).toBe(true);
+  });
+
+  it('does not insert status configs when taskLists record already exists', async () => {
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockInsertStatusConfigValues).not.toHaveBeenCalled();
   });
 
   it('uses custom status configs when present', async () => {
