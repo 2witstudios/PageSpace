@@ -14,7 +14,7 @@ import {
   isMCPAuthResult,
   checkMCPPageScope,
   getAllowedDriveIds,
-  isScopedMcpAuth,
+  isScopedMCPAuth,
   canPrincipalViewPage,
   canPrincipalEditPage,
 } from '@/lib/auth';
@@ -241,7 +241,7 @@ export async function POST(request: Request): Promise<Response> {
       : [stepCountIs(100)];
 
     // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.
-    const isMcpScopedRequest = isScopedMcpAuth(authResult);
+    const isMcpScopedRequest = isScopedMCPAuth(authResult);
 
     if (inServerOnlyMode) {
       // server-only: existing pipeline unchanged

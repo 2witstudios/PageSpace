@@ -27,7 +27,7 @@ import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMcpAuth, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -611,7 +611,7 @@ export async function POST(request: Request) {
     // (e.g. create_drive) from drive-scoped MCP tokens' tool list.
     const baseTools = filterToolsForMcpScope(
       filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
-      isScopedMcpAuth(authResult)
+      isScopedMCPAuth(authResult)
     );
 
     // Step 2: Extract web_search so it can be handled as a runtime-toggle override

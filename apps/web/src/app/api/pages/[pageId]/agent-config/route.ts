@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -50,8 +51,11 @@ export async function GET(
       );
     }
 
-    // Get available tools for the UI
-    const availableTools = Object.entries(pageSpaceTools).map(([toolName, tool]) => ({
+    // Get available tools for the UI — hide account-level-only tools (e.g.
+    // create_drive) from a drive-scoped MCP token, mirroring the runtime
+    // chat/consult tool-list filtering.
+    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth));
+    const availableTools = Object.entries(scopedPageSpaceTools).map(([toolName, tool]) => ({
       name: toolName,
       description: tool.description || `${toolName} tool`,
     }));
@@ -146,9 +150,13 @@ export async function PATCH(
       );
     }
 
-    // Validate enabled tools (ensure they exist in available tools)
+    // Validate enabled tools (ensure they exist in available tools). A
+    // drive-scoped MCP token cannot newly enable an account-level-only tool
+    // (e.g. create_drive) — mirrors the runtime chat/consult tool-list
+    // filtering, so a scoped caller can't configure a tool it will never be
+    // permitted to invoke.
     if (enabledTools && Array.isArray(enabledTools)) {
-      const availableToolNames = Object.keys(pageSpaceTools);
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
       const invalidTools = enabledTools.filter(tool => !availableToolNames.includes(tool));
       if (invalidTools.length > 0) {
         return NextResponse.json(

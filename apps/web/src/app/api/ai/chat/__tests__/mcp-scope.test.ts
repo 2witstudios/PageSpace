@@ -18,7 +18,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: any) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
-  isScopedMcpAuth: vi.fn(() => false),
+  isScopedMCPAuth: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({

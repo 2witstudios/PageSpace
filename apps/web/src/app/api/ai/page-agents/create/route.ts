@@ -5,6 +5,7 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, ONPREM_ALLOWED_PROVIDERS, isValidModel } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -99,9 +100,11 @@ export async function POST(request: Request) {
       }
     }
 
-    // Validate enabled tools
+    // Validate enabled tools. A drive-scoped MCP token cannot newly enable an
+    // account-level-only tool (e.g. create_drive) — mirrors the runtime
+    // chat/consult tool-list filtering.
     if (enabledTools && enabledTools.length > 0) {
-      const availableToolNames = Object.keys(pageSpaceTools);
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
       const invalidTools = enabledTools.filter((toolName: string) => !availableToolNames.includes(toolName));
       if (invalidTools.length > 0) {
         return NextResponse.json(

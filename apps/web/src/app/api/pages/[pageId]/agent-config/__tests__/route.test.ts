@@ -69,6 +69,8 @@ vi.mock('@/lib/auth', () => ({
   // The route authorizes via the principal dispatch (scoped tokens use their own
   // role); tests drive it through the same mock as the old user-level check.
   canPrincipalEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
 }));
 
 vi.mock('@/lib/ai/core/ai-tools', () => ({
