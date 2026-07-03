@@ -287,7 +287,8 @@ export function isIncompatibleServerError(error: unknown): error is Incompatible
 
 export type HttpErrorHeaders = Headers | Record<string, string> | null | undefined;
 
-function getHeaderValue(headers: HttpErrorHeaders, name: string): string | null {
+/** Case-insensitive header lookup across both a real `Headers` and a plain record (house convention: tests use plain objects). */
+export function getHeaderValue(headers: HttpErrorHeaders, name: string): string | null {
   if (!headers) return null;
   if (typeof (headers as Headers).get === 'function') {
     try {

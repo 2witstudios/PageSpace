@@ -77,6 +77,30 @@ describe('defineOperation — runtime shape', () => {
     });
     expect(fast.timeoutMsOverride).toBeUndefined();
   });
+
+  it('captures an explicit expectedContentType, defaulting to undefined otherwise (Phase 3 task 10 export ops)', () => {
+    const exportOp = defineOperation({
+      name: 'test.export',
+      method: 'GET',
+      path: '/api/widgets/export',
+      inputSchema: z.object({}),
+      outputSchema: z.string(),
+      textResponse: true,
+      expectedContentType: 'text/csv',
+      description: 'A text-export op.',
+    });
+    expect(exportOp.expectedContentType).toBe('text/csv');
+
+    const jsonOp = defineOperation({
+      name: 'test.json',
+      method: 'GET',
+      path: '/api/widgets',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      description: 'A regular op.',
+    });
+    expect(jsonOp.expectedContentType).toBeUndefined();
+  });
 });
 
 describe('defineOperation — static type inference', () => {

@@ -44,6 +44,14 @@ export interface OperationConfig<
   /** Set for export-style operations whose 2xx body is raw text, not JSON. */
   readonly textResponse?: boolean;
   /**
+   * Required media type (no `; charset=...` suffix) a `textResponse` 2xx body
+   * must arrive with, e.g. `"text/markdown"`. Only consulted when
+   * `textResponse` is true (`transport/parse-response.ts`); a mismatch or
+   * missing header becomes a typed `ResponseValidationError` instead of the
+   * body being passed through blind.
+   */
+  readonly expectedContentType?: string;
+  /**
    * Overrides the client's default request timeout for this operation only
    * (e.g. `agents.ask`, whose consult loop can run up to 20 tool-calling
    * steps). Facade-enforced (client.ts `#invoke`); absent, the client's own
@@ -97,6 +105,7 @@ export interface Operation<
   readonly outputSchema: TOutputSchema;
   readonly requiredScope: RequiredScope | undefined;
   readonly textResponse: boolean | undefined;
+  readonly expectedContentType: string | undefined;
   readonly timeoutMsOverride: number | undefined;
   readonly destructive: boolean | undefined;
   readonly description: string;
@@ -118,6 +127,7 @@ export function defineOperation<
     outputSchema,
     requiredScope,
     textResponse,
+    expectedContentType,
     timeoutMsOverride,
     destructive,
     description,
@@ -131,6 +141,7 @@ export function defineOperation<
     outputSchema,
     requiredScope,
     textResponse,
+    expectedContentType,
     timeoutMsOverride,
     destructive,
     description,

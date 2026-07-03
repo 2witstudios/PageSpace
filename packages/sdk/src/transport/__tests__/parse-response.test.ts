@@ -25,6 +25,15 @@ const exportOp: TransportOperation<string> = {
   textResponse: true,
 };
 
+const markdownExportOp: TransportOperation<string> = {
+  name: 'export.pageMarkdown',
+  method: 'GET',
+  path: '/api/pages/:id/export/markdown',
+  outputSchema: z.string(),
+  textResponse: true,
+  expectedContentType: 'text/markdown',
+};
+
 describe('parseResponse — success path', () => {
   it('returns the zod-validated output on a 2xx response matching the schema', () => {
     const result = parseResponse(widgetOp, 200, {}, JSON.stringify({ id: 'w1', ok: true }));
@@ -82,6 +91,41 @@ describe('parseResponse — non-2xx classification', () => {
   it('classifies non-2xx even for textResponse operations (does not pass errors through as text)', () => {
     const result = parseResponse(exportOp, 404, {}, JSON.stringify({ error: 'gone' }));
     expect(isNotFoundError(result)).toBe(true);
+  });
+});
+
+describe('parseResponse — expectedContentType (Phase 3 task 10 export ops)', () => {
+  it('passes bodyText through when the Content-Type header matches expectedContentType', () => {
+    const headers = new Headers({ 'Content-Type': 'text/markdown; charset=utf-8' });
+    const result = parseResponse(markdownExportOp, 200, headers, '# Heading\n\nBody text.');
+    expect(result).toBe('# Heading\n\nBody text.');
+  });
+
+  it('matches case-insensitively and ignores charset/params', () => {
+    const headers = new Headers({ 'Content-Type': 'Text/Markdown; charset=UTF-8' });
+    const result = parseResponse(markdownExportOp, 200, headers, 'ok');
+    expect(result).toBe('ok');
+  });
+
+  it('returns ResponseValidationError when Content-Type is a mismatched type (e.g. a JSON error page behind a 2xx proxy)', () => {
+    const headers = new Headers({ 'Content-Type': 'application/json' });
+    const result = parseResponse(markdownExportOp, 200, headers, '{"error":"oops"}');
+    expect(isResponseValidationError(result)).toBe(true);
+  });
+
+  it('returns ResponseValidationError when Content-Type is missing entirely', () => {
+    const result = parseResponse(markdownExportOp, 200, new Headers(), 'plain text with no header');
+    expect(isResponseValidationError(result)).toBe(true);
+  });
+
+  it('names the operation on the content-type ResponseValidationError', () => {
+    const result = parseResponse(markdownExportOp, 200, new Headers(), 'plain text with no header');
+    expect((result as Error & { operation?: string }).operation).toBe('export.pageMarkdown');
+  });
+
+  it('does not content-type-check a textResponse op with no expectedContentType set (existing exportOp)', () => {
+    const result = parseResponse(exportOp, 200, new Headers(), 'plain export text, not json {[');
+    expect(result).toBe('plain export text, not json {[');
   });
 });
 
