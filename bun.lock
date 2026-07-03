@@ -514,6 +514,13 @@
         "typescript-eslint": "^8.59.0",
       },
     },
+    "packages/sdk": {
+      "name": "@pagespace/sdk",
+      "version": "0.1.0",
+      "dependencies": {
+        "zod": "^4.1.8",
+      },
+    },
   },
   "trustedDependencies": [
     "sharp",
@@ -1194,6 +1201,8 @@
     "@pagespace/lib": ["@pagespace/lib@workspace:packages/lib"],
 
     "@pagespace/processor": ["@pagespace/processor@workspace:apps/processor"],
+
+    "@pagespace/sdk": ["@pagespace/sdk@workspace:packages/sdk"],
 
     "@paralleldrive/cuid2": ["@paralleldrive/cuid2@2.3.1", "", { "dependencies": { "@noble/hashes": "^1.1.5" } }, "sha512-XO7cAxhnTZl0Yggq6jOgjiOHhbgcO4NqFqwSmQpjK3b6TEE6Uj/jfSk6wzYyemh3+I0sHirKSetjQwn5cZktFw=="],
 
