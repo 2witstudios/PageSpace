@@ -3,6 +3,7 @@ import {
   AuthenticationError,
   classifyHttpError,
   HttpError,
+  type HttpErrorHeaders,
   IncompatibleServerError,
   isAuthenticationError,
   isHttpError,
@@ -32,25 +33,32 @@ const SECRET_PASSWORD = 'hunter2correcthorse';
 
 describe('classifyHttpError — classification matrix', () => {
   it.each([
-    [401, AuthenticationError, 'AUTHENTICATION_ERROR'],
-    [403, PermissionDeniedError, 'PERMISSION_DENIED'],
-    [404, NotFoundError, 'NOT_FOUND'],
-    [400, ValidationError, 'VALIDATION_ERROR'],
-    [429, RateLimitError, 'RATE_LIMITED'],
-    [500, ServerError, 'SERVER_ERROR'],
-    [502, ServerError, 'SERVER_ERROR'],
-    [503, ServerError, 'SERVER_ERROR'],
-    [599, ServerError, 'SERVER_ERROR'],
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ] as Array<[number, new (...args: any[]) => PageSpaceError, string]>)(
-    'maps HTTP %i to %s (code %s)',
-    (status, ctor, code) => {
-      const err = classifyHttpError(status, {}, { error: 'boom' });
-      expect(err).toBeInstanceOf(PageSpaceError);
-      expect(err).toBeInstanceOf(ctor);
-      expect(err.code).toBe(code);
-    },
-  );
+    [401, 'AUTHENTICATION_ERROR'],
+    [403, 'PERMISSION_DENIED'],
+    [404, 'NOT_FOUND'],
+    [400, 'VALIDATION_ERROR'],
+    [429, 'RATE_LIMITED'],
+    [500, 'SERVER_ERROR'],
+    [502, 'SERVER_ERROR'],
+    [503, 'SERVER_ERROR'],
+    [599, 'SERVER_ERROR'],
+  ] as Array<[number, string]>)('maps HTTP %i to code %s', (status, code) => {
+    const err = classifyHttpError(status, {}, { error: 'boom' });
+    expect(err).toBeInstanceOf(PageSpaceError);
+    expect(err.code).toBe(code);
+  });
+
+  it('maps each status to its distinct concrete class', () => {
+    expect(classifyHttpError(401, {}, null)).toBeInstanceOf(AuthenticationError);
+    expect(classifyHttpError(403, {}, null)).toBeInstanceOf(PermissionDeniedError);
+    expect(classifyHttpError(404, {}, null)).toBeInstanceOf(NotFoundError);
+    expect(classifyHttpError(400, {}, null)).toBeInstanceOf(ValidationError);
+    expect(classifyHttpError(429, {}, null)).toBeInstanceOf(RateLimitError);
+    expect(classifyHttpError(500, {}, null)).toBeInstanceOf(ServerError);
+    expect(classifyHttpError(502, {}, null)).toBeInstanceOf(ServerError);
+    expect(classifyHttpError(503, {}, null)).toBeInstanceOf(ServerError);
+    expect(classifyHttpError(599, {}, null)).toBeInstanceOf(ServerError);
+  });
 
   it('falls back to a generic HttpError for unmapped statuses (never throws, never misclassifies)', () => {
     for (const status of [402, 409, 418, 301, 200, 0, -1]) {
@@ -172,8 +180,7 @@ describe('classifyHttpError — junk body resilience', () => {
   it('never throws for junk headers', () => {
     const junkHeaders: unknown[] = [null, undefined, '', 42, [], { '': '' }];
     for (const headers of junkHeaders) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect(() => classifyHttpError(429, headers as any, null)).not.toThrow();
+      expect(() => classifyHttpError(429, headers as HttpErrorHeaders, null)).not.toThrow();
     }
   });
 
