@@ -131,7 +131,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   // ── Repo + config ───────────────────────────────────────────────────────
 
   const gitClone = tool({
-    description: 'Clone a GitHub repository into the sandbox. Use HTTPS URLs only.',
+    description:
+      'Clone a GitHub repository into the sandbox. Use HTTPS URLs only. Fetches all branch refs (even with depth) so later-created branches get proper origin tracking refs — required for git_push -u and gh_pr_create to work.',
     inputSchema: z.object({
       repo_url: z
         .string()
@@ -152,7 +153,16 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       if (!resolved.ok) return resolved.error;
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      const args = ['clone', ...(depth ? ['--depth', String(depth)] : []), repo_url, resolved.path];
+      // `--depth` implies `--single-branch`, which writes a narrow fetch refspec
+      // (`+refs/heads/<branch>:...`) into .git/config — that leaves later-created
+      // branches without an origin tracking ref, breaking `push -u` and PR creation.
+      // `--no-single-branch` keeps the wildcard `+refs/heads/*:refs/remotes/origin/*`.
+      const args = [
+        'clone',
+        ...(depth ? ['--no-single-branch', '--depth', String(depth)] : []),
+        repo_url,
+        resolved.path,
+      ];
       return git('git', args, opened.ctx);
     },
   });
@@ -487,17 +497,19 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   // ── GitHub PRs (token required) ─────────────────────────────────────────
 
   const ghPrCreate = tool({
-    description: 'Create a pull request. Requires a connected GitHub account.',
+    description:
+      'Create a pull request. Requires a connected GitHub account. head defaults to the current branch; pass it to name the PR head branch explicitly (bypasses the local upstream-tracking check).',
     inputSchema: z.object({
       title: z.string().min(1),
       body: z.string(),
       base: z.string().optional(),
+      head: z.string().optional(),
       draft: z.boolean().optional(),
       labels: z.array(z.string()).optional(),
       cwd: cwdField,
     })
       .strict(),
-    execute: async ({ title, body, base, draft, labels, cwd }, options) => {
+    execute: async ({ title, body, base, head, draft, labels, cwd }, options) => {
       if (!title) {
         return { success: false as const, error: 'title is required' };
       }
@@ -509,6 +521,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             '--title', title,
             '--body', body,
             ...(base ? ['--base', base] : []),
+            ...(head ? ['--head', head] : []),
             ...(draft ? ['--draft'] : []),
             ...(labels?.length ? ['--label', labels.join(',')] : []),
           ],
