@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildRequest } from '../../transport/build-request.js';
 import { parseResponse } from '../../transport/parse-response.js';
 import { ResponseValidationError } from '../../errors.js';
-import { readPage } from '../pages.js';
+import { getPageDetails } from '../pages.js';
 
 const config = { baseUrl: 'https://pagespace.ai' };
 
@@ -38,23 +38,23 @@ const pageFixture = {
   ],
 };
 
-describe('pages.read — request shape', () => {
+describe('pages.details — request shape', () => {
   it('interpolates :pageId into the path and sends no body', () => {
-    const request = buildRequest(readPage, { pageId: 'p1abc' }, config);
+    const request = buildRequest(getPageDetails, { pageId: 'p1abc' }, config);
     expect(request.method).toBe('GET');
     expect(request.url).toBe('https://pagespace.ai/api/pages/p1abc');
     expect(request.body).toBeUndefined();
   });
 
   it('URL-encodes the pageId', () => {
-    const request = buildRequest(readPage, { pageId: 'a/b' }, config);
+    const request = buildRequest(getPageDetails, { pageId: 'a/b' }, config);
     expect(request.url).toBe('https://pagespace.ai/api/pages/a%2Fb');
   });
 });
 
-describe('pages.read — response contract', () => {
+describe('pages.details — response contract', () => {
   it('parses PageWithDetails (route truth, §2.3 get_page_details)', () => {
-    const result = parseResponse(readPage, 200, new Headers(), JSON.stringify(pageFixture));
+    const result = parseResponse(getPageDetails, 200, new Headers(), JSON.stringify(pageFixture));
     expect(result).toEqual(pageFixture);
   });
 
@@ -62,26 +62,26 @@ describe('pages.read — response contract', () => {
     const child = { ...pageFixture, id: 'c1abc' } as Record<string, unknown>;
     delete child.children;
     delete child.messages;
-    const result = parseResponse(readPage, 200, new Headers(), JSON.stringify({ ...pageFixture, children: [child] }));
+    const result = parseResponse(getPageDetails, 200, new Headers(), JSON.stringify({ ...pageFixture, children: [child] }));
     expect(result).not.toBeInstanceOf(ResponseValidationError);
   });
 
   it('rejects a response missing a required field', () => {
     const malformed = { ...pageFixture } as Record<string, unknown>;
     delete malformed.driveId;
-    const result = parseResponse(readPage, 200, new Headers(), JSON.stringify(malformed));
+    const result = parseResponse(getPageDetails, 200, new Headers(), JSON.stringify(malformed));
     expect(result).toBeInstanceOf(ResponseValidationError);
   });
 
   it('classifies a 404 as NotFoundError, never a schema mismatch', () => {
-    const result = parseResponse(readPage, 404, new Headers(), JSON.stringify({ error: 'Page not found' }));
+    const result = parseResponse(getPageDetails, 404, new Headers(), JSON.stringify({ error: 'Page not found' }));
     expect(result).not.toBeInstanceOf(ResponseValidationError);
     expect((result as { code: string }).code).toBe('NOT_FOUND');
   });
 });
 
-describe('pages.read — metadata', () => {
+describe('pages.details — metadata', () => {
   it('declares the drive-scope requirement per ADR 0002', () => {
-    expect(readPage.requiredScope).toBe('drive');
+    expect(getPageDetails.requiredScope).toBe('drive');
   });
 });
