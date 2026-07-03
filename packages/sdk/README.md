@@ -11,10 +11,12 @@ directly, so unit tests never touch the network.
 **Zero trust end-to-end**: every server response is zod-validated against its output schema, and
 no code path in this package may ever log token material.
 
-`MIN_SERVER_API_VERSION` (reserved here per [ADR 0001](../../docs/adr/0001-sdk-api-versioning.md)
-D3) is a placeholder until the transport lands — the repo-level assertion
-`MIN_SERVER_API_VERSION <= API_CONTRACT_VERSION` is deferred until
-`packages/lib/src/api-contract-version.ts` exists (a later Phase 2 task).
+`PageSpaceClient` enforces the [ADR 0001](../../docs/adr/0001-sdk-api-versioning.md) handshake:
+every 2xx response is checked, lazily and once per client instance, against the SDK's compiled-in
+`MIN_SERVER_API_VERSION`, and an incompatible server fails closed with `IncompatibleServerError`
+(opt out only via the explicit `skipVersionCheck: true`). The repo-level assertion
+`MIN_SERVER_API_VERSION <= API_CONTRACT_VERSION` is still deferred until
+`packages/lib/src/api-contract-version.ts` exists (Phase 1/7).
 
 See PageSpace page `ea07mt5jvw0flihsbjce1iv9` (epic architecture + non-negotiables) and
 `docs/adr/` for the binding decisions this package follows.

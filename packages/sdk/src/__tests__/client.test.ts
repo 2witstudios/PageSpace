@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AuthenticationError, IncompatibleServerError, NetworkError, ValidationError } from '../errors.js';
 import { defineOperation } from '../registry/define.js';
-import { PageSpaceClient, type PageSpaceClientOptions } from '../client.js';
+import { PageSpaceClient } from '../client.js';
 import type { AuthProvider } from '../auth/provider.js';
+import type { RetryPolicy } from '../retry.js';
 
 const API_VERSION = '1.0.0';
 
@@ -25,8 +26,6 @@ const createWidget = defineOperation({
   description: 'Create a widget.',
 });
 
-const OPERATIONS = { widgets: { get: getWidget, create: createWidget } };
-
 function fakeAuth(overrides: Partial<AuthProvider> = {}): AuthProvider {
   return {
     getAccessToken: vi.fn(async () => 'token-1'),
@@ -47,18 +46,21 @@ function jsonResponseNoVersionHeader(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
-type FetchMock = ReturnType<typeof vi.fn>;
+interface MakeClientOptions {
+  auth?: AuthProvider;
+  fetch: (...args: never[]) => Promise<Response>;
+  retryPolicy?: Partial<RetryPolicy>;
+  skipVersionCheck?: boolean;
+}
 
-function makeClient(
-  options: Partial<PageSpaceClientOptions<typeof OPERATIONS>> & { fetch: FetchMock },
-): PageSpaceClient<typeof OPERATIONS> {
+function makeClient(options: MakeClientOptions): PageSpaceClient {
   return new PageSpaceClient({
     baseUrl: 'https://pagespace.ai',
-    auth: fakeAuth(),
-    operations: OPERATIONS,
+    auth: options.auth ?? fakeAuth(),
     jitter: () => 0,
     timeoutMs: 1000,
-    ...options,
+    retryPolicy: options.retryPolicy,
+    skipVersionCheck: options.skipVersionCheck,
     fetch: options.fetch as unknown as typeof fetch,
   });
 }
@@ -78,7 +80,7 @@ describe('PageSpaceClient — invoke pipeline happy path', () => {
     });
     const client = makeClient({ auth, fetch: fetchMock });
 
-    await expect(client.widgets.get({ widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
     expect(auth.getAccessToken).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -86,17 +88,10 @@ describe('PageSpaceClient — invoke pipeline happy path', () => {
   it('rejects with ValidationError before any network call when input fails the schema', async () => {
     const fetchMock = vi.fn();
     const client = makeClient({ fetch: fetchMock });
-    const invalidGet = client.widgets.get as unknown as (input: unknown) => Promise<unknown>;
+    const invalidInvoke = client.invoke.bind(client) as (op: typeof getWidget, input: unknown) => Promise<unknown>;
 
-    await expect(invalidGet({})).rejects.toBeInstanceOf(ValidationError);
+    await expect(invalidInvoke(getWidget, {})).rejects.toBeInstanceOf(ValidationError);
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('exposes the same pipeline via the generic invoke() escape hatch', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(200, { id: 'w1', label: 'Widget One' }));
-    const client = makeClient({ fetch: fetchMock });
-
-    await expect(client.invoke(getWidget, { widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
   });
 });
 
@@ -116,7 +111,7 @@ describe('PageSpaceClient — 401 handling', () => {
     });
     const client = makeClient({ auth, fetch: fetchMock });
 
-    await expect(client.widgets.get({ widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
     expect(auth.invalidate).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -126,7 +121,7 @@ describe('PageSpaceClient — 401 handling', () => {
     const fetchMock = vi.fn(async () => jsonResponse(401, { error: 'expired' }));
     const client = makeClient({ auth, fetch: fetchMock });
 
-    await expect(client.widgets.get({ widgetId: 'w1' })).rejects.toBeInstanceOf(AuthenticationError);
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).rejects.toBeInstanceOf(AuthenticationError);
     expect(auth.invalidate).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -142,7 +137,7 @@ describe('PageSpaceClient — idempotent-only retry matrix', () => {
     });
     const client = makeClient({ fetch: fetchMock });
 
-    await expect(client.widgets.get({ widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -155,7 +150,7 @@ describe('PageSpaceClient — idempotent-only retry matrix', () => {
     });
     const client = makeClient({ fetch: fetchMock });
 
-    await expect(client.widgets.get({ widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -166,7 +161,7 @@ describe('PageSpaceClient — idempotent-only retry matrix', () => {
       retryPolicy: { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 10 },
     });
 
-    await expect(client.widgets.get({ widgetId: 'w1' })).rejects.toMatchObject({ code: 'SERVER_ERROR' });
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).rejects.toMatchObject({ code: 'SERVER_ERROR' });
     expect(fetchMock).toHaveBeenCalledTimes(3); // 1 initial attempt + 2 retries
   });
 
@@ -174,7 +169,7 @@ describe('PageSpaceClient — idempotent-only retry matrix', () => {
     const fetchMock = vi.fn(async () => jsonResponse(503, { error: 'unavailable' }));
     const client = makeClient({ fetch: fetchMock });
 
-    await expect(client.widgets.create({ label: 'x' })).rejects.toMatchObject({ code: 'SERVER_ERROR' });
+    await expect(client.invoke(createWidget, { label: 'x' })).rejects.toMatchObject({ code: 'SERVER_ERROR' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -184,7 +179,7 @@ describe('PageSpaceClient — idempotent-only retry matrix', () => {
     });
     const client = makeClient({ fetch: fetchMock });
 
-    await expect(client.widgets.create({ label: 'x' })).rejects.toBeInstanceOf(NetworkError);
+    await expect(client.invoke(createWidget, { label: 'x' })).rejects.toBeInstanceOf(NetworkError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
@@ -200,7 +195,7 @@ describe('PageSpaceClient — RateLimitError retryAfter', () => {
     });
     const client = makeClient({ fetch: fetchMock, retryPolicy: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 5000 } });
 
-    const promise = client.widgets.get({ widgetId: 'w1' });
+    const promise = client.invoke(getWidget, { widgetId: 'w1' });
     await vi.advanceTimersByTimeAsync(2000);
     await expect(promise).resolves.toEqual({ id: 'w1', label: 'Widget One' });
   });
@@ -218,7 +213,7 @@ describe('PageSpaceClient — RateLimitError retryAfter', () => {
       retryPolicy: { maxRetries: 3, baseDelayMs: 10, maxDelayMs: 500 },
     });
 
-    const promise = client.widgets.get({ widgetId: 'w1' });
+    const promise = client.invoke(getWidget, { widgetId: 'w1' });
     // Retry-After asked for 1_000_000ms; the policy caps waits at maxDelayMs (500ms).
     await vi.advanceTimersByTimeAsync(500);
     await expect(promise).resolves.toEqual({ id: 'w1', label: 'Widget One' });
@@ -230,14 +225,14 @@ describe('PageSpaceClient — version handshake (ADR 0001)', () => {
     const fetchMock = vi.fn(async () => jsonResponse(200, { id: 'w1', label: 'Widget One' }));
     const client = makeClient({ fetch: fetchMock });
 
-    await expect(client.widgets.get({ widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
   });
 
   it('throws IncompatibleServerError when the version header is missing (fail closed)', async () => {
     const fetchMock = vi.fn(async () => jsonResponseNoVersionHeader(200, { id: 'w1', label: 'Widget One' }));
     const client = makeClient({ fetch: fetchMock });
 
-    await expect(client.widgets.get({ widgetId: 'w1' })).rejects.toBeInstanceOf(IncompatibleServerError);
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).rejects.toBeInstanceOf(IncompatibleServerError);
   });
 
   it('caches a compatible verdict — a later response missing the header is not re-checked', async () => {
@@ -249,25 +244,75 @@ describe('PageSpaceClient — version handshake (ADR 0001)', () => {
     });
     const client = makeClient({ fetch: fetchMock });
 
-    await client.widgets.get({ widgetId: 'w1' });
-    await expect(client.widgets.get({ widgetId: 'w2' })).resolves.toEqual({ id: 'w2', label: 'Widget Two' });
+    await client.invoke(getWidget, { widgetId: 'w1' });
+    await expect(client.invoke(getWidget, { widgetId: 'w2' })).resolves.toEqual({ id: 'w2', label: 'Widget Two' });
   });
 
   it('skips the handshake entirely when skipVersionCheck is true', async () => {
     const fetchMock = vi.fn(async () => jsonResponseNoVersionHeader(200, { id: 'w1', label: 'Widget One' }));
     const client = makeClient({ fetch: fetchMock, skipVersionCheck: true });
 
-    await expect(client.widgets.get({ widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
   });
 });
 
 describe('PageSpaceClient — registry-derived namespaces', () => {
-  it('exposes operations grouped by namespace, mechanically generated (no hand-written wrappers)', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(200, { id: 'w9', label: 'Nine' }));
+  it('exposes the built-in seed operations grouped by namespace, mechanically generated (no hand-written wrappers)', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/api/drives')) {
+        return jsonResponse(200, [
+          {
+            id: 'd1',
+            name: 'Drive One',
+            slug: 'drive-one',
+            ownerId: 'u1',
+            kind: 'STANDARD',
+            isTrashed: false,
+            trashedAt: null,
+            drivePrompt: null,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            isOwned: true,
+            role: 'OWNER',
+            lastAccessedAt: null,
+            homePageId: null,
+          },
+        ]);
+      }
+      return jsonResponse(200, {
+        id: 'p1',
+        title: 'Page One',
+        type: 'DOCUMENT',
+        content: null,
+        contentMode: 'markdown',
+        parentId: null,
+        driveId: 'd1',
+        position: 0,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        revision: 1,
+        stateHash: null,
+        isTrashed: false,
+        trashedAt: null,
+        aiProvider: null,
+        aiModel: null,
+        systemPrompt: null,
+        enabledTools: null,
+        isPaginated: null,
+        children: [],
+        messages: [],
+      });
+    });
     const client = makeClient({ fetch: fetchMock });
 
-    expect(typeof client.widgets.get).toBe('function');
-    expect(typeof client.widgets.create).toBe('function');
-    await expect(client.widgets.get({ widgetId: 'w9' })).resolves.toEqual({ id: 'w9', label: 'Nine' });
+    expect(typeof client.drives.list).toBe('function');
+    expect(typeof client.pages.read).toBe('function');
+
+    const drives = await client.drives.list({});
+    expect(drives).toHaveLength(1);
+    expect(drives[0]?.id).toBe('d1');
+
+    const page = await client.pages.read({ pageId: 'p1' });
+    expect(page.id).toBe('p1');
   });
 });
