@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -11,7 +10,7 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { recomputeTaskTriggerMetadata } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
-const SESSION_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 const triggerTypeParam = z.enum(['due_date', 'completion']);
 
@@ -55,7 +54,7 @@ export async function DELETE(
     return NextResponse.json({ error: 'Task list page not found' }, { status: 404 });
   }
 
-  const canEdit = await canUserEditPage(userId, taskListPageId);
+  const canEdit = await canPrincipalEditPage(auth, taskListPageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
