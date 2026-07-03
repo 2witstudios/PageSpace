@@ -101,11 +101,12 @@ describe('validateAuthorizeRequest', () => {
     it('rejects an unsupported response_type by redirecting with error=', () => {
       const result = validateAuthorizeRequest(baseParams({ responseType: 'token' }), client);
       expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.kind).toBe('redirect');
+      if (!result.ok && result.kind === 'redirect') {
         expect(result.error).toBe('unsupported_response_type');
         expect(result.redirectUri).toBe(REDIRECT_URI);
         expect(result.state).toBe('xyz123');
+      } else {
+        throw new Error('expected a redirect-kind failure');
       }
     });
 

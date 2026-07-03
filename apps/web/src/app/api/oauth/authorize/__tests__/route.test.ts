@@ -70,8 +70,8 @@ beforeEach(() => {
 describe('GET /api/oauth/authorize — open-redirect guard', () => {
   it('renders an error page (never redirects) for an unknown client_id', async () => {
     const res = await GET(getRequest({ client_id: 'evil-client' }) as never);
-    expect(res.status).not.toBeGreaterThanOrEqual(300);
-    expect(res.status).toBeLessThan(400);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
     expect(res.headers.get('location')).toBeNull();
     const body = await res.text();
     expect(body).toMatch(/error/i);

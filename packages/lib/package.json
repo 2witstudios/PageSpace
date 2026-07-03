@@ -937,6 +937,26 @@
       "import": "./dist/auth/oauth/metadata.js",
       "require": "./dist/auth/oauth/metadata.js"
     },
+    "./auth/oauth/clients": {
+      "types": "./dist/auth/oauth/clients.d.ts",
+      "import": "./dist/auth/oauth/clients.js",
+      "require": "./dist/auth/oauth/clients.js"
+    },
+    "./auth/oauth/authorize-request": {
+      "types": "./dist/auth/oauth/authorize-request.d.ts",
+      "import": "./dist/auth/oauth/authorize-request.js",
+      "require": "./dist/auth/oauth/authorize-request.js"
+    },
+    "./auth/oauth/consent": {
+      "types": "./dist/auth/oauth/consent.d.ts",
+      "import": "./dist/auth/oauth/consent.js",
+      "require": "./dist/auth/oauth/consent.js"
+    },
+    "./auth/oauth/code-lifecycle": {
+      "types": "./dist/auth/oauth/code-lifecycle.d.ts",
+      "import": "./dist/auth/oauth/code-lifecycle.js",
+      "require": "./dist/auth/oauth/code-lifecycle.js"
+    },
     "./auth/account-lockout": {
       "types": "./dist/auth/account-lockout.d.ts",
       "import": "./dist/auth/account-lockout.js",
