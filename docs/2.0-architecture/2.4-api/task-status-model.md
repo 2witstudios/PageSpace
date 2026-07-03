@@ -4,9 +4,20 @@
 
 There are **two distinct "status" concepts** in the task system. They are
 easy to conflate because they're both called `status`, but only one of them
-is a real fixed enum.
+has a fixed value set.
 
-## 1. `taskLists.status` — a real, fixed enum
+**A note on "enum" here:** none of the `status`/`group` columns below are
+backed by a native Postgres `ENUM` type or a `CHECK` constraint — the
+generated migrations create them as plain `text` columns (e.g.
+`packages/db/drizzle/0013_lethal_the_fallen.sql:9,26` for `task_lists.status`,
+and the `task_status_configs` migration for `group`). Drizzle's
+`text(col, { enum: [...] })` only gives you a typed value set in
+**TypeScript/application code** — it is not enforced by the database itself.
+Anything writing raw SQL (migrations, data-repair scripts, another service
+hitting the DB directly) can insert values outside these sets; only
+application-layer code paths validate them.
+
+## 1. `taskLists.status` — a fixed value set (application-level, not DB-enforced)
 
 The container (`task_lists` table) has its own status, independent of its
 child tasks:
@@ -17,8 +28,9 @@ status: text('status', { enum: ['pending', 'in_progress', 'completed'] })
   .default('pending')
 ```
 
-This is a genuine Postgres/Drizzle enum — three values, no configurability.
-It describes the task list as a whole, not any individual task inside it.
+Three values, no configurability, enforced by the TypeScript type — not by a
+database constraint. It describes the task list as a whole, not any
+individual task inside it.
 
 ## 2. `taskItems.status` — per-task-list configurable, not a global enum
 
@@ -56,16 +68,21 @@ export const taskStatusConfigs = pgTable('task_status_configs', {
   (`(taskListId, slug)`), **not** unique globally — two different task lists
   can both have a status with slug `"pending"` that mean different things (or
   have entirely different custom slugs).
-- **`group`** is the one truly fixed, global enum in the system:
-  `'todo' | 'in_progress' | 'done'`. Every custom status — no matter what it's
-  named or slugged — must map to one of these three groups. This is what lets
-  the UI (kanban columns, progress bars) and any code that needs to reason
-  about "is this task done" work generically across task lists with
-  completely different status sets.
+- **`group`** is the one fixed, global value set in the system:
+  `'todo' | 'in_progress' | 'done'` — again enforced at the TypeScript layer
+  by Drizzle's `{ enum }`, not by a database constraint (the generated
+  migration creates `"group" text NOT NULL` with no `CHECK`). Every custom
+  status — no matter what it's named or slugged — must map to one of these
+  three groups. This is what lets the UI (kanban columns, progress bars) and
+  any code that needs to reason about "is this task done" work generically
+  across task lists with completely different status sets.
 
 So: **the set of valid `status` slugs is per-task-list and user-configurable.
-The set of valid `group` values is fixed and global.** When in doubt about
-whether something is a hardcoded enum, it's the `group`, not the `slug`.
+The set of valid `group` values is fixed globally at the application layer**
+(not by the database). When in doubt about whether something is a hardcoded
+value set, it's the `group`, not the `slug` — and even the `group` column
+would accept an arbitrary string if written outside the application code
+paths that validate it.
 
 ## Default statuses
 
@@ -85,12 +102,25 @@ tracking is concerned.
 
 ## Customizing statuses
 
-Users and agents can add, rename, reorder, or remove statuses per task list
-via the `create_task_status` MCP tool (and its sibling update/delete tools).
-This means the slug set is **not** fixed at the codebase level — don't
-hardcode assumptions about which slugs exist beyond the seeded defaults, and
-don't validate a `status` string against a static list. Always resolve valid
-slugs from that task list's current `taskStatusConfigs` rows.
+The slug set is **not** fixed at the codebase level — don't hardcode
+assumptions about which slugs exist beyond the seeded defaults, and don't
+validate a `status` string against a static list. Always resolve valid slugs
+from that task list's current `taskStatusConfigs` rows. Two separate
+surfaces manage this, and they are not symmetric:
+
+- **Creating a new status:** the `create_task_status` tool
+  (`apps/web/src/lib/ai/tools/task-management-tools.ts`), exposed both
+  in-app and to external MCP clients — this is the only status-management
+  tool an agent has. There is no `update_task_status` or
+  `delete_task_status` tool.
+- **Renaming, reordering, regrouping, or deleting statuses:** the REST route
+  `PUT` / `DELETE /api/pages/[pageId]/tasks/statuses`
+  (`apps/web/src/app/api/pages/[pageId]/tasks/statuses/route.ts`), used by
+  the UI. `PUT` takes a bulk `{ statuses: [{ id, name, color, group, position }] }`
+  array and updates all of them in one transaction; `DELETE` removes a status
+  config and migrates any tasks on it to a replacement status. An AI agent
+  that needs to rename or remove a status has no tool for that today — it
+  would have to go through this REST endpoint directly, not an MCP tool.
 
 ## Where status is validated
 

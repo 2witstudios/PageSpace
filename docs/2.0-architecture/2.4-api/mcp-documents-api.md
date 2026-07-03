@@ -81,10 +81,12 @@ const cellUpdateSchema = z.object({
 | `delete` | Delete lines `startLine`–`endLine`. | edit |
 | `edit-cells` | Set/clear cells on a `SHEET` page. See below. | edit |
 
-`replace`/`insert`/`delete` all persist through `applyPageMutation` with
-optimistic concurrency (see below), broadcast a `content-updated` websocket
-event, and write a `data.write`/`data.delete` audit log entry. `read` writes a
-`data.read` audit log entry and does not mutate anything.
+`replace`/`insert`/`delete` all persist through `applyPageMutation` with the
+same in-request revision check described under `edit-cells` below (it guards
+a narrow same-request race, not general client stale-read protection),
+broadcast a `content-updated` websocket event, and write a
+`data.write`/`data.delete` audit log entry. `read` writes a `data.read` audit
+log entry and does not mutate anything.
 
 ## `edit-cells` — sheet editing
 
@@ -132,17 +134,34 @@ through `/api/mcp/documents` with `operation: 'edit-cells'`.
   - anything else → set as a plain **value**.
 - The sheet's `rowCount`/`columnCount` grow automatically to fit any address
   that falls outside the current dimensions.
-- Persistence goes through `applyPageMutation` with **optimistic
-  concurrency**: the request effectively targets `page.revision`. If the
-  page has moved on since the client last read it, the write is rejected with
-  a `PageRevisionMismatchError`:
-  - `428 Precondition Required` if no expected revision was available to
-    check against.
-  - `409 Conflict` on an actual revision mismatch.
+- Persistence goes through `applyPageMutation`
+  (`apps/web/src/services/api/page-mutation-service.ts`), which does a
+  revision check — but **not** the general "reject if the page changed since
+  the client last read it" guarantee it might suggest. `lineOperationSchema`
+  has no `expectedRevision` field, so a client cannot pass in the revision it
+  saw from an earlier `read` call. Instead, the route passes its own
+  just-fetched `page.revision` (fetched moments earlier in the *same* POST
+  request, `route.ts` ~line 167) as `expectedRevision`, and
+  `applyPageMutation` re-fetches the page again internally and compares. The
+  only thing this actually guards against is another write landing in the
+  narrow window between those two in-request fetches — it does not protect a
+  client that read the page via a separate `read` call, waited, and then
+  submitted `edit-cells` against content that has since changed elsewhere.
+  Since `pages.revision` is a `NOT NULL integer` (`packages/db/src/schema/core.ts`),
+  `expectedRevision` is always defined in practice, so the `428` path below
+  is not reachable via this route; a `409` is possible only if a concurrent
+  write happens to land inside that narrow in-request window.
+  On a genuine mismatch, `PageRevisionMismatchError` is thrown:
+  - `409 Conflict` on a revision mismatch.
+  - `428 Precondition Required` in the (here, unreachable) case where no
+    expected revision was available to check against — this path exists for
+    other callers of `applyPageMutation` that may omit it.
   - Body in both cases:
     ```json
     { "error": "...", "currentRevision": 7, "expectedRevision": 5 }
     ```
+  If you need real stale-read protection, compare content or a hash
+  client-side before writing — this endpoint does not expose one.
 - On success: broadcasts a `content-updated` websocket event to the page's
   drive room, and writes a `data.write` audit log entry
   (`eventType: 'data.write'`, `details.cellsUpdated`).
@@ -200,6 +219,6 @@ Content-Type: application/json
 | `edit-cells` with empty/missing `cells` | 400 | `{ "error": "cells array is required for edit-cells operation" }` |
 | `edit-cells` with malformed cell address | 400 | `{ "error": "Invalid cell addresses: ..." }` |
 | Zod schema validation failure | 400 | `{ "error": [...] }` (Zod issues array) |
-| Revision conflict | 409 / 428 | `{ "error": "...", "currentRevision": n, "expectedRevision": n }` |
+| Revision conflict (rare — only a same-request race; see `edit-cells` above) | 409 | `{ "error": "...", "currentRevision": n, "expectedRevision": n }` |
 | Unrecognized `operation` | 400 | `{ "error": "Invalid operation" }` |
 | Unhandled exception | 500 | `{ "error": "Failed to perform document operation" }` |
