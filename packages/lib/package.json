@@ -992,6 +992,11 @@
       "import": "./dist/auth/pkce.js",
       "require": "./dist/auth/pkce.js"
     },
+    "./auth/oauth/pkce": {
+      "types": "./dist/auth/oauth/pkce.d.ts",
+      "import": "./dist/auth/oauth/pkce.js",
+      "require": "./dist/auth/oauth/pkce.js"
+    },
     "./auth/passkey-service": {
       "types": "./dist/auth/passkey-service.d.ts",
       "import": "./dist/auth/passkey-service.js",
@@ -1702,6 +1707,9 @@
       ],
       "auth/pkce": [
         "./dist/auth/pkce.d.ts"
+      ],
+      "auth/oauth/pkce": [
+        "./dist/auth/oauth/pkce.d.ts"
       ],
       "auth/passkey-service": [
         "./dist/auth/passkey-service.d.ts"

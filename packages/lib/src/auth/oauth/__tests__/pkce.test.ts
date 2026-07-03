@@ -98,9 +98,9 @@ describe('verifyPkceChallenge', () => {
   });
 
   it('given a tampered challenge (one char flipped), returns false', () => {
+    const lastChar = RFC_7636_APPENDIX_B_CHALLENGE[RFC_7636_APPENDIX_B_CHALLENGE.length - 1];
     const tampered =
-      RFC_7636_APPENDIX_B_CHALLENGE.slice(0, -1) +
-      (RFC_7636_APPENDIX_B_CHALLENGE.at(-1) === 'M' ? 'N' : 'M');
+      RFC_7636_APPENDIX_B_CHALLENGE.slice(0, -1) + (lastChar === 'M' ? 'N' : 'M');
     expect(verifyPkceChallenge(RFC_7636_APPENDIX_B_VERIFIER, tampered, 'S256')).toBe(false);
   });
 
