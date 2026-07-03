@@ -84,6 +84,7 @@ import {
   getAllowedDriveIds,
   type MCPAuthResult,
   type SessionAuthResult,
+  type OAuthAuthResult,
 } from '../index';
 
 describe('MCP Scope Enforcement', () => {
@@ -124,6 +125,30 @@ describe('MCP Scope Enforcement', () => {
     sessionId: 'session-xyz',
   });
 
+  const createScopedOAuthAuth = (allowedDriveIds: string[]): OAuthAuthResult => ({
+    tokenType: 'oauth',
+    userId: 'user-123',
+    role: 'user',
+    tokenVersion: 1,
+    adminRoleVersion: 0,
+    tokenId: 'oauth-token-abc',
+    scopes: { account: false, offlineAccess: false, drives: new Map() },
+    driveScopes: allowedDriveIds.map((driveId) => ({ driveId, role: null, customRoleId: null })),
+    allowedDriveIds,
+  });
+
+  const createAccountScopedOAuthAuth = (): OAuthAuthResult => ({
+    tokenType: 'oauth',
+    userId: 'user-123',
+    role: 'user',
+    tokenVersion: 1,
+    adminRoleVersion: 0,
+    tokenId: 'oauth-token-abc',
+    scopes: { account: true, offlineAccess: false, drives: new Map() },
+    driveScopes: [],
+    allowedDriveIds: [],
+  });
+
   // ===========================================================================
   // 1. getAllowedDriveIds
   // ===========================================================================
@@ -143,6 +168,19 @@ describe('MCP Scope Enforcement', () => {
 
     it('given scoped MCP auth, should return the allowed drive IDs', () => {
       const auth = createScopedMCPAuth(['drive-1', 'drive-2']);
+      const result = getAllowedDriveIds(auth);
+
+      expect(result).toEqual(['drive-1', 'drive-2']);
+    });
+
+    it('given account-scoped OAuth auth, should return empty array (full access, like an unscoped MCP token)', () => {
+      const result = getAllowedDriveIds(createAccountScopedOAuthAuth());
+
+      expect(result).toEqual([]);
+    });
+
+    it('given drive-scoped OAuth auth, should return the allowed drive IDs', () => {
+      const auth = createScopedOAuthAuth(['drive-1', 'drive-2']);
       const result = getAllowedDriveIds(auth);
 
       expect(result).toEqual(['drive-1', 'drive-2']);
@@ -175,6 +213,27 @@ describe('MCP Scope Enforcement', () => {
 
     it('given scoped MCP token, should deny access to out-of-scope drive', () => {
       const auth = createScopedMCPAuth(['drive-1']);
+      const result = checkMCPDriveScope(auth, 'drive-other');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('given account-scoped OAuth token, should allow access to any drive (full access)', () => {
+      const result = checkMCPDriveScope(createAccountScopedOAuthAuth(), 'any-drive');
+
+      expect(result).toBeNull();
+    });
+
+    it('given drive-scoped OAuth token, should allow access to an in-scope drive — scope narrowing bites', () => {
+      const auth = createScopedOAuthAuth(['drive-1', 'drive-2']);
+      const result = checkMCPDriveScope(auth, 'drive-1');
+
+      expect(result).toBeNull();
+    });
+
+    it('given drive-scoped OAuth token, should deny access to an out-of-scope drive with 403 — scope narrowing bites', () => {
+      const auth = createScopedOAuthAuth(['drive-1']);
       const result = checkMCPDriveScope(auth, 'drive-other');
 
       expect(result).not.toBeNull();
