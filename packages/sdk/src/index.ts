@@ -54,53 +54,9 @@ export type { Operation, OperationConfig, PathParamNames, RequiredScope, ValidOp
 export { createRegistry, getOperation, hasOperation, listOperations } from './registry/registry.js';
 export type { OperationRegistry } from './registry/registry.js';
 
-// Seed operations (Phase 3 grows this list).
-export { listDrives } from './operations/drives.js';
+// Domain operations (Phase 3), alphabetical by domain.
 
-// Pages & content operations (Phase 3 task 2) — full pagespace-mcp page.js/document.js parity.
-export {
-  createPage,
-  getPageDetails,
-  listPages,
-  listTrash,
-  movePage,
-  renamePage,
-  restorePage,
-  trashPage,
-} from './operations/pages.js';
-export { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
-
-// Search operations (Phase 3 task 3).
-export { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
-
-// Drives & members operations (Phase 3 task 1).
-export {
-  assertDriveNameConfirmed,
-  createDrive,
-  renameDrive,
-  restoreDrive,
-  trashDrive,
-  updateDriveContext,
-} from './operations/drives.js';
-export type { ConfirmMismatch, Result } from './operations/drives.js';
-export { listDriveMembers } from './operations/members.js';
-export { listCollaborators } from './operations/collaborators.js';
-
-// Tasks & statuses operations (Phase 3 task 4).
-export {
-  classifyTaskCompletionGate,
-  createTask,
-  createTaskStatus,
-  deleteTask,
-  deleteTaskTrigger,
-  getAssignedTasks,
-  reorderTask,
-  setTaskTrigger,
-  updateTask,
-} from './operations/tasks.js';
-export type { TaskCompletionGatedError } from './operations/tasks.js';
-
-// Agents & conversations operations (Phase 3 task 5).
+// Agents (Phase 3 task 5).
 export {
   askAgent,
   filterModelCatalog,
@@ -110,9 +66,8 @@ export {
   updateAgentConfig,
 } from './operations/agents.js';
 export type { CatalogModel, CatalogProvider, ModelCatalogFilter } from './operations/agents.js';
-export { listConversations, readConversation } from './operations/conversations.js';
 
-// Calendar operations (Phase 3 task 6).
+// Calendar (Phase 3 task 6).
 export {
   computeFreeSlots,
   createCalendarEvent,
@@ -127,6 +82,79 @@ export {
   updateCalendarEvent,
 } from './operations/calendar.js';
 export type { FreeSlot } from './operations/calendar.js';
+
+// Collaborators (Phase 3 task 1).
+export { listCollaborators } from './operations/collaborators.js';
+
+// Conversations (Phase 3 task 5).
+export { listConversations, readConversation } from './operations/conversations.js';
+
+// Documents / content (Phase 3 task 2) — full pagespace-mcp document.js parity.
+export { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
+
+// Drives (Phase 2 seed op + Phase 3 task 1 — full pagespace-mcp drive.js parity).
+export { listDrives } from './operations/drives.js';
+export {
+  assertDriveNameConfirmed,
+  createDrive,
+  renameDrive,
+  restoreDrive,
+  trashDrive,
+  updateDriveContext,
+} from './operations/drives.js';
+export type { ConfirmMismatch, Result } from './operations/drives.js';
+
+// Members (Phase 3 task 1).
+export { listDriveMembers } from './operations/members.js';
+
+// Pages (Phase 3 task 2) — full pagespace-mcp page.js parity.
+export {
+  createPage,
+  getPageDetails,
+  listPages,
+  listTrash,
+  movePage,
+  renamePage,
+  restorePage,
+  trashPage,
+} from './operations/pages.js';
+
+// Roles & permissions (Phase 3 task 7).
+export {
+  buildRemoveRolePagePermissionsInput,
+  buildSetRoleDriveWidePermissionsInput,
+  buildSetRolePagePermissionsInput,
+  createDriveRole,
+  deleteDriveRole,
+  getDriveRole,
+  listDriveRoles,
+  removeRolePagePermissions,
+  setRoleDriveWidePermissions,
+  setRolePagePermissions,
+  updateDriveRole,
+} from './operations/roles.js';
+export type {
+  RemoveRolePagePermissionsArgs,
+  SetRoleDriveWidePermissionsArgs,
+  SetRolePagePermissionsArgs,
+} from './operations/roles.js';
+
+// Search (Phase 3 task 3).
+export { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
+
+// Tasks & statuses (Phase 3 task 4).
+export {
+  classifyTaskCompletionGate,
+  createTask,
+  createTaskStatus,
+  deleteTask,
+  deleteTaskTrigger,
+  getAssignedTasks,
+  reorderTask,
+  setTaskTrigger,
+  updateTask,
+} from './operations/tasks.js';
+export type { TaskCompletionGatedError } from './operations/tasks.js';
 
 // Transport primitive types needed to declare custom operations. buildRequest/
 // parseResponse/executeRequest stay internal — the facade is the only caller.

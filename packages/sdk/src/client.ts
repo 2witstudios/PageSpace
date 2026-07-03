@@ -52,6 +52,16 @@ import {
 } from './operations/pages.js';
 import { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
 import {
+  createDriveRole,
+  deleteDriveRole,
+  getDriveRole,
+  listDriveRoles,
+  removeRolePagePermissions,
+  setRoleDriveWidePermissions,
+  setRolePagePermissions,
+  updateDriveRole,
+} from './operations/roles.js';
+import {
   createTask,
   createTaskStatus,
   deleteTask,
@@ -86,6 +96,16 @@ const DEFAULT_OPERATIONS_MAP = {
     insertLines: insertLines,
     deleteLines: deleteLines,
     editCells: editSheetCells,
+  },
+  roles: {
+    list: listDriveRoles,
+    get: getDriveRole,
+    create: createDriveRole,
+    update: updateDriveRole,
+    delete: deleteDriveRole,
+    setPagePermissions: setRolePagePermissions,
+    setDriveWidePermissions: setRoleDriveWidePermissions,
+    removePagePermissions: removeRolePagePermissions,
   },
   tasks: {
     create: createTask,
