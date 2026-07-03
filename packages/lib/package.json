@@ -962,6 +962,11 @@
       "import": "./dist/auth/oauth/issue-tokens.js",
       "require": "./dist/auth/oauth/issue-tokens.js"
     },
+    "./auth/oauth/refresh-rotation": {
+      "types": "./dist/auth/oauth/refresh-rotation.d.ts",
+      "import": "./dist/auth/oauth/refresh-rotation.js",
+      "require": "./dist/auth/oauth/refresh-rotation.js"
+    },
     "./auth/account-lockout": {
       "types": "./dist/auth/account-lockout.d.ts",
       "import": "./dist/auth/account-lockout.js",

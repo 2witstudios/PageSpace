@@ -81,3 +81,30 @@ export function issueInitialTokenPair(now: Date): IssuedTokenPair {
     familyExpiresAt,
   };
 }
+
+/**
+ * Mint a rotated token pair within an EXISTING refresh-token family (task 8,
+ * ADR 0003 §3.3). `familyId`/`familyExpiresAt` are carried over unchanged
+ * from the presented token's record — only the authorization_code grant
+ * starts a new family; rotation clamps its refresh TTL against the family's
+ * original absolute boundary, never resets it.
+ */
+export function issueRotatedTokenPair(now: Date, familyId: string, familyExpiresAt: Date): IssuedTokenPair {
+  const { accessExpiresAt, refreshExpiresAt } = issuedTokenLifetimes(now, familyExpiresAt);
+
+  const access = generateOpaqueToken('at');
+  const refresh = generateOpaqueToken('rt');
+
+  return {
+    accessToken: access.token,
+    accessTokenHash: access.tokenHash,
+    accessTokenPrefix: access.tokenPrefix,
+    accessExpiresAt,
+    refreshToken: refresh.token,
+    refreshTokenHash: refresh.tokenHash,
+    refreshTokenPrefix: refresh.tokenPrefix,
+    refreshExpiresAt,
+    familyId,
+    familyExpiresAt,
+  };
+}

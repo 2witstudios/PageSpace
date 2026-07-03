@@ -11,9 +11,11 @@ vi.mock('server-only', () => ({}));
 
 const ensureOAuthClientRow = vi.fn();
 const exchangeAuthorizationCode = vi.fn();
+const refreshTokenGrant = vi.fn();
 vi.mock('@/lib/repositories/oauth-repository', () => ({
   ensureOAuthClientRow: (...args: unknown[]) => ensureOAuthClientRow(...args),
   exchangeAuthorizationCode: (...args: unknown[]) => exchangeAuthorizationCode(...args),
+  refreshTokenGrant: (...args: unknown[]) => refreshTokenGrant(...args),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -235,5 +237,144 @@ describe('POST /api/oauth/token — public client confusion guard', () => {
     const res = await POST(tokenRequest(validFields()) as never);
 
     expect(res.status).toBe(200);
+  });
+});
+
+function refreshFields(overrides: Record<string, string | undefined> = {}) {
+  return {
+    grant_type: 'refresh_token',
+    refresh_token: 'raw-refresh-token-value',
+    client_id: CLIENT_ID,
+    ...overrides,
+  };
+}
+
+describe('POST /api/oauth/token — refresh_token grant, happy path', () => {
+  it('returns the RFC 6749 §5.1 token response shape with a rotated pair', async () => {
+    refreshTokenGrant.mockResolvedValue({
+      outcome: 'ok',
+      userId: 'user-1',
+      scopes: ['account'],
+      tokens: okTokens,
+    });
+
+    const res = await POST(tokenRequest(refreshFields()) as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      access_token: okTokens.accessToken,
+      token_type: 'Bearer',
+      expires_in: 15 * 60,
+      refresh_token: okTokens.refreshToken,
+      scope: 'account',
+    });
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('passes the raw refresh token, resolved clientDbId, and requested scope through to the repository', async () => {
+    refreshTokenGrant.mockResolvedValue({
+      outcome: 'ok',
+      userId: 'user-1',
+      scopes: ['account'],
+      tokens: okTokens,
+    });
+
+    await POST(tokenRequest(refreshFields({ scope: 'account' })) as never);
+
+    expect(refreshTokenGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        refreshToken: 'raw-refresh-token-value',
+        clientDbId: CLIENT_DB_ID,
+        requestedScope: 'account',
+      }),
+    );
+  });
+
+  it('passes requestedScope: null when no scope param is present', async () => {
+    refreshTokenGrant.mockResolvedValue({
+      outcome: 'ok',
+      userId: 'user-1',
+      scopes: ['account'],
+      tokens: okTokens,
+    });
+
+    await POST(tokenRequest(refreshFields()) as never);
+
+    expect(refreshTokenGrant).toHaveBeenCalledWith(expect.objectContaining({ requestedScope: null }));
+  });
+});
+
+describe('POST /api/oauth/token — refresh_token grant, constant-shape failures (no oracle)', () => {
+  const CONSTANT_BODY = { error: 'invalid_grant' };
+
+  it('unknown client_id → constant shape, never calls the repository', async () => {
+    const res = await POST(tokenRequest(refreshFields({ client_id: 'evil-client' })) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual(CONSTANT_BODY);
+    expect(refreshTokenGrant).not.toHaveBeenCalled();
+  });
+
+  it('unknown/expired/revoked refresh token → constant shape, same as an unknown one', async () => {
+    refreshTokenGrant.mockResolvedValue({ outcome: 'invalid_grant' });
+
+    const res = await POST(tokenRequest(refreshFields()) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual(CONSTANT_BODY);
+  });
+
+  it('reuse of a rotated token (theft) → the SAME constant shape (no "we detected theft" leak)', async () => {
+    refreshTokenGrant.mockResolvedValue({ outcome: 'invalid_grant' });
+
+    const res = await POST(tokenRequest(refreshFields()) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual(CONSTANT_BODY);
+  });
+
+  it('missing refresh_token → invalid_request (malformed syntax, distinct from invalid_grant)', async () => {
+    const res = await POST(tokenRequest(refreshFields({ refresh_token: undefined })) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_request' });
+    expect(refreshTokenGrant).not.toHaveBeenCalled();
+  });
+
+  it('missing client_id → invalid_request', async () => {
+    const res = await POST(tokenRequest(refreshFields({ client_id: undefined })) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_request' });
+    expect(refreshTokenGrant).not.toHaveBeenCalled();
+  });
+
+  it('a client_secret presented for the public CLI client → invalid_request, never calls the repository', async () => {
+    const res = await POST(tokenRequest(refreshFields({ client_secret: 'anything' })) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_request' });
+    expect(refreshTokenGrant).not.toHaveBeenCalled();
+  });
+
+  it('scope escalation attempt → invalid_scope (distinguishable — the credential itself was valid)', async () => {
+    refreshTokenGrant.mockResolvedValue({ outcome: 'invalid_scope' });
+
+    const res = await POST(tokenRequest(refreshFields({ scope: 'drive:abc123:admin' })) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_scope' });
+  });
+});
+
+describe('POST /api/oauth/token — unsupported grant_type', () => {
+  it('rejects an unrecognized grant_type', async () => {
+    const res = await POST(tokenRequest({ grant_type: 'client_credentials' }) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'unsupported_grant_type' });
+    expect(exchangeAuthorizationCode).not.toHaveBeenCalled();
+    expect(refreshTokenGrant).not.toHaveBeenCalled();
   });
 });
