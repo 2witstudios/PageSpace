@@ -1,29 +1,27 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
+import { POST } from '../route';
+import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
 
 // ============================================================================
-// Prepaid credit-gate enforcement for POST /api/ai/chat
+// Account-level-only tool listing tests for POST /api/ai/chat
 //
-// Verifies the gate is consulted BEFORE the model is invoked: an out-of-credits
-// user gets a 402 and the stream never starts; an allowed/unlimited user is not
-// blocked by the gate. Heavy dependencies are mocked to isolate gate behavior.
+// Verifies that create_drive (account-level-only, cannot be used by a
+// drive-scoped MCP token) is excluded from the tool list built for a scoped
+// MCP token, while an unscoped/session caller still sees it. Spies on the
+// REAL filterToolsForMcpScope (via importOriginal) so we assert on its actual
+// isScoped argument and return value at the point the route builds baseTools,
+// without needing to mock the entire downstream streaming pipeline.
 // ============================================================================
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: any) => 'error' in result),
-  isMCPAuthResult: vi.fn((r: any) => r?.tokenType === 'mcp'),
+  isMCPAuthResult: vi.fn((result: any) => result.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
-  getAllowedDriveIds: vi.fn(() => []),
-  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
-    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
-  }),
-  canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
-    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
-  }),
+  getAllowedDriveIds: vi.fn((auth: any) => auth.allowedDriveIds ?? []),
+  canPrincipalViewPage: vi.fn().mockResolvedValue(true),
+  canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -36,19 +34,28 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     ai: {
-      info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
-      child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      child: vi.fn(() => ({
+        info: vi.fn(),
+        error: vi.fn(),
+        warn: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+      })),
     },
   },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
-vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: vi.fn(),
+}));
 
-// Chainable, thenable query builder: every method returns the builder, and the
-// builder itself resolves (awaits) to a single-row result. This satisfies both
-// `db.select().from().where()` and `db.select().from().where().limit(1)` shapes.
 vi.mock('@pagespace/db/db', () => {
-  const row = {
+  const pageRow = {
     id: 'page_123',
     title: 'Test Page',
     systemPrompt: null,
@@ -60,32 +67,30 @@ vi.mock('@pagespace/db/db', () => {
     includePageTree: false,
     pageTreeScope: null,
     revision: 0,
-    subscriptionTier: 'free',
-    displayName: 'Tester',
-  };
-  const makeBuilder = () => {
-    const builder: any = {
-      from: vi.fn(() => builder),
-      where: vi.fn(() => builder),
-      orderBy: vi.fn(() => builder),
-      limit: vi.fn(() => builder),
-      leftJoin: vi.fn(() => builder),
-      innerJoin: vi.fn(() => builder),
-      then: (resolve: (v: unknown[]) => unknown) => resolve([row]),
-      catch: () => builder,
-    };
-    return builder;
   };
   return {
     db: {
-      select: vi.fn(() => makeBuilder()),
-      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) })),
-      insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => {
+            const result = Promise.resolve([pageRow]);
+            return Object.assign(result, {
+              orderBy: vi.fn().mockResolvedValue([]),
+              limit: vi.fn().mockResolvedValue([]),
+            });
+          }),
+        })),
+      })),
     },
   };
 });
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn() }));
-vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id' } }));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id' },
+}));
 vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id' },
@@ -98,13 +103,14 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   createAdminRestrictedResponse: vi.fn(),
 }));
 
-// The credit gate under test. Default: allowed. Individual tests override.
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastCreditsEvent: vi.fn(),
+  broadcastAiStreamStart: vi.fn().mockResolvedValue(undefined),
+  broadcastAiStreamComplete: vi.fn().mockResolvedValue(undefined),
   broadcastChatUserMessage: vi.fn(),
 }));
 
@@ -113,6 +119,13 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
+}));
+// pageSpaceTools includes create_drive so filtering behavior is observable.
+vi.mock('@/lib/ai/core/ai-tools', () => ({
+  pageSpaceTools: {
+    create_drive: { description: 'create_drive' },
+    list_pages: { description: 'list_pages' },
+  },
 }));
 vi.mock('@/lib/ai/core/message-utils', () => ({
   extractMessageContent: vi.fn().mockReturnValue('test content'),
@@ -132,16 +145,18 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockReturnValue(''),
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
 }));
-vi.mock('@/lib/ai/core/tool-filtering', () => ({
-  filterToolsForReadOnly: vi.fn().mockReturnValue({}),
-  filterToolsForWebSearch: vi.fn().mockReturnValue({}),
-  filterToolsForMcpScope: vi.fn().mockReturnValue({}),
-  buildPageAITools: vi.fn().mockReturnValue({}),
-}));
+// Spy on the REAL implementation so we can assert on its actual behavior
+// (isScoped argument + filtered return value), instead of stubbing it away.
+vi.mock('@/lib/ai/core/tool-filtering', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../../lib/ai/core/tool-filtering')>();
+  return {
+    ...actual,
+    filterToolsForMcpScope: vi.fn(actual.filterToolsForMcpScope),
+  };
+});
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
 }));
-vi.mock('@/lib/ai/core/ai-tools', () => ({ pageSpaceTools: {}, corePageSpaceTools: {} }));
 vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
   convertMCPToolsToAISDKSchemas: vi.fn(),
   parseMCPToolName: vi.fn(),
@@ -166,38 +181,56 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`) }));
-vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({ trackFeature: vi.fn() }));
+vi.mock('@/lib/logging/mask', () => ({
+  maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`),
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
+  trackFeature: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
-  AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+  AIMonitoring: {
+    trackUsage: vi.fn(),
+    trackToolUsage: vi.fn(),
+  },
   extractOpenRouterCostDollars: vi.fn(() => undefined),
   extractOpenRouterGenerationIds: vi.fn(() => []),
 }));
-vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
+
+vi.mock('@/lib/mcp', () => ({
+  getMCPBridge: vi.fn(),
+}));
+
 vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: vi.fn(),
   PageRevisionMismatchError: class extends Error {},
 }));
+
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
   createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
   removeStream: vi.fn(),
   STREAM_ID_HEADER: 'x-stream-id',
 }));
+
 vi.mock('@/lib/ai/core/validate-image-parts', () => ({
   validateUserMessageFileParts: vi.fn().mockReturnValue({ valid: true }),
   hasFileParts: vi.fn().mockReturnValue(false),
 }));
+
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
-  getModelCapabilities: vi.fn().mockResolvedValue({}),
+  getModelCapabilities: vi.fn(),
   hasVisionCapability: vi.fn().mockReturnValue(true),
 }));
+vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
+  resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
+}));
 
-import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { streamText } from 'ai';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 
 const mockUserId = 'user_123';
+const chatId = 'page_123'; // in drive_A per db mock above
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -208,62 +241,57 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-const createChatRequest = () =>
-  new Request('https://example.com/api/ai/chat', {
+const mockMCPAuth = (userId: string, allowedDriveIds: string[]): MCPAuthResult => ({
+  userId,
+  tokenVersion: 0,
+  tokenType: 'mcp',
+  tokenId: 'mcp-token-id',
+  role: 'user',
+  adminRoleVersion: 0,
+  allowedDriveIds,
+});
+
+const createChatRequest = () => {
+  return new Request('https://example.com/api/ai/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'content-length': '200', 'X-Browser-Session-Id': 'session-1' },
     body: JSON.stringify({
-      messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
-      chatId: 'page_123',
+      messages: [
+        { id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
+      ],
+      chatId,
       selectedProvider: 'openai',
       selectedModel: 'openai/gpt-5.3-chat',
     }),
   });
+};
 
-describe('POST /api/ai/chat - prepaid credit gate', () => {
+describe('POST /api/ai/chat - account-level-only tool listing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
-    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
   });
 
-  it('returns 402 out_of_credits and never starts the stream when the gate denies', async () => {
-    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+  it('excludes create_drive from the tool list for a drive-scoped MCP token', async () => {
+    const auth = mockMCPAuth(mockUserId, ['drive_A']);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
 
-    const response = await POST(createChatRequest());
+    await POST(createChatRequest());
 
-    expect(response.status).toBe(402);
-    const body = await response.json();
-    expect(body.error).toBe('out_of_credits');
-    expect(streamText).not.toHaveBeenCalled();
+    expect(filterToolsForMcpScope).toHaveBeenCalledWith(expect.anything(), true);
+    const filtered = vi.mocked(filterToolsForMcpScope).mock.results[0]?.value as Record<string, unknown>;
+    expect(filtered).not.toHaveProperty('create_drive');
+    expect(filtered).toHaveProperty('list_pages');
   });
 
-  it('returns 429 too_many_in_flight (not 402) when the free in-flight cap is hit', async () => {
-    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
+  it('includes create_drive in the tool list for session (unscoped) auth', async () => {
+    const auth = mockWebAuth(mockUserId);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
 
-    const response = await POST(createChatRequest());
+    await POST(createChatRequest());
 
-    expect(response.status).toBe(429);
-    const body = await response.json();
-    expect(body.error).toBe('too_many_in_flight');
-    expect(streamText).not.toHaveBeenCalled();
+    expect(filterToolsForMcpScope).toHaveBeenCalledWith(expect.anything(), false);
+    const filtered = vi.mocked(filterToolsForMcpScope).mock.results[0]?.value as Record<string, unknown>;
+    expect(filtered).toHaveProperty('create_drive');
+    expect(filtered).toHaveProperty('list_pages');
   });
-
-  it('does not block with a 402 when the gate allows', async () => {
-    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
-
-    const response = await POST(createChatRequest());
-
-    expect(canConsumeAI).toHaveBeenCalled();
-    expect(response.status).not.toBe(402);
-  });
-
-  it('does not block with a 402 when billing is disabled (unlimited)', async () => {
-    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-
-    const response = await POST(createChatRequest());
-
-    expect(response.status).not.toBe(402);
-  });
-
 });

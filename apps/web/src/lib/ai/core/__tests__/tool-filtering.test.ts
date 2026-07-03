@@ -3,8 +3,10 @@ import {
   buildPageAITools,
   filterToolsForReadOnly,
   filterToolsForWebSearch,
+  filterToolsForMcpScope,
   isWebSearchTool,
   isWriteTool,
+  isAccountLevelOnlyTool,
 } from '../tool-filtering';
 
 const baseline = {
@@ -99,6 +101,38 @@ describe('filterToolsForWebSearch', () => {
     const result = filterToolsForWebSearch(baseline, false);
     expect(result.web_search).toBeUndefined();
     expect(result.read_page).toBe('read_page');
+  });
+});
+
+describe('filterToolsForMcpScope', () => {
+  const withDrive = {
+    create_drive: 'create_drive',
+    list_pages: 'list_pages',
+    read_page: 'read_page',
+  };
+
+  it('returns input unchanged when isScoped is false (unscoped/session callers see create_drive)', () => {
+    const result = filterToolsForMcpScope(withDrive, false);
+    expect(result).toEqual(withDrive);
+    expect(result.create_drive).toBe('create_drive');
+  });
+
+  it('removes create_drive when isScoped is true (drive-scoped MCP token)', () => {
+    const result = filterToolsForMcpScope(withDrive, true);
+    expect(result.create_drive).toBeUndefined();
+    expect(result.list_pages).toBe('list_pages');
+    expect(result.read_page).toBe('read_page');
+  });
+});
+
+describe('isAccountLevelOnlyTool', () => {
+  it('classifies create_drive as account-level-only', () => {
+    expect(isAccountLevelOnlyTool('create_drive')).toBe(true);
+  });
+
+  it('does not classify ordinary tools as account-level-only', () => {
+    expect(isAccountLevelOnlyTool('list_pages')).toBe(false);
+    expect(isAccountLevelOnlyTool('rename_drive')).toBe(false);
   });
 });
 
