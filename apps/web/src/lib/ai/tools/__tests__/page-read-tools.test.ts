@@ -672,6 +672,58 @@ describe('page-read-tools', () => {
 
   });
 
+  describe('list_trash', () => {
+    it('has correct tool definition', () => {
+      expect(pageReadTools.list_trash).toBeDefined();
+      expect(pageReadTools.list_trash.description).toContain('trash');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        pageReadTools.list_trash.execute!({ driveSlug: 'my-drive', driveId: 'drive-1' }, context)
+      ).rejects.toThrow('User authentication required');
+    });
+
+    // Regression test for #1774: list_trash's output had no page id, so an
+    // agent that just listed trash had nothing to pass to restore_page (which
+    // requires { id }) — it could see a trashed page but not restore it.
+    it('includes the page id for each trashed page, so restore_page can act on it', async () => {
+      mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockResolvedValue([
+              {
+                id: 'page-trashed-1',
+                title: 'Old Notes',
+                type: 'DOCUMENT',
+                trashedAt: new Date('2026-01-01'),
+                parentId: null,
+                position: 0,
+                driveId: 'drive-1',
+              },
+            ]),
+          }),
+        }),
+      });
+
+      const result = await pageReadTools.list_trash.execute!(
+        { driveSlug: 'my-drive', driveId: 'drive-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      const trashedPages = result.trashedPages as Array<{ id: string; title: string }>;
+      assert({
+        given: 'list_trash result',
+        should: 'include the id of each trashed page',
+        actual: trashedPages[0]?.id,
+        expected: 'page-trashed-1',
+      });
+    });
+  });
+
   describe('read_page', () => {
     it('has correct tool definition', () => {
       expect(pageReadTools.read_page).toBeDefined();

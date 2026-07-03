@@ -252,6 +252,34 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       );
     });
 
+    it('should include TASK_LIST as a valid includeTypes value (#1773)', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=TASK_LIST`);
+      await GET(request, createContext(mockDriveId));
+
+      expect(globSearchPages).toHaveBeenCalledWith(
+        mockDriveId,
+        mockUserId,
+        '*',
+        'test-drive',
+        { includeTypes: ['TASK_LIST'], maxResults: 100 }
+      );
+    });
+
+    it('should not silently drop the filter when TASK_LIST is the only requested type (#1773)', async () => {
+      vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
+      vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=TASK_LIST`);
+      await GET(request, createContext(mockDriveId));
+
+      const [, , , , options] = vi.mocked(globSearchPages).mock.calls[0];
+      // Must be a real, non-empty filter — NOT undefined (which would mean "return everything").
+      expect(options?.includeTypes).toEqual(['TASK_LIST']);
+    });
+
     it('should cap maxResults at 200', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
       vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());

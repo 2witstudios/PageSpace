@@ -855,6 +855,7 @@ export const pageReadTools = {
 
         // Define proper type for formatted output
         interface FormattedTrashNode {
+          id: string;
           title: string;
           type: string;
           trashedAt: Date | null;
@@ -868,9 +869,10 @@ export const pageReadTools = {
         // Type for tree nodes (pages with children)
         type TreeNode = typeof trashedPages[0] & { children: TreeNode[] };
 
-        // Helper function to format the tree for AI understanding  
+        // Helper function to format the tree for AI understanding
         const formatForAI = (nodes: TreeNode[], depth = 0): FormattedTrashNode[] => {
           return nodes.map(node => ({
+            id: node.id,
             title: node.title,
             type: node.type,
             trashedAt: node.trashedAt,
