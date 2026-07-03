@@ -45,7 +45,8 @@ export function CreditBalance() {
     return null;
   }
 
-  const { spendable, monthly, topup, reserved, debt } = balance;
+  const { spendable, monthly, topup, reserved, debt, subscriptionTier } = balance;
+  const isFree = subscriptionTier === 'free';
   const inDebt = spendable < 0;
   // Net monthly portion: gross bucket minus any outstanding debt (topup credits are separate).
   // Using monthly.remaining would overstate the balance when a lapsed period carries debt
@@ -128,7 +129,7 @@ export function CreditBalance() {
         </Tooltip>
       </TooltipProvider>
 
-      <UpgradeTierButton />
+      <UpgradeTierButton isFree={isFree} />
 
       {showBilling && (
         <div className="hidden sm:flex">

@@ -2,21 +2,27 @@
 
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Crown } from 'lucide-react';
-import { useCreditBalance } from '@/hooks/useCreditBalance';
-import { useBillingVisibility } from '@/hooks/useBillingVisibility';
+import { PLANS } from '@/lib/subscription/plans';
+
+interface UpgradeTierButtonProps {
+  /** Whether the current user is on the free tier — the only tier this CTA targets. */
+  isFree: boolean;
+}
+
+const UpgradeIcon = PLANS.pro.icon;
 
 /**
  * Navbar CTA driving free-tier users toward a paid plan — buying credits alone
  * doesn't unlock premium models, so this sits next to "Buy credits" as the other
- * half of the upsell.
+ * half of the upsell. Takes tier as a prop rather than fetching its own balance:
+ * its sole caller (CreditBalance) already holds it after resolving showBilling/
+ * billingEnabled, so a second useCreditBalance() instance here would just add a
+ * redundant SWR/socket subscription for data the parent already has.
  */
-export function UpgradeTierButton() {
+export function UpgradeTierButton({ isFree }: UpgradeTierButtonProps) {
   const router = useRouter();
-  const { showBilling } = useBillingVisibility();
-  const { balance } = useCreditBalance();
 
-  if (!showBilling || !balance || balance.subscriptionTier !== 'free') return null;
+  if (!isFree) return null;
 
   return (
     <Button
@@ -25,7 +31,7 @@ export function UpgradeTierButton() {
       onClick={() => router.push('/settings/plan')}
       className="hidden sm:flex items-center gap-1.5 border-primary/30 text-primary hover:bg-primary/10"
     >
-      <Crown className="h-4 w-4" />
+      <UpgradeIcon className="h-4 w-4" />
       Upgrade
     </Button>
   );

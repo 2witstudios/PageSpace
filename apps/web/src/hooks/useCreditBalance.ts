@@ -96,9 +96,12 @@ export function useCreditBalance() {
 
     const handleCreditsUpdated = (payload: CreditsEventPayload) => {
       mutate(
-        // Skip the merge if the initial fetch hasn't resolved yet — defaulting
-        // subscriptionTier to 'free' here would briefly mis-show the upgrade CTA
-        // to a paid user until the next revalidation corrected it.
+        // Skip the merge (leave the cache as-is) if the initial fetch hasn't
+        // resolved yet — defaulting subscriptionTier to 'free' here would briefly
+        // mis-show the upgrade CTA to a paid user. This also means the balance
+        // fields in this particular push are deferred rather than applied early,
+        // but that's fine: the initial GET is already in flight in this window
+        // and lands within moments regardless of what this handler does.
         (prev) => (prev ? { ...applyCreditsPayload(payload), subscriptionTier: prev.subscriptionTier } : prev),
         CREDITS_PUSH_MUTATE_OPTIONS,
       );
