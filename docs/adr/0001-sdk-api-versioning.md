@@ -1,6 +1,6 @@
 # ADR 0001 — SDK ↔ Server API Versioning
 
-- **Status:** Proposed (Phase 0 of the SDK/CLI/OAuth epic)
+- **Status:** Accepted (merged into `pu/cli-login`, commit b986938d7)
 - **Date:** 2026-07-03
 - **Deciders:** SDK/CLI/OAuth epic, Phase 0
 - **Consumers:** Phase 2 (SDK transport + operation registry), Phase 1 (OAuth server routes), Phase 6 (MCP adapter parity gate)
@@ -65,9 +65,16 @@ reuse — this ADR introduces it.
   `readonly code = '...' as const`, and a realm-independent type guard instead of
   `instanceof` (`packages/lib/src/services/validated-service-token.ts:98-121`,
   `packages/lib/src/utils/fetch-with-timeout.ts:3-8`).
-- All API responses flow through `createSecureResponse(..., { isAPIRoute: true })` in
-  middleware (`apps/web/middleware.ts:102`, `apps/web/middleware.ts:127`), giving a single
-  central place to stamp a response header on every `/api/*` response.
+- Middleware's `/api/*` responses are built by **two separate, independently-maintained**
+  functions — this matters for D2. `createSecureResponse` (`security-headers.ts:202-231`)
+  returns `NextResponse.next()` with headers merged via `applySecurityHeaders`
+  (`security-headers.ts:147-166`); it backs the pass-through/allow paths
+  (`apps/web/middleware.ts:102`, `:127`, `:133`, `:158`). `createSecureErrorResponse`
+  (`security-headers.ts:51-71`) instead builds a fresh `NextResponse` from a standalone
+  `ERROR_RESPONSE_HEADERS` object literal (`security-headers.ts:43-49`) and backs the two
+  early-rejection paths: origin-invalid 403 (`apps/web/middleware.ts:80`) and no-session
+  401 (`apps/web/middleware.ts:150`). A header added to only one of the two is missing from
+  the other's responses — both must be touched.
 
 ## Options considered
 
@@ -121,9 +128,11 @@ export const API_CONTRACT_VERSION = '1.0.0';
 ### D2. The server advertises it in two places
 
 1. **Response header on every `/api/*` response:**
-   `X-PageSpace-API-Version: <semver>` — stamped centrally where API responses already get
-   their security headers (`createSecureResponse(..., { isAPIRoute: true })`,
-   `apps/web/src/middleware/security-headers.ts:153-166`), so no route can forget it.
+   `X-PageSpace-API-Version: <semver>` — stamped in **both** places identified in fact 7:
+   `applySecurityHeaders` (`security-headers.ts:147-166`, the pass-through path) and
+   `ERROR_RESPONSE_HEADERS` (`security-headers.ts:43-49`, the `createSecureErrorResponse`
+   path). Missing either one leaves a class of `/api/*` responses (the 401/403
+   early-rejections) without the header — exactly the drift this ADR exists to prevent.
    Follows the existing `X-PageSpace-*` convention (fact 7).
 2. **Public handshake endpoint:** `GET /api/version` — added to the middleware public-route
    allowlist (alongside `/api/health`, `apps/web/middleware.ts:125`), touches no DB (unlike
@@ -164,7 +173,7 @@ The SDK never assumes a compatible server. On a 2xx response:
 
 | Observation | Verdict |
 |---|---|
-| Header missing | **Incompatible** (`missing-header`) — a pre-contract server (today's prod) must be refused, not silently degraded to |
+| Header missing | **Incompatible** (`missing-header`) — a pre-contract server (today's prod) must be refused outright, never silently treated as compatible |
 | Header not valid semver | **Incompatible** (`malformed-version`) — garbage input is rejected, not coerced |
 | `major(server) ≠ major(min)` | **Incompatible** (`major-mismatch`) — no silent forward-compat across breaking majors, in either direction |
 | `server < min` (same major) | **Incompatible** (`server-too-old`) |
@@ -224,8 +233,10 @@ export type CompatibilityResult =
       serverVersion: string | null;   // raw header value, null if absent
       sdkMinVersion: string };
 
+export type ParsedVersion = { major: number; minor: number; patch: number };
+
 /** Parse a strict semver "MAJOR.MINOR.PATCH" (no ranges, no prerelease). */
-export function parseApiVersion(raw: string): { major: number; minor: number; patch: number } | null;
+export function parseApiVersion(raw: string): ParsedVersion | null;
 
 /** Total order on parsed versions: -1 | 0 | 1. */
 export function compareApiVersions(a: ParsedVersion, b: ParsedVersion): -1 | 0 | 1;
@@ -273,8 +284,12 @@ export function isIncompatibleServerError(error: unknown): error is Incompatible
    **not** `IncompatibleServerError`.
 9. `GET /api/version` responds 200 without auth and without touching the DB, body
    `{ service, apiVersion }` where `apiVersion === API_CONTRACT_VERSION`.
-10. Every `/api/*` response (success and error alike, as both flow through
-    `createSecureResponse`) carries `X-PageSpace-API-Version` equal to `API_CONTRACT_VERSION`.
+10. Every `/api/*` response carries `X-PageSpace-API-Version` equal to
+    `API_CONTRACT_VERSION` — covering both header-application paths named in fact 7:
+    responses built by `applySecurityHeaders` (the pass-through path) AND responses built by
+    `createSecureErrorResponse`'s `ERROR_RESPONSE_HEADERS` (the 401/403 early-rejection
+    path). A test against each path independently is required; a test against only one
+    would pass while leaving the other silently non-compliant.
 11. Repo-level: `MIN_SERVER_API_VERSION <= API_CONTRACT_VERSION` (SDK never requires a
     future server).
 12. Repo-level (Phase 7 gate): a change to any registry operation schema without an
