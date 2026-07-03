@@ -297,6 +297,26 @@ describe('MCP Documents API — TASK_LIST read', () => {
     expect(inserted.every((c: { taskListId: string }) => c.taskListId === EXISTING_TASK_LIST.id)).toBe(true);
   });
 
+  it('still returns 200 with the DEFAULT_TASK_STATUSES fallback when the legacy backfill insert fails', async () => {
+    // The backfill is best-effort: this branch used to be a pure read (no write)
+    // that could never fail. A transient DB error on the backfill insert must
+    // not turn a previously-safe display fallback into a failed request.
+    mockFindFirstTaskList.mockResolvedValue(EXISTING_TASK_LIST);
+    mockFindManyStatusConfigs.mockResolvedValue([]);
+    mockInsertStatusConfigValues.mockImplementationOnce(() => {
+      throw new Error('connection reset');
+    });
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.availableStatuses.map((s: { slug: string }) => s.slug)).toEqual([
+      'pending', 'in_progress', 'blocked', 'completed',
+    ]);
+  });
+
   it('uses custom status configs when present', async () => {
     const customConfigs = [
       { slug: 'backlog', name: 'Backlog', group: 'todo', position: 0, color: '#aaa' },
