@@ -347,6 +347,50 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
     );
   });
 
+  it('clears all scopes when drives is explicitly an empty array', async () => {
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ drives: [] }),
+    });
+
+    const response = await PATCH(request, createContext());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.driveScopes).toEqual([]);
+    expect(sessionRepository.updateMcpTokenDriveScopes).toHaveBeenCalledWith(
+      'token-123',
+      'test-user-id',
+      []
+    );
+  });
+
+  it('clears all scopes when driveIds is explicitly an empty array', async () => {
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'PATCH',
+      headers: {
+        Cookie: 'ps_session=valid-token',
+        'X-CSRF-Token': 'valid-csrf-token',
+      },
+      body: JSON.stringify({ driveIds: [] }),
+    });
+
+    const response = await PATCH(request, createContext());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.driveScopes).toEqual([]);
+    expect(sessionRepository.updateMcpTokenDriveScopes).toHaveBeenCalledWith(
+      'token-123',
+      'test-user-id',
+      []
+    );
+  });
+
   it('returns 500 when db throws', async () => {
     vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockRejectedValueOnce(
       new Error('DB error')

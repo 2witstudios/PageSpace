@@ -26,7 +26,7 @@ export interface NormalizedDriveScope {
  * - `driveIds` maps to scopes with `role: null` (inherit owner's access).
  * - Duplicate drive IDs are deduplicated (last definition wins).
  *
- * @returns Canonical DriveScopeInput[] — never throws (except mutual-exclusivity violation).
+ * @returns Canonical NormalizedDriveScope[] — never throws (except mutual-exclusivity violation).
  */
 export function normalizeDriveScopes(
   drives?: DriveScopeInput[],
