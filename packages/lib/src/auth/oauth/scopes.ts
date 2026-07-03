@@ -31,7 +31,8 @@ export type ScopeError =
   | { code: 'unknown_scope'; scope: string }
   | { code: 'empty_scope' }
   | { code: 'account_drive_conflict' }
-  | { code: 'duplicate_drive'; driveId: string };
+  | { code: 'duplicate_drive'; driveId: string }
+  | { code: 'offline_access_alone' };
 
 export type DriveScopeRow = { driveId: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null };
 
@@ -112,6 +113,14 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
 
   if (account && drives.size > 0) {
     return { ok: false, error: { code: 'account_drive_conflict' } };
+  }
+
+  // Rule 10: offline_access alone has no principal shape (Decision 2) — a
+  // refresh token minted for it could only ever mint access tokens with no
+  // access scope. Reject rather than grant a token that is structurally
+  // useless (fail closed, Codex #1754).
+  if (offlineAccess && !account && drives.size === 0) {
+    return { ok: false, error: { code: 'offline_access_alone' } };
   }
 
   return { ok: true, scopes: { account, offlineAccess, drives } };

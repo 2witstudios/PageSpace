@@ -73,7 +73,7 @@ Scope tokens and their meaning:
 | `drive:<driveId>:admin` | Explicit ADMIN in this drive. | Drive row `role = 'ADMIN'`. |
 | `drive:<driveId>:member` | Explicit plain MEMBER in this drive. | Drive row `role = 'MEMBER'`, `customRoleId = NULL`. |
 | `drive:<driveId>:role:<roleId>` | Custom drive role. | Drive row `role = 'MEMBER'`, `customRoleId = <roleId>`. |
-| `offline_access` | Request a refresh token (OAuth 2.1 convention). | Grant flag; orthogonal to access scopes. |
+| `offline_access` | Request a refresh token (OAuth 2.1 convention). Must accompany `account` or ≥1 `drive:*` scope — see rule 10. | Grant flag; orthogonal to access scopes. |
 
 Grammar rules (each is a testable assertion; all fail closed):
 
@@ -108,6 +108,12 @@ Grammar rules (each is a testable assertion; all fail closed):
 9. **Canonical serialization:** scopes are emitted sorted (`account`/`offline_access` first,
    then `drive:*` by drive id), lowercase, single-space separated. `parse ∘ format` is the
    identity on canonical sets (round-trip law for tests).
+10. **`offline_access` alone → reject.** Decision 2 defines a principal shape for `account` and
+    for any `drive:*` set, but none for a grant with neither. A refresh token issued for such a
+    grant could only ever mint access tokens with no access scope — meaningless, and a
+    zero-trust liability (a token that exists but authorizes nothing invites callers to assume
+    it authorizes something). `offline_access` MUST be combined with `account` or at least one
+    `drive:*` scope in the same request. (Found by independent review, Codex P2 on PR #1754.)
 
 ### Considered and rejected: resource-family scopes (`pages:read`, `tasks:write`, …)
 
@@ -263,7 +269,8 @@ type ScopeError =
   | { code: 'unknown_scope'; scope: string }
   | { code: 'empty_scope' }
   | { code: 'account_drive_conflict' }
-  | { code: 'duplicate_drive'; driveId: string };
+  | { code: 'duplicate_drive'; driveId: string }
+  | { code: 'offline_access_alone' };
 
 // Grammar (Decision 1). Total: never throws.
 function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { ok: false; error: ScopeError };
@@ -314,6 +321,7 @@ function describeScopeForConsent(
 | F10 | PKCE verifier missing/unstorable/mismatched on provider side | Flow fails; no PKCE-less fallback |
 | F11 | Unresolvable custom role at consent render | Already rejected pre-render (F4); screen never shows placeholders |
 | F12 | Scope needed but DB unreachable at any decision point | Deny (no cached/assumed authority) |
+| F13 | `offline_access` requested alone (no `account`, no `drive:*`) | Reject, `invalid_scope` (rule 10) |
 
 ## Consequences
 
