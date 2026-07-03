@@ -37,6 +37,8 @@ import {
   type ValidationIssue,
 } from './errors.js';
 import type { AuthProvider } from './auth/provider.js';
+import { askAgent, listAgents, listModels, multiDriveListAgents, updateAgentConfig } from './operations/agents.js';
+import { listConversations, readConversation } from './operations/conversations.js';
 import { listDrives } from './operations/drives.js';
 import {
   createPage,
@@ -94,6 +96,17 @@ const DEFAULT_OPERATIONS_MAP = {
     setTrigger: setTaskTrigger,
     deleteTrigger: deleteTaskTrigger,
     getAssigned: getAssignedTasks,
+  },
+  agents: {
+    list: listAgents,
+    listMultiDrive: multiDriveListAgents,
+    updateConfig: updateAgentConfig,
+    ask: askAgent,
+    listModels,
+  },
+  conversations: {
+    list: listConversations,
+    read: readConversation,
   },
 } as const;
 
@@ -226,7 +239,7 @@ export class PageSpaceClient {
         const descriptor = buildRequest(op, input, this.#config);
         raw = await executeRequest(
           { ...descriptor, headers: { ...descriptor.headers, Authorization: `Bearer ${token}` } },
-          { fetch: this.#fetch, timeoutMs: this.#timeoutMs, abortFactory: this.#abortFactory },
+          { fetch: this.#fetch, timeoutMs: op.timeoutMsOverride ?? this.#timeoutMs, abortFactory: this.#abortFactory },
         );
       } catch (error) {
         if (idempotent && (isNetworkError(error) || isTimeoutError(error)) && retryAttempt < this.#retryPolicy.maxRetries) {
