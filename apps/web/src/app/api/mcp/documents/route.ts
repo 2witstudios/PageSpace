@@ -215,8 +215,15 @@ export async function POST(req: NextRequest) {
 
           // Legacy task_lists row (e.g. seeded by a pre-fix lazy-init path) with no
           // configs — backfill now instead of leaving it half-initialized forever.
+          // Best-effort: this read already has a correct in-memory fallback
+          // (DEFAULT_TASK_STATUSES below), so a transient backfill failure must not
+          // fail the whole read — it'll simply retry on the next read of this page.
           if (statusConfigs.length === 0) {
-            await seedDefaultTaskStatusConfigs(db, taskList.id);
+            try {
+              await seedDefaultTaskStatusConfigs(db, taskList.id);
+            } catch (error) {
+              loggers.api.error('Failed to backfill default task status configs', error as Error);
+            }
           }
 
           const availableStatuses = statusConfigs.length > 0

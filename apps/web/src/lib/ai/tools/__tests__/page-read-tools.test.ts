@@ -1194,6 +1194,30 @@ describe('page-read-tools', () => {
           expected: true,
         });
       });
+
+      it('still returns the DEFAULT_TASK_STATUSES fallback when the legacy backfill insert fails', async () => {
+        // The backfill is best-effort: this branch used to be a pure read (no
+        // write) that could never fail. A transient DB error on the backfill
+        // insert must not turn a previously-safe display fallback into a
+        // failed tool call -- it should log and let the read still succeed.
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
+
+        mockDb.insert = vi.fn(() => ({
+          values: () => Promise.reject(new Error('connection reset')),
+        })) as unknown as typeof mockDb.insert;
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        ) as { availableStatuses: Array<{ slug: string }> };
+
+        assert({
+          given: 'a legacy list whose backfill insert fails with an unrelated error',
+          should: 'still return the documented default statuses instead of throwing',
+          actual: result.availableStatuses.map(s => s.slug).sort(),
+          expected: ['blocked', 'completed', 'in_progress', 'pending'],
+        });
+      });
     });
 
   });

@@ -13,6 +13,9 @@ import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
 import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+
+const pageReadLogger = loggers.ai.child({ module: 'page-read-tools' });
 
 // Batching raw content onto list_pages has no pagination to lean on (recursive
 // listing is already unbounded), so this caps how many pages can have content
@@ -390,8 +393,15 @@ export const pageReadTools = {
 
           // Legacy task_lists row (e.g. seeded by a pre-fix lazy-init path) with no
           // configs — backfill now instead of leaving it half-initialized forever.
+          // Best-effort: this read already has a correct in-memory fallback
+          // (DEFAULT_TASK_STATUSES below), so a transient backfill failure must not
+          // fail the whole read — it'll simply retry on the next read of this page.
           if (statusConfigs.length === 0) {
-            await seedDefaultTaskStatusConfigs(db, taskList.id);
+            try {
+              await seedDefaultTaskStatusConfigs(db, taskList.id);
+            } catch (error) {
+              pageReadLogger.error('Failed to backfill default task status configs', error as Error);
+            }
           }
 
           const availableStatuses = statusConfigs.length > 0
