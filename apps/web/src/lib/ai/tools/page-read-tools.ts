@@ -21,10 +21,11 @@ const MAX_CONTENT_INCLUDE_PAGES = 50;
 
 // The page-count cap above bounds how many pages get content, but not how
 // large any single page is — a folder of 50 long CODE/DOCUMENT pages could
-// still return a multi-megabyte response. Cap each page's content the same
-// way read_conversation already truncates long messages, so one huge page
-// can't blow up the whole batch; callers needing the rest can page through it
-// with read_page's lineStart/lineEnd.
+// still return a multi-megabyte response. Clip each page's content (in the
+// same truncate-and-report spirit as read_conversation's message truncation,
+// though the mechanics differ — see the newline-boundary cut below) so one
+// huge page can't blow up the whole batch; callers needing the rest can
+// resume with read_page's lineStart/lineEnd.
 const MAX_CONTENT_CHARS_PER_PAGE = 8000;
 
 export const pageReadTools = {
@@ -38,7 +39,7 @@ export const pageReadTools = {
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
-      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response, avoiding N+1 read_page calls. Capped at ${MAX_CONTENT_INCLUDE_PAGES} pages per call, and each page's content is clipped near ${MAX_CONTENT_CHARS_PER_PAGE} characters (contentClipped: true, contentClippedAfterLine gives the resume line) — use read_page with lineStart: contentClippedAfterLine + 1 for the rest. CHANNEL/TASK_LIST/FILE pages get a short summary instead of full content (same as read_page).`),
+      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response instead of calling read_page per page. Content over ${MAX_CONTENT_CHARS_PER_PAGE} characters is clipped (contentClipped: true) — resume with read_page's lineStart at contentClippedAfterLine + 1. CHANNEL/TASK_LIST/FILE pages get a short summary instead of content.`),
     }),
     execute: async ({ driveSlug, driveId, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -146,34 +147,41 @@ export const pageReadTools = {
           const pagesForContent = resultPages.slice(0, MAX_CONTENT_INCLUDE_PAGES);
           contentTruncated = resultPages.length > MAX_CONTENT_INCLUDE_PAGES;
 
-          const contentRows = await db
-            .select({ id: pages.id, content: pages.content, contentMode: pages.contentMode, type: pages.type })
-            .from(pages)
-            .where(inArray(pages.id, pagesForContent.map(p => p.id)));
-          const contentMap = new Map(contentRows.map(r => [r.id, r]));
+          // Type is already known from resultPages, so split up front: structured
+          // types (CHANNEL/TASK_LIST/FILE) never need their content column fetched
+          // at all, and the query below only runs for the text-serializable subset.
+          const textEntries = pagesForContent.filter(entry => {
+            if (isTextSerializablePageType(entry.type)) return true;
+            entry.contentOmitted = `${entry.type} pages return structured data, not inline text — use read_page with this page's ID instead.`;
+            return false;
+          });
 
-          for (const entry of pagesForContent) {
-            const row = contentMap.get(entry.id);
-            if (!row) continue;
-            if (!isTextSerializablePageType(row.type)) {
-              entry.contentOmitted = `${row.type} pages return structured data, not inline text — use read_page with this page's ID instead.`;
-              continue;
-            }
-            const fullContent = serializePageContentForAI(row);
-            if (fullContent.length > MAX_CONTENT_CHARS_PER_PAGE) {
-              // Cut at the last newline within the budget rather than an arbitrary
-              // character offset, so we don't split a UTF-16 surrogate pair or sever
-              // an HTML tag mid-way. Falls back to a hard cut only when the window
-              // has no newline at all (e.g. one huge minified line).
-              const hardCut = fullContent.slice(0, MAX_CONTENT_CHARS_PER_PAGE);
-              const lastNewline = hardCut.lastIndexOf('\n');
-              const clipped = lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut;
-              entry.content = clipped;
-              entry.contentClipped = true;
-              entry.contentClippedAfterLine = clipped.split('\n').length;
-              contentClippedCount++;
-            } else {
-              entry.content = fullContent;
+          if (textEntries.length > 0) {
+            const contentRows = await db
+              .select({ id: pages.id, content: pages.content, contentMode: pages.contentMode })
+              .from(pages)
+              .where(inArray(pages.id, textEntries.map(p => p.id)));
+            const contentMap = new Map(contentRows.map(r => [r.id, r]));
+
+            for (const entry of textEntries) {
+              const row = contentMap.get(entry.id);
+              if (!row) continue;
+              const fullContent = serializePageContentForAI({ type: entry.type, ...row });
+              if (fullContent.length > MAX_CONTENT_CHARS_PER_PAGE) {
+                // Cut at the last newline within the budget rather than an arbitrary
+                // character offset, so we don't split a UTF-16 surrogate pair or sever
+                // an HTML tag mid-way. Falls back to a hard cut only when the window
+                // has no newline at all (e.g. one huge minified line).
+                const hardCut = fullContent.slice(0, MAX_CONTENT_CHARS_PER_PAGE);
+                const lastNewline = hardCut.lastIndexOf('\n');
+                const clipped = lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut;
+                entry.content = clipped;
+                entry.contentClipped = true;
+                entry.contentClippedAfterLine = clipped.split('\n').length;
+                contentClippedCount++;
+              } else {
+                entry.content = fullContent;
+              }
             }
           }
         }
