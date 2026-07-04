@@ -77,6 +77,18 @@ export {
 } from './commands/pages.js';
 export { renderTrashTree, trashListHandler } from './commands/trash.js';
 
+// Search verbs (Phase 5 task 4) — thin projections over the `search.*` SDK
+// operations (glob/regex are drive-scoped; text is the multi-drive op with
+// searchType: 'text').
+export {
+  renderGlobSearch,
+  renderMultiDriveSearch,
+  renderRegexSearch,
+  searchGlobHandler,
+  searchRegexHandler,
+  searchTextHandler,
+} from './commands/search.js';
+
 // Tasks verbs (Phase 5 task 3) — thin projections over the `tasks.*` SDK
 // operations (and, for list/statuses, the already-wired `pages.read`
 // TASK_LIST branch).
