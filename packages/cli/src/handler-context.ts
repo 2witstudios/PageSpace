@@ -13,4 +13,8 @@ export interface HandlerContext {
   readonly stderr: OutputSink;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly credentialStore: CredentialStore;
+  /** Whether stdin is an interactive terminal — governs the fail-closed rule for destructive verbs. */
+  readonly isTTY: boolean;
+  /** Writes `message` and reads one line of interactive input. Never called when `isTTY` is false. */
+  readonly prompt: (message: string) => Promise<string>;
 }

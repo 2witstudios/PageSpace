@@ -129,6 +129,7 @@ export {
   listPages,
   listTrash,
   movePage,
+  pageTypeSchema,
   renamePage,
   restorePage,
   trashPage,

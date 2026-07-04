@@ -352,6 +352,17 @@ describe('PageSpaceClient — registry-derived namespaces', () => {
     expect(page.id).toBe('p1');
   });
 
+  it('exposes every drives.* operation defined in operations/drives.ts, not just list (regression: only .list was wired)', () => {
+    const client = makeClient({ fetch: vi.fn() });
+
+    expect(typeof client.drives.list).toBe('function');
+    expect(typeof client.drives.create).toBe('function');
+    expect(typeof client.drives.rename).toBe('function');
+    expect(typeof client.drives.updateContext).toBe('function');
+    expect(typeof client.drives.trash).toBe('function');
+    expect(typeof client.drives.restore).toBe('function');
+  });
+
   it('exposes the Phase 3 agents & conversations namespaces', () => {
     const client = makeClient({ fetch: vi.fn() });
 

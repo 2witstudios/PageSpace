@@ -13,6 +13,12 @@ export type { CommandHandler, Route, RouteResolution } from './router/router.js'
 // Handler context — what every command handler receives instead of `process.*`.
 export type { HandlerContext, OutputSink } from './handler-context.js';
 
+// Destructive-verb confirmation gate (Phase 5 task 1) — shared by every
+// `trash` verb: --yes short-circuits, non-TTY without it fails closed,
+// TTY without it prompts via the injected `HandlerContext.prompt`.
+export { confirmationFailureMessage, confirmDestructive, isYes } from './confirm.js';
+export type { ConfirmDestructiveOptions, ConfirmOutcome } from './confirm.js';
+
 // Multi-host credential store (keychain + 0600 file fallback) — Phase 4 task 2.
 export { CompositeCredentialStore, createCredentialStore } from './credentials/store.js';
 export type { CredentialStore, CreateCredentialStoreOptions } from './credentials/store.js';
@@ -44,6 +50,32 @@ export type { ExitCode } from './exit-codes.js';
 // Built-in commands.
 export { helpHandler } from './commands/help.js';
 export { CLI_VERSION, versionHandler } from './commands/version.js';
+
+// Drives & pages verbs (Phase 5 task 1) — thin projections over the
+// `drives.*`/`pages.*` SDK operations.
+export {
+  drivesCreateHandler,
+  drivesListHandler,
+  drivesRenameHandler,
+  drivesRestoreHandler,
+  drivesTrashHandler,
+  renderDrive,
+  renderDrivesList,
+} from './commands/drives.js';
+export {
+  pagesCreateHandler,
+  pagesListHandler,
+  pagesMoveHandler,
+  pagesReadDetailsHandler,
+  pagesRenameHandler,
+  pagesRestoreHandler,
+  pagesTrashHandler,
+  pagesTreeHandler,
+  renderPage,
+  renderPagesList,
+  renderPagesTree,
+} from './commands/pages.js';
+export { renderTrashTree, trashListHandler } from './commands/trash.js';
 export {
   createLoginHandler,
   DEFAULT_LOGIN_SCOPE,
