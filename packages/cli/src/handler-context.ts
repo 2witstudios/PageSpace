@@ -1,5 +1,5 @@
 import type { PageSpaceClient } from '@pagespace/sdk';
-import type { CredentialStore } from './credential-store.js';
+import type { CredentialStore } from './credentials/store.js';
 
 /** Minimal write sink handlers use instead of touching `process.stdout`/`process.stderr` directly. */
 export interface OutputSink {

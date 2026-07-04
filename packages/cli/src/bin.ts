@@ -5,7 +5,7 @@
  * injected, so it can be unit-tested without a real process.
  */
 import process from 'node:process';
-import { NullCredentialStore } from './credential-store.js';
+import { createCredentialStore } from './credentials/store.js';
 import type { OutputSink } from './handler-context.js';
 import { run } from './run.js';
 
@@ -17,7 +17,7 @@ run({
   env: process.env,
   stdout,
   stderr,
-  credentialStore: new NullCredentialStore(),
+  credentialStore: createCredentialStore({ stderr }),
 })
   .then((code) => {
     process.exitCode = code;

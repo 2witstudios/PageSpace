@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createWhoamiHandler, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, parseArgv } from '@pagespace/cli';
-import type { HostCredential, HostCredentialStore, RefreshedTokens } from '@pagespace/cli';
+import type { HostCredential, CredentialStore, RefreshedTokens } from '@pagespace/cli';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
 const CREDENTIAL: HostCredential = {
@@ -19,7 +19,7 @@ const REFRESHED: RefreshedTokens = {
 
 const IDENTITY = { name: 'Ada Lovelace', email: 'ada@example.com' };
 
-function fakeStore(initial: Map<string, HostCredential> = new Map()): HostCredentialStore {
+function fakeStore(initial: Map<string, HostCredential> = new Map()): CredentialStore {
   return {
     get: async (host) => initial.get(host) ?? null,
     set: async (host, credential) => {
@@ -38,7 +38,7 @@ function commandIntent(argv: string[]) {
   return intent;
 }
 
-function baseDeps(store: HostCredentialStore) {
+function baseDeps(store: CredentialStore) {
   return {
     createCredentialStore: () => store,
     discoverMetadata: async () => ({
@@ -109,7 +109,7 @@ describe('createWhoamiHandler', () => {
   it('persists the rotated refresh token BEFORE using the new access token to confirm identity', async () => {
     const calls: string[] = [];
     const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
-    const wrappedStore: HostCredentialStore = {
+    const wrappedStore: CredentialStore = {
       ...store,
       set: async (host, credential) => {
         calls.push('persist');
