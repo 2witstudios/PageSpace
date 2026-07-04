@@ -29,8 +29,9 @@ Old config (`claude_desktop_config.json`):
 }
 ```
 
-New config — install `@pagespace/cli` once (`npm install -g @pagespace/cli` or use `npx
-@pagespace/cli`), run `pagespace login` in a terminal to store a real OAuth credential, then:
+New config — install `@pagespace/cli` once (`npm install -g @pagespace/cli` or use `npx -y -p
+@pagespace/cli pagespace`), run `pagespace login` in a terminal to store a real OAuth credential,
+then:
 
 ```json
 {
@@ -120,7 +121,7 @@ that behaves exactly like `pagespace mcp` and honors your existing `PAGESPACE_AP
   "mcpServers": {
     "pagespace": {
       "command": "npx",
-      "args": ["-y", "@pagespace/cli", "pagespace-mcp"],
+      "args": ["-y", "-p", "@pagespace/cli", "pagespace-mcp"],
       "env": {
         "PAGESPACE_API_URL": "https://pagespace.ai",
         "PAGESPACE_AUTH_TOKEN": "<YOUR_PAGESPACE_MCP_TOKEN_HERE>"

@@ -8,8 +8,12 @@ mints scoped agent tokens from the terminal instead of Settings → MCP.
 
 ```bash
 npm install -g @pagespace/cli
-# or, without installing: npx @pagespace/cli whoami
+# or, without installing: npx -y -p @pagespace/cli pagespace whoami
 ```
+
+`npx @pagespace/cli` alone can't pick a bin — the package publishes two (`pagespace`,
+`pagespace-mcp`), neither of which matches the unscoped package name `cli` that bare `npx` looks
+for. Use `-p @pagespace/cli <bin>` to name the bin explicitly, as above.
 
 This installs two commands: `pagespace` and `pagespace-mcp` (a bridge alias — see
 [Migrating from `pagespace-mcp`](docs/migrating-from-pagespace-mcp.md)).
@@ -68,16 +72,16 @@ Every command follows `pagespace <resource> <verb> [args] [flags]`.
 | Resource | Verbs |
 |---|---|
 | `drives` | `list [--all]`, `create <name>`, `rename <driveId> <name>`, `trash <driveId> [--yes]`, `restore <driveId>` |
-| `pages` | `list --drive <id> [parentId]`, `tree --drive <id> [parentId]`, `read-details <pageId>`, `create <title> <type> [parentId] --drive <id>`, `rename <pageId> <title>`, `move <pageId> <newParentId\|root> <position>`, `trash <pageId> [--all] [--yes]`, `restore <pageId>`, `read <pageId> [--start N] [--end M] [--raw]`, `replace-lines <pageId> --start N [--end M] [--file <path>]`, `export <pageId> --format md\|csv --out <path\|->` |
+| `pages` | `list --drive <id> [parentId]`, `tree --drive <id> [parentId]`, `read-details <pageId>`, `create <title> <type> [parentId] --drive <id>`, `rename <pageId> <title>`, `move <pageId> <newParentId\|root> <position>`, `trash <pageId> [--all] [--yes]`, `restore <pageId>`, `read <pageId> [--start N] [--end M] [--raw]`, `replace-lines <pageId> --start N [--end M] [--file <path>]`, `export <pageId> --format md\|csv --out <path\|-> [--force]` |
 | `sheets` | `edit-cells <pageId> [--json-input <json>]` |
 | `trash` | `list --drive <id>` |
-| `tasks` | `list <taskListPageId>`, `create <pageId> --title <title> [--priority low\|medium\|high] [--status <slug>] [--due <date>] [--assignee <userId>]`, `update <pageId> <taskId> [--status <slug>] [--title <title>] [--priority ...] [--due <date>]`, `delete <pageId> <taskId> [--yes]`, `reorder <pageId> <taskId> <position>`, `statuses <taskListPageId>`, `create-status <pageId> --name <name> --color <color> --group todo\|in_progress\|done`, `assigned` |
-| `search` | `text <query> [--drive <id>\|--all-drives] [--max-results <n>]`, `regex <pattern> --drive <id> [--in content\|title\|both]`, `glob <pattern> --drive <id>` |
+| `tasks` | `list <taskListPageId>`, `create <pageId> --title <title> [--priority low\|medium\|high] [--status <slug>] [--due <date>] [--assignee <userId>]`, `update <pageId> <taskId> [--status <slug>] [--title <title>] [--priority ...] [--due <date>]`, `delete <pageId> <taskId> [--yes]`, `reorder <pageId> <taskId> <position>`, `statuses <taskListPageId>`, `create-status <pageId> --name <name> --color <color> --group todo\|in_progress\|done [--position N]`, `assigned` |
+| `search` | `text <query> [--drive <id>\|--all-drives] [--max-results <n>]`, `regex <pattern> --drive <id> [--in content\|title\|both] [--max-results <n>]`, `glob <pattern> --drive <id> [--max-results <n>]` |
 | `agents` | `list --drive <id>\|--all-drives`, `ask <agentPageId> <message> [--conversation-id <id>] [--context <text>]`, `config <agentPageId> --set <key>=<value>` |
 | `models` | `list` |
 | `activity` | `<driveId>` |
 | `channels` | `send <channelId> <message>` |
-| `tokens` | `create --name <name> [--drive <id>]`, `list`, `revoke <tokenId>` |
+| `tokens` | `create --name <name> [--drive <id>]`, `list`, `revoke <tokenId> [--yes]` |
 
 Every command supports `--json` (machine-readable output on stdout, nothing else) and `--host
 <url>` / `--token <token>` (override the resolved config for that one call).
