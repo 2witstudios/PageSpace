@@ -110,7 +110,7 @@ vi.mock('@pagespace/db/schema/sessions', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed', title: 'title', content: 'content' },
-  drives: { id: 'id', name: 'name', drivePrompt: 'drivePrompt', isTrashed: 'isTrashed' },
+  drives: { id: 'id', name: 'name', drivePrompt: 'drivePrompt', isTrashed: 'isTrashed', ownerId: 'ownerId' },
   userMentions: { targetUserId: 'targetUserId', createdAt: 'createdAt', mentionedByUserId: 'mentionedByUserId', sourcePageId: 'sourcePageId' },
   chatMessages: { pageId: 'pageId', role: 'role', isActive: 'isActive', createdAt: 'createdAt', userId: 'userId', content: 'content' },
 }));
@@ -146,6 +146,7 @@ vi.mock('@pagespace/db/schema/automation-preferences', () => ({
 import { POST } from '../route';
 import { users } from '@pagespace/db/schema/auth';
 import { sessions } from '@pagespace/db/schema/sessions';
+import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { taskItems } from '@pagespace/db/schema/tasks';
 
@@ -166,11 +167,16 @@ const overdueTaskRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
   ...overrides,
 });
 
-function setupTables(taskRows: Record<string, unknown>[], driveMemberRows: Record<string, unknown>[]) {
+function setupTables(
+  taskRows: Record<string, unknown>[],
+  driveMemberRows: Record<string, unknown>[],
+  ownedDriveRows: Record<string, unknown>[] = []
+) {
   h.tableRows.clear();
   h.tableRows.set(users, [{ id: USER_ID, timezone: 'UTC', name: 'Tester', email: 'tester@example.com', subscriptionTier: 'pro' }]);
   h.tableRows.set(sessions, [{ userId: USER_ID, type: 'user', revokedAt: null, lastUsedAt: new Date() }]);
   h.tableRows.set(driveMembers, driveMemberRows);
+  h.tableRows.set(drives, ownedDriveRows);
   h.tableRows.set(taskItems, taskRows);
 }
 
@@ -250,5 +256,25 @@ describe('POST /api/pulse/cron — task lists scoped to trash + drive membership
     const tasks = insertedTasks();
     expect(tasks.overdue).toBe(0);
     expect(tasks.overdueItems).toEqual([]);
+  });
+
+  it('includes an overdue task in a drive the user owns but has no accepted membership row for yet', async () => {
+    // Owner drive_members rows are only lazily backfilled on first access
+    // (updateDriveLastAccessed), so a freshly created drive has no accepted
+    // membership row. Task scoping must still include it via drives.ownerId.
+    setupTables(
+      [overdueTaskRow({ driveId: 'drive-owned-unbackfilled' })],
+      [], // no accepted drive_members row at all
+      [{ id: 'drive-owned-unbackfilled', ownerId: USER_ID, isTrashed: false }]
+    );
+
+    const response = await POST(makeRequest());
+    const body = await response.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.generated).toBe(1);
+
+    const tasks = insertedTasks();
+    expect(tasks.overdue).toBe(1);
+    expect(tasks.overdueItems).toEqual([{ title: 'Ship the report', priority: 'high' }]);
   });
 });

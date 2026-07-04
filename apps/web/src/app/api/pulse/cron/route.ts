@@ -222,6 +222,16 @@ async function buildAndPersistPulse(
     ));
   const driveIds = userDrives.map(d => d.driveId);
 
+  // Drives the user owns. Owner drive_members rows are only lazily backfilled
+  // on first access (see updateDriveLastAccessed), so an owner can have tasks
+  // in a drive with no accepted membership row yet — task scoping must include
+  // owned drives or those tasks would wrongly drop out of the persisted lists.
+  const ownedDrives = await db
+    .select({ id: drives.id })
+    .from(drives)
+    .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)));
+  const taskDriveIds = Array.from(new Set([...driveIds, ...ownedDrives.map(d => d.id)]));
+
   // Pages the user is actually permitted to view (owner | drive-admin |
   // explicit page permission). Drive membership alone does NOT grant access
   // to every page in a drive, so Pulse must scope all page content, diffs,
@@ -632,7 +642,7 @@ async function buildAndPersistPulse(
   // ========================================
   const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
-  const overdueTasks = driveIds.length > 0 ? await db
+  const overdueTasks = taskDriveIds.length > 0 ? await db
     .select({
       title: pages.title,
       priority: taskItems.priority,
@@ -645,14 +655,14 @@ async function buildAndPersistPulse(
         or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
         ne(taskItems.status, 'completed'),
         lt(taskItems.dueDate, startOfToday),
-        inArray(pages.driveId, driveIds),
+        inArray(pages.driveId, taskDriveIds),
         eq(pages.isTrashed, false)
       )
     )
     .orderBy(desc(taskItems.priority), taskItems.dueDate)
     .limit(10) : [];
 
-  const todayTasks = driveIds.length > 0 ? await db
+  const todayTasks = taskDriveIds.length > 0 ? await db
     .select({
       title: pages.title,
       priority: taskItems.priority,
@@ -665,14 +675,14 @@ async function buildAndPersistPulse(
         ne(taskItems.status, 'completed'),
         gte(taskItems.dueDate, startOfToday),
         lt(taskItems.dueDate, endOfToday),
-        inArray(pages.driveId, driveIds),
+        inArray(pages.driveId, taskDriveIds),
         eq(pages.isTrashed, false)
       )
     )
     .orderBy(desc(taskItems.priority))
     .limit(10) : [];
 
-  const recentlyCompletedTasks = driveIds.length > 0 ? await db
+  const recentlyCompletedTasks = taskDriveIds.length > 0 ? await db
     .select({ title: pages.title, completedAt: taskItems.completedAt })
     .from(taskItems)
     .innerJoin(pages, eq(pages.id, taskItems.pageId))
@@ -681,7 +691,7 @@ async function buildAndPersistPulse(
         or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
         eq(taskItems.status, 'completed'),
         gte(taskItems.completedAt, twentyFourHoursAgo),
-        inArray(pages.driveId, driveIds),
+        inArray(pages.driveId, taskDriveIds),
         eq(pages.isTrashed, false)
       )
     )

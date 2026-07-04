@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, lt, gte, ne, desc, count, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { pages } from '@pagespace/db/schema/core'
+import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
@@ -91,6 +91,7 @@ export async function GET(req: Request) {
     const [
       summaryResult,
       userDrives,
+      ownedDrives,
       userConversations,
     ] = await Promise.all([
       // Latest pulse summary
@@ -106,6 +107,14 @@ export async function GET(req: Request) {
           eq(driveMembers.userId, userId),
           isNotNull(driveMembers.acceptedAt)
         )),
+      // Drives the user owns. Owner drive_members rows are only lazily
+      // backfilled on first access (see updateDriveLastAccessed), so an owner
+      // can have tasks in a drive with no accepted membership row yet — task
+      // scoping must include owned drives or those tasks would wrongly drop
+      // out of the counts below.
+      db.select({ id: drives.id })
+        .from(drives)
+        .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false))),
       // User conversations
       db.select({ id: dmConversations.id })
         .from(dmConversations)
@@ -119,6 +128,7 @@ export async function GET(req: Request) {
 
     const latestSummary = summaryResult[0] ?? null;
     const driveIds = userDrives.map(d => d.driveId);
+    const taskDriveIds = Array.from(new Set([...driveIds, ...ownedDrives.map(d => d.id)]));
 
     // Phase 2: Queries that depend on driveIds or conversationIds
     const calendarVisibility = driveIds.length > 0
@@ -211,7 +221,7 @@ export async function GET(req: Request) {
             )
         : Promise.resolve([{ count: 0 }]),
       // Tasks overdue
-      driveIds.length > 0
+      taskDriveIds.length > 0
         ? db.select({ count: count() })
             .from(taskItems)
             .innerJoin(pages, eq(pages.id, taskItems.pageId))
@@ -220,13 +230,13 @@ export async function GET(req: Request) {
                 or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
                 ne(taskItems.status, 'completed'),
                 lt(taskItems.dueDate, startOfToday),
-                inArray(pages.driveId, driveIds),
+                inArray(pages.driveId, taskDriveIds),
                 eq(pages.isTrashed, false)
               )
             )
         : Promise.resolve([{ count: 0 }]),
       // Tasks due today
-      driveIds.length > 0
+      taskDriveIds.length > 0
         ? db.select({ count: count() })
             .from(taskItems)
             .innerJoin(pages, eq(pages.id, taskItems.pageId))
@@ -236,13 +246,13 @@ export async function GET(req: Request) {
                 ne(taskItems.status, 'completed'),
                 gte(taskItems.dueDate, startOfToday),
                 lt(taskItems.dueDate, endOfToday),
-                inArray(pages.driveId, driveIds),
+                inArray(pages.driveId, taskDriveIds),
                 eq(pages.isTrashed, false)
               )
             )
         : Promise.resolve([{ count: 0 }]),
       // Tasks due this week
-      driveIds.length > 0
+      taskDriveIds.length > 0
         ? db.select({ count: count() })
             .from(taskItems)
             .innerJoin(pages, eq(pages.id, taskItems.pageId))
@@ -252,13 +262,13 @@ export async function GET(req: Request) {
                 ne(taskItems.status, 'completed'),
                 gte(taskItems.dueDate, startOfToday),
                 lt(taskItems.dueDate, endOfWeek),
-                inArray(pages.driveId, driveIds),
+                inArray(pages.driveId, taskDriveIds),
                 eq(pages.isTrashed, false)
               )
             )
         : Promise.resolve([{ count: 0 }]),
       // Tasks completed this week
-      driveIds.length > 0
+      taskDriveIds.length > 0
         ? db.select({ count: count() })
             .from(taskItems)
             .innerJoin(pages, eq(pages.id, taskItems.pageId))
@@ -267,7 +277,7 @@ export async function GET(req: Request) {
                 or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
                 eq(taskItems.status, 'completed'),
                 gte(taskItems.completedAt, startOfWeek),
-                inArray(pages.driveId, driveIds),
+                inArray(pages.driveId, taskDriveIds),
                 eq(pages.isTrashed, false)
               )
             )

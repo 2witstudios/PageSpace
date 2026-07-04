@@ -53,6 +53,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed', updatedAt: 'updatedAt', title: 'title' },
+  drives: { id: 'id', ownerId: 'ownerId', isTrashed: 'isTrashed' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt' },
@@ -84,6 +85,7 @@ vi.mock('@pagespace/db/schema/automation-preferences', () => ({
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { users } from '@pagespace/db/schema/auth';
+import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
@@ -116,10 +118,15 @@ const overdueTaskRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
   ...overrides,
 });
 
-function setupTables(taskRows: Record<string, unknown>[], driveMemberRows: Record<string, unknown>[]) {
+function setupTables(
+  taskRows: Record<string, unknown>[],
+  driveMemberRows: Record<string, unknown>[],
+  ownedDriveRows: Record<string, unknown>[] = []
+) {
   h.tableRows.clear();
   h.tableRows.set(users, [{ id: USER_ID, timezone: 'UTC' }]);
   h.tableRows.set(driveMembers, driveMemberRows);
+  h.tableRows.set(drives, ownedDriveRows);
   h.tableRows.set(taskItems, taskRows);
   h.tableRows.set(pulseSummaries, []);
   h.tableRows.set(dmConversations, []);
@@ -184,5 +191,21 @@ describe('GET /api/pulse — task counts scoped to trash + drive membership', ()
       dueThisWeek: 0,
       completedThisWeek: 0,
     });
+  });
+
+  it('counts an overdue task in a drive the user owns but has no accepted membership row for yet', async () => {
+    // Owner drive_members rows are only lazily backfilled on first access
+    // (updateDriveLastAccessed), so a freshly created drive has no accepted
+    // membership row. Task scoping must still include it via drives.ownerId.
+    setupTables(
+      [overdueTaskRow({ driveId: 'drive-owned-unbackfilled' })],
+      [], // no accepted drive_members row at all
+      [{ id: 'drive-owned-unbackfilled', ownerId: USER_ID, isTrashed: false }]
+    );
+
+    const response = await GET(new Request('https://example.com/api/pulse'));
+    const body = await response.json();
+
+    expect(body.stats.tasks.overdue).toBe(1);
   });
 });
