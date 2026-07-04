@@ -125,13 +125,13 @@ export default function TermsOfService() {
               PageSpace offers the following subscription plans:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Free Plan:</strong> {MONTHLY_CREDITS.free}/month in AI credits, standard models, 500MB storage</li>
-              <li><strong>Pro Plan ($15/month):</strong> {MONTHLY_CREDITS.pro}/month in AI credits, standard and Pro models, 2GB storage</li>
-              <li><strong>Founder Plan ($50/month):</strong> {MONTHLY_CREDITS.founder}/month in AI credits, standard and Pro models, 10GB storage, priority support</li>
-              <li><strong>Business Plan ($100/month):</strong> {MONTHLY_CREDITS.business}/month in AI credits, standard and Pro models, 50GB storage, priority support</li>
+              <li><strong>Free Plan:</strong> {MONTHLY_CREDITS.free}/month in credits, standard models, 500MB storage</li>
+              <li><strong>Pro Plan ($15/month):</strong> {MONTHLY_CREDITS.pro}/month in credits, standard and Pro models, 2GB storage</li>
+              <li><strong>Founder Plan ($50/month):</strong> {MONTHLY_CREDITS.founder}/month in credits, standard and Pro models, 10GB storage, priority support</li>
+              <li><strong>Business Plan ($100/month):</strong> {MONTHLY_CREDITS.business}/month in credits, standard and Pro models, 50GB storage, priority support</li>
             </ul>
             <p className="mb-4">
-              Each plan&#39;s monthly AI-credit allowance meters AI usage; unused credits roll over and accumulate — they never expire. Additional credits may be purchased at any time as one-time top-ups, which also never expire. Model availability differs by plan: free accounts use standard models, while paid plans add access to Pro (advanced) models.
+              Each plan&#39;s monthly credit allowance meters AI usage; unused credits roll over and accumulate — they never expire. Additional credits may be purchased at any time as one-time top-ups, which also never expire. Model availability differs by plan: free accounts use standard models, while paid plans add access to Pro (advanced) models.
             </p>
 
             <h3 className="text-xl font-semibold mb-3">11.2 Billing and Payment</h3>
@@ -144,9 +144,9 @@ export default function TermsOfService() {
               <li>No refunds are provided for partial months of service</li>
             </ul>
 
-            <h3 className="text-xl font-semibold mb-3">11.3 AI Credits and Usage Limits</h3>
+            <h3 className="text-xl font-semibold mb-3">11.3 Credits and Usage Limits</h3>
             <p className="mb-4">
-              AI usage is metered against your plan&#39;s monthly AI-credit allowance. When your available credits are exhausted, AI features pause until you purchase additional credits or your monthly allowance is added at the next billing renewal; all non-AI features (documents, tasks, channels, and collaboration) remain available. AI-credit prices and allowances may be adjusted with reasonable notice. Storage and file-size limits also apply per plan, and exceeding them may result in service throttling or temporary suspension until your next billing cycle.
+              AI usage is metered against your plan&#39;s monthly credit allowance. When your available credits are exhausted, AI features pause until you purchase additional credits or your monthly allowance is added at the next billing renewal; all non-AI features (documents, tasks, channels, and collaboration) remain available. Credit prices and allowances may be adjusted with reasonable notice. Storage and file-size limits also apply per plan, and exceeding them may result in service throttling or temporary suspension until your next billing cycle.
             </p>
           </section>
 

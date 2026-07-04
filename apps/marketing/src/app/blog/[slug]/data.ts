@@ -24,7 +24,7 @@ export const blogPosts: Record<string, BlogPost> = {
   "usage-based-pricing-and-built-for-scale": {
     slug: "usage-based-pricing-and-built-for-scale",
     title:
-      "AI Credits Replace Daily Limits: Pay for What You Use, Run the Models You Want",
+      "Credits Replace Daily Limits: Pay for What You Use, Run the Models You Want",
     description:
       "PageSpace AI is now usage-based. Every plan gets a monthly pool of credits you spend however you like, paid plans unlock frontier models, and you can top up any amount from $5 to $500. Here's how it works, plus the infrastructure move that makes it scale.",
     image: "/blog/usage-based-pricing-and-built-for-scale.png",

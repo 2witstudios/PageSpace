@@ -26,7 +26,7 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 
 ## How it works
 
-**Models.** PageSpace gives you one catalogue of models from many vendors — OpenAI, Anthropic, Google, xAI, and more — all in a single picker. PageSpace holds the credentials, so you never paste an API key or manage a provider account. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost; free accounts pick from a curated set of efficient models, while paid plans unlock the full catalogue across every vendor, plus top-up credits whenever you need more.
+**Models.** PageSpace gives you one catalogue of models from many vendors — OpenAI, Anthropic, Google, xAI, and more — all in a single picker. PageSpace holds the credentials, so you never paste an API key or manage a provider account. Each call draws from your plan's monthly credit allowance based on the model's real cost; free accounts pick from a curated set of efficient models, while paid plans unlock the full catalogue across every vendor, plus top-up credits whenever you need more.
 
 **Permissions.** When an agent acts, it acts as **you**. It can only see pages you can see and only change pages you can change. Share a page with a teammate and *their* agents can now see it too, under their account. Revoke access and the agents lose access immediately — there is no AI back-door.
 
