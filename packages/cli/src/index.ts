@@ -56,6 +56,10 @@ export {
   loginHandler,
 } from './commands/login.js';
 export type { LoginHandlerDeps } from './commands/login.js';
+export { createLogoutHandler, formatLogoutLine, logoutHandler, summarizeLogout } from './commands/logout.js';
+export type { LogoutHandlerDeps, LogoutHostOutcome } from './commands/logout.js';
+export { createWhoamiHandler, whoamiHandler } from './commands/whoami.js';
+export type { WhoamiHandlerDeps } from './commands/whoami.js';
 
 // Login flow — the pure loopback+PKCE state machine (Phase 4 task 3) and its
 // production effect adapters, reused by `pagespace whoami`/`logout` (task 5).
@@ -82,6 +86,13 @@ export { createDiscoverMetadata, DiscoveryError } from './auth/discover.js';
 export { createExchangeCode, TokenExchangeError } from './auth/exchange-code.js';
 export { confirmIdentity, whoamiOperation } from './auth/confirm-identity.js';
 export { openBrowser } from './auth/open-browser.js';
+
+// Token revocation (RFC 7009) and refresh_token grant — Phase 4 task 5,
+// reused by `pagespace logout`/`pagespace whoami`.
+export { createRevokeToken } from './auth/revoke-token.js';
+export type { RevokeResult, RevokeToken, RevokeTokenParams } from './auth/revoke-token.js';
+export { createRefreshToken, RefreshTokenError } from './auth/refresh-token.js';
+export type { RefreshedTokens, RefreshToken, RefreshTokenParams } from './auth/refresh-token.js';
 
 // Composition root.
 export { run } from './run.js';

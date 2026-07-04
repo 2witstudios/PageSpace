@@ -8,7 +8,9 @@ import { PageSpaceClient, StaticTokenProvider } from '@pagespace/sdk';
 import { parseArgv } from './argv/parse.js';
 import { helpHandler } from './commands/help.js';
 import { loginHandler } from './commands/login.js';
+import { logoutHandler } from './commands/logout.js';
 import { versionHandler } from './commands/version.js';
+import { whoamiHandler } from './commands/whoami.js';
 import { resolveConfig } from './config/resolve.js';
 import type { CredentialStore } from './credential-store.js';
 import { EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
@@ -26,6 +28,8 @@ export interface RunDependencies {
 const ROUTES: readonly Route[] = [
   { path: ['help'], handler: helpHandler },
   { path: ['login'], handler: loginHandler },
+  { path: ['logout'], handler: logoutHandler },
+  { path: ['whoami'], handler: whoamiHandler },
 ];
 
 export async function run(deps: RunDependencies): Promise<ExitCode> {
