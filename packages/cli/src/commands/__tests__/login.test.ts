@@ -5,7 +5,7 @@ import {
   EXIT_SUCCESS,
   parseArgv,
 } from '@pagespace/cli';
-import type { HostCredential, HostCredentialStore, LoopbackCallback, LoopbackServer } from '@pagespace/cli';
+import type { CredentialStore, HostCredential, LoopbackCallback, LoopbackServer } from '@pagespace/cli';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
 const FIXED_TOKENS = {
@@ -15,7 +15,7 @@ const FIXED_TOKENS = {
   scope: 'account offline_access',
 };
 
-function fakeStore(initial: Map<string, HostCredential> = new Map()): HostCredentialStore {
+function fakeStore(initial: Map<string, HostCredential> = new Map()): CredentialStore {
   return {
     get: async (host) => initial.get(host) ?? null,
     set: async (host, credential) => {
@@ -61,7 +61,7 @@ function fakeServer(port = 55555) {
   };
 }
 
-function baseHandlerDeps(store: HostCredentialStore) {
+function baseHandlerDeps(store: CredentialStore) {
   return {
     createCredentialStore: () => store,
     randomBytes: (n: number) => new Uint8Array(n).fill(7),

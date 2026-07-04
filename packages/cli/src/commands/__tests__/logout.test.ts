@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createLogoutHandler, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, formatLogoutLine, parseArgv, summarizeLogout } from '@pagespace/cli';
-import type { HostCredential, HostCredentialStore, RevokeResult, RevokeToken } from '@pagespace/cli';
+import type { HostCredential, CredentialStore, RevokeResult, RevokeToken } from '@pagespace/cli';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
 const CREDENTIAL: HostCredential = {
@@ -10,7 +10,7 @@ const CREDENTIAL: HostCredential = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-function fakeStore(initial: Map<string, HostCredential> = new Map()): HostCredentialStore {
+function fakeStore(initial: Map<string, HostCredential> = new Map()): CredentialStore {
   return {
     get: async (host) => initial.get(host) ?? null,
     set: async (host, credential) => {
@@ -37,7 +37,7 @@ describe('createLogoutHandler', () => {
     const calls: string[] = [];
     const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
     const originalDelete = store.delete.bind(store);
-    const wrappedStore: HostCredentialStore = {
+    const wrappedStore: CredentialStore = {
       ...store,
       delete: async (host) => {
         calls.push('delete');

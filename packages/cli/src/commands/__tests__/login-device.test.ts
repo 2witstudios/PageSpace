@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createLoginDeviceHandler, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, parseArgv } from '@pagespace/cli';
-import type { DeviceAuthorization, DeviceTokenResult, HostCredential, HostCredentialStore } from '@pagespace/cli';
+import type { DeviceAuthorization, DeviceTokenResult, HostCredential, CredentialStore } from '@pagespace/cli';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
 const FIXED_TOKENS = {
@@ -19,7 +19,7 @@ const AUTHORIZATION: DeviceAuthorization = {
   intervalSeconds: 5,
 };
 
-function fakeStore(initial: Map<string, HostCredential> = new Map()): HostCredentialStore {
+function fakeStore(initial: Map<string, HostCredential> = new Map()): CredentialStore {
   return {
     get: async (host) => initial.get(host) ?? null,
     set: async (host, credential) => {
@@ -32,7 +32,7 @@ function fakeStore(initial: Map<string, HostCredential> = new Map()): HostCreden
   };
 }
 
-function baseHandlerDeps(store: HostCredentialStore) {
+function baseHandlerDeps(store: CredentialStore) {
   return {
     createCredentialStore: () => store,
     discoverMetadata: async () => ({

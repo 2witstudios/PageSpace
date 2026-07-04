@@ -13,13 +13,9 @@ export type { CommandHandler, Route, RouteResolution } from './router/router.js'
 // Handler context — what every command handler receives instead of `process.*`.
 export type { HandlerContext, OutputSink } from './handler-context.js';
 
-// Credential store — placeholder pending Phase 4 task 2.
-export { NullCredentialStore } from './credential-store.js';
-export type { CredentialStore, StoredProfile } from './credential-store.js';
-
 // Multi-host credential store (keychain + 0600 file fallback) — Phase 4 task 2.
 export { CompositeCredentialStore, createCredentialStore } from './credentials/store.js';
-export type { CredentialStore as HostCredentialStore, CreateCredentialStoreOptions } from './credentials/store.js';
+export type { CredentialStore, CreateCredentialStoreOptions } from './credentials/store.js';
 export { FileCredentialStore, PermissionError, defaultCredentialsPath } from './credentials/file-store.js';
 export type { FileCredentialStoreOptions } from './credentials/file-store.js';
 export { createNativeKeychainAdapter } from './credentials/keychain.js';
@@ -115,6 +111,18 @@ export {
   loginDeviceHandler,
 } from './commands/login-device.js';
 export type { LoginDeviceHandlerDeps } from './commands/login-device.js';
+
+// Non-interactive auth precedence resolver (Phase 4 task 7; ADR 0003 §4/§6):
+// --token flag > PAGESPACE_TOKEN env > stored profile (silent refresh) > fail.
+// `silent-refresh.ts` is a distinct effect from task 5's `refresh-token.ts`
+// above: it adapts the refresh_token grant to the SDK's OAuthTokenProvider
+// contract (absolute expiry timestamps, classifyHttpError-based retry vs.
+// terminal classification) for this resolver's own silent-refresh wiring.
+export { missingCredentialsMessage, resolveAuth } from './auth/resolve.js';
+export type { AuthSource, ResolveAuthEnv, ResolveAuthFlags } from './auth/resolve.js';
+export { createRefreshAccessToken } from './auth/silent-refresh.js';
+export { buildAuthProvider, enforceAuth, FailingAuthProvider } from './auth/auth-context.js';
+export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } from './auth/auth-context.js';
 
 // Composition root.
 export { run } from './run.js';

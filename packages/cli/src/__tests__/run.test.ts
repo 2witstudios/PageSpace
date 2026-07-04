@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { CLI_VERSION, EXIT_SUCCESS, EXIT_USAGE_ERROR, NullCredentialStore, run } from '@pagespace/cli';
+import { CLI_VERSION, EXIT_SUCCESS, EXIT_USAGE_ERROR, run } from '@pagespace/cli';
 import type { RunDependencies } from '@pagespace/cli';
-import { createRecordingSink } from './fake-context.js';
+import { createFakeCredentialStore, createRecordingSink } from './fake-context.js';
 
 function makeDeps(argv: string[], env: Record<string, string | undefined> = {}): RunDependencies & {
   stdout: ReturnType<typeof createRecordingSink>;
@@ -12,7 +12,7 @@ function makeDeps(argv: string[], env: Record<string, string | undefined> = {}):
     env,
     stdout: createRecordingSink(),
     stderr: createRecordingSink(),
-    credentialStore: new NullCredentialStore(),
+    credentialStore: createFakeCredentialStore(),
   };
 }
 
@@ -65,17 +65,29 @@ describe('run', () => {
   });
 
   it('reads the credential store exactly once per invocation', async () => {
-    let readCalls = 0;
+    let getCalls = 0;
     const store = {
-      async read() {
-        readCalls += 1;
+      ...createFakeCredentialStore(),
+      async get(host: string) {
+        getCalls += 1;
         return null;
       },
-      async write() {},
-      async clear() {},
     };
     const deps = { ...makeDeps(['help']), credentialStore: store };
     await run(deps);
-    expect(readCalls).toBe(1);
+    expect(getCalls).toBe(1);
+  });
+
+  it('never triggers auth enforcement (never writes to stderr, never deletes) for "help" with zero credentials', async () => {
+    const store = createFakeCredentialStore();
+    let deleteCalls = 0;
+    const deps = {
+      ...makeDeps(['help']),
+      credentialStore: { ...store, delete: async (host: string) => { deleteCalls += 1; return store.delete(host); } },
+    };
+    const code = await run(deps);
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(deps.stderr.lines).toEqual([]);
+    expect(deleteCalls).toBe(0);
   });
 });

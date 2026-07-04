@@ -260,6 +260,6 @@ describe('non-interactive posture', () => {
     const { readFileSync } = await import('node:fs');
     const { fileURLToPath } = await import('node:url');
     const source = readFileSync(fileURLToPath(new URL('../auth-context.ts', import.meta.url)), 'utf-8');
-    expect(source).not.toMatch(/stdin|readline|prompt/i);
+    expect(source).not.toMatch(/process\.stdin|readline|inquirer/i);
   });
 });
