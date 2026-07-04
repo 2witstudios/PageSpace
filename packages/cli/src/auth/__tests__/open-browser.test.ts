@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const spawnMock = vi.fn();
 vi.mock('node:child_process', () => ({
@@ -13,6 +13,10 @@ function fakeChild(): EventEmitter & { unref(): void } {
 }
 
 describe('openBrowser', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
   it('resolves true once the child process reports a successful spawn', async () => {
     const child = fakeChild();
     spawnMock.mockReturnValue(child);
@@ -42,5 +46,41 @@ describe('openBrowser', () => {
     const { openBrowser } = await import('@pagespace/cli');
 
     await expect(openBrowser('https://pagespace.ai')).resolves.toBe(false);
+  });
+
+  it('on win32, refuses to hand cmd.exe a URL containing cmd metacharacters (untrusted discovery-doc URL) — falls back instead of risking truncation/injection', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      const { openBrowser } = await import('@pagespace/cli');
+      const maliciousUrl = 'https://pagespace.ai/api/oauth/authorize?client_id=x&state=y&extra=z ^& calc.exe';
+
+      const opened = await openBrowser(maliciousUrl);
+
+      expect(opened).toBe(false);
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it('on win32, still opens a plain URL with no cmd metacharacters, passing it through verbatim (untruncated)', async () => {
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      const child = fakeChild();
+      spawnMock.mockReturnValue(child);
+      const { openBrowser } = await import('@pagespace/cli');
+      const url = 'https://pagespace.ai/api/oauth/authorize?client_id=x';
+
+      const opened = openBrowser(url);
+      child.emit('spawn');
+
+      await expect(opened).resolves.toBe(true);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
+      expect(command).toBe('cmd');
+      expect(args.join(' ')).toContain(url);
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });

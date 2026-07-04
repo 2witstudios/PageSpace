@@ -20,13 +20,13 @@ import type { CommandHandler } from '../router/router.js';
 import { confirmIdentity } from '../auth/confirm-identity.js';
 import { createDiscoverMetadata } from '../auth/discover.js';
 import type { ConfirmIdentity, DiscoverMetadata } from '../auth/loopback-flow.js';
-import { createRefreshToken } from '../auth/refresh-token.js';
-import type { RefreshToken } from '../auth/refresh-token.js';
+import { createRefreshAccessToken } from '../auth/silent-refresh.js';
+import type { RefreshAccessToken } from '@pagespace/sdk';
 
 export interface WhoamiHandlerDeps {
   readonly createCredentialStore: () => CredentialStore;
   readonly discoverMetadata: DiscoverMetadata;
-  readonly refreshToken: RefreshToken;
+  readonly createRefreshAccessToken: (tokenEndpoint: string, clientId: string) => RefreshAccessToken;
   readonly confirmIdentity: ConfirmIdentity;
   readonly now: () => number;
 }
@@ -54,17 +54,18 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
       return EXIT_RUNTIME_ERROR;
     }
 
-    let refreshed;
+    let tokens;
     try {
-      refreshed = await deps.refreshToken({ tokenEndpoint, clientId: credential.clientId, refreshToken: credential.refreshToken });
+      const doRefresh = deps.createRefreshAccessToken(tokenEndpoint, credential.clientId);
+      tokens = await doRefresh(credential.refreshToken);
     } catch {
       ctx.stderr.write(`Not logged in to ${host}: stored credential was rejected. Run "pagespace login" again.\n`);
       return EXIT_RUNTIME_ERROR;
     }
 
-    const scopes = refreshed.scope.split(' ').filter(Boolean);
+    const scopes = credential.scopes;
     await store.set(host, {
-      refreshToken: refreshed.refreshToken,
+      refreshToken: tokens.refreshToken,
       clientId: credential.clientId,
       scopes,
       createdAt: new Date(deps.now()).toISOString(),
@@ -72,7 +73,7 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
 
     let identity;
     try {
-      identity = await deps.confirmIdentity({ host, accessToken: refreshed.accessToken });
+      identity = await deps.confirmIdentity({ host, accessToken: tokens.accessToken });
     } catch (error) {
       ctx.stderr.write(`Could not confirm identity on ${host}: ${error instanceof Error ? error.message : String(error)}\n`);
       return EXIT_RUNTIME_ERROR;
@@ -92,7 +93,7 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
 export const whoamiHandler: CommandHandler = createWhoamiHandler({
   createCredentialStore,
   discoverMetadata: createDiscoverMetadata(),
-  refreshToken: createRefreshToken(),
+  createRefreshAccessToken,
   confirmIdentity,
   now: Date.now,
 });

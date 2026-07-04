@@ -142,4 +142,42 @@ describe('parseArgv', () => {
     const argv = ['--json', 'tokens', 'create', '--yes'];
     expect(parseArgv(argv)).toEqual(parseArgv(argv));
   });
+
+  it('parses --host=value (equals-joined) the same as space-separated', () => {
+    const result = parseArgv(['--host=https://selfhosted.example']);
+    expectCommand(result);
+    expect(result.flags.host).toBe('https://selfhosted.example');
+  });
+
+  it('parses --token=value (equals-joined) the same as space-separated', () => {
+    const result = parseArgv(['--token=ps_sess_abc123']);
+    expectCommand(result);
+    expect(result.flags.token).toBe('ps_sess_abc123');
+  });
+
+  it('accepts a --host=value that itself starts with a dash (only possible via the equals form)', () => {
+    const result = parseArgv(['--host=-not-actually-a-flag']);
+    expectCommand(result);
+    expect(result.flags.host).toBe('-not-actually-a-flag');
+  });
+
+  it('parses --json=true / --json=false via the equals form', () => {
+    expectCommand(parseArgv(['--json=true']));
+    const on = parseArgv(['--json=true']);
+    const off = parseArgv(['--json=false']);
+    expectCommand(on);
+    expectCommand(off);
+    expect(on.flags.json).toBe(true);
+    expect(off.flags.json).toBe(false);
+  });
+
+  it('rejects --host= with an empty value as a usage error', () => {
+    const result = parseArgv(['--host=']);
+    expect(result.kind).toBe('usage-error');
+  });
+
+  it('never echoes an equals-joined token value back in a usage error message', () => {
+    const result = parseArgv(['--token=super-secret-value', '--bogus']);
+    expect(JSON.stringify(result)).not.toContain('super-secret-value');
+  });
 });

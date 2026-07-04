@@ -26,9 +26,12 @@ const FORBIDDEN_PATTERNS: ReadonlyArray<{ readonly name: string; readonly patter
 ];
 
 function commandSourceFiles(): string[] {
-  return readdirSync(COMMANDS_DIR)
-    .filter((entry) => entry.endsWith('.ts') && !entry.endsWith('.test.ts'))
-    .map((entry) => join(COMMANDS_DIR, entry));
+  // Recurse into subdirectories (e.g. commands/tokens/) — a non-recursive
+  // readdir would silently skip every command module nested one level
+  // deeper, letting a forbidden pattern hide there unchecked.
+  return readdirSync(COMMANDS_DIR, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts'))
+    .map((entry) => join(entry.parentPath, entry.name));
 }
 
 describe('single auth path — command modules', () => {
@@ -36,6 +39,10 @@ describe('single auth path — command modules', () => {
 
   it('finds at least one command module to check (the check is not vacuous)', () => {
     expect(files.length).toBeGreaterThan(0);
+  });
+
+  it('recurses into subdirectories (e.g. commands/tokens/) rather than skipping nested command modules', () => {
+    expect(files.some((file) => file.includes(`${join('tokens', 'revoke.ts')}`))).toBe(true);
   });
 
   for (const file of files) {

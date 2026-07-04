@@ -77,4 +77,35 @@ describe('createLoopbackServer', () => {
       await b.close();
     }
   });
+
+  it(
+    'a request to a non-/callback path (e.g. a favicon prefetch) does not consume the single-use callback',
+    async () => {
+      const server = await createLoopbackServer();
+      try {
+        const pending = server.nextCallback();
+        let resolved = false;
+        pending.then(() => {
+          resolved = true;
+        });
+
+        const faviconResponse = await fetch(`http://127.0.0.1:${server.port}/favicon.ico`);
+
+        expect(faviconResponse.status).not.toBe(200);
+        expect(resolved).toBe(false);
+
+        // The real callback still arrives and is delivered correctly.
+        const callbackResponsePromise = fetch(`http://127.0.0.1:${server.port}/callback?code=abc123&state=xyz`);
+        const callback = await pending;
+        await server.finish('ok');
+        const response = await callbackResponsePromise;
+
+        expect(callback.query).toEqual({ code: 'abc123', state: 'xyz' });
+        expect(response.status).toBe(200);
+      } finally {
+        await server.close();
+      }
+    },
+    3000,
+  );
 });

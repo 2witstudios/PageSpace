@@ -75,8 +75,8 @@ export function buildAuthProvider(source: AuthSource, deps: BuildAuthProviderDep
         },
         refreshAccessToken,
         now: deps.now,
-        onTokensUpdated: (tokens: OAuthTokens) => {
-          void deps.credentialStore.set(host, {
+        onTokensUpdated: async (tokens: OAuthTokens) => {
+          await deps.credentialStore.set(host, {
             refreshToken: tokens.refreshToken,
             clientId: credential.clientId,
             scopes: credential.scopes,

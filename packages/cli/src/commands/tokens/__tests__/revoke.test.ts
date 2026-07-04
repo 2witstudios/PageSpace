@@ -4,7 +4,7 @@ import { parseArgv } from '../../../argv/parse.js';
 import type { CommandIntent } from '../../../argv/parse.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../../exit-codes.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
-import { createTokensRevokeHandler } from '../revoke.js';
+import { tokensRevokeHandler } from '../revoke.js';
 
 function commandIntent(argv: string[]): CommandIntent {
   const parsed = parseArgv(argv);
@@ -16,14 +16,13 @@ function fakeSdk(invoke: ReturnType<typeof vi.fn>): PageSpaceClient {
   return { invoke } as unknown as PageSpaceClient;
 }
 
-describe('createTokensRevokeHandler', () => {
+describe('tokensRevokeHandler', () => {
   it('rejects a missing tokenId as a usage error without touching the SDK', async () => {
     const invoke = vi.fn();
-    const handler = createTokensRevokeHandler({ isTTY: () => true, confirm: vi.fn() });
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke) });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke), isTTY: true });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'revoke']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke']));
 
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(invoke).not.toHaveBeenCalled();
@@ -31,53 +30,49 @@ describe('createTokensRevokeHandler', () => {
 
   it('requires --yes in a non-TTY session and never calls the SDK', async () => {
     const invoke = vi.fn();
-    const confirm = vi.fn();
-    const handler = createTokensRevokeHandler({ isTTY: () => false, confirm });
+    const prompt = vi.fn();
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke) });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke), isTTY: false, prompt });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'revoke', 'tok_1']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('--yes');
-    expect(confirm).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
   });
 
   it('skips confirmation and revokes immediately with --yes', async () => {
     const invoke = vi.fn(async () => ({ message: 'Token revoked successfully' }));
-    const confirm = vi.fn();
-    const handler = createTokensRevokeHandler({ isTTY: () => false, confirm });
-    const ctx = createFakeContext({ sdk: fakeSdk(invoke) });
+    const prompt = vi.fn();
+    const ctx = createFakeContext({ sdk: fakeSdk(invoke), isTTY: false, prompt });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'revoke', 'tok_1', '--yes']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1', '--yes']));
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect(confirm).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledWith(expect.anything(), { tokenId: 'tok_1' });
   });
 
   it('prompts interactively in a TTY without --yes, and proceeds when confirmed', async () => {
     const invoke = vi.fn(async () => ({ message: 'Token revoked successfully' }));
-    const confirm = vi.fn(async () => true);
-    const handler = createTokensRevokeHandler({ isTTY: () => true, confirm });
-    const ctx = createFakeContext({ sdk: fakeSdk(invoke) });
+    const prompt = vi.fn(async () => 'y');
+    const ctx = createFakeContext({ sdk: fakeSdk(invoke), isTTY: true, prompt });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'revoke', 'tok_1']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1']));
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it('aborts without calling the SDK when the interactive confirmation is declined', async () => {
     const invoke = vi.fn();
-    const confirm = vi.fn(async () => false);
-    const handler = createTokensRevokeHandler({ isTTY: () => true, confirm });
+    const prompt = vi.fn(async () => 'n');
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke) });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke), isTTY: true, prompt });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'revoke', 'tok_1']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(invoke).not.toHaveBeenCalled();
@@ -88,11 +83,10 @@ describe('createTokensRevokeHandler', () => {
     const invoke = vi.fn(async () => {
       throw new Error('token not found');
     });
-    const handler = createTokensRevokeHandler({ isTTY: () => false, confirm: vi.fn() });
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke) });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke), isTTY: false });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'revoke', 'tok_1', '--yes']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1', '--yes']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('token not found');

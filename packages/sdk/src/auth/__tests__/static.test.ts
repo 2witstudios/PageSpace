@@ -22,6 +22,18 @@ describe('StaticTokenProvider', () => {
     await expect(provider.getAccessToken()).rejects.toBeInstanceOf(AuthenticationError);
   });
 
+  it('recovers on the next call instead of sticking permanently invalidated — a long-lived process must survive one transient 401', async () => {
+    const provider = new StaticTokenProvider(TOKEN);
+    provider.invalidate();
+    await expect(provider.getAccessToken()).rejects.toBeInstanceOf(AuthenticationError);
+
+    // The very next call must succeed again with the same token — a
+    // transient rejection must not brick the provider for the rest of the
+    // process lifetime.
+    await expect(provider.getAccessToken()).resolves.toBe(TOKEN);
+    await expect(provider.getAccessToken()).resolves.toBe(TOKEN);
+  });
+
   it('never exposes the token through default JSON serialization or string coercion', () => {
     const provider = new StaticTokenProvider(TOKEN);
     expect(JSON.stringify(provider)).not.toContain(TOKEN);

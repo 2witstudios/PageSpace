@@ -10,6 +10,9 @@ import type { LoopbackCallback, LoopbackServer } from './loopback-flow.js';
 
 export const LOOPBACK_HOST = '127.0.0.1';
 
+/** The only path the OAuth redirect ever targets (see loopback-flow.ts's CALLBACK_PATH). */
+const CALLBACK_PATH = '/callback';
+
 export class PortBindError extends Error {
   constructor(message: string) {
     super(message);
@@ -26,6 +29,17 @@ export function createLoopbackServer(): Promise<LoopbackServer> {
 
     server.on('request', (req, res) => {
       const url = new URL(req.url ?? '/', `http://${LOOPBACK_HOST}`);
+
+      // Browsers routinely fire off incidental requests (favicon, prefetch)
+      // alongside the real OAuth redirect. This server serves exactly one
+      // callback per login, so anything other than the redirect_uri's own
+      // path must never touch pendingResolve/respond — otherwise it can
+      // consume the single-use callback slot the real redirect needs.
+      if (url.pathname !== CALLBACK_PATH) {
+        res.writeHead(404).end();
+        return;
+      }
+
       const query: Record<string, string> = {};
       url.searchParams.forEach((value, key) => {
         // The OAuth callback query is attacker-influenceable; never let a query

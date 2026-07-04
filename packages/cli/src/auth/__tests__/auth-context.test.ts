@@ -255,6 +255,53 @@ describe('enforceAuth', () => {
   });
 });
 
+describe('buildAuthProvider — persist-before-use (ADR 0003 §3.5)', () => {
+  it('awaits credentialStore.set before getAccessToken hands out the rotated access token', async () => {
+    let storeWriteStarted = false;
+    let storeWriteFinished = false;
+    const storeWriteGate = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        storeWriteFinished = true;
+        resolve();
+      }, 0);
+    });
+    const slowStore = {
+      async get() {
+        return null;
+      },
+      async set() {
+        storeWriteStarted = true;
+        await storeWriteGate;
+      },
+      async delete() {},
+      async list() {
+        return [];
+      },
+    };
+
+    const provider = buildAuthProvider(
+      { kind: 'profile', host: HOST, credential: CREDENTIAL },
+      {
+        discoverMetadata: async () => ({ authorizationEndpoint: 'x', tokenEndpoint: 'y' }),
+        createRefreshAccessToken: () => async () => ({
+          accessToken: 'ps_at_fresh',
+          accessExpiresAt: 999_999_999,
+          refreshToken: 'ps_rt_rotated',
+          refreshExpiresAt: 999_999_999,
+        }),
+        credentialStore: slowStore,
+        now: () => 0,
+      },
+    );
+
+    const token = await provider.getAccessToken();
+
+    expect(storeWriteStarted).toBe(true);
+    expect(storeWriteFinished).toBe(true);
+    expect(token).toBe('ps_at_fresh');
+  });
+});
+
 describe('non-interactive posture', () => {
   it('this module never references stdin/readline/prompt — there is no interactive fallback to accidentally trigger', async () => {
     const { readFileSync } = await import('node:fs');

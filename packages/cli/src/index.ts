@@ -48,7 +48,10 @@ export { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from './exit-codes
 export type { ExitCode } from './exit-codes.js';
 
 // Built-in commands.
-export { helpHandler } from './commands/help.js';
+export { createHelpHandler } from './commands/help.js';
+export type { HelpCommandDescriptor } from './commands/help.js';
+export { helpHandler, ROUTES } from './router/routes.js';
+export type { RouteEntry } from './router/routes.js';
 export { CLI_VERSION, versionHandler } from './commands/version.js';
 
 // Drives & pages verbs (Phase 5 task 1) — thin projections over the
@@ -184,12 +187,12 @@ export { createExchangeCode, TokenExchangeError } from './auth/exchange-code.js'
 export { confirmIdentity, whoamiOperation } from './auth/confirm-identity.js';
 export { openBrowser } from './auth/open-browser.js';
 
-// Token revocation (RFC 7009) and refresh_token grant — Phase 4 task 5,
-// reused by `pagespace logout`/`pagespace whoami`.
+// Token revocation (RFC 7009) — Phase 4 task 5, reused by `pagespace logout`.
+// The refresh_token grant itself is `silent-refresh.ts`'s
+// `createRefreshAccessToken` (exported below), shared by `pagespace whoami`
+// and the non-interactive auth resolver — no bespoke duplicate here.
 export { createRevokeToken } from './auth/revoke-token.js';
 export type { RevokeResult, RevokeToken, RevokeTokenParams } from './auth/revoke-token.js';
-export { createRefreshToken, RefreshTokenError } from './auth/refresh-token.js';
-export type { RefreshedTokens, RefreshToken, RefreshTokenParams } from './auth/refresh-token.js';
 
 // Device-authorization login flow (Phase 4 task 4) — RFC 8628, the headless
 // counterpart to the loopback flow, sharing its discovery/persistence plumbing.
@@ -215,10 +218,10 @@ export type { LoginDeviceHandlerDeps } from './commands/login-device.js';
 
 // Non-interactive auth precedence resolver (Phase 4 task 7; ADR 0003 §4/§6):
 // --token flag > PAGESPACE_TOKEN env > stored profile (silent refresh) > fail.
-// `silent-refresh.ts` is a distinct effect from task 5's `refresh-token.ts`
-// above: it adapts the refresh_token grant to the SDK's OAuthTokenProvider
-// contract (absolute expiry timestamps, classifyHttpError-based retry vs.
-// terminal classification) for this resolver's own silent-refresh wiring.
+// `silent-refresh.ts`'s `createRefreshAccessToken` is the sole refresh_token
+// grant effect in the CLI (SDK OAuthTokenProvider contract: absolute expiry
+// timestamps, classifyHttpError-based retry vs. terminal classification) —
+// shared by this resolver's silent-refresh wiring and by `pagespace whoami`.
 export { missingCredentialsMessage, resolveAuth } from './auth/resolve.js';
 export type { AuthSource, ResolveAuthEnv, ResolveAuthFlags } from './auth/resolve.js';
 export { createRefreshAccessToken } from './auth/silent-refresh.js';
@@ -232,8 +235,7 @@ export { parseTokensCreateArgs, parseTokensRevokeArgs } from './commands/tokens/
 export type { CreateTokenArgs, DriveScopeArg, RevokeTokenArgs } from './commands/tokens/args.js';
 export { tokensCreateHandler } from './commands/tokens/create.js';
 export { tokensListHandler } from './commands/tokens/list.js';
-export { createTokensRevokeHandler, tokensRevokeHandler } from './commands/tokens/revoke.js';
-export type { RevokeHandlerDeps } from './commands/tokens/revoke.js';
+export { tokensRevokeHandler } from './commands/tokens/revoke.js';
 
 // Legacy `PAGESPACE_AUTH_TOKEN` env var support (Phase 6 task 1) — folded
 // into `run.ts`'s single auth-resolution path, never a second one.

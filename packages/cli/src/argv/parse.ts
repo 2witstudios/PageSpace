@@ -14,6 +14,11 @@
  * command's own pure arg-mapper to interpret — only a `--flag` with NO
  * preceding positional token is a hard usage error (there is no command yet
  * to hand it to).
+ *
+ * Every global flag also accepts the equals-joined form (`--host=value`),
+ * not just space-separated (`--host value`) — resolved before any other
+ * grammar rule so `--host=-looks-like-a-flag` is unambiguously a value, not
+ * a following flag.
  */
 
 export interface ParsedFlags {
@@ -59,26 +64,31 @@ export function parseArgv(argv: readonly string[]): ParseResult {
 
   for (let i = 0; i < argv.length; i += 1) {
     const current = argv[i];
+    const eqIndex = current.startsWith('--') ? current.indexOf('=') : -1;
+    const flagName = eqIndex === -1 ? current : current.slice(0, eqIndex);
+    const inlineValue = eqIndex === -1 ? undefined : current.slice(eqIndex + 1);
 
-    if (VALUE_FLAGS.has(current)) {
-      const value = argv[i + 1];
-      if (value === undefined || value.startsWith('-')) {
-        return { kind: 'usage-error', message: `Flag ${current} requires a value.` };
+    if (VALUE_FLAGS.has(flagName)) {
+      const value = inlineValue ?? argv[i + 1];
+      const missing = value === undefined || value.length === 0 || (inlineValue === undefined && value.startsWith('-'));
+      if (missing) {
+        return { kind: 'usage-error', message: `Flag ${flagName} requires a value.` };
       }
-      if (current === '--host') host = value;
+      if (flagName === '--host') host = value;
       else token = value;
-      i += 1;
+      if (inlineValue === undefined) i += 1;
       continue;
     }
 
-    if (BOOLEAN_FLAGS.has(current)) {
-      if (current === '--json') json = true;
-      else if (current === '--yes') yes = true;
-      else if (current === '--all') all = true;
-      else if (current === '--force') force = true;
-      else if (current === '--help') help = true;
-      else if (current === '--version') version = true;
-      else device = true;
+    if (BOOLEAN_FLAGS.has(flagName)) {
+      const value = inlineValue === undefined ? true : /^(true|1|yes)$/i.test(inlineValue);
+      if (flagName === '--json') json = value;
+      else if (flagName === '--yes') yes = value;
+      else if (flagName === '--all') all = value;
+      else if (flagName === '--force') force = value;
+      else if (flagName === '--help') help = value;
+      else if (flagName === '--version') version = value;
+      else device = value;
       continue;
     }
 

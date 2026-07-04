@@ -215,4 +215,45 @@ describe('OAuthTokenProvider', () => {
 
     await expect(provider.getAccessToken()).rejects.toBe(transportError);
   });
+
+  it('persist-before-use: awaits an async onTokensUpdated before handing out the new access token (ADR 0003 §3.5)', async () => {
+    const refreshed = makeTokens({ accessToken: 'ps_at_new', accessExpiresAt: 2_000_000 });
+    const refreshAccessToken = vi.fn().mockResolvedValue(refreshed);
+    const persisted = deferred<void>();
+    let persistStarted = false;
+    const onTokensUpdated = vi.fn(() => {
+      persistStarted = true;
+      return persisted.promise;
+    });
+    const provider = new OAuthTokenProvider({
+      initialTokens: makeTokens({ accessExpiresAt: 0 }),
+      refreshAccessToken,
+      onTokensUpdated,
+      now: () => 0,
+      skewMs: 60_000,
+    });
+
+    const call = provider.getAccessToken();
+    let settledEarly = false;
+    call.then(
+      () => {
+        settledEarly = true;
+      },
+      () => {
+        settledEarly = true;
+      },
+    );
+
+    // A full macrotask turn is far more than enough microtask ticks for the
+    // refresh + onTokensUpdated call to run; if the provider resolves here
+    // without persisted ever having settled, it isn't awaiting the persist.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(persistStarted).toBe(true);
+    expect(settledEarly).toBe(false);
+
+    persisted.resolve();
+    await expect(call).resolves.toBe('ps_at_new');
+    expect(settledEarly).toBe(true);
+  });
 });
