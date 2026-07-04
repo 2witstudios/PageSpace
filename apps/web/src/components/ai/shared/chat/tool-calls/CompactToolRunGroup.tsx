@@ -60,7 +60,10 @@ export const CompactToolRunGroup: React.FC<CompactToolRunGroupProps> = React.mem
       </button>
 
       {expanded && (
-        <div className="mt-1 max-w-full break-words pl-2 space-y-0.5">
+        // pl-1 (not pl-2): the sidebar is already tight (max-w-[80px]
+        // truncating summary column on each nested row), so keep the nesting
+        // indent minimal to avoid tripping truncation sooner than necessary.
+        <div className="mt-1 max-w-full break-words pl-1 space-y-0.5">
           {parts.map((part, i) => (
             <CompactToolCallRenderer key={part.toolCallId || `${part.type}-${i}`} part={part} />
           ))}

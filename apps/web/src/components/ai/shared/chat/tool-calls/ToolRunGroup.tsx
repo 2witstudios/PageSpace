@@ -48,7 +48,10 @@ export const ToolRunGroup: React.FC<ToolRunGroupProps> = React.memo(function Too
     <Tool className="my-2" open={open} onOpenChange={onOpenChange}>
       <ToolHeader title={summary} type="tool-run-group" state={HEADER_STATE_FOR_STATUS[status]} />
       <ToolContent>
-        <div className="space-y-1 py-1 pl-2">
+        {/* Children already carry their own `my-2` vertical margin (same as a
+            top-level ToolCallRenderer) — no extra space-y/padding here, just
+            the indent that marks them as nested inside the group. */}
+        <div className="pl-2">
           {parts.map((part, i) => (
             <ToolCallRenderer key={part.toolCallId || `${part.type}-${i}`} part={part} />
           ))}
