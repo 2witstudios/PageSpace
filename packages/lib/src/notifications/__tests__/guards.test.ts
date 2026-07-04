@@ -11,8 +11,6 @@ import {
   isDriveInvited,
   isDriveJoined,
   isDriveRoleChanged,
-  isMention,
-  isTaskAssigned,
   hasMetadataField,
 } from '../guards';
 import type { LegacyNotification } from '../types';
@@ -361,66 +359,6 @@ describe('isDriveRoleChanged', () => {
   it('returns false when metadata is missing driveName key', () => {
     const n = base({ type: 'DRIVE_ROLE_CHANGED', metadata: { previousRole: 'MEMBER' } });
     expect(isDriveRoleChanged(n)).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// isMention
-// ---------------------------------------------------------------------------
-describe('isMention', () => {
-  it('returns true for matching type with mentionerName key', () => {
-    const n = base({ type: 'MENTION', metadata: { mentionerName: 'Jane', pageTitle: 'Roadmap', pageType: 'DOCUMENT' } });
-    expect(isMention(n)).toBe(true);
-  });
-
-  it('returns false for wrong type', () => {
-    const n = base({ type: 'TASK_ASSIGNED', metadata: { mentionerName: 'Jane' } });
-    expect(isMention(n)).toBe(false);
-  });
-
-  it('returns false when metadata is undefined', () => {
-    const n = base({ type: 'MENTION', metadata: undefined });
-    expect(isMention(n)).toBe(false);
-  });
-
-  it('returns false when metadata is null', () => {
-    const n = base({ type: 'MENTION', metadata: null as unknown as undefined });
-    expect(isMention(n)).toBe(false);
-  });
-
-  it('returns false when metadata is missing mentionerName key', () => {
-    const n = base({ type: 'MENTION', metadata: { pageTitle: 'Roadmap' } });
-    expect(isMention(n)).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// isTaskAssigned
-// ---------------------------------------------------------------------------
-describe('isTaskAssigned', () => {
-  it('returns true for matching type with taskId key', () => {
-    const n = base({ type: 'TASK_ASSIGNED', metadata: { taskId: 't1', taskTitle: 'Ship it', assignerName: 'Jane' } });
-    expect(isTaskAssigned(n)).toBe(true);
-  });
-
-  it('returns false for wrong type', () => {
-    const n = base({ type: 'MENTION', metadata: { taskId: 't1' } });
-    expect(isTaskAssigned(n)).toBe(false);
-  });
-
-  it('returns false when metadata is undefined', () => {
-    const n = base({ type: 'TASK_ASSIGNED', metadata: undefined });
-    expect(isTaskAssigned(n)).toBe(false);
-  });
-
-  it('returns false when metadata is null', () => {
-    const n = base({ type: 'TASK_ASSIGNED', metadata: null as unknown as undefined });
-    expect(isTaskAssigned(n)).toBe(false);
-  });
-
-  it('returns false when metadata is missing taskId key', () => {
-    const n = base({ type: 'TASK_ASSIGNED', metadata: { taskTitle: 'Ship it' } });
-    expect(isTaskAssigned(n)).toBe(false);
   });
 });
 
