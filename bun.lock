@@ -466,7 +466,9 @@
       },
       "dependencies": {
         "@napi-rs/keyring": "^1.3.0",
+        "@pagespace/lib": "workspace:*",
         "@pagespace/sdk": "workspace:*",
+        "zod": "^4.1.8",
       },
     },
     "packages/db": {

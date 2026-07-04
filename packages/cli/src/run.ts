@@ -7,6 +7,7 @@
 import { PageSpaceClient, StaticTokenProvider } from '@pagespace/sdk';
 import { parseArgv } from './argv/parse.js';
 import { helpHandler } from './commands/help.js';
+import { loginHandler } from './commands/login.js';
 import { versionHandler } from './commands/version.js';
 import { resolveConfig } from './config/resolve.js';
 import type { CredentialStore } from './credential-store.js';
@@ -22,7 +23,10 @@ export interface RunDependencies {
   readonly credentialStore: CredentialStore;
 }
 
-const ROUTES: readonly Route[] = [{ path: ['help'], handler: helpHandler }];
+const ROUTES: readonly Route[] = [
+  { path: ['help'], handler: helpHandler },
+  { path: ['login'], handler: loginHandler },
+];
 
 export async function run(deps: RunDependencies): Promise<ExitCode> {
   const parsed = parseArgv(deps.argv);
