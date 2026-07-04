@@ -106,8 +106,11 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['channels', 'send'], handler: channelsSendHandler, summary: 'Send a channel message' },
 ];
 
-const HELP_ROUTE: Omit<RouteEntry, 'handler'> = { path: ['help'], summary: 'Show this help message' };
+const HELP_DESCRIPTOR = { path: ['help'], summary: 'Show this help message' };
 
-export const helpHandler = createHelpHandler([HELP_ROUTE, ...OTHER_ROUTES.map((r) => ({ path: r.path, summary: r.summary }))]);
+// RouteEntry is structurally a superset of HelpCommandDescriptor (path +
+// summary), so OTHER_ROUTES can be passed straight through — no projection
+// needed to drop the `handler` field.
+export const helpHandler = createHelpHandler([HELP_DESCRIPTOR, ...OTHER_ROUTES]);
 
-export const ROUTES: readonly RouteEntry[] = [{ ...HELP_ROUTE, handler: helpHandler }, ...OTHER_ROUTES];
+export const ROUTES: readonly RouteEntry[] = [{ ...HELP_DESCRIPTOR, handler: helpHandler }, ...OTHER_ROUTES];

@@ -6,12 +6,10 @@
  * caller closes it — this is a single-use, single-attempt server per login.
  */
 import { createServer } from 'node:http';
+import { CALLBACK_PATH } from './loopback-flow.js';
 import type { LoopbackCallback, LoopbackServer } from './loopback-flow.js';
 
 export const LOOPBACK_HOST = '127.0.0.1';
-
-/** The only path the OAuth redirect ever targets (see loopback-flow.ts's CALLBACK_PATH). */
-const CALLBACK_PATH = '/callback';
 
 export class PortBindError extends Error {
   constructor(message: string) {

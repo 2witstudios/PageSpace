@@ -10,41 +10,33 @@ import process from 'node:process';
 import type { OpenBrowser } from './loopback-flow.js';
 
 /**
- * cmd.exe's own command-line lexer treats these as separators/redirections —
- * even inside double quotes — regardless of how Node's spawn() passes argv.
- * The authorize URL comes from an untrusted discovery doc, so rather than
- * rely on escaping to neutralize every one of these, win32 refuses to hand
- * cmd a URL containing any of them at all (see `isWin32CmdUnsafe` below).
+ * `cmd /c start` was the original win32 approach, but cmd.exe's own
+ * command-line lexer treats `&`, `|`, `<`, `>`, `^` as separators/
+ * redirections — and the authorize URL (untrusted discovery-doc input)
+ * always contains multiple `&`-joined query params (see
+ * loopback-flow.ts's buildAuthorizeUrl), so cmd would never see the whole
+ * URL as one argument. Escaping every metacharacter cmd's lexer recognizes
+ * is fragile and easy to get subtly wrong; refusing to open whenever a
+ * metacharacter is present would disable auto-open for effectively every
+ * real login. Instead, bypass cmd.exe entirely: `rundll32.exe
+ * url.dll,FileProtocolHandler <url>` is a normal argv-parsing Win32 binary
+ * (standard CommandLineToArgvW convention — only `"`/`\` are special, not
+ * shell metacharacters), which Node's default (non-verbatim) argument
+ * quoting already handles safely.
  */
-const WIN32_CMD_METACHARACTERS = /[&|<>^"]/;
-
-function isWin32CmdUnsafe(url: string, platform: NodeJS.Platform): boolean {
-  return platform === 'win32' && WIN32_CMD_METACHARACTERS.test(url);
-}
-
-function commandFor(
-  url: string,
-  platform: NodeJS.Platform,
-): { readonly command: string; readonly args: readonly string[]; readonly windowsVerbatimArguments?: boolean } {
+function commandFor(url: string, platform: NodeJS.Platform): { readonly command: string; readonly args: readonly string[] } {
   if (platform === 'darwin') return { command: 'open', args: [url] };
-  if (platform === 'win32') {
-    return { command: 'cmd', args: ['/c', 'start', '""', url], windowsVerbatimArguments: true };
-  }
+  if (platform === 'win32') return { command: 'rundll32', args: ['url.dll,FileProtocolHandler', url] };
   return { command: 'xdg-open', args: [url] };
 }
 
 export const openBrowser: OpenBrowser = (url: string) =>
   new Promise((resolve) => {
-    if (isWin32CmdUnsafe(url, process.platform)) {
-      resolve(false);
-      return;
-    }
-
-    const { command, args, windowsVerbatimArguments } = commandFor(url, process.platform);
+    const { command, args } = commandFor(url, process.platform);
 
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(command, args, { stdio: 'ignore', detached: true, windowsVerbatimArguments });
+      child = spawn(command, args, { stdio: 'ignore', detached: true });
     } catch {
       resolve(false);
       return;

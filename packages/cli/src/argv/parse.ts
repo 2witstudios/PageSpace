@@ -15,10 +15,14 @@
  * preceding positional token is a hard usage error (there is no command yet
  * to hand it to).
  *
- * Every global flag also accepts the equals-joined form (`--host=value`),
- * not just space-separated (`--host value`) — resolved before any other
- * grammar rule so `--host=-looks-like-a-flag` is unambiguously a value, not
- * a following flag.
+ * Value-bearing flags (`--host`, `--token`) also accept the equals-joined
+ * form (`--host=value`), not just space-separated (`--host value`) —
+ * resolved before any other grammar rule so `--host=-looks-like-a-flag` is
+ * unambiguously a value, not a following flag. Boolean flags (`--json`,
+ * `--yes`, ...) deliberately do NOT accept an equals-joined value: presence
+ * always means true, and there is no well-defined meaning for an
+ * unrecognized value on a confirmation flag like `--yes=oops` — better to
+ * reject it as an unknown flag than silently coerce a typo to `false`.
  */
 
 export interface ParsedFlags {
@@ -80,15 +84,14 @@ export function parseArgv(argv: readonly string[]): ParseResult {
       continue;
     }
 
-    if (BOOLEAN_FLAGS.has(flagName)) {
-      const value = inlineValue === undefined ? true : /^(true|1|yes)$/i.test(inlineValue);
-      if (flagName === '--json') json = value;
-      else if (flagName === '--yes') yes = value;
-      else if (flagName === '--all') all = value;
-      else if (flagName === '--force') force = value;
-      else if (flagName === '--help') help = value;
-      else if (flagName === '--version') version = value;
-      else device = value;
+    if (BOOLEAN_FLAGS.has(current)) {
+      if (current === '--json') json = true;
+      else if (current === '--yes') yes = true;
+      else if (current === '--all') all = true;
+      else if (current === '--force') force = true;
+      else if (current === '--help') help = true;
+      else if (current === '--version') version = true;
+      else device = true;
       continue;
     }
 

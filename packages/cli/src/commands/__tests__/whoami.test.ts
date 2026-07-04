@@ -150,6 +150,39 @@ describe('createWhoamiHandler', () => {
     expect(stderr.lines.join('')).not.toContain(CREDENTIAL.refreshToken);
   });
 
+  it('reports the LIVE server-granted scope from the refresh response, not the stale locally-cached scopes, when the server narrows the grant', async () => {
+    const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
+    const narrowed = { ...REFRESHED, scope: 'account' };
+    const handler = createWhoamiHandler({
+      ...baseDeps(store),
+      createRefreshAccessToken: () => async () => narrowed,
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+    const code = await handler(ctx, commandIntent(['whoami', '--json']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const parsed = JSON.parse(stdout.lines.join(''));
+    // CREDENTIAL.scopes still has 'offline_access' too — the live response
+    // narrowed to just 'account', and that's what must be reported/persisted.
+    expect(parsed.scopes).toEqual(['account']);
+    expect((await store.get('https://pagespace.ai'))?.scopes).toEqual(['account']);
+  });
+
+  it('falls back to the stored scopes when the refresh response carries no scope field', async () => {
+    const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
+    const handler = createWhoamiHandler(baseDeps(store));
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+    const code = await handler(ctx, commandIntent(['whoami', '--json']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const parsed = JSON.parse(stdout.lines.join(''));
+    expect(parsed.scopes).toEqual(CREDENTIAL.scopes);
+  });
+
   it('never writes the access or refresh token to stdout/stderr on success', async () => {
     const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
     const handler = createWhoamiHandler(baseDeps(store));

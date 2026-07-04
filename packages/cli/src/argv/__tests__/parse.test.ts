@@ -161,14 +161,14 @@ describe('parseArgv', () => {
     expect(result.flags.host).toBe('-not-actually-a-flag');
   });
 
-  it('parses --json=true / --json=false via the equals form', () => {
-    expectCommand(parseArgv(['--json=true']));
-    const on = parseArgv(['--json=true']);
-    const off = parseArgv(['--json=false']);
-    expectCommand(on);
-    expectCommand(off);
-    expect(on.flags.json).toBe(true);
-    expect(off.flags.json).toBe(false);
+  it('rejects --json=<value> as an unknown flag — boolean flags do not accept an equals-joined value', () => {
+    const result = parseArgv(['--json=true']);
+    expect(result).toEqual({ kind: 'usage-error', message: 'Unknown flag: --json=true' });
+  });
+
+  it('rejects --yes=<value> as an unknown flag rather than silently coercing a typo to false', () => {
+    const result = parseArgv(['--yes=oops']);
+    expect(result.kind).toBe('usage-error');
   });
 
   it('rejects --host= with an empty value as a usage error', () => {

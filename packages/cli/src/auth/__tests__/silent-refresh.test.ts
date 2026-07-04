@@ -40,6 +40,22 @@ describe('createRefreshAccessToken', () => {
     expect(params.get('client_id')).toBe(CLIENT_ID);
   });
 
+  it('surfaces the server-granted scope on the resolved tokens (so a caller like whoami can report the current, authoritative grant)', async () => {
+    const fetchImpl = (async () =>
+      jsonResponse(200, {
+        access_token: 'ps_at_new',
+        token_type: 'Bearer',
+        expires_in: 900,
+        refresh_token: 'ps_rt_new',
+        scope: 'account',
+      })) as typeof fetch;
+
+    const refresh = createRefreshAccessToken(TOKEN_ENDPOINT, CLIENT_ID, fetchImpl);
+    const tokens = await refresh('ps_rt_old');
+
+    expect(tokens.scope).toBe('account');
+  });
+
   it('never leaks the refresh token in a thrown error on failure', async () => {
     const fetchImpl = (async () => jsonResponse(400, { error: 'invalid_grant' })) as typeof fetch;
     const refresh = createRefreshAccessToken(TOKEN_ENDPOINT, CLIENT_ID, fetchImpl);

@@ -63,7 +63,12 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
       return EXIT_RUNTIME_ERROR;
     }
 
-    const scopes = credential.scopes;
+    // Prefer the server's live, authoritative scope from this refresh over
+    // the locally-cached value — whoami exists to confirm CURRENT grants, and
+    // a refresh response scope reflects any server-side narrowing/change
+    // since the credential was last stored. Fall back to the stored scopes
+    // only if the transport didn't capture one.
+    const scopes = tokens.scope !== undefined ? tokens.scope.split(' ').filter(Boolean) : credential.scopes;
     await store.set(host, {
       refreshToken: tokens.refreshToken,
       clientId: credential.clientId,

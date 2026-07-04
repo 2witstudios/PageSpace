@@ -256,4 +256,32 @@ describe('OAuthTokenProvider', () => {
     await expect(call).resolves.toBe('ps_at_new');
     expect(settledEarly).toBe(true);
   });
+
+  it('a persist (onTokensUpdated) failure propagates as-is and does NOT get misclassified as a terminal OAuth rejection', async () => {
+    const refreshed = makeTokens({ accessToken: 'ps_at_new', accessExpiresAt: 2_000_000 });
+    const refreshAccessToken = vi.fn().mockResolvedValue(refreshed);
+    const diskError = new Error('ENOSPC: no space left on device');
+    const onTokensUpdated = vi.fn().mockRejectedValue(diskError);
+    const provider = new OAuthTokenProvider({
+      initialTokens: makeTokens({ accessExpiresAt: 0 }),
+      refreshAccessToken,
+      onTokensUpdated,
+      now: () => 0,
+      skewMs: 60_000,
+    });
+
+    // The persist error must surface as itself, not get funneled through
+    // classifyRefreshFailure (which is for refresh-HTTP-call failures only)
+    // and rethrown as a definitive AuthenticationError.
+    await expect(provider.getAccessToken()).rejects.toBe(diskError);
+
+    // Because the actual OAuth refresh succeeded (only the local persist
+    // failed), the provider must NOT have been forced into the terminal
+    // 'unauthenticated' state — a subsequent call should use the
+    // already-rotated (in-memory) token normally, not fail closed forever.
+    refreshAccessToken.mockClear();
+    onTokensUpdated.mockResolvedValue(undefined);
+    await expect(provider.getAccessToken()).resolves.toBe('ps_at_new');
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+  });
 });
