@@ -37,14 +37,78 @@ export interface LoginDeviceHandlerDeps {
   readonly timeoutMs?: number;
 }
 
-export function createLoginDeviceHandler(_deps: LoginDeviceHandlerDeps): CommandHandler {
-  return async (_ctx, _intent) => {
-    throw new Error('not implemented');
-  };
-}
+export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandHandler {
+  return async (ctx, intent) => {
+    const { host } = resolveConfig({
+      flags: { host: intent.flags.host },
+      env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
+      profile: null,
+    });
 
-function printDeviceCode(_authorization: DeviceAuthorization): void {
-  throw new Error('not implemented');
+    const store = deps.createCredentialStore();
+    const existing = await store.get(host);
+    if (existing && !intent.flags.yes) {
+      ctx.stderr.write(
+        `A stored credential for ${host} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host}" first.\n`,
+      );
+      return EXIT_RUNTIME_ERROR;
+    }
+
+    const result = await runDeviceLogin({
+      host,
+      clientId: PAGESPACE_CLI_CLIENT_ID,
+      scope: DEFAULT_LOGIN_SCOPE,
+      discoverMetadata: deps.discoverMetadata,
+      requestDeviceAuthorization: deps.requestDeviceAuthorization,
+      pollDeviceToken: deps.pollDeviceToken,
+      waitMs: deps.waitMs,
+      now: deps.now,
+      isInterrupted: deps.isInterrupted,
+      timeoutMs: deps.timeoutMs,
+      credentialStore: store,
+      confirmIdentity: deps.confirmIdentity,
+      onDeviceCode: (authorization: DeviceAuthorization) => {
+        ctx.stdout.write(`To finish signing in, visit:\n  ${authorization.verificationUri}\n`);
+        ctx.stdout.write(`And enter this code: ${authorization.userCode}\n`);
+        ctx.stdout.write(`Or open directly: ${authorization.verificationUriComplete}\n`);
+      },
+    });
+
+    switch (result.outcome) {
+      case 'success':
+        ctx.stdout.write(
+          result.identity
+            ? `Logged in as ${result.identity.name ?? result.identity.email} <${result.identity.email}> on ${host}.\n`
+            : `Logged in to ${host}.\n`,
+        );
+        return EXIT_SUCCESS;
+      case 'access_denied':
+        ctx.stderr.write('Login was denied.\n');
+        return EXIT_RUNTIME_ERROR;
+      case 'expired_token':
+        ctx.stderr.write('The device code expired before login completed. Run "pagespace login --device" again.\n');
+        return EXIT_RUNTIME_ERROR;
+      case 'timeout':
+        ctx.stderr.write('Login timed out waiting for approval. Run "pagespace login --device" again.\n');
+        return EXIT_RUNTIME_ERROR;
+      case 'poll_failed':
+        ctx.stderr.write(`Login failed while polling for a token: ${result.message}\n`);
+        return EXIT_RUNTIME_ERROR;
+      case 'interrupted':
+        ctx.stderr.write('Login cancelled.\n');
+        return EXIT_RUNTIME_ERROR;
+      case 'discovery_failed':
+        ctx.stderr.write(`Could not discover the OAuth server configuration for ${host}: ${result.message}\n`);
+        return EXIT_RUNTIME_ERROR;
+      case 'device_authorization_failed':
+        ctx.stderr.write(`Could not start device login: ${result.message}\n`);
+        return EXIT_RUNTIME_ERROR;
+      default: {
+        const unreachable: never = result;
+        throw new Error(`Unhandled login outcome: ${JSON.stringify(unreachable)}`);
+      }
+    }
+  };
 }
 
 function nodeWaitMs(ms: number): Promise<void> {

@@ -18,7 +18,7 @@
  * never the access/refresh tokens — same discipline as `LoopbackLoginResult`.
  */
 import type { CredentialStore } from '../credentials/store.js';
-import type { ConfirmIdentity, DiscoverMetadata, ExchangedTokens, Identity, WaitMs } from './loopback-flow.js';
+import type { ConfirmIdentity, DiscoverMetadata, DiscoveredMetadata, ExchangedTokens, Identity, WaitMs } from './loopback-flow.js';
 
 export interface DeviceAuthorization {
   readonly deviceCode: string;
@@ -66,6 +66,8 @@ export type NextPollDecision =
   | { readonly action: 'continue'; readonly waitMs: number; readonly nextState: DevicePollState }
   | { readonly action: 'stop'; readonly outcome: DeviceLoginOutcome };
 
+const SLOW_DOWN_INCREMENT_MS = 5000;
+
 /**
  * Decide what to do after a single device-code poll response.
  *
@@ -79,8 +81,32 @@ export type NextPollDecision =
  *     that wider interval for every subsequent poll (cumulative, not reset).
  *  4. `authorization_pending` — keep waiting at the current interval.
  */
-export function decideNextPoll(_state: DevicePollState, _response: DeviceTokenResult, _now: number): NextPollDecision {
-  throw new Error('not implemented');
+export function decideNextPoll(state: DevicePollState, response: DeviceTokenResult, now: number): NextPollDecision {
+  if (now >= state.deadline) {
+    return { action: 'stop', outcome: { kind: 'timeout' } };
+  }
+
+  switch (response.kind) {
+    case 'success':
+      return { action: 'stop', outcome: { kind: 'success', tokens: response.tokens } };
+    case 'access_denied':
+      return { action: 'stop', outcome: { kind: 'access_denied' } };
+    case 'expired_token':
+      return { action: 'stop', outcome: { kind: 'expired_token' } };
+    case 'request_failed':
+      return { action: 'stop', outcome: { kind: 'poll_failed', message: response.message } };
+    case 'slow_down': {
+      const intervalMs = state.intervalMs + SLOW_DOWN_INCREMENT_MS;
+      const nextState: DevicePollState = { intervalMs, deadline: state.deadline };
+      return { action: 'continue', waitMs: intervalMs, nextState };
+    }
+    case 'authorization_pending':
+      return { action: 'continue', waitMs: state.intervalMs, nextState: state };
+    default: {
+      const unreachable: never = response;
+      throw new Error(`Unhandled device token response: ${JSON.stringify(unreachable)}`);
+    }
+  }
 }
 
 export interface DeviceLoginDeps {
@@ -113,6 +139,92 @@ export type DeviceLoginResult =
   | { readonly outcome: 'discovery_failed'; readonly message: string }
   | { readonly outcome: 'device_authorization_failed'; readonly message: string };
 
-export async function runDeviceLogin(_deps: DeviceLoginDeps): Promise<DeviceLoginResult> {
-  throw new Error('not implemented');
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export async function runDeviceLogin(deps: DeviceLoginDeps): Promise<DeviceLoginResult> {
+  let metadata: DiscoveredMetadata;
+  try {
+    metadata = await deps.discoverMetadata(deps.host);
+  } catch (error) {
+    return { outcome: 'discovery_failed', message: messageOf(error) };
+  }
+
+  if (!metadata.deviceAuthorizationEndpoint) {
+    return { outcome: 'discovery_failed', message: 'Server does not advertise a device_authorization_endpoint.' };
+  }
+
+  let authorization: DeviceAuthorization;
+  try {
+    authorization = await deps.requestDeviceAuthorization({
+      deviceAuthorizationEndpoint: metadata.deviceAuthorizationEndpoint,
+      clientId: deps.clientId,
+      scope: deps.scope,
+    });
+  } catch (error) {
+    return { outcome: 'device_authorization_failed', message: messageOf(error) };
+  }
+
+  deps.onDeviceCode(authorization);
+
+  const deadline = deps.now() + (deps.timeoutMs ?? authorization.expiresInSeconds * 1000);
+  let state: DevicePollState = { intervalMs: authorization.intervalSeconds * 1000, deadline };
+
+  while (true) {
+    if (deps.isInterrupted()) {
+      return { outcome: 'interrupted' };
+    }
+
+    await deps.waitMs(state.intervalMs);
+
+    if (deps.isInterrupted()) {
+      return { outcome: 'interrupted' };
+    }
+
+    const response = await deps.pollDeviceToken({
+      tokenEndpoint: metadata.tokenEndpoint,
+      clientId: deps.clientId,
+      deviceCode: authorization.deviceCode,
+    });
+
+    const decision = decideNextPoll(state, response, deps.now());
+
+    if (decision.action === 'continue') {
+      state = decision.nextState;
+      continue;
+    }
+
+    switch (decision.outcome.kind) {
+      case 'success': {
+        await deps.credentialStore.set(deps.host, {
+          refreshToken: decision.outcome.tokens.refreshToken,
+          clientId: deps.clientId,
+          scopes: decision.outcome.tokens.scope.split(' ').filter(Boolean),
+          createdAt: new Date(deps.now()).toISOString(),
+        });
+
+        let identity: Identity | null;
+        try {
+          identity = await deps.confirmIdentity({ host: deps.host, accessToken: decision.outcome.tokens.accessToken });
+        } catch {
+          identity = null;
+        }
+
+        return { outcome: 'success', identity };
+      }
+      case 'access_denied':
+        return { outcome: 'access_denied' };
+      case 'expired_token':
+        return { outcome: 'expired_token' };
+      case 'timeout':
+        return { outcome: 'timeout' };
+      case 'poll_failed':
+        return { outcome: 'poll_failed', message: decision.outcome.message };
+      default: {
+        const unreachable: never = decision.outcome;
+        throw new Error(`Unhandled device login outcome: ${JSON.stringify(unreachable)}`);
+      }
+    }
+  }
 }

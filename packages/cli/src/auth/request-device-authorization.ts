@@ -32,8 +32,39 @@ function extractErrorCode(json: unknown, status: number): string {
   return `http_${status}`;
 }
 
-export function createRequestDeviceAuthorization(_fetchImpl: typeof fetch = fetch): RequestDeviceAuthorization {
-  return async (_params): Promise<DeviceAuthorization> => {
-    throw new Error('not implemented');
+export function createRequestDeviceAuthorization(fetchImpl: typeof fetch = fetch): RequestDeviceAuthorization {
+  return async (params): Promise<DeviceAuthorization> => {
+    const body = new URLSearchParams({ client_id: params.clientId, scope: params.scope });
+
+    let response: Response;
+    try {
+      response = await fetchImpl(params.deviceAuthorizationEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+    } catch (error) {
+      throw new DeviceAuthorizationError(`network_error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const json: unknown = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new DeviceAuthorizationError(extractErrorCode(json, response.status));
+    }
+
+    const parsed = deviceAuthorizationResponseSchema.safeParse(json);
+    if (!parsed.success) {
+      throw new DeviceAuthorizationError('invalid_response');
+    }
+
+    return {
+      deviceCode: parsed.data.device_code,
+      userCode: parsed.data.user_code,
+      verificationUri: parsed.data.verification_uri,
+      verificationUriComplete: parsed.data.verification_uri_complete,
+      expiresInSeconds: parsed.data.expires_in,
+      intervalSeconds: parsed.data.interval,
+    };
   };
 }

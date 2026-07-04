@@ -27,8 +27,56 @@ function extractErrorCode(json: unknown): string | null {
   return null;
 }
 
-export function createPollDeviceToken(_fetchImpl: typeof fetch = fetch): PollDeviceToken {
-  return async (_params): Promise<DeviceTokenResult> => {
-    throw new Error('not implemented');
+export function createPollDeviceToken(fetchImpl: typeof fetch = fetch): PollDeviceToken {
+  return async (params): Promise<DeviceTokenResult> => {
+    const body = new URLSearchParams({
+      grant_type: DEVICE_GRANT_TYPE,
+      device_code: params.deviceCode,
+      client_id: params.clientId,
+    });
+
+    let response: Response;
+    try {
+      response = await fetchImpl(params.tokenEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+    } catch (error) {
+      return { kind: 'request_failed', message: `network_error: ${error instanceof Error ? error.message : String(error)}` };
+    }
+
+    const json: unknown = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      const errorCode = extractErrorCode(json);
+      switch (errorCode) {
+        case 'authorization_pending':
+          return { kind: 'authorization_pending' };
+        case 'slow_down':
+          return { kind: 'slow_down' };
+        case 'access_denied':
+          return { kind: 'access_denied' };
+        case 'expired_token':
+          return { kind: 'expired_token' };
+        default:
+          return { kind: 'request_failed', message: errorCode ?? `http_${response.status}` };
+      }
+    }
+
+    const parsed = tokenResponseSchema.safeParse(json);
+    if (!parsed.success) {
+      return { kind: 'request_failed', message: 'invalid_response' };
+    }
+
+    return {
+      kind: 'success',
+      tokens: {
+        accessToken: parsed.data.access_token,
+        refreshToken: parsed.data.refresh_token,
+        expiresIn: parsed.data.expires_in,
+        scope: parsed.data.scope,
+      },
+    };
   };
 }
