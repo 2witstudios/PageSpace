@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -20,6 +21,7 @@ import {
   TOPUP_MAX_CENTS,
 } from '@/lib/subscription/credits';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
+import { useCreditBalance } from '@/hooks/useCreditBalance';
 
 interface BuyCreditsButtonProps {
   /** Visual variant for the trigger button. */
@@ -46,10 +48,13 @@ export function BuyCreditsButton({
   className,
   label = 'Buy credits',
 }: BuyCreditsButtonProps) {
+  const router = useRouter();
   const { showBilling } = useBillingVisibility();
+  const { balance } = useCreditBalance();
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [customDollars, setCustomDollars] = useState('');
+  const isFree = balance?.subscriptionTier === 'free';
 
   const startCheckout = async (body: TopupBody, key: string) => {
     setLoadingKey(key);
@@ -105,7 +110,7 @@ export function BuyCreditsButton({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuLabel>Add AI credits</DropdownMenuLabel>
+          <DropdownMenuLabel>Add credits</DropdownMenuLabel>
           <DropdownMenuSeparator />
           {CREDIT_PACK_LIST.map((pack) => (
             <DropdownMenuItem
@@ -163,6 +168,23 @@ export function BuyCreditsButton({
               {loadingKey === 'custom' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Add'}
             </Button>
           </div>
+          {isFree && (
+            <>
+              <DropdownMenuSeparator />
+              <div className="px-2 py-2 flex items-center justify-between gap-2 rounded-sm bg-primary/5">
+                <p className="text-xs text-muted-foreground">
+                  Free plan — premium models need a paid plan.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => router.push('/settings/plan')}
+                  className="text-xs font-medium text-primary hover:underline shrink-0"
+                >
+                  Upgrade →
+                </button>
+              </div>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
