@@ -20,8 +20,10 @@ import { z } from 'zod';
 import { defineOperation } from '../registry/define.js';
 import { HttpError, isHttpError } from '../errors.js';
 
-const priorityEnum = z.enum(['low', 'medium', 'high']);
-const statusGroupEnum = z.enum(['todo', 'in_progress', 'done']);
+/** Exported (unlike status slugs, which are per-list and server-owned) so CLI verbs can validate `--priority` without a second, drifting allowlist. */
+export const priorityEnum = z.enum(['low', 'medium', 'high']);
+/** Exported for the same reason as `priorityEnum` — `tasks create-status --group` validates against this, not a duplicated literal. */
+export const statusGroupEnum = z.enum(['todo', 'in_progress', 'done']);
 const triggerTypeEnum = z.enum(['due_date', 'completion']);
 
 const userRefSchema = z

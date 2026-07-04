@@ -166,8 +166,10 @@ export {
   deleteTask,
   deleteTaskTrigger,
   getAssignedTasks,
+  priorityEnum,
   reorderTask,
   setTaskTrigger,
+  statusGroupEnum,
   updateTask,
 } from './operations/tasks.js';
 export type { TaskCompletionGatedError } from './operations/tasks.js';
