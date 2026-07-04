@@ -374,4 +374,20 @@ describe('PageSpaceClient — registry-derived namespaces', () => {
     expect(typeof client.conversations.list).toBe('function');
     expect(typeof client.conversations.read).toBe('function');
   });
+
+  it('exposes the export namespace (Phase 3 task 10 defined the operations; the facade never wired them)', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/export/markdown')) {
+        return new Response('# Hello', { status: 200, headers: { 'X-PageSpace-API-Version': API_VERSION, 'Content-Type': 'text/markdown' } });
+      }
+      return new Response('a,b\n1,2', { status: 200, headers: { 'X-PageSpace-API-Version': API_VERSION, 'Content-Type': 'text/csv' } });
+    });
+    const client = makeClient({ fetch: fetchMock });
+
+    expect(typeof client.export.pageMarkdown).toBe('function');
+    expect(typeof client.export.sheetCsv).toBe('function');
+
+    await expect(client.export.pageMarkdown({ pageId: 'p1' })).resolves.toBe('# Hello');
+    await expect(client.export.sheetCsv({ pageId: 'p1' })).resolves.toBe('a,b\n1,2');
+  });
 });
