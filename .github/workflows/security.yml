@@ -178,6 +178,13 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
+      - name: Run SDK and CLI package suites (auth providers, credential store, single-auth-path)
+        run: |
+          bun run --filter '@pagespace/sdk' test:coverage
+          bun run --filter '@pagespace/cli' test:coverage
+        env:
+          NODE_ENV: test
+
       - name: Run security audit route coverage gate
         run: bun run --filter 'web' test -- src/app/api/__tests__/security-audit-coverage.test.ts
         env:

@@ -23,7 +23,9 @@
     "pretypecheck": "bun run build",
     "typecheck": "tsc --noEmit",
     "pretest": "bun run build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "pretest:coverage": "bun run build",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
