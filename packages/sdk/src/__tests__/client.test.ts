@@ -85,6 +85,23 @@ describe('PageSpaceClient — invoke pipeline happy path', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('normalizes a trailing slash on baseUrl so the request URL never has a double slash', async () => {
+    const auth = fakeAuth();
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe('https://pagespace.ai/api/widgets/w1');
+      return jsonResponse(200, { id: 'w1', label: 'Widget One' });
+    });
+    const client = new PageSpaceClient({
+      baseUrl: 'https://pagespace.ai/',
+      auth,
+      jitter: () => 0,
+      timeoutMs: 1000,
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
+  });
+
   it('rejects with ValidationError before any network call when input fails the schema', async () => {
     const fetchMock = vi.fn();
     const client = makeClient({ fetch: fetchMock });

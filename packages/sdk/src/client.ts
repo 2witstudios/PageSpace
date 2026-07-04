@@ -297,7 +297,7 @@ export class PageSpaceClient {
   #compatibilityVerified = false;
 
   constructor(options: PageSpaceClientOptions) {
-    this.#config = { baseUrl: options.baseUrl, apiVersion: options.apiVersion };
+    this.#config = { baseUrl: options.baseUrl.replace(/\/+$/, ''), apiVersion: options.apiVersion };
     this.#auth = options.auth;
     this.#fetch = options.fetch ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? 30_000;
