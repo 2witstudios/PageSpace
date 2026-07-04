@@ -121,6 +121,7 @@ let codeRow: CodeRow | null = null;
 let refreshRows: TokenRow[] = [];
 let accessRows: TokenRow[] = [];
 let userTokenVersion = 0;
+let userSuspendedAt: Date | null = null;
 let lockChain: Promise<unknown> = Promise.resolve();
 
 function makeTx() {
@@ -129,7 +130,7 @@ function makeTx() {
       from: (table: unknown) => ({
         where: (predicate: Predicate) => {
           if (table === usersTable) {
-            return Promise.resolve([{ tokenVersion: userTokenVersion }]);
+            return Promise.resolve([{ tokenVersion: userTokenVersion, suspendedAt: userSuspendedAt }]);
           }
           const matches = codeRow && evalPredicate(predicate, codeRow as unknown as Record<string, unknown>);
           const rows = matches ? [{ ...codeRow }] : [];
@@ -205,6 +206,7 @@ beforeEach(() => {
   refreshRows = [];
   accessRows = [];
   userTokenVersion = 0;
+  userSuspendedAt = null;
   lockChain = Promise.resolve();
 });
 
@@ -320,6 +322,27 @@ describe('exchangeAuthorizationCode — rejections', () => {
     });
 
     expect(result).toEqual({ outcome: 'rejected', decision: { status: 'pkce_failed' } });
+  });
+});
+
+describe('exchangeAuthorizationCode — suspended user (zero-trust audit finding)', () => {
+  it('rejects the exchange and mints no tokens when the code owner is suspended', async () => {
+    seedCodeRow();
+    userSuspendedAt = new Date();
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result).toEqual({ outcome: 'user_suspended' });
+    expect(refreshRows).toHaveLength(0);
+    expect(accessRows).toHaveLength(0);
+    // Single-use still holds: the code is consumed, not left replayable.
+    expect(codeRow?.consumedAt).not.toBeNull();
   });
 });
 

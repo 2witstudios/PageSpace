@@ -242,6 +242,8 @@ const DEVICE_POLL_ERROR_BODY: Record<Exclude<Awaited<ReturnType<typeof pollDevic
   slow_down: { error: 'slow_down' },
   expired_token: { error: 'expired_token' },
   access_denied: { error: 'access_denied' },
+  // Constant-shape with not_found/expired/etc — no oracle on account status.
+  user_suspended: INVALID_GRANT,
 };
 
 async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
