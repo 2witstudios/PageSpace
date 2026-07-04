@@ -14,6 +14,8 @@ export interface ParsedFlags {
   readonly host: string | undefined;
   readonly token: string | undefined;
   readonly yes: boolean;
+  readonly all: boolean;
+  readonly force: boolean;
   readonly help: boolean;
   readonly version: boolean;
 }
@@ -33,13 +35,15 @@ export interface UsageError {
 export type ParseResult = CommandIntent | UsageError;
 
 const VALUE_FLAGS = new Set(['--host', '--token']);
-const BOOLEAN_FLAGS = new Set(['--json', '--yes', '--help', '--version']);
+const BOOLEAN_FLAGS = new Set(['--json', '--yes', '--all', '--force', '--help', '--version']);
 
 export function parseArgv(argv: readonly string[]): ParseResult {
   let json = false;
   let host: string | undefined;
   let token: string | undefined;
   let yes = false;
+  let all = false;
+  let force = false;
   let help = false;
   let version = false;
   const args: string[] = [];
@@ -61,6 +65,8 @@ export function parseArgv(argv: readonly string[]): ParseResult {
     if (BOOLEAN_FLAGS.has(current)) {
       if (current === '--json') json = true;
       else if (current === '--yes') yes = true;
+      else if (current === '--all') all = true;
+      else if (current === '--force') force = true;
       else if (current === '--help') help = true;
       else version = true;
       continue;
@@ -76,6 +82,6 @@ export function parseArgv(argv: readonly string[]): ParseResult {
   return {
     kind: 'command',
     args,
-    flags: { json, host, token, yes, help, version },
+    flags: { json, host, token, yes, all, force, help, version },
   };
 }
