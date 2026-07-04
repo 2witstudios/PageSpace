@@ -5,7 +5,8 @@
   "type": "module",
   "sideEffects": false,
   "bin": {
-    "pagespace": "./dist/bin.js"
+    "pagespace": "./dist/bin.js",
+    "pagespace-mcp": "./dist/bin-pagespace-mcp.js"
   },
   "exports": {
     ".": {
@@ -18,7 +19,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/bin.js",
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/bin.js dist/bin-pagespace-mcp.js",
     "pretypecheck": "bun run build",
     "typecheck": "tsc --noEmit",
     "pretest": "bun run build",

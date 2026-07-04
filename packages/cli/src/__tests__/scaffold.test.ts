@@ -25,8 +25,11 @@ describe('@pagespace/cli package scaffold', () => {
     expect(packageJson.name).toBe('@pagespace/cli');
   });
 
-  it('declares the pagespace bin pointing at dist/bin.js', () => {
-    expect(packageJson.bin).toEqual({ pagespace: './dist/bin.js' });
+  it('declares the pagespace bin pointing at dist/bin.js, plus the deprecated pagespace-mcp alias', () => {
+    expect(packageJson.bin).toEqual({
+      pagespace: './dist/bin.js',
+      'pagespace-mcp': './dist/bin-pagespace-mcp.js',
+    });
   });
 
   it('ships an exports map for programmatic (non-bin) consumers', () => {
