@@ -292,6 +292,14 @@ export async function revokeOAuthToken(input: RevokeOAuthTokenInput): Promise<vo
   // Neither opaque format — foreign/garbage token, no-op (no oracle upstream).
 }
 
+/**
+ * Sentinel for `oauthRefreshTokens.replacedByTokenId` on a terminal (F1
+ * access-only) rotation — never dereferenced/joined against, only read back
+ * as a plain `!== null` check by `decideRefreshRotation`'s grace-window
+ * branch (`refresh-rotation.ts`). See `refreshTokenGrant` below.
+ */
+const TERMINAL_ROTATION_MARKER = 'terminal-access-only-rotation';
+
 export interface RefreshTokenGrantInput {
   /** Raw refresh token from the token request; hashed before any lookup. */
   refreshToken: string;
@@ -408,9 +416,17 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
     const newRefreshId = offlineAccess ? createId() : null;
     const tokens = issueRotatedTokenPair(input.now, row.familyId, row.familyExpiresAt, offlineAccess);
 
+    // decideRefreshRotation's grace-window branch only fires when
+    // replacedByTokenId !== null (it's the signal "this row died via a
+    // legitimate rotation", distinct from a straight reuse/family
+    // revocation). A terminal (access-only) rotation has no next refresh row
+    // to point to, but a benign in-window retry (dropped connection, same as
+    // any other rotation) must still land on grace_cache_miss rather than
+    // reuse_detected — so mark it with a non-dereferenced sentinel instead of
+    // leaving it null.
     await tx
       .update(oauthRefreshTokens)
-      .set({ revokedAt: input.now, revokedReason: 'rotated', replacedByTokenId: newRefreshId })
+      .set({ revokedAt: input.now, revokedReason: 'rotated', replacedByTokenId: newRefreshId ?? TERMINAL_ROTATION_MARKER })
       .where(eq(oauthRefreshTokens.id, row.id));
 
     if (tokens.refreshToken !== undefined && newRefreshId !== null) {

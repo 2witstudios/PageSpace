@@ -447,6 +447,58 @@ describe('refreshTokenGrant — F1: refresh token gated on offline_access', () =
     expect(accessRows[0].scopes).toEqual(['account']);
   });
 
+  it('a terminal (access-only) rotation still marks replacedByTokenId non-null, so a benign in-window retry is NOT mistaken for reuse (Codex P2)', async () => {
+    seedRefreshRow({ scopes: ['account', 'offline_access'] });
+
+    const result = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: 'account',
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok');
+    // decideRefreshRotation's grace-window branch only applies when
+    // replacedByTokenId !== null — without a marker here, ANY presentation of
+    // this now-revoked token (even a benign dropped-connection retry inside
+    // the 30s window) falls straight through to reuse_detected and revokes
+    // the whole family, including the access token this call just issued.
+    expect(refreshRows[0].replacedByTokenId).not.toBeNull();
+  });
+
+  it('a benign duplicate/retry within the grace window on a terminal rotation does NOT revoke the family (Codex P2)', async () => {
+    seedRefreshRow({ scopes: ['account', 'offline_access'] });
+
+    const t0 = new Date();
+    const first = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: 'account', // drops offline_access -> terminal, access-only
+      now: t0,
+    });
+    expect(first.outcome).toBe('ok');
+    if (first.outcome !== 'ok') throw new Error('unreachable');
+    expect(first.tokens.refreshToken).toBeUndefined();
+
+    // A benign duplicate/retry (e.g. a dropped-connection retry) presents the
+    // SAME (now-revoked) old token again, within the 30s grace window.
+    const retryNow = new Date(t0.getTime() + 5_000);
+    const retry = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: 'account',
+      now: retryNow,
+    });
+
+    // The retry itself still fails — there's no grace cache to replay from
+    // (deferred infra, same as the non-terminal case) — but critically the
+    // family must NOT be revoked: the access token from the first
+    // (successful) response must remain valid.
+    expect(retry).toEqual({ outcome: 'invalid_grant' });
+    expect(accessRows).toHaveLength(1);
+    expect(accessRows[0].revokedAt).toBeFalsy();
+  });
+
   it('keeps minting a refresh token across rotation while offline_access remains granted', async () => {
     seedRefreshRow({ scopes: ['account', 'offline_access'] });
 
