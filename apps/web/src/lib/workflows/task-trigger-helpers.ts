@@ -22,6 +22,14 @@ export interface CreateTaskTriggerWorkflowParams {
   timezone: string;
 }
 
+export interface TaskTriggerWorkflowResult {
+  workflowId: string;
+  triggerId: string;
+  triggerType: 'due_date' | 'completion';
+  nextRunAt: Date | null;
+  isEnabled: boolean;
+}
+
 const logger = loggers.api.child({ module: 'task-trigger-helpers' });
 
 /**
@@ -65,7 +73,7 @@ export async function recomputeTaskTriggerMetadata(
  * and reusing the same workflowId across upserts means the workflow update
  * targets a known id rather than a returned excluded.workflowId.
  */
-export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflowParams): Promise<void> {
+export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflowParams): Promise<TaskTriggerWorkflowResult> {
   const { database, driveId, userId, taskId, taskMetadata, agentTrigger, dueDate, timezone } = params;
   const triggerType = agentTrigger.triggerType;
 
@@ -83,9 +91,9 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
   const triggerPrompt = agentTrigger.prompt || 'Execute instructions from linked page.';
   const nextRunAt = triggerType === 'due_date' && dueDate ? dueDate : null;
 
-  await database.transaction(async (tx) => {
+  const result = await database.transaction(async (tx) => {
     const existing = await tx
-      .select({ workflowId: taskTriggers.workflowId })
+      .select({ workflowId: taskTriggers.workflowId, id: taskTriggers.id })
       .from(taskTriggers)
       .where(and(
         eq(taskTriggers.taskItemId, taskId),
@@ -112,6 +120,8 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         eq(taskTriggers.taskItemId, taskId),
         eq(taskTriggers.triggerType, triggerType),
       ));
+
+      return { workflowId, triggerId: existing[0].id };
     } else {
       const [createdWorkflow] = await tx.insert(workflows).values({
         driveId,
@@ -126,17 +136,21 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         isEnabled: true,
       }).returning({ id: workflows.id });
 
-      await tx.insert(taskTriggers).values({
+      const [createdTrigger] = await tx.insert(taskTriggers).values({
         workflowId: createdWorkflow.id,
         taskItemId: taskId,
         triggerType,
         nextRunAt,
         isEnabled: true,
-      });
+      }).returning({ id: taskTriggers.id });
+
+      return { workflowId: createdWorkflow.id, triggerId: createdTrigger.id };
     }
   });
 
   await recomputeTaskTriggerMetadata(database, taskId, taskMetadata);
+
+  return { ...result, triggerType, nextRunAt, isEnabled: true };
 }
 
 /**

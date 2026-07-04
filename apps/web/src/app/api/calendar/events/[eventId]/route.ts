@@ -62,15 +62,17 @@ const updateEventSchema = z.object({
 async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
   const userId = auth.userId;
 
-  // A drive-scoped token acts as an app member of its drives only: it gets no
-  // identity power over the owner's PERSONAL (drive-less) events.
-  if (!event.driveId && isScopedMCPAuth(auth)) {
-    return false;
-  }
-
-  // Creator always has access (identity check)
+  // Creator always has access (identity check) — including a scoped token
+  // reading back a driveless event IT created: the token still acts on
+  // behalf of its owner for a resource that belongs to that exact identity.
   if (event.createdById === userId) {
     return true;
+  }
+
+  // A drive-scoped token acts as an app member of its drives only: it gets no
+  // identity power over a DIFFERENT user's PERSONAL (drive-less) events.
+  if (!event.driveId && isScopedMCPAuth(auth)) {
+    return false;
   }
 
   // Check if user is an attendee (identity check)
@@ -96,9 +98,12 @@ async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$in
  * Check if the principal can edit an event (only creator or drive admin)
  */
 async function canEditEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
-  // Scoped tokens have no identity power over personal (drive-less) events.
-  if (!event.driveId && isScopedMCPAuth(auth)) return false;
+  // Creator always has edit access, including a scoped token editing a
+  // driveless event it created itself.
   if (event.createdById === auth.userId) return true;
+  // Scoped tokens have no identity power over a different user's personal
+  // (drive-less) events.
+  if (!event.driveId && isScopedMCPAuth(auth)) return false;
   if (event.driveId) return isPrincipalDriveOwnerOrAdmin(auth, event.driveId);
   return false;
 }

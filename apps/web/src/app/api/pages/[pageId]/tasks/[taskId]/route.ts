@@ -12,7 +12,7 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 
-import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers, createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
+import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers, createTaskTriggerWorkflow, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
 import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS } from '@/lib/tasks/completion-guard';
 import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
@@ -360,11 +360,12 @@ export async function PATCH(
   }
 
   // Create the agent trigger workflow after the transaction commits, mirroring update_task.
+  let agentTriggerResult: TaskTriggerWorkflowResult | undefined;
   if (normalizedAgentTrigger && taskListPage?.driveId) {
     const resolvedTimezone = typeof timezone === 'string' && timezone.trim()
       ? timezone.trim()
       : (await getUserTimezone(userId)) || 'UTC';
-    await createTaskTriggerWorkflow({
+    agentTriggerResult = await createTaskTriggerWorkflow({
       database: db,
       driveId: taskListPage.driveId,
       userId,
@@ -448,7 +449,13 @@ export async function PATCH(
     }
   }
 
-  const responseBody = { ...taskWithRelations, title: responseTitle };
+  // Surface the trigger created/updated by an inline agentTrigger — otherwise
+  // the response is indistinguishable from an update that touched no trigger.
+  const responseBody = {
+    ...taskWithRelations,
+    title: responseTitle,
+    ...(agentTriggerResult ? { agentTrigger: agentTriggerResult } : {}),
+  };
 
   // Broadcast events
   const broadcasts: Promise<void>[] = [

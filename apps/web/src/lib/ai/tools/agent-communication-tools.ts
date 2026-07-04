@@ -12,6 +12,7 @@ import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, i
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
@@ -443,6 +444,15 @@ export const agentCommunicationTools = {
 
         // 3. Create or use existing conversation
         const activeConversationId = conversationId || createId();
+
+        // Eagerly ensure a conversations row exists so this conversation is
+        // listable via GET .../conversations (same fix as the consult route,
+        // #1837 finding #1) — without it, chat_messages are persisted but the
+        // listing query's ownership join never matches. createConversation
+        // itself refuses to claim ownership of a supplied conversationId that
+        // already has messages from a different user (see its doc comment) —
+        // safe to call unconditionally.
+        await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
 
         // 4. Load conversation history if continuing an existing conversation
         let messages: UIMessage[] = [];
