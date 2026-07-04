@@ -181,6 +181,10 @@ export type { CreateMcpServerOptions, McpSdkClient } from './mcp/serve.js';
 export { createMcpHandler, mcpHandler } from './commands/mcp.js';
 export type { McpHandlerDeps } from './commands/mcp.js';
 
+// `pagespace-mcp` bin alias (Phase 6 task 3) — zero-config-change migration
+// path for existing `npx pagespace-mcp` users; forces the "mcp" route.
+export { LEGACY_MCP_DEPRECATION_NOTICE, buildLegacyMcpArgv, runLegacyMcpBin } from './legacy-bin.js';
+
 // Composition root.
 export { run } from './run.js';
 export type { RunDependencies } from './run.js';
