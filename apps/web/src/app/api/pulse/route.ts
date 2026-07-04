@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, desc, count, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, desc, count, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members'
@@ -11,6 +11,7 @@ import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
+import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core/timestamp-utils';
 
@@ -92,6 +93,7 @@ export async function GET(req: Request) {
       summaryResult,
       userDrives,
       userConversations,
+      accessiblePagesList,
     ] = await Promise.all([
       // Latest pulse summary
       db.select()
@@ -115,18 +117,19 @@ export async function GET(req: Request) {
             eq(dmConversations.participant2Id, userId)
           )
         ),
+      // Pages the user is actually permitted to view (owner | drive-admin |
+      // explicit page permission | default member read) — the same canonical
+      // access-control primitive used elsewhere in Pulse (generate/cron) for
+      // content scoping. Task counts below scope to this set rather than
+      // driveIds: it already covers owner access (no accepted drive_members
+      // row required — that row is only lazily backfilled on first drive
+      // access) and explicit page-level grants with no drive membership at
+      // all, and excludes trashed pages and pages in trashed drives.
+      accessiblePageIds(userId),
     ]);
 
     const latestSummary = summaryResult[0] ?? null;
     const driveIds = userDrives.map(d => d.driveId);
-    // Task scoping uses the canonical accessible_page_ids_for_user DB function
-    // rather than driveIds: it already covers owner access (no accepted
-    // drive_members row required — that row is only lazily backfilled on first
-    // drive access), drive-admin/member access, explicit page-level permission
-    // grants (a user can be assigned a task on a page shared with them directly,
-    // with no drive membership at all), and excludes trashed pages AND pages in
-    // trashed drives. A driveId-based filter can't express any of that without
-    // reimplementing this function's rules by hand.
 
     // Phase 2: Queries that depend on driveIds or conversationIds
     const calendarVisibility = driveIds.length > 0
@@ -226,7 +229,7 @@ export async function GET(req: Request) {
             or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
             ne(taskItems.status, 'completed'),
             lt(taskItems.dueDate, startOfToday),
-            sql`${taskItems.pageId} IN (SELECT page_id FROM accessible_page_ids_for_user(${userId}))`
+            inArray(taskItems.pageId, accessiblePagesList)
           )
         ),
       // Tasks due today
@@ -238,7 +241,7 @@ export async function GET(req: Request) {
             ne(taskItems.status, 'completed'),
             gte(taskItems.dueDate, startOfToday),
             lt(taskItems.dueDate, endOfToday),
-            sql`${taskItems.pageId} IN (SELECT page_id FROM accessible_page_ids_for_user(${userId}))`
+            inArray(taskItems.pageId, accessiblePagesList)
           )
         ),
       // Tasks due this week
@@ -250,7 +253,7 @@ export async function GET(req: Request) {
             ne(taskItems.status, 'completed'),
             gte(taskItems.dueDate, startOfToday),
             lt(taskItems.dueDate, endOfWeek),
-            sql`${taskItems.pageId} IN (SELECT page_id FROM accessible_page_ids_for_user(${userId}))`
+            inArray(taskItems.pageId, accessiblePagesList)
           )
         ),
       // Tasks completed this week
@@ -261,7 +264,7 @@ export async function GET(req: Request) {
             or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
             eq(taskItems.status, 'completed'),
             gte(taskItems.completedAt, startOfWeek),
-            sql`${taskItems.pageId} IN (SELECT page_id FROM accessible_page_ids_for_user(${userId}))`
+            inArray(taskItems.pageId, accessiblePagesList)
           )
         ),
     ]);

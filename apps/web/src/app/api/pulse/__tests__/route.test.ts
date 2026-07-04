@@ -13,12 +13,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // whose page had been trashed (or whose drive the user no longer belonged to)
 // was still counted as overdue forever, even though it's unreachable in the UI.
 //
-// The fix scopes tasks via `taskItems.pageId IN (SELECT page_id FROM
-// accessible_page_ids_for_user(userId))` — the same canonical, already-tested
-// DB function used elsewhere in Pulse for page/content access — rather than a
-// hand-rolled driveId filter, so these tests model "is this page accessible"
-// directly via a fixture set instead of re-deriving trash/membership/ownership
-// logic that's that function's own responsibility.
+// The fix scopes tasks via `inArray(taskItems.pageId, accessiblePagesList)`,
+// where `accessiblePagesList` comes from the canonical, already-tested
+// `accessiblePageIds(userId)` helper (the same one generate.ts/cron.ts use for
+// content scoping) — rather than a hand-rolled driveId filter. These tests
+// model "is this page accessible" directly via the mocked `accessiblePageIds`
+// return value instead of re-deriving trash/membership/ownership logic that's
+// that function's own responsibility.
 //
 // These tests build a tiny fixture-based fake DB (see task-fixture-db.ts) that
 // genuinely evaluates the query's where-condition against fixture rows, so
@@ -51,13 +52,17 @@ vi.mock('@/lib/ai/core/timestamp-utils', () => ({
 
 vi.mock('@pagespace/db/db', async () => {
   const { createFixtureSelect } = await import('./task-fixture-db');
-  return { db: { select: createFixtureSelect(h.tableRows, () => h.accessiblePageIds) } };
+  return { db: { select: createFixtureSelect(h.tableRows) } };
 });
 
 vi.mock('@pagespace/db/operators', async () => {
   const { fixtureOperators } = await import('./task-fixture-db');
   return fixtureOperators;
 });
+
+vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({
+  accessiblePageIds: vi.fn(() => Promise.resolve(h.accessiblePageIds)),
+}));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', timezone: 'timezone' },

@@ -18,10 +18,6 @@ export type Cond =
   | { type: 'or'; conds: Cond[] }
   | { type: 'isNull'; col: string }
   | { type: 'isNotNull'; col: string }
-  // Recognizes `sql`${col} IN (SELECT page_id FROM accessible_page_ids_for_user(${userId}))``
-  // (see route.ts) and evaluates it against the accessiblePageIds fixture passed
-  // to createFixtureSelect, mirroring what the real DB function would return.
-  | { type: 'inAccessiblePages'; col: string }
   | undefined;
 
 export const COUNT_SENTINEL = '__count__';
@@ -40,19 +36,9 @@ export const fixtureOperators = {
   isNotNull: (col: string): Cond => ({ type: 'isNotNull', col }),
   desc: (col: string) => col,
   count: () => COUNT_SENTINEL,
-  sql: (strings: TemplateStringsArray, ...values: unknown[]): Cond => {
-    if (strings.join('').includes('accessible_page_ids_for_user')) {
-      return { type: 'inAccessiblePages', col: values[0] as string };
-    }
-    throw new Error(`Unhandled sql fragment in test fixture: ${strings.join('')}`);
-  },
 };
 
-export function evalCond(
-  cond: Cond,
-  row: Record<string, unknown>,
-  accessiblePageIds: ReadonlySet<string>
-): boolean {
+export function evalCond(cond: Cond, row: Record<string, unknown>): boolean {
   if (!cond) return true;
   switch (cond.type) {
     case 'eq': return row[cond.col] === cond.val;
@@ -60,11 +46,10 @@ export function evalCond(
     case 'gte': return (row[cond.col] as string | number | Date) >= (cond.val as string | number | Date);
     case 'lt': return (row[cond.col] as string | number | Date) < (cond.val as string | number | Date);
     case 'in': return cond.vals.includes(row[cond.col]);
-    case 'and': return cond.conds.every(c => evalCond(c, row, accessiblePageIds));
-    case 'or': return cond.conds.some(c => evalCond(c, row, accessiblePageIds));
+    case 'and': return cond.conds.every(c => evalCond(c, row));
+    case 'or': return cond.conds.some(c => evalCond(c, row));
     case 'isNull': return row[cond.col] == null;
     case 'isNotNull': return row[cond.col] != null;
-    case 'inAccessiblePages': return accessiblePageIds.has(row[cond.col] as string);
     default: return true;
   }
 }
@@ -93,14 +78,8 @@ export interface RowQueryBuilder {
  * .where()[.orderBy()][.groupBy()][.limit()]`, and resolves to `[{count}]` when
  * `fields` is the single `{ count: count() }` shape, otherwise to the row list
  * mapped through `fields` (or the raw rows when no fields/select shape applies).
- * `getAccessiblePageIds` is re-invoked on every resolution (not just once at
- * builder-creation time) so a test's `beforeEach` can freely reassign the
- * fixture between cases.
  */
-export function createFixtureSelect(
-  tableRows: Map<unknown, Record<string, unknown>[]>,
-  getAccessiblePageIds: () => string[] = () => []
-) {
+export function createFixtureSelect(tableRows: Map<unknown, Record<string, unknown>[]>) {
   return (fields?: Record<string, unknown>): RowQueryBuilder => {
     let rows: Record<string, unknown>[] = [];
     let cond: Cond;
@@ -121,8 +100,7 @@ export function createFixtureSelect(
       limit: (n: number) => { limitN = n; return builder; },
       then: (resolve: (v: Record<string, unknown>[]) => void, reject?: (e: unknown) => void) => {
         try {
-          const accessiblePageIds = new Set(getAccessiblePageIds());
-          const filtered = rows.filter(r => evalCond(cond, r, accessiblePageIds));
+          const filtered = rows.filter(r => evalCond(cond, r));
           const fieldEntries = fields ? Object.entries(fields) : undefined;
           const isCount = !!fieldEntries && fieldEntries.length === 1 && fieldEntries[0][1] === COUNT_SENTINEL;
           if (isCount) {
