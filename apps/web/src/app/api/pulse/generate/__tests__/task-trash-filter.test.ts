@@ -1,10 +1,20 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // ============================================================================
 // POST /api/pulse/generate — the "overdue"/"due today" task lists fed to the AI
-// narrative (and persisted in contextData) must exclude tasks whose page has
-// been trashed or whose drive is outside the user's current membership.
+// narrative (and persisted in contextData) must exclude tasks whose page isn't
+// in the user's accessible-pages set (trashed page, page in a trashed drive,
+// drive membership revoked), while still including tasks on pages the user can
+// reach via owner access (even with no accepted drive_members row yet) or an
+// explicit page-level permission grant with no drive membership at all.
+//
+// The fix reuses this route's existing `accessiblePageIds(userId)` call (the
+// same canonical, already-tested access-control primitive used elsewhere in
+// this file for content/activity scoping) to filter tasks via
+// `inArray(taskItems.pageId, accessiblePagesList)`, rather than a hand-rolled
+// driveId filter — so these tests model "is this page accessible" directly via
+// the mocked `accessiblePageIds` return value instead of re-deriving
+// trash/membership/ownership logic that's that function's own responsibility.
 //
 // Uses the same fixture-based fake DB as ../../__tests__/route.test.ts so the
 // where-condition is genuinely evaluated against fixture rows, not just
@@ -13,11 +23,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   tableRows: new Map<unknown, Record<string, unknown>[]>(),
+  accessiblePageIds: [] as string[],
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((r: any) => r != null && typeof r === 'object' && 'error' in r),
+  isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -61,7 +72,7 @@ vi.mock('../../calendar-context', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({
-  accessiblePageIds: vi.fn().mockResolvedValue([]),
+  accessiblePageIds: vi.fn(() => Promise.resolve(h.accessiblePageIds)),
 }));
 
 vi.mock('@pagespace/lib/content/activity-diff-utils', () => ({
@@ -100,7 +111,7 @@ vi.mock('@pagespace/db/db', async () => {
       update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) })),
       insert: vi.fn(() => ({
         values: (row: Record<string, unknown>) => {
-          const result: any = Promise.resolve(undefined);
+          const result = Promise.resolve(undefined) as Promise<undefined> & { returning: () => Promise<Record<string, unknown>[]> };
           result.returning = () => Promise.resolve([{
             id: 'summary-1',
             generatedAt: new Date('2024-01-10T00:00:00.000Z'),
@@ -160,13 +171,10 @@ vi.mock('@pagespace/db/schema/automation-preferences', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { users } from '@pagespace/db/schema/auth';
-import { drives } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
 import { taskItems } from '@pagespace/db/schema/tasks';
 
 const USER_ID = 'user-1';
-const IN_DRIVE = 'drive-in';
-const OUT_DRIVE = 'drive-out';
+const PAGE_ID = 'page-1';
 
 const mockAuth = () => ({
   userId: USER_ID,
@@ -185,20 +193,14 @@ const overdueTaskRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
   completedAt: null,
   priority: 'high',
   title: 'Ship the report',
-  driveId: IN_DRIVE,
-  isTrashed: false,
+  pageId: PAGE_ID,
   ...overrides,
 });
 
-function setupTables(
-  taskRows: Record<string, unknown>[],
-  driveMemberRows: Record<string, unknown>[],
-  ownedDriveRows: Record<string, unknown>[] = []
-) {
+function setupTables(taskRows: Record<string, unknown>[], accessiblePageIds: string[]) {
   h.tableRows.clear();
+  h.accessiblePageIds = accessiblePageIds;
   h.tableRows.set(users, [{ id: USER_ID, timezone: 'UTC', name: 'Tester', email: 'tester@example.com', subscriptionTier: 'pro' }]);
-  h.tableRows.set(driveMembers, driveMemberRows);
-  h.tableRows.set(drives, ownedDriveRows);
   h.tableRows.set(taskItems, taskRows);
 }
 
@@ -209,17 +211,14 @@ const makeRequest = () =>
     body: JSON.stringify({}),
   });
 
-describe('POST /api/pulse/generate — task lists scoped to trash + drive membership', () => {
+describe('POST /api/pulse/generate — task lists scoped to accessible pages', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
   });
 
-  it('excludes an overdue task whose page has been trashed from the narrative context', async () => {
-    setupTables(
-      [overdueTaskRow({ isTrashed: true })],
-      [{ userId: USER_ID, acceptedAt: new Date(), driveId: IN_DRIVE }]
-    );
+  it('excludes an overdue task whose page is not accessible (trashed, or drive access revoked) from the narrative context', async () => {
+    setupTables([overdueTaskRow()], [] /* PAGE_ID not accessible */);
 
     const response = await POST(makeRequest());
     const body = await response.json();
@@ -228,24 +227,8 @@ describe('POST /api/pulse/generate — task lists scoped to trash + drive member
     expect(body.contextData.tasks.overdueItems).toEqual([]);
   });
 
-  it("excludes an overdue task whose page's drive is outside the user's current membership", async () => {
-    setupTables(
-      [overdueTaskRow({ driveId: OUT_DRIVE })],
-      [{ userId: USER_ID, acceptedAt: new Date(), driveId: IN_DRIVE }]
-    );
-
-    const response = await POST(makeRequest());
-    const body = await response.json();
-
-    expect(body.contextData.tasks.overdue).toBe(0);
-    expect(body.contextData.tasks.overdueItems).toEqual([]);
-  });
-
-  it('includes a normal overdue task (not trashed, drive accessible) same as before', async () => {
-    setupTables(
-      [overdueTaskRow()],
-      [{ userId: USER_ID, acceptedAt: new Date(), driveId: IN_DRIVE }]
-    );
+  it('includes a normal overdue task whose page is accessible', async () => {
+    setupTables([overdueTaskRow()], [PAGE_ID]);
 
     const response = await POST(makeRequest());
     const body = await response.json();
@@ -254,11 +237,8 @@ describe('POST /api/pulse/generate — task lists scoped to trash + drive member
     expect(body.contextData.tasks.overdueItems).toEqual([{ title: 'Ship the report', priority: 'high' }]);
   });
 
-  it('resolves task lists to empty when the user has no accepted drive memberships', async () => {
-    setupTables(
-      [overdueTaskRow()], // would appear if the driveIds guard were missing
-      []
-    );
+  it('resolves task lists to empty when the user has no accessible pages at all', async () => {
+    setupTables([overdueTaskRow()], []); // would appear if the filter were missing
 
     const response = await POST(makeRequest());
     const body = await response.json();
@@ -269,13 +249,23 @@ describe('POST /api/pulse/generate — task lists scoped to trash + drive member
 
   it('includes an overdue task in a drive the user owns but has no accepted membership row for yet', async () => {
     // Owner drive_members rows are only lazily backfilled on first access
-    // (updateDriveLastAccessed), so a freshly created drive has no accepted
-    // membership row. Task scoping must still include it via drives.ownerId.
-    setupTables(
-      [overdueTaskRow({ driveId: 'drive-owned-unbackfilled' })],
-      [], // no accepted drive_members row at all
-      [{ id: 'drive-owned-unbackfilled', ownerId: USER_ID, isTrashed: false }]
-    );
+    // (updateDriveLastAccessed). accessiblePageIds grants owner access
+    // independent of that row, so the page is accessible regardless.
+    setupTables([overdueTaskRow()], [PAGE_ID]);
+
+    const response = await POST(makeRequest());
+    const body = await response.json();
+
+    expect(body.contextData.tasks.overdue).toBe(1);
+    expect(body.contextData.tasks.overdueItems).toEqual([{ title: 'Ship the report', priority: 'high' }]);
+  });
+
+  it('includes an overdue task on a page shared via explicit permission with no drive membership', async () => {
+    // A user can be assigned a task on a page shared directly with them
+    // (page_permissions.canView) without ever being a drive member.
+    // accessiblePageIds includes this; a driveId-based filter could not,
+    // since there is no drive membership row at all.
+    setupTables([overdueTaskRow()], [PAGE_ID]);
 
     const response = await POST(makeRequest());
     const body = await response.json();

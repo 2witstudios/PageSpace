@@ -113,31 +113,27 @@ export async function POST(req: Request) {
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const startOfToday = getStartOfTodayInTimezone(userTimezone);
 
-    // Get user's drives
-    const userDrives = await db
-      .select({ driveId: driveMembers.driveId })
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt)
-      ));
+    // Get user's drives, and the pages the user is actually permitted to view
+    // (owner | drive-admin | explicit page permission | default member read).
+    // Drive membership alone does NOT grant access to every page in a drive, so
+    // Pulse must scope all page content, diffs, and per-page activity to this
+    // set or it leaks restricted pages. Task scoping below reuses the same set
+    // rather than a driveId-based filter: it already covers owner access (no
+    // accepted drive_members row required — that row is only lazily backfilled
+    // on first drive access) and explicit page-level grants with no drive
+    // membership at all, and excludes trashed pages and pages in trashed drives.
+    const [userDrives, accessiblePagesList] = await Promise.all([
+      db
+        .select({ driveId: driveMembers.driveId })
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.userId, userId),
+          isNotNull(driveMembers.acceptedAt)
+        )),
+      accessiblePageIds(userId),
+    ]);
     const driveIds = userDrives.map(d => d.driveId);
-
-    // Drives the user owns. Owner drive_members rows are only lazily backfilled
-    // on first access (see updateDriveLastAccessed), so an owner can have tasks
-    // in a drive with no accepted membership row yet — task scoping must include
-    // owned drives or those tasks would wrongly drop out of the overdue/today lists.
-    const ownedDrives = await db
-      .select({ id: drives.id })
-      .from(drives)
-      .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)));
-    const taskDriveIds = Array.from(new Set([...driveIds, ...ownedDrives.map(d => d.id)]));
-
-    // Pages the user is actually permitted to view (owner | drive-admin |
-    // explicit page permission). Drive membership alone does NOT grant access
-    // to every page in a drive, so Pulse must scope all page content, diffs,
-    // and per-page activity to this set or it leaks restricted pages.
-    const accessiblePages = new Set(await accessiblePageIds(userId));
+    const accessiblePages = new Set(accessiblePagesList);
 
     // ========================================
     // 1. WORKSPACE CONTEXT
@@ -511,7 +507,7 @@ export async function POST(req: Request) {
     // ========================================
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
-    const overdueTasks = taskDriveIds.length > 0 ? await db
+    const overdueTasks = await db
       .select({ title: pages.title, priority: taskItems.priority })
       .from(taskItems)
       .innerJoin(pages, eq(pages.id, taskItems.pageId))
@@ -520,14 +516,13 @@ export async function POST(req: Request) {
           or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
           ne(taskItems.status, 'completed'),
           lt(taskItems.dueDate, startOfToday),
-          inArray(pages.driveId, taskDriveIds),
-          eq(pages.isTrashed, false)
+          inArray(taskItems.pageId, accessiblePagesList)
         )
       )
       .orderBy(desc(taskItems.priority))
-      .limit(5) : [];
+      .limit(5);
 
-    const todayTasks = taskDriveIds.length > 0 ? await db
+    const todayTasks = await db
       .select({ title: pages.title, priority: taskItems.priority })
       .from(taskItems)
       .innerJoin(pages, eq(pages.id, taskItems.pageId))
@@ -537,11 +532,10 @@ export async function POST(req: Request) {
           ne(taskItems.status, 'completed'),
           gte(taskItems.dueDate, startOfToday),
           lt(taskItems.dueDate, endOfToday),
-          inArray(pages.driveId, taskDriveIds),
-          eq(pages.isTrashed, false)
+          inArray(taskItems.pageId, accessiblePagesList)
         )
       )
-      .limit(5) : [];
+      .limit(5);
 
     // ========================================
     // 10. CALENDAR EVENTS

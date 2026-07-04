@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, desc, count, inArray, isNull, isNotNull } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, desc, count, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { pages, drives } from '@pagespace/db/schema/core'
+import { pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
@@ -91,7 +91,6 @@ export async function GET(req: Request) {
     const [
       summaryResult,
       userDrives,
-      ownedDrives,
       userConversations,
     ] = await Promise.all([
       // Latest pulse summary
@@ -107,14 +106,6 @@ export async function GET(req: Request) {
           eq(driveMembers.userId, userId),
           isNotNull(driveMembers.acceptedAt)
         )),
-      // Drives the user owns. Owner drive_members rows are only lazily
-      // backfilled on first access (see updateDriveLastAccessed), so an owner
-      // can have tasks in a drive with no accepted membership row yet — task
-      // scoping must include owned drives or those tasks would wrongly drop
-      // out of the counts below.
-      db.select({ id: drives.id })
-        .from(drives)
-        .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false))),
       // User conversations
       db.select({ id: dmConversations.id })
         .from(dmConversations)
@@ -128,7 +119,14 @@ export async function GET(req: Request) {
 
     const latestSummary = summaryResult[0] ?? null;
     const driveIds = userDrives.map(d => d.driveId);
-    const taskDriveIds = Array.from(new Set([...driveIds, ...ownedDrives.map(d => d.id)]));
+    // Task scoping uses the canonical accessible_page_ids_for_user DB function
+    // rather than driveIds: it already covers owner access (no accepted
+    // drive_members row required — that row is only lazily backfilled on first
+    // drive access), drive-admin/member access, explicit page-level permission
+    // grants (a user can be assigned a task on a page shared with them directly,
+    // with no drive membership at all), and excludes trashed pages AND pages in
+    // trashed drives. A driveId-based filter can't express any of that without
+    // reimplementing this function's rules by hand.
 
     // Phase 2: Queries that depend on driveIds or conversationIds
     const calendarVisibility = driveIds.length > 0
@@ -221,67 +219,51 @@ export async function GET(req: Request) {
             )
         : Promise.resolve([{ count: 0 }]),
       // Tasks overdue
-      taskDriveIds.length > 0
-        ? db.select({ count: count() })
-            .from(taskItems)
-            .innerJoin(pages, eq(pages.id, taskItems.pageId))
-            .where(
-              and(
-                or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-                ne(taskItems.status, 'completed'),
-                lt(taskItems.dueDate, startOfToday),
-                inArray(pages.driveId, taskDriveIds),
-                eq(pages.isTrashed, false)
-              )
-            )
-        : Promise.resolve([{ count: 0 }]),
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            lt(taskItems.dueDate, startOfToday),
+            sql`${taskItems.pageId} IN (SELECT page_id FROM accessible_page_ids_for_user(${userId}))`
+          )
+        ),
       // Tasks due today
-      taskDriveIds.length > 0
-        ? db.select({ count: count() })
-            .from(taskItems)
-            .innerJoin(pages, eq(pages.id, taskItems.pageId))
-            .where(
-              and(
-                or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-                ne(taskItems.status, 'completed'),
-                gte(taskItems.dueDate, startOfToday),
-                lt(taskItems.dueDate, endOfToday),
-                inArray(pages.driveId, taskDriveIds),
-                eq(pages.isTrashed, false)
-              )
-            )
-        : Promise.resolve([{ count: 0 }]),
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            gte(taskItems.dueDate, startOfToday),
+            lt(taskItems.dueDate, endOfToday),
+            sql`${taskItems.pageId} IN (SELECT page_id FROM accessible_page_ids_for_user(${userId}))`
+          )
+        ),
       // Tasks due this week
-      taskDriveIds.length > 0
-        ? db.select({ count: count() })
-            .from(taskItems)
-            .innerJoin(pages, eq(pages.id, taskItems.pageId))
-            .where(
-              and(
-                or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-                ne(taskItems.status, 'completed'),
-                gte(taskItems.dueDate, startOfToday),
-                lt(taskItems.dueDate, endOfWeek),
-                inArray(pages.driveId, taskDriveIds),
-                eq(pages.isTrashed, false)
-              )
-            )
-        : Promise.resolve([{ count: 0 }]),
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            gte(taskItems.dueDate, startOfToday),
+            lt(taskItems.dueDate, endOfWeek),
+            sql`${taskItems.pageId} IN (SELECT page_id FROM accessible_page_ids_for_user(${userId}))`
+          )
+        ),
       // Tasks completed this week
-      taskDriveIds.length > 0
-        ? db.select({ count: count() })
-            .from(taskItems)
-            .innerJoin(pages, eq(pages.id, taskItems.pageId))
-            .where(
-              and(
-                or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-                eq(taskItems.status, 'completed'),
-                gte(taskItems.completedAt, startOfWeek),
-                inArray(pages.driveId, taskDriveIds),
-                eq(pages.isTrashed, false)
-              )
-            )
-        : Promise.resolve([{ count: 0 }]),
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            eq(taskItems.status, 'completed'),
+            gte(taskItems.completedAt, startOfWeek),
+            sql`${taskItems.pageId} IN (SELECT page_id FROM accessible_page_ids_for_user(${userId}))`
+          )
+        ),
     ]);
 
     const unreadCount = unreadResult[0]?.count ?? 0;

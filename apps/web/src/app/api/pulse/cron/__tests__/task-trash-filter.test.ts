@@ -2,17 +2,26 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // ============================================================================
 // POST /api/pulse/cron — the scheduled Pulse summary's overdue/due-today task
-// lists (persisted in contextData) must exclude tasks whose page has been
-// trashed or whose drive is outside the user's current membership.
+// lists (persisted in contextData) must exclude tasks whose page isn't in the
+// user's accessible-pages set (trashed page, page in a trashed drive, drive
+// membership revoked), while still including tasks on pages the user can
+// reach via owner access (even with no accepted drive_members row yet) or an
+// explicit page-level permission grant with no drive membership at all.
 //
-// Uses the same fixture-based fake DB as ../../__tests__/route.test.ts so the
-// where-condition is genuinely evaluated against fixture rows. Since the cron
-// route persists its result rather than returning it, these tests capture the
-// row passed to `db.insert(pulseSummaries).values(...)` and assert on that.
+// The fix reuses this route's existing `accessiblePageIds(userId)` call to
+// filter tasks via `inArray(taskItems.pageId, accessiblePagesList)`, rather
+// than a hand-rolled driveId filter — so these tests model "is this page
+// accessible" directly via the mocked `accessiblePageIds` return value.
+//
+// Uses the same fixture-based fake DB as ../../__tests__/route.test.ts. Since
+// the cron route persists its result rather than returning it, these tests
+// capture the row passed to `db.insert(pulseSummaries).values(...)` and
+// assert on that.
 // ============================================================================
 
 const h = vi.hoisted(() => ({
   tableRows: new Map<unknown, Record<string, unknown>[]>(),
+  accessiblePageIds: [] as string[],
   insertValuesMock: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -60,7 +69,7 @@ vi.mock('../../calendar-context', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({
-  accessiblePageIds: vi.fn().mockResolvedValue([]),
+  accessiblePageIds: vi.fn(() => Promise.resolve(h.accessiblePageIds)),
 }));
 
 vi.mock('@pagespace/lib/content/activity-diff-utils', () => ({
@@ -146,13 +155,10 @@ vi.mock('@pagespace/db/schema/automation-preferences', () => ({
 import { POST } from '../route';
 import { users } from '@pagespace/db/schema/auth';
 import { sessions } from '@pagespace/db/schema/sessions';
-import { drives } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
 import { taskItems } from '@pagespace/db/schema/tasks';
 
 const USER_ID = 'user-1';
-const IN_DRIVE = 'drive-in';
-const OUT_DRIVE = 'drive-out';
+const PAGE_ID = 'page-1';
 
 const overdueTaskRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
   assigneeId: USER_ID,
@@ -162,21 +168,15 @@ const overdueTaskRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
   completedAt: null,
   priority: 'high',
   title: 'Ship the report',
-  driveId: IN_DRIVE,
-  isTrashed: false,
+  pageId: PAGE_ID,
   ...overrides,
 });
 
-function setupTables(
-  taskRows: Record<string, unknown>[],
-  driveMemberRows: Record<string, unknown>[],
-  ownedDriveRows: Record<string, unknown>[] = []
-) {
+function setupTables(taskRows: Record<string, unknown>[], accessiblePageIds: string[]) {
   h.tableRows.clear();
+  h.accessiblePageIds = accessiblePageIds;
   h.tableRows.set(users, [{ id: USER_ID, timezone: 'UTC', name: 'Tester', email: 'tester@example.com', subscriptionTier: 'pro' }]);
   h.tableRows.set(sessions, [{ userId: USER_ID, type: 'user', revokedAt: null, lastUsedAt: new Date() }]);
-  h.tableRows.set(driveMembers, driveMemberRows);
-  h.tableRows.set(drives, ownedDriveRows);
   h.tableRows.set(taskItems, taskRows);
 }
 
@@ -188,17 +188,14 @@ function insertedTasks() {
   return row.contextData.tasks;
 }
 
-describe('POST /api/pulse/cron — task lists scoped to trash + drive membership', () => {
+describe('POST /api/pulse/cron — task lists scoped to accessible pages', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.insertValuesMock.mockClear();
   });
 
-  it('excludes an overdue task whose page has been trashed from the persisted summary', async () => {
-    setupTables(
-      [overdueTaskRow({ isTrashed: true })],
-      [{ userId: USER_ID, acceptedAt: new Date(), driveId: IN_DRIVE }]
-    );
+  it('excludes an overdue task whose page is not accessible (trashed, or drive access revoked) from the persisted summary', async () => {
+    setupTables([overdueTaskRow()], [] /* PAGE_ID not accessible */);
 
     const response = await POST(makeRequest());
     const body = await response.json();
@@ -210,27 +207,8 @@ describe('POST /api/pulse/cron — task lists scoped to trash + drive membership
     expect(tasks.overdueItems).toEqual([]);
   });
 
-  it("excludes an overdue task whose page's drive is outside the user's current membership", async () => {
-    setupTables(
-      [overdueTaskRow({ driveId: OUT_DRIVE })],
-      [{ userId: USER_ID, acceptedAt: new Date(), driveId: IN_DRIVE }]
-    );
-
-    const response = await POST(makeRequest());
-    const body = await response.json();
-    expect(body.errors).toBeUndefined();
-    expect(body.generated).toBe(1);
-
-    const tasks = insertedTasks();
-    expect(tasks.overdue).toBe(0);
-    expect(tasks.overdueItems).toEqual([]);
-  });
-
-  it('includes a normal overdue task (not trashed, drive accessible) same as before', async () => {
-    setupTables(
-      [overdueTaskRow()],
-      [{ userId: USER_ID, acceptedAt: new Date(), driveId: IN_DRIVE }]
-    );
+  it('includes a normal overdue task whose page is accessible', async () => {
+    setupTables([overdueTaskRow()], [PAGE_ID]);
 
     const response = await POST(makeRequest());
     const body = await response.json();
@@ -242,11 +220,8 @@ describe('POST /api/pulse/cron — task lists scoped to trash + drive membership
     expect(tasks.overdueItems).toEqual([{ title: 'Ship the report', priority: 'high' }]);
   });
 
-  it('resolves task lists to empty when the user has no accepted drive memberships', async () => {
-    setupTables(
-      [overdueTaskRow()], // would appear if the driveIds guard were missing
-      []
-    );
+  it('resolves task lists to empty when the user has no accessible pages at all', async () => {
+    setupTables([overdueTaskRow()], []); // would appear if the filter were missing
 
     const response = await POST(makeRequest());
     const body = await response.json();
@@ -260,13 +235,26 @@ describe('POST /api/pulse/cron — task lists scoped to trash + drive membership
 
   it('includes an overdue task in a drive the user owns but has no accepted membership row for yet', async () => {
     // Owner drive_members rows are only lazily backfilled on first access
-    // (updateDriveLastAccessed), so a freshly created drive has no accepted
-    // membership row. Task scoping must still include it via drives.ownerId.
-    setupTables(
-      [overdueTaskRow({ driveId: 'drive-owned-unbackfilled' })],
-      [], // no accepted drive_members row at all
-      [{ id: 'drive-owned-unbackfilled', ownerId: USER_ID, isTrashed: false }]
-    );
+    // (updateDriveLastAccessed). accessiblePageIds grants owner access
+    // independent of that row, so the page is accessible regardless.
+    setupTables([overdueTaskRow()], [PAGE_ID]);
+
+    const response = await POST(makeRequest());
+    const body = await response.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.generated).toBe(1);
+
+    const tasks = insertedTasks();
+    expect(tasks.overdue).toBe(1);
+    expect(tasks.overdueItems).toEqual([{ title: 'Ship the report', priority: 'high' }]);
+  });
+
+  it('includes an overdue task on a page shared via explicit permission with no drive membership', async () => {
+    // A user can be assigned a task on a page shared directly with them
+    // (page_permissions.canView) without ever being a drive member.
+    // accessiblePageIds includes this; a driveId-based filter could not,
+    // since there is no drive membership row at all.
+    setupTables([overdueTaskRow()], [PAGE_ID]);
 
     const response = await POST(makeRequest());
     const body = await response.json();
