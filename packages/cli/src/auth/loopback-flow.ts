@@ -100,7 +100,7 @@ export type LoopbackLoginResult =
   | { readonly outcome: 'port_bind_failed' }
   | { readonly outcome: 'discovery_failed'; readonly message: string };
 
-const CALLBACK_PATH = '/callback';
+export const CALLBACK_PATH = '/callback';
 
 const SUCCESS_HTML =
   "<!doctype html><html><head><title>PageSpace</title></head><body><p>You're logged in — return to your terminal.</p></body></html>";

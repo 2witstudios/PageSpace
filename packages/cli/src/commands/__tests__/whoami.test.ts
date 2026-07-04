@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createWhoamiHandler, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, parseArgv } from '@pagespace/cli';
-import type { HostCredential, CredentialStore, RefreshedTokens } from '@pagespace/cli';
+import type { HostCredential, CredentialStore } from '@pagespace/cli';
+import type { OAuthTokens } from '@pagespace/sdk';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
 const CREDENTIAL: HostCredential = {
@@ -10,11 +11,11 @@ const CREDENTIAL: HostCredential = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-const REFRESHED: RefreshedTokens = {
+const REFRESHED: OAuthTokens = {
   accessToken: 'ps_at_new',
+  accessExpiresAt: 999_999_999,
   refreshToken: 'ps_rt_new',
-  expiresIn: 900,
-  scope: 'account offline_access',
+  refreshExpiresAt: 999_999_999,
 };
 
 const IDENTITY = { name: 'Ada Lovelace', email: 'ada@example.com' };
@@ -45,7 +46,7 @@ function baseDeps(store: CredentialStore) {
       authorizationEndpoint: 'https://pagespace.ai/api/oauth/authorize',
       tokenEndpoint: 'https://pagespace.ai/api/oauth/token',
     }),
-    refreshToken: async () => REFRESHED,
+    createRefreshAccessToken: () => async () => REFRESHED,
     confirmIdentity: async () => IDENTITY,
     now: () => Date.parse('2026-07-03T00:00:00.000Z'),
   };
@@ -91,7 +92,7 @@ describe('createWhoamiHandler', () => {
     let refreshCalls = 0;
     const handler = createWhoamiHandler({
       ...baseDeps(store),
-      refreshToken: async () => {
+      createRefreshAccessToken: () => async () => {
         refreshCalls += 1;
         return REFRESHED;
       },
@@ -136,7 +137,7 @@ describe('createWhoamiHandler', () => {
     const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
     const handler = createWhoamiHandler({
       ...baseDeps(store),
-      refreshToken: async () => {
+      createRefreshAccessToken: () => async () => {
         throw new Error(`rejected: ${CREDENTIAL.refreshToken}`);
       },
     });
@@ -147,6 +148,39 @@ describe('createWhoamiHandler', () => {
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).not.toContain(CREDENTIAL.refreshToken);
+  });
+
+  it('reports the LIVE server-granted scope from the refresh response, not the stale locally-cached scopes, when the server narrows the grant', async () => {
+    const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
+    const narrowed = { ...REFRESHED, scope: 'account' };
+    const handler = createWhoamiHandler({
+      ...baseDeps(store),
+      createRefreshAccessToken: () => async () => narrowed,
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+    const code = await handler(ctx, commandIntent(['whoami', '--json']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const parsed = JSON.parse(stdout.lines.join(''));
+    // CREDENTIAL.scopes still has 'offline_access' too — the live response
+    // narrowed to just 'account', and that's what must be reported/persisted.
+    expect(parsed.scopes).toEqual(['account']);
+    expect((await store.get('https://pagespace.ai'))?.scopes).toEqual(['account']);
+  });
+
+  it('falls back to the stored scopes when the refresh response carries no scope field', async () => {
+    const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
+    const handler = createWhoamiHandler(baseDeps(store));
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+    const code = await handler(ctx, commandIntent(['whoami', '--json']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const parsed = JSON.parse(stdout.lines.join(''));
+    expect(parsed.scopes).toEqual(CREDENTIAL.scopes);
   });
 
   it('never writes the access or refresh token to stdout/stderr on success', async () => {

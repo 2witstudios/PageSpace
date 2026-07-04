@@ -142,4 +142,42 @@ describe('parseArgv', () => {
     const argv = ['--json', 'tokens', 'create', '--yes'];
     expect(parseArgv(argv)).toEqual(parseArgv(argv));
   });
+
+  it('parses --host=value (equals-joined) the same as space-separated', () => {
+    const result = parseArgv(['--host=https://selfhosted.example']);
+    expectCommand(result);
+    expect(result.flags.host).toBe('https://selfhosted.example');
+  });
+
+  it('parses --token=value (equals-joined) the same as space-separated', () => {
+    const result = parseArgv(['--token=ps_sess_abc123']);
+    expectCommand(result);
+    expect(result.flags.token).toBe('ps_sess_abc123');
+  });
+
+  it('accepts a --host=value that itself starts with a dash (only possible via the equals form)', () => {
+    const result = parseArgv(['--host=-not-actually-a-flag']);
+    expectCommand(result);
+    expect(result.flags.host).toBe('-not-actually-a-flag');
+  });
+
+  it('rejects --json=<value> as an unknown flag — boolean flags do not accept an equals-joined value', () => {
+    const result = parseArgv(['--json=true']);
+    expect(result).toEqual({ kind: 'usage-error', message: 'Unknown flag: --json=true' });
+  });
+
+  it('rejects --yes=<value> as an unknown flag rather than silently coercing a typo to false', () => {
+    const result = parseArgv(['--yes=oops']);
+    expect(result.kind).toBe('usage-error');
+  });
+
+  it('rejects --host= with an empty value as a usage error', () => {
+    const result = parseArgv(['--host=']);
+    expect(result.kind).toBe('usage-error');
+  });
+
+  it('never echoes an equals-joined token value back in a usage error message', () => {
+    const result = parseArgv(['--token=super-secret-value', '--bogus']);
+    expect(JSON.stringify(result)).not.toContain('super-secret-value');
+  });
 });

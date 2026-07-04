@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EXIT_SUCCESS, helpHandler, parseArgv } from '@pagespace/cli';
+import { EXIT_SUCCESS, helpHandler, parseArgv, ROUTES } from '@pagespace/cli';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
 describe('helpHandler', () => {
@@ -36,5 +36,20 @@ describe('helpHandler', () => {
     await helpHandler(ctx, intent);
 
     expect(stderr.lines).toEqual([]);
+  });
+
+  it('lists every registered command, not a hardcoded handful', async () => {
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout });
+    const intent = parseArgv(['help']);
+    if (intent.kind !== 'command') throw new Error('expected command');
+
+    await helpHandler(ctx, intent);
+
+    expect(ROUTES.length).toBeGreaterThan(30);
+    const output = stdout.lines.join('');
+    for (const route of ROUTES) {
+      expect(output).toContain(route.path.join(' '));
+    }
   });
 });

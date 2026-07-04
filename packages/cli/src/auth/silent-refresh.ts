@@ -81,6 +81,7 @@ export function createRefreshAccessToken(
       accessExpiresAt: issuedAt + parsed.data.expires_in * 1000,
       refreshToken: parsed.data.refresh_token,
       refreshExpiresAt: issuedAt + NOMINAL_REFRESH_TTL_MS,
+      scope: parsed.data.scope,
     };
   };
 }

@@ -14,6 +14,15 @@
  * command's own pure arg-mapper to interpret — only a `--flag` with NO
  * preceding positional token is a hard usage error (there is no command yet
  * to hand it to).
+ *
+ * Value-bearing flags (`--host`, `--token`) also accept the equals-joined
+ * form (`--host=value`), not just space-separated (`--host value`) —
+ * resolved before any other grammar rule so `--host=-looks-like-a-flag` is
+ * unambiguously a value, not a following flag. Boolean flags (`--json`,
+ * `--yes`, ...) deliberately do NOT accept an equals-joined value: presence
+ * always means true, and there is no well-defined meaning for an
+ * unrecognized value on a confirmation flag like `--yes=oops` — better to
+ * reject it as an unknown flag than silently coerce a typo to `false`.
  */
 
 export interface ParsedFlags {
@@ -59,15 +68,19 @@ export function parseArgv(argv: readonly string[]): ParseResult {
 
   for (let i = 0; i < argv.length; i += 1) {
     const current = argv[i];
+    const eqIndex = current.startsWith('--') ? current.indexOf('=') : -1;
+    const flagName = eqIndex === -1 ? current : current.slice(0, eqIndex);
+    const inlineValue = eqIndex === -1 ? undefined : current.slice(eqIndex + 1);
 
-    if (VALUE_FLAGS.has(current)) {
-      const value = argv[i + 1];
-      if (value === undefined || value.startsWith('-')) {
-        return { kind: 'usage-error', message: `Flag ${current} requires a value.` };
+    if (VALUE_FLAGS.has(flagName)) {
+      const value = inlineValue ?? argv[i + 1];
+      const missing = value === undefined || value.length === 0 || (inlineValue === undefined && value.startsWith('-'));
+      if (missing) {
+        return { kind: 'usage-error', message: `Flag ${flagName} requires a value.` };
       }
-      if (current === '--host') host = value;
+      if (flagName === '--host') host = value;
       else token = value;
-      i += 1;
+      if (inlineValue === undefined) i += 1;
       continue;
     }
 

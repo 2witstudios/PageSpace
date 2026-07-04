@@ -75,11 +75,17 @@ export function buildAuthProvider(source: AuthSource, deps: BuildAuthProviderDep
         },
         refreshAccessToken,
         now: deps.now,
-        onTokensUpdated: (tokens: OAuthTokens) => {
-          void deps.credentialStore.set(host, {
+        onTokensUpdated: async (tokens: OAuthTokens) => {
+          // Prefer the server's live, authoritative scope from this refresh
+          // over the locally-cached value (mirrors whoami.ts) — every
+          // command refreshes via this same path, so this is what keeps a
+          // server-side scope narrowing from silently going stale until the
+          // user happens to run `whoami`.
+          const scopes = tokens.scope !== undefined ? tokens.scope.split(' ').filter(Boolean) : credential.scopes;
+          await deps.credentialStore.set(host, {
             refreshToken: tokens.refreshToken,
             clientId: credential.clientId,
-            scopes: credential.scopes,
+            scopes,
             createdAt: new Date(deps.now()).toISOString(),
           });
         },

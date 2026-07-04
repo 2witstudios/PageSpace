@@ -26,6 +26,14 @@ export interface OAuthTokens {
   refreshToken: string;
   /** Epoch ms. */
   refreshExpiresAt: number;
+  /**
+   * The space-separated scope string the server actually granted on this
+   * refresh, when the transport captured it (optional: OAuthTokenProvider
+   * itself never reads this field — it exists so a caller like `whoami` can
+   * report the server's current, authoritative grant instead of a
+   * potentially stale locally-cached value).
+   */
+  scope?: string;
 }
 
 /**
@@ -43,8 +51,14 @@ export interface OAuthTokenProviderOptions {
   now?: () => number;
   /** Proactive-refresh skew window in ms; defaults to 60_000 per ADR 0003 §3.2. */
   skewMs?: number;
-  /** Invoked with the full new token pair after every successful refresh, so the caller (CLI) can persist it. The SDK itself never touches disk. */
-  onTokensUpdated?: (tokens: OAuthTokens) => void;
+  /**
+   * Invoked with the full new token pair after every successful refresh, so
+   * the caller (CLI) can persist it. The SDK itself never touches disk. Per
+   * ADR 0003 §3.5 (persist-before-use), if this returns a Promise it is
+   * awaited before the new access token is handed to the caller — the store
+   * write must land before the token is used.
+   */
+  onTokensUpdated?: (tokens: OAuthTokens) => void | Promise<void>;
 }
 
 const DEFAULT_SKEW_MS = 60_000;
@@ -55,7 +69,7 @@ export class OAuthTokenProvider implements AuthProvider {
   readonly #now: () => number;
   readonly #skewMs: number;
   readonly #refreshAccessToken: RefreshAccessToken;
-  readonly #onTokensUpdated: ((tokens: OAuthTokens) => void) | undefined;
+  readonly #onTokensUpdated: ((tokens: OAuthTokens) => void | Promise<void>) | undefined;
   #inFlightRefresh: Promise<string> | null = null;
 
   constructor(options: OAuthTokenProviderOptions) {
@@ -104,11 +118,9 @@ export class OAuthTokenProvider implements AuthProvider {
   }
 
   async #performRefresh(): Promise<string> {
+    let tokens: OAuthTokens;
     try {
-      const tokens = await this.#refreshAccessToken(this.#tokens.refreshToken);
-      this.#tokens = tokens;
-      this.#onTokensUpdated?.(tokens);
-      return tokens.accessToken;
+      tokens = await this.#refreshAccessToken(this.#tokens.refreshToken);
     } catch (error) {
       if (classifyRefreshFailure(error) === 'terminal') {
         this.#status = 'unauthenticated';
@@ -116,5 +128,15 @@ export class OAuthTokenProvider implements AuthProvider {
       }
       throw error;
     }
+
+    this.#tokens = tokens;
+    // Deliberately outside the try/catch above: classifyRefreshFailure
+    // classifies refresh-HTTP-call failures (invalid_grant vs. transient
+    // network/5xx), not local persistence failures. A disk/keychain error
+    // here must propagate as itself — never reclassified into a terminal
+    // AuthenticationError, which would force a re-login over what is really
+    // just a failed local write of an otherwise-valid rotated token.
+    await this.#onTokensUpdated?.(tokens);
+    return tokens.accessToken;
   }
 }

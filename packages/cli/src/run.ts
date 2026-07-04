@@ -11,56 +11,17 @@ import { createDiscoverMetadata } from './auth/discover.js';
 import { resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
 import { resolveAuth } from './auth/resolve.js';
-import { activityHandler } from './commands/activity.js';
-import { agentsAskHandler, agentsConfigHandler, agentsListHandler, modelsListHandler } from './commands/agents.js';
-import { channelsSendHandler } from './commands/channels.js';
-import {
-  drivesCreateHandler,
-  drivesListHandler,
-  drivesRenameHandler,
-  drivesRestoreHandler,
-  drivesTrashHandler,
-} from './commands/drives.js';
-import { pagesReadHandler, pagesReplaceLinesHandler } from './commands/content.js';
-import { pagesExportHandler } from './commands/export.js';
-import { helpHandler } from './commands/help.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
-import { mcpHandler } from './commands/mcp.js';
-import { searchGlobHandler, searchRegexHandler, searchTextHandler } from './commands/search.js';
-import {
-  pagesCreateHandler,
-  pagesListHandler,
-  pagesMoveHandler,
-  pagesReadDetailsHandler,
-  pagesRenameHandler,
-  pagesRestoreHandler,
-  pagesTrashHandler,
-  pagesTreeHandler,
-} from './commands/pages.js';
-import { sheetsEditCellsHandler } from './commands/sheets.js';
-import {
-  tasksAssignedHandler,
-  tasksCreateHandler,
-  tasksCreateStatusHandler,
-  tasksDeleteHandler,
-  tasksListHandler,
-  tasksReorderHandler,
-  tasksStatusesHandler,
-  tasksUpdateHandler,
-} from './commands/tasks.js';
-import { trashListHandler } from './commands/trash.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
-import { tokensCreateHandler } from './commands/tokens/create.js';
-import { tokensListHandler } from './commands/tokens/list.js';
-import { tokensRevokeHandler } from './commands/tokens/revoke.js';
 import { resolveConfig } from './config/resolve.js';
 import type { CredentialStore } from './credentials/store.js';
 import { EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
 import type { HandlerContext, OutputSink } from './handler-context.js';
-import { resolveRoute, type Route } from './router/router.js';
+import { resolveRoute } from './router/router.js';
+import { helpHandler, ROUTES } from './router/routes.js';
 
 export interface RunDependencies {
   readonly argv: readonly string[];
@@ -73,52 +34,6 @@ export interface RunDependencies {
   /** Defaults to a function that never resolves truthily when omitted; only called when `isTTY` is true. */
   readonly prompt?: (message: string) => Promise<string>;
 }
-
-const ROUTES: readonly Route[] = [
-  { path: ['help'], handler: helpHandler },
-  { path: ['login'], handler: loginHandler },
-  { path: ['logout'], handler: logoutHandler },
-  { path: ['whoami'], handler: whoamiHandler },
-  { path: ['tokens', 'create'], handler: tokensCreateHandler },
-  { path: ['tokens', 'list'], handler: tokensListHandler },
-  { path: ['tokens', 'revoke'], handler: tokensRevokeHandler },
-  { path: ['mcp'], handler: mcpHandler },
-  { path: ['drives', 'list'], handler: drivesListHandler },
-  { path: ['drives', 'create'], handler: drivesCreateHandler },
-  { path: ['drives', 'rename'], handler: drivesRenameHandler },
-  { path: ['drives', 'trash'], handler: drivesTrashHandler },
-  { path: ['drives', 'restore'], handler: drivesRestoreHandler },
-  { path: ['pages', 'list'], handler: pagesListHandler },
-  { path: ['pages', 'tree'], handler: pagesTreeHandler },
-  { path: ['pages', 'read-details'], handler: pagesReadDetailsHandler },
-  { path: ['pages', 'create'], handler: pagesCreateHandler },
-  { path: ['pages', 'rename'], handler: pagesRenameHandler },
-  { path: ['pages', 'move'], handler: pagesMoveHandler },
-  { path: ['pages', 'trash'], handler: pagesTrashHandler },
-  { path: ['pages', 'restore'], handler: pagesRestoreHandler },
-  { path: ['pages', 'read'], handler: pagesReadHandler },
-  { path: ['pages', 'replace-lines'], handler: pagesReplaceLinesHandler },
-  { path: ['pages', 'export'], handler: pagesExportHandler },
-  { path: ['sheets', 'edit-cells'], handler: sheetsEditCellsHandler },
-  { path: ['trash', 'list'], handler: trashListHandler },
-  { path: ['tasks', 'list'], handler: tasksListHandler },
-  { path: ['tasks', 'create'], handler: tasksCreateHandler },
-  { path: ['tasks', 'update'], handler: tasksUpdateHandler },
-  { path: ['tasks', 'delete'], handler: tasksDeleteHandler },
-  { path: ['tasks', 'reorder'], handler: tasksReorderHandler },
-  { path: ['tasks', 'statuses'], handler: tasksStatusesHandler },
-  { path: ['tasks', 'create-status'], handler: tasksCreateStatusHandler },
-  { path: ['tasks', 'assigned'], handler: tasksAssignedHandler },
-  { path: ['search', 'text'], handler: searchTextHandler },
-  { path: ['search', 'regex'], handler: searchRegexHandler },
-  { path: ['search', 'glob'], handler: searchGlobHandler },
-  { path: ['agents', 'list'], handler: agentsListHandler },
-  { path: ['agents', 'ask'], handler: agentsAskHandler },
-  { path: ['agents', 'config'], handler: agentsConfigHandler },
-  { path: ['models', 'list'], handler: modelsListHandler },
-  { path: ['activity'], handler: activityHandler },
-  { path: ['channels', 'send'], handler: channelsSendHandler },
-];
 
 /**
  * Commands that manage credentials themselves and never touch `ctx.sdk`:
