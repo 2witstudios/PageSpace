@@ -16,6 +16,8 @@ describe('parseArgv', () => {
       host: undefined,
       token: undefined,
       yes: false,
+      all: false,
+      force: false,
       help: false,
       version: false,
     });
@@ -55,6 +57,18 @@ describe('parseArgv', () => {
     const result = parseArgv(['--version']);
     expectCommand(result);
     expect(result.flags.version).toBe(true);
+  });
+
+  it('parses --all as a boolean flag', () => {
+    const result = parseArgv(['logout', '--all']);
+    expectCommand(result);
+    expect(result.flags.all).toBe(true);
+  });
+
+  it('parses --force as a boolean flag', () => {
+    const result = parseArgv(['logout', '--force']);
+    expectCommand(result);
+    expect(result.flags.force).toBe(true);
   });
 
   it('parses --host with its value', () => {
