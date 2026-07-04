@@ -25,6 +25,8 @@ interface ToolPart {
 
 interface ToolCallRendererProps {
   part: ToolPart;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 // Helper for safe JSON parsing
@@ -120,7 +122,7 @@ export const TOOL_NAME_MAP: Record<string, string> = {
 };
 
 // Internal renderer component with hooks
-const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function ToolCallRendererInternal({ part, toolName }) {
+const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; open?: boolean; onOpenChange?: (open: boolean) => void }> = memo(function ToolCallRendererInternal({ part, toolName, open, onOpenChange }) {
   const state = part.state || 'input-available';
   const input = part.input;
   const output = part.output;
@@ -205,7 +207,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
 
   // Render with rich content (no Parameters/Result wrappers)
   return (
-    <Tool className="my-2">
+    <Tool className="my-2" open={open} onOpenChange={onOpenChange}>
       <ToolHeader
         title={descriptiveTitle}
         type={`tool-${toolName}`}
@@ -229,7 +231,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
   );
 });
 
-export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function ToolCallRenderer({ part }) {
+export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function ToolCallRenderer({ part, open, onOpenChange }) {
   let toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
   let resolvedPart = part;
 
@@ -248,5 +250,5 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
 
   if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
   if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;
-  return <ToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
+  return <ToolCallRendererInternal part={resolvedPart} toolName={toolName} open={open} onOpenChange={onOpenChange} />;
 });

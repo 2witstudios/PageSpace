@@ -41,6 +41,8 @@ interface ToolPart {
 
 interface CompactToolCallRendererProps {
   part: ToolPart;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 // Count pages in a tree structure (used by the compact one-line summary)
@@ -103,8 +105,14 @@ export const TOOL_NAME_MAP: Record<string, string> = {
 };
 
 // Internal renderer component with hooks
-const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function CompactToolCallRendererInternal({ part, toolName }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; expanded?: boolean; onExpandedChange?: (expanded: boolean) => void }> = memo(function CompactToolCallRendererInternal({ part, toolName, expanded: expandedProp, onExpandedChange }) {
+  const [internalExpanded, setInternalExpanded] = useState(false);
+  const isExpanded = expandedProp ?? internalExpanded;
+  const toggleExpanded = () => {
+    const next = !isExpanded;
+    onExpandedChange?.(next);
+    if (expandedProp === undefined) setInternalExpanded(next);
+  };
 
   const state = part.state;
   const input = part.input;
@@ -329,7 +337,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
   return (
     <div className="py-0.5 text-[11px] max-w-full">
       <button
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={toggleExpanded}
         className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full"
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
@@ -346,7 +354,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
   );
 });
 
-export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = memo(function CompactToolCallRenderer({ part }) {
+export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = memo(function CompactToolCallRenderer({ part, expanded, onExpandedChange }) {
   let toolName = part.toolName || part.type?.replace('tool-', '') || '';
   let resolvedPart = part;
 
@@ -365,5 +373,5 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
 
   if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
   if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;
-  return <CompactToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
+  return <CompactToolCallRendererInternal part={resolvedPart} toolName={toolName} expanded={expanded} onExpandedChange={onExpandedChange} />;
 });

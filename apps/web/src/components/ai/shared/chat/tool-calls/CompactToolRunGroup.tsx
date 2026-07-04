@@ -7,6 +7,9 @@ import type { ProcessedToolPart } from '../message-types';
 
 interface CompactToolRunGroupProps {
   parts: ProcessedToolPart[];
+  /** See ToolRunGroup.tsx's identical props for why this is needed. */
+  getToolCallOpen: (toolCallId: string) => boolean | undefined;
+  setToolCallOpen: (toolCallId: string, open: boolean) => void;
 }
 
 const toStatus = (state: ProcessedToolPart['state']): RunStatus => {
@@ -35,7 +38,7 @@ const computeStatus = (parts: ProcessedToolPart[]): RunStatus => {
  * auto-expand while running/erroring and auto-collapse once complete, but
  * respect a manual toggle afterward.
  */
-export const CompactToolRunGroup: React.FC<CompactToolRunGroupProps> = React.memo(function CompactToolRunGroup({ parts }) {
+export const CompactToolRunGroup: React.FC<CompactToolRunGroupProps> = React.memo(function CompactToolRunGroup({ parts, getToolCallOpen, setToolCallOpen }) {
   const status = useMemo(() => computeStatus(parts), [parts]);
   const { open: expanded, onOpenChange } = useAutoCollapseOnComplete(status);
 
@@ -64,9 +67,17 @@ export const CompactToolRunGroup: React.FC<CompactToolRunGroupProps> = React.mem
         // truncating summary column on each nested row), so keep the nesting
         // indent minimal to avoid tripping truncation sooner than necessary.
         <div className="mt-1 max-w-full break-words pl-1 space-y-0.5">
-          {parts.map((part, i) => (
-            <CompactToolCallRenderer key={part.toolCallId || `${part.type}-${i}`} part={part} />
-          ))}
+          {parts.map((part, i) => {
+            const rowKey = part.toolCallId || `${part.type}-${i}`;
+            return (
+              <CompactToolCallRenderer
+                key={rowKey}
+                part={part}
+                expanded={getToolCallOpen(rowKey)}
+                onExpandedChange={(next) => setToolCallOpen(rowKey, next)}
+              />
+            );
+          })}
         </div>
       )}
     </div>
