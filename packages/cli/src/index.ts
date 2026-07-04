@@ -17,6 +17,30 @@ export type { HandlerContext, OutputSink } from './handler-context.js';
 export { NullCredentialStore } from './credential-store.js';
 export type { CredentialStore, StoredProfile } from './credential-store.js';
 
+// Multi-host credential store (keychain + 0600 file fallback) — Phase 4 task 2.
+export { CompositeCredentialStore, createCredentialStore } from './credentials/store.js';
+export type { CredentialStore as HostCredentialStore, CreateCredentialStoreOptions } from './credentials/store.js';
+export { FileCredentialStore, PermissionError, defaultCredentialsPath } from './credentials/file-store.js';
+export type { FileCredentialStoreOptions } from './credentials/file-store.js';
+export { createNativeKeychainAdapter } from './credentials/keychain.js';
+export type { KeychainAdapter, KeychainCredential } from './credentials/keychain.js';
+export {
+  CredentialsFileFormatError,
+  emptyCredentialsFile,
+  getHost,
+  isSecureMode,
+  listSummaries,
+  parseCredentialsFile,
+  parseHostCredential,
+  permissionFixItMessage,
+  removeHost,
+  serializeCredentialsFile,
+  serializeHostCredential,
+  tokenPrefix,
+  upsertHost,
+} from './credentials/serialize.js';
+export type { CredentialSummary, CredentialsFile, HostCredential } from './credentials/serialize.js';
+
 // Fixed exit code contract.
 export { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from './exit-codes.js';
 export type { ExitCode } from './exit-codes.js';

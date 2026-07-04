@@ -25,6 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@napi-rs/keyring": "^1.3.0",
     "@pagespace/sdk": "workspace:*"
   }
 }
