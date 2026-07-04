@@ -11,9 +11,9 @@
  * `packages/db/src/schema/commands.ts`) — the Universal Commands epic's
  * Agent Skills surface: a command's entry page is the skill body, its direct
  * children are discoverable resources. Trigger/description validation
- * (`triggerSchema`/`descriptionSchema` below) is imported straight from
- * `@pagespace/lib/commands/command-core` rather than restated, so the SDK
- * cannot drift from the route's own validators.
+ * (`triggerSchema`/`descriptionSchema` below) mirrors
+ * `@pagespace/lib/commands/command-core`'s constants (inlined, not imported —
+ * see below), drift-guarded by `commands.test.ts`.
  *
  * DISCREPANCY vs the old MCP tool (`list_commands`, tools.js:1032): the tool
  * accepted an optional `driveId` filter, but the CURRENT GET route
@@ -30,17 +30,24 @@
  * owner/admin authority server-side — a per-call condition this static
  * registry field cannot express (same limitation the ADR 0002 scope grammar
  * accepts for every operation whose authority depends on its own input).
+ *
+ * The trigger/description validation constants below are INLINED, not
+ * imported from `@pagespace/lib` — that package is dev-only workspace tooling
+ * and a value-import of it survives into `dist/`, breaking any consumer that
+ * installs `@pagespace/sdk` outside this monorepo (`ERR_MODULE_NOT_FOUND`).
+ * `commands.test.ts` drift-guards these values against
+ * `packages/lib/src/commands/command-core.ts` directly.
  */
 import { z } from 'zod';
-import {
-  COMMAND_DESCRIPTION_MAX_LENGTH,
-  COMMAND_TRIGGER_MAX_LENGTH,
-  COMMAND_TRIGGER_PATTERN,
-} from '@pagespace/lib/commands/command-core';
 import { defineOperation } from '../registry/define.js';
 
 const commandScopeEnum = z.enum(['user', 'drive']);
 const commandTypeEnum = z.enum(['document', 'prompt_template', 'builtin']);
+
+/** Mirrors `packages/lib/src/commands/command-core.ts` (Agent Skills 'name' rules: lowercase alphanumeric + single hyphens). Inlined — see file header. */
+export const COMMAND_TRIGGER_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export const COMMAND_TRIGGER_MAX_LENGTH = 64;
+export const COMMAND_DESCRIPTION_MAX_LENGTH = 1024;
 
 /** Agent Skills 'name' rules (`packages/lib/src/commands/command-core.ts`), mirrored so an invalid trigger is rejected before the network call. */
 const triggerSchema = z.string().min(1).max(COMMAND_TRIGGER_MAX_LENGTH).regex(COMMAND_TRIGGER_PATTERN);
@@ -74,7 +81,7 @@ export const listCommands = defineOperation({
   name: 'commands.list',
   method: 'GET',
   path: '/api/commands',
-  inputSchema: z.object({}),
+  inputSchema: z.object({}).strict(),
   outputSchema: z.object({ commands: z.array(commandListItemSchema) }),
   requiredScope: 'account',
   description:
@@ -123,7 +130,7 @@ export const deleteCommand = defineOperation({
   name: 'commands.delete',
   method: 'DELETE',
   path: '/api/commands/:commandId',
-  inputSchema: z.object({ commandId: z.string() }),
+  inputSchema: z.object({ commandId: z.string() }).strict(),
   outputSchema: z.object({ success: z.literal(true) }),
   requiredScope: 'account',
   destructive: true,
