@@ -439,4 +439,43 @@ describe('PageSpaceClient — registry-derived namespaces', () => {
     await expect(client.search.regex({ driveId: 'd1', pattern: 'TODO' })).resolves.toEqual(regexFixture);
     await expect(client.search.multiDrive({ searchQuery: 'quarterly report' })).resolves.toEqual(multiDriveFixture);
   });
+
+  it('exposes the activity & channels namespaces (Phase 5 task 5 wired the facade; Phase 3 task 9 defined the operations)', async () => {
+    const activityFixture = {
+      activities: [],
+      pagination: { total: 0, limit: 50, offset: 0, hasMore: false },
+    };
+    const sendFixture = {
+      id: 'm1',
+      content: 'hi',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      pageId: 'ch1',
+      userId: 'u1',
+      fileId: null,
+      attachmentMeta: null,
+      isActive: true,
+      editedAt: null,
+      aiMeta: null,
+      parentId: null,
+      replyCount: 0,
+      lastReplyAt: null,
+      mirroredFromId: null,
+      quotedMessageId: null,
+      user: { id: 'u1', name: 'Ada', image: null },
+      file: null,
+      reactions: [],
+      mirroredFrom: null,
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/api/activities')) return jsonResponse(200, activityFixture);
+      return jsonResponse(200, sendFixture);
+    });
+    const client = makeClient({ fetch: fetchMock });
+
+    expect(typeof client.activity.get).toBe('function');
+    expect(typeof client.channels.send).toBe('function');
+
+    await expect(client.activity.get({})).resolves.toEqual(activityFixture);
+    await expect(client.channels.send({ pageId: 'ch1', content: 'hi' })).resolves.toEqual(sendFixture);
+  });
 });
