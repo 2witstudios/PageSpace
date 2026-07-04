@@ -111,7 +111,7 @@ export default function PricingPage() {
               Simple, transparent pricing
             </h1>
             <p className="text-lg text-muted-foreground mb-4">
-              Every plan includes a monthly allowance of AI credits that meter
+              Every plan includes a monthly allowance of credits that meter
               your usage. Run low? Buy more anytime. No hidden fees.
             </p>
             <p className="text-sm text-muted-foreground">
@@ -157,7 +157,7 @@ export default function PricingPage() {
                       <span className="font-medium">{plan.features.storage}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">AI credits</span>
+                      <span className="text-muted-foreground">Credits</span>
                       <span className="font-medium">{plan.features.monthlyCredits}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
@@ -225,7 +225,7 @@ export default function PricingPage() {
               <tbody>
                 {[
                   { key: "storage", label: "Storage" },
-                  { key: "monthlyCredits", label: "Monthly AI credits" },
+                  { key: "monthlyCredits", label: "Monthly credits" },
                   { key: "models", label: "Model access" },
                   { key: "buyMore", label: "Buy more credits anytime" },
                   { key: "realtime", label: "Real-time Collaboration" },
@@ -285,7 +285,7 @@ export default function PricingPage() {
                   <ul className="space-y-2 text-sm text-muted-foreground">
                     <li className="flex items-center gap-2">
                       <Check className="h-4 w-4 text-green-500" />
-                      Custom storage and AI credit allowances
+                      Custom storage and credit allowances
                     </li>
                     <li className="flex items-center gap-2">
                       <Check className="h-4 w-4 text-green-500" />

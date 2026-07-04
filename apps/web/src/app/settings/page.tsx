@@ -71,7 +71,7 @@ export default function SettingsPage() {
         },
         {
           title: "Usage",
-          description: "AI credits, usage breakdown, automations & storage",
+          description: "Credits, usage breakdown, automations & storage",
           icon: Coins,
           href: "/settings/usage",
           available: true,

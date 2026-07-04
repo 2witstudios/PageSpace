@@ -762,7 +762,7 @@ const faqs = [
   },
   {
     q: "How much does it cost?",
-    a: "PageSpace has a free tier that includes unlimited pages, AI chat, and task lists — everything you need to get started. Paid plans start at $15/month if you want more AI credits or storage. No credit card required to sign up.",
+    a: "PageSpace has a free tier that includes unlimited pages, AI chat, and task lists — everything you need to get started. Paid plans start at $15/month if you want more credits or storage. No credit card required to sign up.",
   },
   {
     q: "Is my family's information private?",

@@ -94,9 +94,9 @@ export async function POST(request: NextRequest) {
             product_data: {
               name:
                 purchase.id === 'custom'
-                  ? 'Custom AI credits'
-                  : `${purchase.label} (AI credits)`,
-              description: 'Prepaid AI credits added to your PageSpace top-up balance.',
+                  ? 'Custom credits'
+                  : `${purchase.label} (credits)`,
+              description: 'Prepaid credits added to your PageSpace top-up balance.',
             },
           },
         },
