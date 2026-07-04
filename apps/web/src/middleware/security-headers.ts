@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
 
 export const NONCE_HEADER = 'x-nonce';
 
@@ -46,6 +47,7 @@ const ERROR_RESPONSE_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': PERMISSIONS_POLICY,
+  'X-PageSpace-API-Version': API_CONTRACT_VERSION,
 };
 
 export const createSecureErrorResponse = (
@@ -155,6 +157,7 @@ export const applySecurityHeaders = (
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
+  response.headers.set('X-PageSpace-API-Version', API_CONTRACT_VERSION);
   // COEP 'credentialless' is set for all page routes except Stripe-dependent
   // paths (/settings/plan, /settings/billing) where it blocks Stripe.js loading
   // via no-cors without Cross-Origin-Resource-Policy headers.

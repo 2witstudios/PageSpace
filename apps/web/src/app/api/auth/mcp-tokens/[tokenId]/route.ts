@@ -7,8 +7,12 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { normalizeDriveScopes } from '@pagespace/lib/auth/mcp-token-scopes';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { rejectScopedOAuth } from '../scope-guard';
 
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+// 'oauth' lets the pagespace CLI (`pagespace tokens revoke`) authenticate
+// with an OAuth access token instead of a session cookie — see the sibling
+// mcp-tokens/route.ts for the read/write route this pairs with.
+const AUTH_OPTIONS = { allow: ['session', 'oauth'] as const, requireCSRF: true };
 
 // Schema for PATCH (editing drive scopes on an existing token)
 const updateTokenScopesSchema = z.object({
@@ -33,6 +37,8 @@ export async function DELETE(
 ) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   const { tokenId } = await context.params;
@@ -71,6 +77,8 @@ export async function PATCH(
 ) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   const { tokenId } = await context.params;

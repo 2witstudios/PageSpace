@@ -17,6 +17,7 @@ vi.mock('@/lib/repositories/session-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  isScopedOAuthAuth: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
@@ -60,7 +61,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 }));
 
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
 import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 
 describe('/api/auth/mcp-tokens', () => {
@@ -76,6 +77,7 @@ describe('/api/auth/mcp-tokens', () => {
       sessionId: 'test-session-id',
     } as never);
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(isScopedOAuthAuth).mockReturnValue(false);
 
     // Default repository mocks
     vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mockResolvedValue({
@@ -313,7 +315,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: true }
+          { allow: ['session', 'oauth'], requireCSRF: true }
         );
       });
     });
@@ -441,7 +443,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: false }
+          { allow: ['session', 'oauth'], requireCSRF: false }
         );
       });
     });
@@ -575,7 +577,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: true }
+          { allow: ['session', 'oauth'], requireCSRF: true }
         );
       });
     });

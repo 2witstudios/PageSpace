@@ -44,6 +44,31 @@ run_test_suite() {
     fi
 }
 
+# Some packages (@pagespace/cli, @pagespace/sdk) wire a `pretest: bun run
+# build` hook (tsc must run before vitest sees the compiled dist types).
+# `bun run --filter <pkg> test -- <args>` forwards trailing args to EVERY
+# script in that chain, including pretest — so `-- src --reporter=dot` reaches
+# `tsc` as stray positional args and it refuses to build ("Unknown compiler
+# option '--reporter=dot'"), failing the suite before vitest ever runs a
+# single test. Building explicitly first, then invoking vitest directly
+# (bypassing the `test` npm-script's arg-forwarding entirely), avoids that.
+run_full_package_suite() {
+    local name="$1"
+    local pkg_dir="$2"
+
+    TOTAL=$((TOTAL + 1))
+    echo -e "${YELLOW}▶ Running: ${name}${NC}"
+
+    if (cd "$pkg_dir" && bun run build && bunx vitest run src --reporter=dot) 2>&1; then
+        echo -e "${GREEN}✓ ${name} passed${NC}"
+        echo ""
+    else
+        echo -e "${RED}✗ ${name} failed${NC}"
+        echo ""
+        FAILED=$((FAILED + 1))
+    fi
+}
+
 # =============================================================================
 # Core Security Module Tests (packages/lib/src/security)
 # =============================================================================
@@ -169,6 +194,40 @@ echo "💾 Database Transaction Security"
 echo "---------------------------------"
 
 run_test_suite "Auth Transactions (Race Conditions)" "@pagespace/db" "src/transactions/__tests__/auth-transactions.test.ts"
+
+# =============================================================================
+# OAuth 2.1 Provider, SDK, CLI & MCP Adapter (SDK/CLI/OAuth epic — Phase 7
+# zero-trust audit). Whole-package runs for @pagespace/cli and @pagespace/sdk
+# are deliberate, not lazy: virtually every file in both packages is auth
+# surface (credential storage, token exchange/rotation, the MCP adapter's
+# error-formatting boundary) and the epic is still under active development —
+# a per-file allowlist here would silently stop covering new auth code the
+# moment a task added a file without also editing this script. Directory-glob
+# runs for the oauth pure logic and API routes make new files under those
+# directories covered automatically for the same reason.
+# =============================================================================
+echo "🔑 OAuth 2.1 Provider (packages/lib/src/auth/oauth — PKCE, scopes, code/device/refresh lifecycle, redirect_uri, clients)"
+echo "-----------------------------------------------------------------------------------------------------------------------"
+
+run_test_suite "OAuth Provider Pure Logic (PKCE/scopes/code-lifecycle/refresh-rotation/clients/user-code/authorize-request/consent/metadata)" "@pagespace/lib" "src/auth/oauth"
+
+echo "🔑 OAuth 2.1 Provider API Routes & Repository (apps/web — authorize/token/device/revoke, atomic grant persistence)"
+echo "---------------------------------------------------------------------------------------------------------------"
+
+run_test_suite "OAuth API Routes (authorize/token/device_authorization/revoke + hardening sweep)" "web" "src/app/api/oauth"
+run_test_suite "OAuth Repository (atomic code exchange/refresh rotation/device poll persistence)" "web" "src/lib/repositories/__tests__/oauth-repository"
+run_test_suite "OAuth Scope Narrowing (principal-permissions dispatch, drive-scoped MCP/OAuth token enforcement)" "web" "src/lib/auth/__tests__/principal-permissions.test.ts"
+run_test_suite "OAuth Scope Enforcement (mcp-scope-enforcement, drive-scope 403 boundary)" "web" "src/lib/auth/__tests__/mcp-scope-enforcement.test.ts"
+
+echo "🔑 pagespace CLI (packages/cli — login/device-login, credential store, auth precedence, tokens, mcp adapter)"
+echo "----------------------------------------------------------------------------------------------------------"
+
+run_full_package_suite "pagespace CLI (full package — every command authenticates through the same precedence resolver)" "packages/cli"
+
+echo "🔑 pagespace SDK (packages/sdk — auth providers, error classification, operation registry)"
+echo "--------------------------------------------------------------------------------------------"
+
+run_full_package_suite "pagespace SDK (full package — StaticTokenProvider/OAuthTokenProvider, typed error hierarchy)" "packages/sdk"
 
 # =============================================================================
 # Security Audit Coverage Gate

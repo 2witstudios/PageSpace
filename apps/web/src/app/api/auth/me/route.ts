@@ -1,11 +1,16 @@
-import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
 
+// Session (browser) and OAuth (CLI `pagespace login` identity confirmation,
+// ADR 0003) both resolve identity the same way; `mcp_*` tokens are scoped
+// agent credentials with no single "current user" concept and stay excluded.
+const AUTH_OPTIONS = { allow: ['session', 'oauth'] as const, requireCSRF: false };
+
 export async function GET(req: Request) {
-  const auth = await requireAuth(req);
-  if (isAuthError(auth)) return auth;
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
 
   const user = await authRepository.findUserById(auth.userId);
 

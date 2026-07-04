@@ -513,16 +513,16 @@ export default function MCPSettingsView() {
     const config = {
       mcpServers: {
         "pagespace": {
-          command: "npx",
-          args: ["-y", "pagespace-mcp@latest"],
+          command: "pagespace",
+          args: ["mcp"],
           env: {
             PAGESPACE_API_URL: "https://pagespace.ai",
-            PAGESPACE_AUTH_TOKEN: token
+            PAGESPACE_TOKEN: token
           }
         }
       }
     };
-    
+
     return JSON.stringify(config, null, 2);
   };
 
@@ -560,8 +560,11 @@ export default function MCPSettingsView() {
         </Button>
         <h1 className="text-3xl font-bold mb-6">MCP Integration</h1>
         <p className="mb-8 text-muted-foreground">
-          Create and manage MCP (Model Context Protocol) tokens for Claude Code and Claude Desktop integration.
-          These tokens allow external tools to read and edit your documents.
+          Connect Claude Code, Claude Desktop, and other MCP clients to PageSpace. For your own
+          machine, the <code className="rounded bg-muted px-1">pagespace</code> CLI&apos;s{' '}
+          <code className="rounded bg-muted px-1">pagespace login</code> is the fastest path — no
+          token to copy. The tokens below are for agents, CI, and service accounts, or whenever you
+          want access scoped to specific drives.
         </p>
       </div>
 
@@ -913,23 +916,27 @@ export default function MCPSettingsView() {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <p className="text-sm font-medium">1. Install the MCP server</p>
+            <p className="text-sm font-medium">1. Install the pagespace CLI</p>
             <div className="relative">
               <pre className="rounded-lg bg-muted p-3 overflow-x-auto">
-                <code className="font-mono text-sm">npm install -g pagespace-mcp@latest</code>
+                <code className="font-mono text-sm">npm install -g @pagespace/cli</code>
               </pre>
               <Button
                 size="sm"
                 variant="outline"
                 className="absolute top-2 right-2"
                 onClick={() => {
-                  navigator.clipboard.writeText("npm install -g pagespace-mcp@latest");
+                  navigator.clipboard.writeText("npm install -g @pagespace/cli");
                   toast.success("Command copied to clipboard");
                 }}
               >
                 <Copy className="h-3 w-3" />
               </Button>
             </div>
+            <p className="text-xs text-muted-foreground">
+              This installs <code className="rounded bg-muted px-1">pagespace mcp</code>, which the
+              config below points at.
+            </p>
           </div>
 
           <div className="space-y-2">

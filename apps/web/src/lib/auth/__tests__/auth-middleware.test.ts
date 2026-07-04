@@ -5,10 +5,12 @@ import {
   authenticateHybridRequest,
   authenticateRequestWithOptions,
   validateMCPToken,
+  validateOAuthAccessToken,
   validateSessionToken,
   isAuthError,
   isMCPAuthResult,
   isSessionAuthResult,
+  isOAuthAuthResult,
 } from '../index';
 
 // Mock dependencies
@@ -19,6 +21,9 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     validateSession: vi.fn(),
   },
+}));
+vi.mock('@pagespace/lib/auth/token-lookup', () => ({
+  findOAuthAccessTokenByValue: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
@@ -38,6 +43,9 @@ vi.mock('@pagespace/db/db', () => ({
       mcpTokens: {
         findFirst: vi.fn(),
       },
+      oauthAccessTokens: {
+        findFirst: vi.fn(),
+      },
     },
     update: vi.fn().mockReturnValue({
       set: vi.fn().mockReturnValue({
@@ -54,6 +62,9 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/auth', () => ({
   mcpTokens: {},
 }));
+vi.mock('@pagespace/db/schema/oauth', () => ({
+  oauthAccessTokens: {},
+}));
 
 vi.mock('../csrf-validation', () => ({
   validateCSRF: vi.fn().mockResolvedValue(null),
@@ -68,6 +79,7 @@ vi.mock('../cookie-config', () => ({
 }));
 
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { findOAuthAccessTokenByValue } from '@pagespace/lib/auth/token-lookup';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { db } from '@pagespace/db/db';
 import { validateCSRF } from '../csrf-validation';
@@ -90,6 +102,7 @@ describe('Auth Middleware', () => {
     vi.clearAllMocks();
     vi.mocked(sessionService.validateSession).mockResolvedValue(null);
     vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(null as never);
+    vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(null);
     vi.mocked(validateCSRF).mockResolvedValue(null);
     vi.mocked(validateOrigin).mockReturnValue(null);
     vi.mocked(getSessionFromCookies).mockReturnValue(null);
@@ -271,6 +284,130 @@ describe('Auth Middleware', () => {
           userId: 'test-user-id',
           tokenId: 'token-id',
           authType: 'mcp',
+          action: 'revoke_and_deny',
+        })
+      );
+    });
+  });
+
+  describe('validateOAuthAccessToken', () => {
+    const baseUser = {
+      id: 'test-user-id',
+      role: 'user' as const,
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      suspendedAt: null as Date | null,
+    };
+
+    function mockOAuthToken(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'oauth-token-id',
+        userId: 'test-user-id',
+        scopes: ['account'],
+        tokenVersion: 0,
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        revokedAt: null,
+        user: { ...baseUser },
+        ...overrides,
+      };
+    }
+
+    it('returns null for token without ps_at_ prefix', async () => {
+      const result = await validateOAuthAccessToken('mcp_some-token');
+      expect(result).toBeNull();
+      expect(findOAuthAccessTokenByValue).not.toHaveBeenCalled();
+    });
+
+    it('returns null for empty token', async () => {
+      const result = await validateOAuthAccessToken('');
+      expect(result).toBeNull();
+    });
+
+    it('returns null when token not found in database', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(null as never);
+
+      const result = await validateOAuthAccessToken('ps_at_valid-token');
+      expect(result).toBeNull();
+    });
+
+    it('returns auth details for a valid account-scoped OAuth token (full access, like an unscoped MCP token)', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(mockOAuthToken() as never);
+
+      const result = await validateOAuthAccessToken('ps_at_valid-token');
+      expect(result).toEqual({
+        userId: 'test-user-id',
+        role: 'user',
+        tokenVersion: 0,
+        adminRoleVersion: 0,
+        tokenId: 'oauth-token-id',
+        scopes: { account: true, offlineAccess: false, drives: new Map() },
+        driveScopes: [],
+        allowedDriveIds: [],
+      });
+    });
+
+    it('returns auth details for a drive-scoped OAuth token, resolving allowedDriveIds from the scope', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+        mockOAuthToken({ scopes: ['drive:abc123def456:admin'] }) as never
+      );
+
+      const result = await validateOAuthAccessToken('ps_at_valid-token');
+      expect(result?.allowedDriveIds).toEqual(['abc123def456']);
+      expect(result?.driveScopes).toEqual([{ driveId: 'abc123def456', role: 'ADMIN', customRoleId: null }]);
+    });
+
+    it('returns null for an expired token', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+        mockOAuthToken({ expiresAt: new Date(Date.now() - 1000) }) as never
+      );
+
+      const result = await validateOAuthAccessToken('ps_at_expired-token');
+      expect(result).toBeNull();
+    });
+
+    it('returns null and fails closed on corrupt/unparseable stored scopes', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+        mockOAuthToken({ scopes: ['not a valid scope grammar!!'] }) as never
+      );
+
+      const result = await validateOAuthAccessToken('ps_at_valid-token');
+      expect(result).toBeNull();
+    });
+
+    it('returns null when tokenVersion is stale (global logout/password change invalidates it)', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+        mockOAuthToken({ tokenVersion: 0, user: { ...baseUser, tokenVersion: 1 } }) as never
+      );
+
+      const result = await validateOAuthAccessToken('ps_at_valid-token');
+      expect(result).toBeNull();
+    });
+
+    it('denies and revokes an OAuth access token for a suspended user, mirroring mcp_token_user_suspended', async () => {
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(
+        mockOAuthToken({ user: { ...baseUser, suspendedAt: new Date('2026-01-01T00:00:00.000Z') } }) as never
+      );
+
+      let capturedSetValues: Record<string, unknown> | undefined;
+      const mockSet = vi.fn().mockImplementation((values: Record<string, unknown>) => {
+        capturedSetValues = values;
+        return { where: vi.fn().mockResolvedValue(undefined) };
+      });
+      vi.mocked(db.update).mockReturnValue({ set: mockSet } as never);
+
+      const result = await validateOAuthAccessToken('ps_at_suspended-user-token');
+
+      expect(result).toBeNull();
+      expect(db.update).toHaveBeenCalled();
+      expect(mockSet).toHaveBeenCalled();
+      expect(capturedSetValues!.revokedAt).toBeInstanceOf(Date);
+      expect(logSecurityEvent).toHaveBeenCalledWith(
+        'unauthorized',
+        expect.objectContaining({
+          reason: 'oauth_token_user_suspended',
+          userId: 'test-user-id',
+          tokenId: 'oauth-token-id',
+          authType: 'oauth',
           action: 'revoke_and_deny',
         })
       );
@@ -566,6 +703,60 @@ describe('Auth Middleware', () => {
         // Assert
         expect(isAuthError(result)).toBe(false);
         expect(isMCPAuthResult(result)).toBe(true);
+      });
+
+      it('rejects an OAuth access token when oauth type is not allowed', async () => {
+        const request = new Request('http://localhost/api/test', {
+          method: 'GET',
+          headers: { Authorization: 'Bearer ps_at_some-token' },
+        });
+
+        const result = await authenticateRequestWithOptions(request, { allow: ['session', 'mcp'] });
+
+        expect(isAuthError(result)).toBe(true);
+        if (isAuthError(result)) {
+          const body = await result.error.json();
+          expect(body.error).toContain('not permitted');
+        }
+      });
+
+      it('allows an OAuth access token when oauth type is allowed', async () => {
+        const mockOAuthToken = {
+          id: 'oauth-token-id',
+          userId: 'test-user-id',
+          scopes: ['account'],
+          tokenVersion: 0,
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+          revokedAt: null,
+          user: { id: 'test-user-id', role: 'user', tokenVersion: 0, adminRoleVersion: 0, suspendedAt: null },
+        };
+        vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(mockOAuthToken as never);
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'GET',
+          headers: { Authorization: 'Bearer ps_at_valid-token' },
+        });
+
+        const result = await authenticateRequestWithOptions(request, { allow: ['oauth'] });
+
+        expect(isAuthError(result)).toBe(false);
+        expect(isOAuthAuthResult(result)).toBe(true);
+        if (!isAuthError(result)) {
+          expect(result.userId).toBe('test-user-id');
+        }
+      });
+
+      it('rejects an invalid/expired/revoked OAuth access token the same way as unknown (no oracle)', async () => {
+        vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(null as never);
+
+        const request = new Request('http://localhost/api/test', {
+          method: 'GET',
+          headers: { Authorization: 'Bearer ps_at_revoked-token' },
+        });
+
+        const result = await authenticateRequestWithOptions(request, { allow: ['oauth'] });
+
+        expect(isAuthError(result)).toBe(true);
       });
     });
 
@@ -964,6 +1155,45 @@ describe('Auth Middleware', () => {
           allowedDriveIds: [],
         };
         expect(isSessionAuthResult(mcpResult)).toBe(false);
+      });
+    });
+
+    describe('isOAuthAuthResult', () => {
+      it('returns true for an OAuth result', () => {
+        const oauthResult = {
+          userId: 'test',
+          role: 'user' as const,
+          tokenVersion: 0,
+          adminRoleVersion: 0,
+          tokenType: 'oauth' as const,
+          tokenId: 'oauth-token-id',
+          scopes: { account: true, offlineAccess: false, drives: new Map() },
+          driveScopes: [],
+          allowedDriveIds: [],
+        };
+        expect(isOAuthAuthResult(oauthResult)).toBe(true);
+      });
+
+      it('returns false for session/mcp results', () => {
+        const sessionResult = {
+          userId: 'test',
+          role: 'user' as const,
+          tokenVersion: 0,
+          adminRoleVersion: 0,
+          tokenType: 'session' as const,
+          sessionId: 'test-session-id',
+        };
+        const mcpResult = {
+          userId: 'test',
+          role: 'user' as const,
+          tokenVersion: 0,
+          adminRoleVersion: 0,
+          tokenType: 'mcp' as const,
+          tokenId: 'token-id',
+          allowedDriveIds: [],
+        };
+        expect(isOAuthAuthResult(sessionResult)).toBe(false);
+        expect(isOAuthAuthResult(mcpResult)).toBe(false);
       });
     });
   });
