@@ -17,13 +17,11 @@
 import { z } from 'zod';
 import { defineOperation } from '../registry/define.js';
 
-const driveScopeInputSchema = z
-  .object({
-    id: z.string(),
-    role: z.enum(['ADMIN', 'MEMBER']).nullish(),
-    customRoleId: z.string().optional(),
-  })
-  .strict();
+const driveScopeInputSchema = z.strictObject({
+  id: z.string(),
+  role: z.enum(['ADMIN', 'MEMBER']).nullish(),
+  customRoleId: z.string().optional(),
+});
 
 const driveScopeOutputSchema = z.object({ id: z.string(), name: z.string() });
 
@@ -31,12 +29,10 @@ export const createMcpToken = defineOperation({
   name: 'tokens.create',
   method: 'POST',
   path: '/api/auth/mcp-tokens',
-  inputSchema: z
-    .object({
-      name: z.string().min(1).max(100),
-      drives: z.array(driveScopeInputSchema).optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    name: z.string().min(1).max(100),
+    drives: z.array(driveScopeInputSchema).optional(),
+  }),
   outputSchema: z.object({
     id: z.string(),
     name: z.string(),
@@ -54,7 +50,7 @@ export const listMcpTokens = defineOperation({
   name: 'tokens.list',
   method: 'GET',
   path: '/api/auth/mcp-tokens',
-  inputSchema: z.object({}).strict(),
+  inputSchema: z.strictObject({}),
   outputSchema: z.array(
     z.object({
       id: z.string(),
@@ -74,7 +70,7 @@ export const revokeMcpToken = defineOperation({
   name: 'tokens.revoke',
   method: 'DELETE',
   path: '/api/auth/mcp-tokens/:tokenId',
-  inputSchema: z.object({ tokenId: z.string() }).strict(),
+  inputSchema: z.strictObject({ tokenId: z.string() }),
   outputSchema: z.object({ message: z.string() }),
   requiredScope: 'account',
   destructive: true,

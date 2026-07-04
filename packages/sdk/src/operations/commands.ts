@@ -81,7 +81,7 @@ export const listCommands = defineOperation({
   name: 'commands.list',
   method: 'GET',
   path: '/api/commands',
-  inputSchema: z.object({}).strict(),
+  inputSchema: z.strictObject({}),
   outputSchema: z.object({ commands: z.array(commandListItemSchema) }),
   requiredScope: 'account',
   description:
@@ -92,15 +92,13 @@ export const createCommand = defineOperation({
   name: 'commands.create',
   method: 'POST',
   path: '/api/commands',
-  inputSchema: z
-    .object({
-      trigger: triggerSchema,
-      description: descriptionSchema,
-      entryPageId: z.string().min(1),
-      driveId: z.string().min(1).optional(),
-      enabled: z.boolean().optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    trigger: triggerSchema,
+    description: descriptionSchema,
+    entryPageId: z.string().min(1),
+    driveId: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
+  }),
   outputSchema: commandEnvelopeSchema,
   requiredScope: 'account',
   description:
@@ -111,15 +109,13 @@ export const updateCommand = defineOperation({
   name: 'commands.update',
   method: 'PATCH',
   path: '/api/commands/:commandId',
-  inputSchema: z
-    .object({
-      commandId: z.string(),
-      trigger: triggerSchema.optional(),
-      description: descriptionSchema.optional(),
-      entryPageId: z.string().min(1).optional(),
-      enabled: z.boolean().optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    commandId: z.string(),
+    trigger: triggerSchema.optional(),
+    description: descriptionSchema.optional(),
+    entryPageId: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
+  }),
   outputSchema: commandEnvelopeSchema,
   requiredScope: 'account',
   description:
@@ -130,7 +126,7 @@ export const deleteCommand = defineOperation({
   name: 'commands.delete',
   method: 'DELETE',
   path: '/api/commands/:commandId',
-  inputSchema: z.object({ commandId: z.string() }).strict(),
+  inputSchema: z.strictObject({ commandId: z.string() }),
   outputSchema: z.object({ success: z.literal(true) }),
   requiredScope: 'account',
   destructive: true,

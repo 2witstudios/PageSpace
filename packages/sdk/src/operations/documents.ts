@@ -166,14 +166,12 @@ export const readDocument = defineOperation({
   name: 'pages.read',
   method: 'POST',
   path: DOCUMENTS_PATH,
-  inputSchema: z
-    .object({
-      operation: z.literal('read').default('read'),
-      pageId: z.string(),
-      startLine: z.number().int().min(1).optional(),
-      endLine: z.number().int().min(1).optional(),
-    })
-    .strict()
+  inputSchema: z.strictObject({
+    operation: z.literal('read').default('read'),
+    pageId: z.string(),
+    startLine: z.number().int().min(1).optional(),
+    endLine: z.number().int().min(1).optional(),
+  })
     .refine((v) => v.startLine === undefined || v.endLine === undefined || v.endLine >= v.startLine, {
       message: 'endLine must be >= startLine',
       path: ['endLine'],
@@ -195,15 +193,13 @@ export const replaceLines = defineOperation({
   name: 'pages.replaceLines',
   method: 'POST',
   path: DOCUMENTS_PATH,
-  inputSchema: z
-    .object({
-      operation: z.literal('replace').default('replace'),
-      pageId: z.string(),
-      startLine: z.number().int().min(1),
-      endLine: z.number().int().min(1).optional(),
-      content: z.string(),
-    })
-    .strict()
+  inputSchema: z.strictObject({
+    operation: z.literal('replace').default('replace'),
+    pageId: z.string(),
+    startLine: z.number().int().min(1),
+    endLine: z.number().int().min(1).optional(),
+    content: z.string(),
+  })
     .refine((v) => v.endLine === undefined || v.endLine >= v.startLine, {
       message: 'endLine must be >= startLine',
       path: ['endLine'],
@@ -229,14 +225,12 @@ export const insertLines = defineOperation({
   name: 'pages.insertLines',
   method: 'POST',
   path: DOCUMENTS_PATH,
-  inputSchema: z
-    .object({
-      operation: z.literal('insert').default('insert'),
-      pageId: z.string(),
-      startLine: z.number().int().min(1),
-      content: z.string(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    operation: z.literal('insert').default('insert'),
+    pageId: z.string(),
+    startLine: z.number().int().min(1),
+    content: z.string(),
+  }),
   outputSchema: z.object({
     pageId: z.string(),
     pageTitle: z.string().nullable(),
@@ -257,14 +251,12 @@ export const deleteLines = defineOperation({
   name: 'pages.deleteLines',
   method: 'POST',
   path: DOCUMENTS_PATH,
-  inputSchema: z
-    .object({
-      operation: z.literal('delete').default('delete'),
-      pageId: z.string(),
-      startLine: z.number().int().min(1),
-      endLine: z.number().int().min(1).optional(),
-    })
-    .strict()
+  inputSchema: z.strictObject({
+    operation: z.literal('delete').default('delete'),
+    pageId: z.string(),
+    startLine: z.number().int().min(1),
+    endLine: z.number().int().min(1).optional(),
+  })
     .refine((v) => v.endLine === undefined || v.endLine >= v.startLine, {
       message: 'endLine must be >= startLine',
       path: ['endLine'],
@@ -295,20 +287,18 @@ export const editSheetCells = defineOperation({
   name: 'pages.editCells',
   method: 'POST',
   path: DOCUMENTS_PATH,
-  inputSchema: z
-    .object({
-      operation: z.literal('edit-cells').default('edit-cells'),
-      pageId: z.string(),
-      cells: z
-        .array(
-          z.object({
-            address: z.string().trim().regex(cellAddressPattern, 'Invalid A1-style cell address'),
-            value: z.string(),
-          }),
-        )
-        .min(1),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    operation: z.literal('edit-cells').default('edit-cells'),
+    pageId: z.string(),
+    cells: z
+      .array(
+        z.object({
+          address: z.string().trim().regex(cellAddressPattern, 'Invalid A1-style cell address'),
+          value: z.string(),
+        }),
+      )
+      .min(1),
+  }),
   outputSchema: z.object({
     pageId: z.string(),
     pageTitle: z.string().nullable(),

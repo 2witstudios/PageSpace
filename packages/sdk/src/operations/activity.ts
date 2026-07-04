@@ -124,21 +124,19 @@ export const getActivity = defineOperation({
   name: 'activity.get',
   method: 'GET',
   path: '/api/activities',
-  inputSchema: z
-    .object({
-      context: z.enum(['user', 'drive', 'page']).optional(),
-      driveId: z.string().optional(),
-      pageId: z.string().optional(),
-      startDate: isoDatetimeSchema.optional(),
-      endDate: isoDatetimeSchema.optional(),
-      // actorId is ignored by the route in 'user' context (already scoped to the caller).
-      actorId: z.string().optional(),
-      operation: z.string().optional(),
-      resourceType: z.string().optional(),
-      limit: z.number().int().min(1).max(100).optional(),
-      offset: z.number().int().min(0).optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    context: z.enum(['user', 'drive', 'page']).optional(),
+    driveId: z.string().optional(),
+    pageId: z.string().optional(),
+    startDate: isoDatetimeSchema.optional(),
+    endDate: isoDatetimeSchema.optional(),
+    // actorId is ignored by the route in 'user' context (already scoped to the caller).
+    actorId: z.string().optional(),
+    operation: z.string().optional(),
+    resourceType: z.string().optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    offset: z.number().int().min(0).optional(),
+  }),
   outputSchema: getActivityOutputSchema,
   // No fixed driveId path param — `context: 'user'` (the default) scopes to
   // whatever drives the caller's own principal/token can already reach, same

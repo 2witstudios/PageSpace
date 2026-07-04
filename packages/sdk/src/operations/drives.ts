@@ -31,12 +31,10 @@ export const listDrives = defineOperation({
   name: 'drives.list',
   method: 'GET',
   path: '/api/drives',
-  inputSchema: z
-    .object({
-      includeTrash: z.boolean().optional(),
-      tokenScopable: z.boolean().optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    includeTrash: z.boolean().optional(),
+    tokenScopable: z.boolean().optional(),
+  }),
   outputSchema: z.array(driveSchema),
   description: 'List drives the caller can access.',
 });
@@ -45,7 +43,7 @@ export const createDrive = defineOperation({
   name: 'drives.create',
   method: 'POST',
   path: '/api/drives',
-  inputSchema: z.object({ name: z.string().min(1, 'Missing name') }).strict(),
+  inputSchema: z.strictObject({ name: z.string().min(1, 'Missing name') }),
   outputSchema: driveSchema,
   requiredScope: 'account',
   description:
@@ -79,7 +77,7 @@ export const renameDrive = defineOperation({
   name: 'drives.rename',
   method: 'PATCH',
   path: '/api/drives/:driveId',
-  inputSchema: z.object({ driveId: z.string(), name: z.string() }).strict(),
+  inputSchema: z.strictObject({ driveId: z.string(), name: z.string() }),
   outputSchema: driveRowSchema,
   requiredScope: 'drive:admin',
   description: "Rename a drive. Requires owner/admin authority; a drive's Home drive cannot be renamed.",
@@ -89,7 +87,7 @@ export const updateDriveContext = defineOperation({
   name: 'drives.updateContext',
   method: 'PATCH',
   path: '/api/drives/:driveId',
-  inputSchema: z.object({ driveId: z.string(), drivePrompt: z.string().max(10000) }).strict(),
+  inputSchema: z.strictObject({ driveId: z.string(), drivePrompt: z.string().max(10000) }),
   outputSchema: driveRowSchema,
   requiredScope: 'drive:admin',
   description:
@@ -100,7 +98,7 @@ export const trashDrive = defineOperation({
   name: 'drives.trash',
   method: 'DELETE',
   path: '/api/drives/:driveId',
-  inputSchema: z.object({ driveId: z.string(), confirmDriveName: z.string() }).strict(),
+  inputSchema: z.strictObject({ driveId: z.string(), confirmDriveName: z.string() }),
   outputSchema: z.object({ success: z.literal(true) }),
   requiredScope: 'drive:admin',
   description:
@@ -111,7 +109,7 @@ export const restoreDrive = defineOperation({
   name: 'drives.restore',
   method: 'POST',
   path: '/api/drives/:driveId/restore',
-  inputSchema: z.object({ driveId: z.string() }).strict(),
+  inputSchema: z.strictObject({ driveId: z.string() }),
   outputSchema: z.object({ success: z.literal(true) }),
   requiredScope: 'drive',
   description:

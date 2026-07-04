@@ -128,13 +128,11 @@ export const multiDriveListAgents = defineOperation({
   name: 'agents.listMultiDrive',
   method: 'GET',
   path: '/api/ai/page-agents/multi-drive',
-  inputSchema: z
-    .object({
-      includeSystemPrompt: z.boolean().optional(),
-      includeTools: z.boolean().optional(),
-      groupByDrive: z.boolean().optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    includeSystemPrompt: z.boolean().optional(),
+    includeTools: z.boolean().optional(),
+    groupByDrive: z.boolean().optional(),
+  }),
   outputSchema: multiDriveListAgentsOutputSchema,
   // No driveId path param — enumerates whatever drives the caller can already
   // access (same rationale as drives.list / search.multiDrive).
@@ -180,19 +178,17 @@ export const updateAgentConfig = defineOperation({
   name: 'agents.updateConfig',
   method: 'PUT',
   path: '/api/ai/page-agents/:agentId/config',
-  inputSchema: z
-    .object({
-      agentId: z.string(),
-      systemPrompt: z.string().optional(),
-      enabledTools: z.array(z.string()).nullable().optional(),
-      aiProvider: z.string().optional(),
-      aiModel: z.string().optional(),
-      agentDefinition: z.string().nullable().optional(),
-      visibleToGlobalAssistant: z.boolean().optional(),
-      toolExposureMode: toolExposureModeSchema.optional(),
-      expectedRevision: z.number().optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    agentId: z.string(),
+    systemPrompt: z.string().optional(),
+    enabledTools: z.array(z.string()).nullable().optional(),
+    aiProvider: z.string().optional(),
+    aiModel: z.string().optional(),
+    agentDefinition: z.string().nullable().optional(),
+    visibleToGlobalAssistant: z.boolean().optional(),
+    toolExposureMode: toolExposureModeSchema.optional(),
+    expectedRevision: z.number().optional(),
+  }),
   outputSchema: updateAgentConfigOutputSchema,
   requiredScope: 'drive',
   description:
@@ -235,14 +231,12 @@ export const askAgent = defineOperation({
   name: 'agents.ask',
   method: 'POST',
   path: '/api/ai/page-agents/consult',
-  inputSchema: z
-    .object({
-      agentId: z.string(),
-      question: z.string().min(1),
-      context: z.string().optional(),
-      conversationId: z.string().optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    agentId: z.string(),
+    question: z.string().min(1),
+    context: z.string().optional(),
+    conversationId: z.string().optional(),
+  }),
   outputSchema: askAgentOutputSchema,
   requiredScope: 'drive',
   // Long-running: the route's tool loop is capped at 20 steps (#1769 fix,
@@ -283,7 +277,7 @@ export const listModels = defineOperation({
   name: 'agents.listModels',
   method: 'GET',
   path: '/api/ai/models',
-  inputSchema: z.object({}).strict(),
+  inputSchema: z.strictObject({}),
   outputSchema: listModelsOutputSchema,
   description:
     'List the AI model catalog grouped by provider (D3: the route is public, takes no query params, and returns no top-level `models` array — the old tool\'s provider/freeOnly filtering was dead code). Filter the fetched catalog client-side with `filterModelCatalog`.',
