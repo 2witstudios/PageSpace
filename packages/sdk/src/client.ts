@@ -241,6 +241,20 @@ export interface PageSpaceClientOptions {
   readonly abortFactory?: () => AbortController;
 }
 
+/**
+ * Trims trailing `/` characters without a regex — `/\/+$/` is flagged by
+ * static analysis as a polynomial-backtracking risk on attacker-influenced
+ * input (CodeQL js/polynomial-redos); this loop is linear in the input
+ * length by construction.
+ */
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function toValidationIssues(issues: ReadonlyArray<{ path: PropertyKey[]; message: string }>): ValidationIssue[] {
   return issues.map((issue) => ({
     path: issue.path.filter((segment): segment is string | number => typeof segment === 'string' || typeof segment === 'number'),
@@ -297,7 +311,7 @@ export class PageSpaceClient {
   #compatibilityVerified = false;
 
   constructor(options: PageSpaceClientOptions) {
-    this.#config = { baseUrl: options.baseUrl.replace(/\/+$/, ''), apiVersion: options.apiVersion };
+    this.#config = { baseUrl: trimTrailingSlashes(options.baseUrl), apiVersion: options.apiVersion };
     this.#auth = options.auth;
     this.#fetch = options.fetch ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? 30_000;

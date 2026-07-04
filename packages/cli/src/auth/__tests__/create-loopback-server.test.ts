@@ -50,6 +50,25 @@ describe('createLoopbackServer', () => {
     }
   });
 
+  it('does not let a "prototype" query key inject either, and query stays a plain object', async () => {
+    const server = await createLoopbackServer();
+    try {
+      const pending = server.nextCallback();
+      const responsePromise = fetch(
+        `http://127.0.0.1:${server.port}/callback?prototype=pwned&code=ok`,
+      );
+      const callback = await pending;
+      await server.finish('ok');
+      await responsePromise;
+
+      expect(callback.query.code).toBe('ok');
+      expect(Object.prototype.hasOwnProperty.call(callback.query, 'prototype')).toBe(false);
+      expect(Object.getPrototypeOf(callback.query)).toBe(Object.prototype);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('finish() sends the given HTML back to the requester', async () => {
     const server = await createLoopbackServer();
     try {

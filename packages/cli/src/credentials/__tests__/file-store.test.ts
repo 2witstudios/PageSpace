@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileCredentialStore, PermissionError } from '@pagespace/cli';
 import type { HostCredential } from '@pagespace/cli';
 
@@ -145,6 +145,24 @@ describe('FileCredentialStore', () => {
       const message = error instanceof Error ? error.message : String(error);
       expect(message).toContain(credentialsPath);
       expect(message).not.toContain(CRED_A.refreshToken);
+    }
+  });
+
+  it('checks permissions and reads via the same open file descriptor, not stat-then-open-by-path (TOCTOU)', async () => {
+    const store = new FileCredentialStore({ path: credentialsPath });
+    await store.set('pagespace.ai', CRED_A);
+
+    // The old implementation called fs.stat(path) directly, then a separate
+    // fs.readFile(path) — a check-to-use gap an attacker could exploit by
+    // swapping the path's target between the two calls. The fix opens the
+    // file once and stats/reads that same descriptor, so a path-level
+    // fs.stat should never be invoked from readFile().
+    const statSpy = vi.spyOn(fs, 'stat');
+    try {
+      expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+      expect(statSpy).not.toHaveBeenCalled();
+    } finally {
+      statSpy.mockRestore();
     }
   });
 

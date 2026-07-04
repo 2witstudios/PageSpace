@@ -38,13 +38,15 @@ export function createLoopbackServer(): Promise<LoopbackServer> {
         return;
       }
 
-      const query: Record<string, string> = {};
-      url.searchParams.forEach((value, key) => {
-        // The OAuth callback query is attacker-influenceable; never let a query
-        // key write to a prototype-polluting property (remote property injection).
-        if (key === '__proto__' || key === 'constructor' || key === 'prototype') return;
-        query[key] = value;
-      });
+      // The OAuth callback query is attacker-influenceable; never let a query
+      // key write to a prototype-polluting property (remote property injection).
+      // Object.fromEntries defines own data properties (CreateDataPropertyOrThrow),
+      // it never mutates an object's prototype slot even for a "__proto__" key —
+      // combined with the denylist filter this clears static analysis flags too.
+      const DENIED_QUERY_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+      const query: Record<string, string> = Object.fromEntries(
+        [...url.searchParams.entries()].filter(([key]) => !DENIED_QUERY_KEYS.has(key)),
+      );
 
       respond = (html: string) => {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

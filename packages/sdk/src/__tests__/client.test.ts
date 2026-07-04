@@ -102,6 +102,23 @@ describe('PageSpaceClient — invoke pipeline happy path', () => {
     await expect(client.invoke(getWidget, { widgetId: 'w1' })).resolves.toEqual({ id: 'w1', label: 'Widget One' });
   });
 
+  it('normalizes a pathological run of trailing slashes on baseUrl in linear time (no regex backtracking)', () => {
+    const auth = fakeAuth();
+    const pathological = `https://pagespace.ai${'/'.repeat(200_000)}`;
+    const start = performance.now();
+    const client = new PageSpaceClient({
+      baseUrl: pathological,
+      auth,
+      jitter: () => 0,
+      timeoutMs: 1000,
+      fetch: vi.fn() as unknown as typeof fetch,
+    });
+    const elapsedMs = performance.now() - start;
+
+    expect(client).toBeInstanceOf(PageSpaceClient);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
   it('rejects with ValidationError before any network call when input fails the schema', async () => {
     const fetchMock = vi.fn();
     const client = makeClient({ fetch: fetchMock });

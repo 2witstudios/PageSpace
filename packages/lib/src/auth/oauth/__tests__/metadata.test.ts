@@ -93,4 +93,14 @@ describe('buildServerMetadata', () => {
     expect(first).toEqual(second);
     expect(first).not.toBe(second);
   });
+
+  it('strips a pathological run of trailing slashes in linear time (no regex backtracking)', () => {
+    const pathological = `https://pagespace.ai${'/'.repeat(200_000)}`;
+    const start = performance.now();
+    const metadata = buildServerMetadata({ issuer: pathological });
+    const elapsedMs = performance.now() - start;
+
+    expect(metadata.issuer).toBe('https://pagespace.ai');
+    expect(elapsedMs).toBeLessThan(500);
+  });
 });

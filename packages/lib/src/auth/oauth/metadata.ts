@@ -40,8 +40,22 @@ export interface OAuthServerMetadata {
   scopes_supported: readonly string[];
 }
 
+/**
+ * Trims trailing `/` characters without a regex — `/\/+$/` is flagged by
+ * static analysis as a polynomial-backtracking risk on attacker-influenced
+ * input (CodeQL js/polynomial-redos); this loop is linear in the input
+ * length by construction.
+ */
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 export function buildServerMetadata(config: OAuthServerConfig): OAuthServerMetadata {
-  const issuer = config.issuer.replace(/\/+$/, '');
+  const issuer = trimTrailingSlashes(config.issuer);
 
   return {
     issuer,

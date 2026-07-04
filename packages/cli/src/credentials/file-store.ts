@@ -67,9 +67,13 @@ export class FileCredentialStore {
   }
 
   private async readFile(): Promise<CredentialsFile> {
-    let stat;
+    // Open once and stat/read the SAME file descriptor rather than
+    // stat-then-open-by-path — the latter has a TOCTOU gap where the path
+    // could be swapped (e.g. a symlink) between the permission check and the
+    // read, reading through a different, unchecked file.
+    let handle;
     try {
-      stat = await fs.stat(this.path);
+      handle = await fs.open(this.path, 'r');
     } catch (error) {
       if (isErrnoException(error) && error.code === 'ENOENT') {
         return emptyCredentialsFile();
@@ -77,13 +81,18 @@ export class FileCredentialStore {
       throw error;
     }
 
-    const mode = stat.mode & 0o777;
-    if (!isSecureMode(mode)) {
-      throw new PermissionError(permissionFixItMessage(this.path, mode));
-    }
+    try {
+      const stat = await handle.stat();
+      const mode = stat.mode & 0o777;
+      if (!isSecureMode(mode)) {
+        throw new PermissionError(permissionFixItMessage(this.path, mode));
+      }
 
-    const raw = await fs.readFile(this.path, 'utf8');
-    return parseCredentialsFile(raw);
+      const raw = await handle.readFile('utf8');
+      return parseCredentialsFile(raw);
+    } finally {
+      await handle.close();
+    }
   }
 
   private async writeFile(file: CredentialsFile): Promise<void> {
