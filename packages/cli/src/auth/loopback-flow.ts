@@ -8,17 +8,18 @@
  * discovery failure) is a distinct `LoopbackLoginResult` variant so callers
  * never need to inspect an error message to decide what happened.
  *
- * PKCE math (`generateCodeVerifier`/`deriveCodeChallenge`) is reused from the
- * provider-side implementation rather than reinvented — the derivation is
- * the same SHA256/base64url math regardless of which side of the exchange
- * calls it.
+ * PKCE math (`generateCodeVerifier`/`deriveCodeChallenge`) comes from
+ * `@pagespace/sdk` rather than being reinvented here — the derivation is the
+ * same SHA256/base64url math regardless of which side of the exchange calls
+ * it, and importing the SDK (an existing CLI dependency) keeps this package
+ * free of a runtime `@pagespace/lib` import.
  *
  * `LoopbackLoginResult`'s `success` case deliberately carries only
  * `identity`, never the access/refresh tokens — the tokens exist solely
  * inside this function's local scope between exchange and persistence, so
  * no caller can accidentally print or log one.
  */
-import { deriveCodeChallenge, generateCodeVerifier } from '@pagespace/lib/auth/oauth/pkce';
+import { deriveCodeChallenge, generateCodeVerifier } from '@pagespace/sdk';
 import type { CredentialStore } from '../credentials/store.js';
 
 export interface DiscoveredMetadata {

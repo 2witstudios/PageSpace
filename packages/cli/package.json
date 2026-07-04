@@ -1,7 +1,16 @@
 {
   "name": "@pagespace/cli",
   "version": "0.1.0",
-  "license": "UNLICENSED",
+  "description": "pagespace — the official CLI for PageSpace: browser-based login, drive/page/task management, and a `pagespace mcp` stdio server for coding agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2witstudios/PageSpace.git",
+    "directory": "packages/cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "sideEffects": false,
   "bin": {
@@ -30,8 +39,10 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@napi-rs/keyring": "^1.3.0",
-    "@pagespace/lib": "workspace:*",
     "@pagespace/sdk": "workspace:*",
     "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@pagespace/lib": "workspace:*"
   }
 }
