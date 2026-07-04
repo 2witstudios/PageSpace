@@ -67,6 +67,16 @@ export class OAuthTokenProvider implements AuthProvider {
   }
 
   async getAccessToken(): Promise<string> {
+    // A refresh already in flight owns the authoritative outcome — join it
+    // rather than re-deciding against `this.#tokens`, which is still the
+    // pre-refresh snapshot until that flight resolves. Without this, a
+    // concurrent caller arriving after `refreshExpiresAt` (measured against
+    // the stale snapshot) would fail closed even though the in-flight
+    // refresh is about to succeed and produce a fresh token pair.
+    if (this.#inFlightRefresh) {
+      return this.#inFlightRefresh;
+    }
+
     const state: OAuthTokenState =
       this.#status === 'unauthenticated'
         ? { status: 'unauthenticated' }
