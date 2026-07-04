@@ -1,5 +1,6 @@
 import { describe, test, vi, beforeEach, type Mock } from 'vitest';
 import { render, act, waitFor, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { assert } from './riteway';
 
 // Hoisted mock instances accessible inside vi.mock factories
@@ -102,12 +103,30 @@ vi.mock('@/lib/ai/core/stream-abort-client', () => ({
 }));
 vi.mock('@/lib/ai/core/vision-models', () => ({ hasVisionCapability: vi.fn(() => false) }));
 
-const { mockCreateConversation, mockRefreshConversations } = vi.hoisted(() => ({
+const { mockCreateConversation, mockRefreshConversations, mockLoadConversation, useConversationsOptionsRef, historyTabPropsRef } = vi.hoisted(() => ({
   mockCreateConversation: vi.fn(),
   mockRefreshConversations: vi.fn(),
+  mockLoadConversation: vi.fn(),
+  // Captures the options passed to useConversations() on each render so tests
+  // can simulate the real hook's callback contract (onConversationCreate fires
+  // synchronously, before any network round trip resolves).
+  useConversationsOptionsRef: {
+    current: null as null | {
+      onConversationCreate?: (id: string) => void;
+      onConversationLoad?: (id: string, messages: unknown[]) => void;
+    },
+  },
+  historyTabPropsRef: {
+    current: null as null | { onSelectConversation?: (id: string) => void },
+  },
 }));
 
-vi.mock('@/lib/ai/shared', () => ({
+vi.mock('@/lib/ai/shared', async (importOriginal) => ({
+  // useConversationIdentity is intentionally left as the real implementation:
+  // it's a simple, independently-tested wrapper, and these tests rely on its
+  // real resolve()-on-mount behavior to exercise resolveConversation's fetch
+  // sequence (the thing this suite is actually testing).
+  ...(await importOriginal<typeof import('@/lib/ai/shared')>()),
   useMCPTools: vi.fn(() => ({
     isDesktop: false,
     runningServers: [],
@@ -136,15 +155,21 @@ vi.mock('@/lib/ai/shared', () => ({
     setSelectedModel: vi.fn(),
     isProviderConfigured: vi.fn(() => true),
   })),
-  useConversations: vi.fn(() => ({
-    conversations: [],
-    isLoading: false,
-    loadConversation: vi.fn(),
-    createConversation: mockCreateConversation,
-    deleteConversation: vi.fn(),
-    refreshConversations: mockRefreshConversations,
-    prependConversationOptimistic: vi.fn(),
-  })),
+  useConversations: vi.fn((options: {
+    onConversationCreate?: (id: string) => void;
+    onConversationLoad?: (id: string, messages: unknown[]) => void;
+  }) => {
+    useConversationsOptionsRef.current = options;
+    return {
+      conversations: [],
+      isLoading: false,
+      loadConversation: mockLoadConversation,
+      createConversation: mockCreateConversation,
+      deleteConversation: vi.fn(),
+      refreshConversations: mockRefreshConversations,
+      prependConversationOptimistic: vi.fn(),
+    };
+  }),
   useChatTransport: vi.fn(() => ({})),
   useStreamingRegistration: vi.fn(),
   useChatStop: vi.fn(() => mockLocalStop),
@@ -171,7 +196,10 @@ vi.mock('@/lib/ai/shared/hooks/useImageAttachments', () => {
 vi.mock('@/lib/tree/tree-utils', () => ({ buildPagePath: vi.fn(() => null) }));
 vi.mock('@/components/ai/page-agents', () => ({
   PageAgentSettingsTab: vi.fn(() => null),
-  PageAgentHistoryTab: vi.fn(() => null),
+  PageAgentHistoryTab: vi.fn((props: { onSelectConversation?: (id: string) => void }) => {
+    historyTabPropsRef.current = props;
+    return null;
+  }),
 }));
 vi.mock('@/components/ai/page-agents/AgentIntegrationsPanel', () => ({
   AgentIntegrationsPanel: vi.fn(() => null),
@@ -234,6 +262,17 @@ import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { ChatLayout } from '@/components/ai/chat/layouts';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
+import { useMCPTools } from '@/lib/ai/shared';
+
+// The most recently observed conversationId — useMCPTools({ conversationId })
+// is called on every render, so its latest call args are a reliable, already-
+// mocked signal for "what does AiChatView currently believe currentConversationId is",
+// without needing to click through the (also mocked) ChatLayout/PageAgentHistoryTab.
+const latestMcpConversationId = (): string | null => {
+  const calls = vi.mocked(useMCPTools).mock.calls;
+  const last = calls[calls.length - 1] as [{ conversationId: string | null }] | undefined;
+  return last ? last[0].conversationId : null;
+};
 
 const PAGE_ID = 'page-123';
 const CONV_ID = 'conv-existing-abc';
@@ -295,6 +334,8 @@ describe('AiChatView initializeChat', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationsOptionsRef.current = null;
+    historyTabPropsRef.current = null;
   });
 
   test('given a page with existing conversations, loads the most recent conversation without creating a new one', async () => {
@@ -330,13 +371,18 @@ describe('AiChatView initializeChat', () => {
       expected: false,
     });
 
-    assert({
-      given: 'a page with existing conversations',
-      should: 'apply the fetched messages to chat state',
-      actual: mockSetMessages.mock.calls.some(
-        (args) => JSON.stringify(args[0]) === JSON.stringify(testMessages)
-      ),
-      expected: true,
+    // Applying preloaded messages now happens via the load-on-select effect
+    // reacting to the identity becoming ready — one more async tick than the
+    // old inline call chain, so this needs its own waitFor.
+    await waitFor(() => {
+      assert({
+        given: 'a page with existing conversations',
+        should: 'apply the fetched messages to chat state',
+        actual: mockSetMessages.mock.calls.some(
+          (args) => JSON.stringify(args[0]) === JSON.stringify(testMessages)
+        ),
+        expected: true,
+      });
     });
   });
 
@@ -484,6 +530,124 @@ describe('AiChatView initializeChat', () => {
       should: 'call createConversation from useConversations (no change to existing behavior)',
       actual: mockCreateConversation.mock.calls.length,
       expected: 1,
+    });
+  });
+
+  test('given New Chat succeeds, should adopt the new conversationId synchronously — before the create persist would resolve', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [existingConversation] });
+      }
+      if (url === MESSAGES_URL && !opts?.method) {
+        return makeOkResponse({ messages: [] });
+      }
+      return makeErrorResponse();
+    });
+
+    // Mirrors the real hook: createConversation invokes onConversationCreate
+    // synchronously, then persists — the persist here never resolves, so if
+    // identity depended on it, currentConversationId would never update.
+    mockCreateConversation.mockImplementation(() => {
+      useConversationsOptionsRef.current?.onConversationCreate?.('new-conv-xyz');
+      return new Promise(() => {});
+    });
+
+    render(<AiChatView page={page} />);
+    await waitFor(() => {
+      assert({
+        given: 'init has resolved to the existing conversation',
+        should: 'reflect it via useMCPTools',
+        actual: latestMcpConversationId(),
+        expected: CONV_ID,
+      });
+    });
+
+    const newChatButton = await screen.findByRole('button', { name: /new chat/i });
+    fireEvent.click(newChatButton);
+
+    assert({
+      given: 'New Chat was clicked and createConversation invoked its callback',
+      should: 'adopt the new conversationId immediately, without waiting for the persist to resolve',
+      actual: latestMcpConversationId(),
+      expected: 'new-conv-xyz',
+    });
+  });
+
+  test('given a conversation is selected from history, should adopt its id synchronously — before useConversations.loadConversation resolves', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [existingConversation] });
+      }
+      if (url === MESSAGES_URL && !opts?.method) {
+        return makeOkResponse({ messages: [] });
+      }
+      return makeErrorResponse();
+    });
+    // loadConversation's own fetch never resolves — proves identity doesn't wait on it.
+    mockLoadConversation.mockImplementation(() => new Promise(() => {}));
+
+    render(<AiChatView page={page} />);
+    await waitFor(() => {
+      assert({
+        given: 'init has resolved to the existing conversation',
+        should: 'reflect it via useMCPTools',
+        actual: latestMcpConversationId(),
+        expected: CONV_ID,
+      });
+    });
+
+    // PageAgentHistoryTab only mounts (and its props get captured) once the
+    // History tab is active — Radix Tabs doesn't render inactive TabsContent
+    // children by default.
+    const historyTrigger = await screen.findByRole('tab', { name: /history/i });
+    await userEvent.click(historyTrigger);
+    await waitFor(() => {
+      assert({
+        given: 'the History tab was clicked',
+        should: 'mount PageAgentHistoryTab and capture its onSelectConversation prop',
+        actual: historyTabPropsRef.current?.onSelectConversation !== undefined,
+        expected: true,
+      });
+    });
+
+    act(() => {
+      // Invokes the onSelectConversation wrapper AiChatView passes to
+      // PageAgentHistoryTab — setIdentity fires before loadConversation's
+      // fetch (mocked above to hang forever) has any chance to resolve.
+      historyTabPropsRef.current?.onSelectConversation?.('selected-from-history-id');
+    });
+
+    assert({
+      given: 'a conversation was selected from history',
+      should: 'adopt its id immediately, without waiting for loadConversation to resolve',
+      actual: latestMcpConversationId(),
+      expected: 'selected-from-history-id',
+    });
+  });
+
+  test('given the conversations-list fetch fails during init, should surface a retry state instead of silently falling back to the page-scoped placeholder', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        throw new Error('network down');
+      }
+      return makeErrorResponse();
+    });
+
+    render(<AiChatView page={page} />);
+
+    await screen.findByText(/Failed to load this conversation/i);
+
+    assert({
+      given: 'the conversations-list fetch threw during init',
+      should: 'never adopt the page-scoped default placeholder id',
+      actual: latestMcpConversationId(),
+      expected: null,
     });
   });
 });

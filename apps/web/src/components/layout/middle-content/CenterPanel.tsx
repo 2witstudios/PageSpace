@@ -199,6 +199,10 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   } else if (componentName === 'SheetView') {
     // SheetView should remount per page to isolate undo/redo history
     pageComponent = <SheetView key={`sheet-${page.id}`} page={page} />;
+  } else if (componentName === 'AiChatView') {
+    // AiChatView should remount per page: conversation identity, drafts, and
+    // attachments are all scoped to a single page and must reset on switch.
+    pageComponent = <AiChatView key={`ai-chat-${page.id}`} page={page} />;
   } else {
     // Other components still accept full page object
     // Type assertion: we've excluded DocumentView above, so ViewComponent here
