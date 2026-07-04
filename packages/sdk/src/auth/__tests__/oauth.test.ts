@@ -203,6 +203,23 @@ describe('OAuthTokenProvider', () => {
     expect(JSON.stringify(provider)).not.toContain(secretAccessToken);
   });
 
+  it('fails closed without a network call once the refresh token itself has expired', async () => {
+    const refreshAccessToken = vi.fn();
+    const provider = new OAuthTokenProvider({
+      initialTokens: makeTokens({ accessExpiresAt: 0, refreshExpiresAt: 500 }),
+      refreshAccessToken,
+      now: () => 1_000,
+      skewMs: 60_000,
+    });
+
+    await expect(provider.getAccessToken()).rejects.toBeInstanceOf(AuthenticationError);
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+
+    // Stays terminal on a subsequent call too.
+    await expect(provider.getAccessToken()).rejects.toBeInstanceOf(AuthenticationError);
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+  });
+
   it('propagates the refresh HTTP call errors from the injected transport (no bespoke fetch inside the provider)', async () => {
     const transportError = new NetworkError('DNS resolution failed');
     const refreshAccessToken = vi.fn().mockRejectedValue(transportError);

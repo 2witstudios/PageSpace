@@ -70,11 +70,19 @@ export class OAuthTokenProvider implements AuthProvider {
     const state: OAuthTokenState =
       this.#status === 'unauthenticated'
         ? { status: 'unauthenticated', accessExpiresAt: this.#tokens.accessExpiresAt }
-        : { status: 'authenticated', accessExpiresAt: this.#tokens.accessExpiresAt };
+        : {
+            status: 'authenticated',
+            accessExpiresAt: this.#tokens.accessExpiresAt,
+            refreshExpiresAt: this.#tokens.refreshExpiresAt,
+          };
 
     const action = decideTokenAction(state, this.#now(), this.#skewMs);
 
     if (action === 'unauthenticated') {
+      // Reached either because a prior refresh was already terminal, or
+      // because refreshExpiresAt has now passed — either way, fail closed
+      // for good rather than re-deciding the same outcome on every call.
+      this.#status = 'unauthenticated';
       throw new AuthenticationError('OAuth credential is unauthenticated; re-login required');
     }
     if (action === 'use-cached') {

@@ -14,13 +14,15 @@ import {
 export type TokenAction = 'use-cached' | 'refresh' | 'unauthenticated';
 
 export type OAuthTokenState =
-  | { status: 'authenticated'; accessExpiresAt: number }
+  | { status: 'authenticated'; accessExpiresAt: number; refreshExpiresAt: number }
   | { status: 'unauthenticated'; accessExpiresAt: number };
 
 /**
  * Decides what an OAuthTokenProvider should do for the next getAccessToken()
  * call. Refreshes proactively once fewer than `skewMs` remain before expiry
- * — never waits for the server to return a 401.
+ * — never waits for the server to return a 401. Once `refreshExpiresAt`
+ * itself has passed, goes straight to 'unauthenticated' rather than
+ * attempting a refresh call that the server will reject anyway.
  */
 export function decideTokenAction(
   state: OAuthTokenState,
@@ -30,7 +32,10 @@ export function decideTokenAction(
   if (state.status === 'unauthenticated') {
     return 'unauthenticated';
   }
-  return nowMs + skewMs < state.accessExpiresAt ? 'use-cached' : 'refresh';
+  if (nowMs + skewMs < state.accessExpiresAt) {
+    return 'use-cached';
+  }
+  return nowMs < state.refreshExpiresAt ? 'refresh' : 'unauthenticated';
 }
 
 export type RefreshFailureClassification = 'retryable' | 'terminal';
