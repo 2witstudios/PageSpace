@@ -13,54 +13,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { listWiredOperations } from '../client.js';
-import type { Operation } from '../registry/define.js';
 import { createRegistry } from '../registry/registry.js';
-
-/**
- * `import.meta.glob` (Vite/vitest) isn't in the package's `ImportMeta` type —
- * this package has no `vite/client` types reference (it's a library, not a
- * Vite app) — so the single method this test needs is declared locally
- * rather than pulling in vite's own (much wider) ambient types.
- */
-declare global {
-  interface ImportMeta {
-    glob(pattern: string, options: { eager: true }): Record<string, Record<string, unknown>>;
-  }
-}
-
-/**
- * Vite's statically-analyzable enumeration of every sibling module under
- * `operations/` (one level deep — `__tests__/*.test.ts` lives in a
- * subdirectory the pattern doesn't reach). Eager so the modules are already
- * evaluated; no runtime `fs`/dynamic-import-by-string needed.
- */
-const OPERATION_MODULES = import.meta.glob('../operations/*.ts', { eager: true });
-
-function isOperation(value: unknown): value is Operation {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  const inputSchema = candidate.inputSchema as { safeParse?: unknown } | undefined;
-  const outputSchema = candidate.outputSchema as { safeParse?: unknown } | undefined;
-  return (
-    typeof candidate.name === 'string' &&
-    typeof candidate.method === 'string' &&
-    typeof candidate.path === 'string' &&
-    typeof candidate.description === 'string' &&
-    typeof inputSchema?.safeParse === 'function' &&
-    typeof outputSchema?.safeParse === 'function'
-  );
-}
-
-/** Every `Operation`-shaped export across every module in `operations/` — the full registry universe. */
-function loadAllOperations(): Operation[] {
-  const ops: Operation[] = [];
-  for (const mod of Object.values(OPERATION_MODULES)) {
-    for (const exported of Object.values(mod)) {
-      if (isOperation(exported)) ops.push(exported);
-    }
-  }
-  return ops;
-}
+import { loadAllOperations } from './support/load-operations.js';
 
 describe('PageSpaceClient facade — structural completeness', () => {
   it('wires every registry operation into exactly one client namespace method', () => {

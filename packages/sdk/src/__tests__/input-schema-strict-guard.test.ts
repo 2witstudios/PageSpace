@@ -14,39 +14,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Operation } from '../registry/define.js';
-
-declare global {
-  interface ImportMeta {
-    glob(pattern: string, options: { eager: true }): Record<string, Record<string, unknown>>;
-  }
-}
-
-const OPERATION_MODULES = import.meta.glob('../operations/*.ts', { eager: true });
-
-function isOperation(value: unknown): value is Operation {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  const inputSchema = candidate.inputSchema as { safeParse?: unknown } | undefined;
-  const outputSchema = candidate.outputSchema as { safeParse?: unknown } | undefined;
-  return (
-    typeof candidate.name === 'string' &&
-    typeof candidate.method === 'string' &&
-    typeof candidate.path === 'string' &&
-    typeof candidate.description === 'string' &&
-    typeof inputSchema?.safeParse === 'function' &&
-    typeof outputSchema?.safeParse === 'function'
-  );
-}
-
-function loadAllOperations(): Operation[] {
-  const ops: Operation[] = [];
-  for (const mod of Object.values(OPERATION_MODULES)) {
-    for (const exported of Object.values(mod)) {
-      if (isOperation(exported)) ops.push(exported);
-    }
-  }
-  return ops;
-}
+import { loadAllOperations } from './support/load-operations.js';
 
 /** Deliberately not `.strict()` — see file header. */
 const ALLOWED_NON_STRICT = new Set(['agents.list']);
