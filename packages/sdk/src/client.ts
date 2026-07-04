@@ -71,6 +71,7 @@ import {
   setTaskTrigger,
   updateTask,
 } from './operations/tasks.js';
+import { createMcpToken, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
 import { buildRequest } from './transport/build-request.js';
@@ -127,6 +128,11 @@ const DEFAULT_OPERATIONS_MAP = {
   conversations: {
     list: listConversations,
     read: readConversation,
+  },
+  tokens: {
+    create: createMcpToken,
+    list: listMcpTokens,
+    revoke: revokeMcpToken,
   },
 } as const;
 

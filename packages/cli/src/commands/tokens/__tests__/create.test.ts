@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { PageSpaceClient } from '@pagespace/sdk';
 import { parseArgv } from '../../../argv/parse.js';
 import type { CommandIntent } from '../../../argv/parse.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../../exit-codes.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
-import { createTokensCreateHandler } from '../create.js';
-import type { TokensSessionResult } from '../session.js';
+import { tokensCreateHandler } from '../create.js';
 
 function commandIntent(argv: string[]): CommandIntent {
   const parsed = parseArgv(argv);
   if (parsed.kind !== 'command') throw new Error('expected command');
   return { ...parsed, args: parsed.args.slice(2) };
+}
+
+function fakeSdk(invoke: ReturnType<typeof vi.fn>): PageSpaceClient {
+  return { invoke } as unknown as PageSpaceClient;
 }
 
 const CREATE_RESPONSE = {
@@ -21,68 +25,33 @@ const CREATE_RESPONSE = {
   driveScopes: [{ id: 'drv1', name: 'Engineering' }],
 };
 
-function okSession(invoke: ReturnType<typeof vi.fn>): TokensSessionResult {
-  return { outcome: 'ok', sdk: { invoke } };
-}
-
-describe('createTokensCreateHandler', () => {
-  it('rejects a missing --name as a usage error without touching the session', async () => {
-    const resolveSession = vi.fn();
-    const handler = createTokensCreateHandler({ resolveSession });
+describe('tokensCreateHandler', () => {
+  it('rejects a missing --name as a usage error without touching the SDK', async () => {
+    const invoke = vi.fn();
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke) });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create']));
+    const code = await tokensCreateHandler(ctx, commandIntent(['tokens', 'create']));
 
     expect(code).toBe(EXIT_USAGE_ERROR);
-    expect(resolveSession).not.toHaveBeenCalled();
-    expect(stderr.lines.join('')).toContain('--name');
-  });
-
-  it('exits 1 with a login prompt when unauthenticated, never calling the SDK', async () => {
-    const invoke = vi.fn();
-    const resolveSession = vi.fn(async (): Promise<TokensSessionResult> => ({ outcome: 'unauthenticated' }));
-    const handler = createTokensCreateHandler({ resolveSession });
-    const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr });
-
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--name', 'CI bot']));
-
-    expect(code).toBe(EXIT_RUNTIME_ERROR);
-    expect(stderr.lines.join('')).toContain('pagespace login');
     expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it('exits 1 when session resolution throws', async () => {
-    const resolveSession = vi.fn(async () => {
-      throw new Error('discovery unreachable');
-    });
-    const handler = createTokensCreateHandler({ resolveSession });
-    const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr });
-
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--name', 'CI bot']));
-
-    expect(code).toBe(EXIT_RUNTIME_ERROR);
-    expect(stderr.lines.join('')).toContain('discovery unreachable');
+    expect(stderr.lines.join('')).toContain('--name');
   });
 
   it('calls the SDK with the mapped name/drives and prints the token exactly once with a warning', async () => {
     const invoke = vi.fn(async () => CREATE_RESPONSE);
-    const resolveSession = vi.fn(async () => okSession(invoke));
-    const handler = createTokensCreateHandler({ resolveSession });
     const stdout = createRecordingSink();
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stdout, stderr });
+    const ctx = createFakeContext({ stdout, stderr, sdk: fakeSdk(invoke) });
 
-    const code = await handler(
+    const code = await tokensCreateHandler(
       ctx,
       commandIntent(['tokens', 'create', '--name', 'CI bot', '--drive', 'drv1', '--role', 'member', '--drive', 'drv2', '--role', 'role-xyz']),
     );
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(invoke).toHaveBeenCalledTimes(1);
-    const [, input] = invoke.mock.calls[0] as [unknown, { name: string; drives: unknown[] }];
+    const input = (invoke.mock.calls[0] as unknown[])[1] as { name: string; drives: unknown[] };
     expect(input).toEqual({
       name: 'CI bot',
       drives: [
@@ -100,12 +69,10 @@ describe('createTokensCreateHandler', () => {
 
   it('emits { name, token, drives } as the only JSON shape with --json', async () => {
     const invoke = vi.fn(async () => CREATE_RESPONSE);
-    const resolveSession = vi.fn(async () => okSession(invoke));
-    const handler = createTokensCreateHandler({ resolveSession });
     const stdout = createRecordingSink();
-    const ctx = createFakeContext({ stdout });
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk(invoke) });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--name', 'CI bot', '--json']));
+    const code = await tokensCreateHandler(ctx, commandIntent(['tokens', 'create', '--name', 'CI bot', '--json']));
 
     expect(code).toBe(EXIT_SUCCESS);
     const parsed = JSON.parse(stdout.lines.join(''));
@@ -116,13 +83,11 @@ describe('createTokensCreateHandler', () => {
     const invoke = vi.fn(async () => {
       throw new Error('drive access denied');
     });
-    const resolveSession = vi.fn(async () => okSession(invoke));
-    const handler = createTokensCreateHandler({ resolveSession });
     const stdout = createRecordingSink();
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stdout, stderr });
+    const ctx = createFakeContext({ stdout, stderr, sdk: fakeSdk(invoke) });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--name', 'CI bot']));
+    const code = await tokensCreateHandler(ctx, commandIntent(['tokens', 'create', '--name', 'CI bot']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('drive access denied');
@@ -131,13 +96,11 @@ describe('createTokensCreateHandler', () => {
 
   it('sends no drives field for an unscoped token', async () => {
     const invoke = vi.fn(async () => ({ ...CREATE_RESPONSE, driveScopes: [] }));
-    const resolveSession = vi.fn(async () => okSession(invoke));
-    const handler = createTokensCreateHandler({ resolveSession });
-    const ctx = createFakeContext();
+    const ctx = createFakeContext({ sdk: fakeSdk(invoke) });
 
-    await handler(ctx, commandIntent(['tokens', 'create', '--name', 'CI bot']));
+    await tokensCreateHandler(ctx, commandIntent(['tokens', 'create', '--name', 'CI bot']));
 
-    const [, input] = invoke.mock.calls[0] as [unknown, { drives?: unknown[] }];
+    const input = (invoke.mock.calls[0] as unknown[])[1] as { drives?: unknown[] };
     expect(input.drives).toBeUndefined();
   });
 });

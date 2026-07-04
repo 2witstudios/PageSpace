@@ -8,8 +8,13 @@ import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activi
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+// 'oauth' lets the pagespace CLI (which never holds a session cookie —
+// `pagespace tokens create/list` authenticates with an OAuth access token
+// from `pagespace login`) call this route directly. CSRF is already skipped
+// for Bearer-token auth (`authenticateRequestWithOptions`), so this is not a
+// CSRF-relevant change.
+const AUTH_OPTIONS_READ = { allow: ['session', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'oauth'] as const, requireCSRF: true };
 
 // Schema for creating a new MCP token
 const createTokenSchema = z.object({

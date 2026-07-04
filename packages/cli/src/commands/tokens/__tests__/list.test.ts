@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { PageSpaceClient } from '@pagespace/sdk';
 import { parseArgv } from '../../../argv/parse.js';
 import type { CommandIntent } from '../../../argv/parse.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../../../exit-codes.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
-import { createTokensListHandler } from '../list.js';
-import type { TokensSessionResult } from '../session.js';
+import { tokensListHandler } from '../list.js';
 
 function commandIntent(argv: string[]): CommandIntent {
   const parsed = parseArgv(argv);
   if (parsed.kind !== 'command') throw new Error('expected command');
   return { ...parsed, args: parsed.args.slice(2) };
+}
+
+function fakeSdk(invoke: ReturnType<typeof vi.fn>): PageSpaceClient {
+  return { invoke } as unknown as PageSpaceClient;
 }
 
 const TOKENS = [
@@ -33,31 +37,13 @@ const TOKENS = [
   },
 ];
 
-function okSession(invoke: ReturnType<typeof vi.fn>): TokensSessionResult {
-  return { outcome: 'ok', sdk: { invoke } };
-}
-
-describe('createTokensListHandler', () => {
-  it('exits 1 with a login prompt when unauthenticated', async () => {
-    const resolveSession = vi.fn(async (): Promise<TokensSessionResult> => ({ outcome: 'unauthenticated' }));
-    const handler = createTokensListHandler({ resolveSession });
-    const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr });
-
-    const code = await handler(ctx, commandIntent(['tokens', 'list']));
-
-    expect(code).toBe(EXIT_RUNTIME_ERROR);
-    expect(stderr.lines.join('')).toContain('pagespace login');
-  });
-
+describe('tokensListHandler', () => {
   it('never prints a full token — only the prefix — for each listed token', async () => {
     const invoke = vi.fn(async () => TOKENS);
-    const resolveSession = vi.fn(async () => okSession(invoke));
-    const handler = createTokensListHandler({ resolveSession });
     const stdout = createRecordingSink();
-    const ctx = createFakeContext({ stdout });
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk(invoke) });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'list']));
+    const code = await tokensListHandler(ctx, commandIntent(['tokens', 'list']));
 
     expect(code).toBe(EXIT_SUCCESS);
     const output = stdout.lines.join('');
@@ -69,12 +55,10 @@ describe('createTokensListHandler', () => {
 
   it('emits the raw token array as JSON with --json', async () => {
     const invoke = vi.fn(async () => TOKENS);
-    const resolveSession = vi.fn(async () => okSession(invoke));
-    const handler = createTokensListHandler({ resolveSession });
     const stdout = createRecordingSink();
-    const ctx = createFakeContext({ stdout });
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk(invoke) });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'list', '--json']));
+    const code = await tokensListHandler(ctx, commandIntent(['tokens', 'list', '--json']));
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(JSON.parse(stdout.lines.join(''))).toEqual(TOKENS);
@@ -82,12 +66,10 @@ describe('createTokensListHandler', () => {
 
   it('prints a friendly message when there are no tokens', async () => {
     const invoke = vi.fn(async () => []);
-    const resolveSession = vi.fn(async () => okSession(invoke));
-    const handler = createTokensListHandler({ resolveSession });
     const stdout = createRecordingSink();
-    const ctx = createFakeContext({ stdout });
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk(invoke) });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'list']));
+    const code = await tokensListHandler(ctx, commandIntent(['tokens', 'list']));
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(stdout.lines.join('').length).toBeGreaterThan(0);
@@ -97,12 +79,10 @@ describe('createTokensListHandler', () => {
     const invoke = vi.fn(async () => {
       throw new Error('server unreachable');
     });
-    const resolveSession = vi.fn(async () => okSession(invoke));
-    const handler = createTokensListHandler({ resolveSession });
     const stderr = createRecordingSink();
-    const ctx = createFakeContext({ stderr });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke) });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'list']));
+    const code = await tokensListHandler(ctx, commandIntent(['tokens', 'list']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('server unreachable');
