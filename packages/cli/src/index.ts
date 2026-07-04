@@ -94,6 +94,28 @@ export type { RevokeResult, RevokeToken, RevokeTokenParams } from './auth/revoke
 export { createRefreshToken, RefreshTokenError } from './auth/refresh-token.js';
 export type { RefreshedTokens, RefreshToken, RefreshTokenParams } from './auth/refresh-token.js';
 
+// Device-authorization login flow (Phase 4 task 4) — RFC 8628, the headless
+// counterpart to the loopback flow, sharing its discovery/persistence plumbing.
+export { decideNextPoll, runDeviceLogin } from './auth/device-flow.js';
+export type {
+  DeviceAuthorization,
+  DeviceLoginDeps,
+  DeviceLoginOutcome,
+  DeviceLoginResult,
+  DevicePollState,
+  DeviceTokenResult,
+  NextPollDecision,
+  PollDeviceToken,
+  RequestDeviceAuthorization,
+} from './auth/device-flow.js';
+export { createRequestDeviceAuthorization, DeviceAuthorizationError } from './auth/request-device-authorization.js';
+export { createPollDeviceToken } from './auth/poll-device-token.js';
+export {
+  createLoginDeviceHandler,
+  loginDeviceHandler,
+} from './commands/login-device.js';
+export type { LoginDeviceHandlerDeps } from './commands/login-device.js';
+
 // Composition root.
 export { run } from './run.js';
 export type { RunDependencies } from './run.js';

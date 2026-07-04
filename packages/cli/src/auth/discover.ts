@@ -18,6 +18,7 @@ export class DiscoveryError extends Error {
 const metadataSchema = z.object({
   authorization_endpoint: z.string().url(),
   token_endpoint: z.string().url(),
+  device_authorization_endpoint: z.string().url().optional(),
 });
 
 const WELL_KNOWN_PATH = '/.well-known/oauth-authorization-server';
@@ -46,6 +47,7 @@ export function createDiscoverMetadata(fetchImpl: typeof fetch = fetch): Discove
     return {
       authorizationEndpoint: parsed.data.authorization_endpoint,
       tokenEndpoint: parsed.data.token_endpoint,
+      deviceAuthorizationEndpoint: parsed.data.device_authorization_endpoint,
     };
   };
 }

@@ -26,6 +26,39 @@ describe('createDiscoverMetadata', () => {
     });
   });
 
+  it('surfaces device_authorization_endpoint when the server advertises it', async () => {
+    const discover = createDiscoverMetadata(
+      fakeFetch({
+        ok: true,
+        json: async () => ({
+          authorization_endpoint: 'https://pagespace.ai/api/oauth/authorize',
+          token_endpoint: 'https://pagespace.ai/api/oauth/token',
+          device_authorization_endpoint: 'https://pagespace.ai/api/oauth/device_authorization',
+        }),
+      }),
+    );
+
+    const metadata = await discover('https://pagespace.ai');
+
+    expect(metadata.deviceAuthorizationEndpoint).toBe('https://pagespace.ai/api/oauth/device_authorization');
+  });
+
+  it('leaves device_authorization_endpoint undefined when the server does not advertise it', async () => {
+    const discover = createDiscoverMetadata(
+      fakeFetch({
+        ok: true,
+        json: async () => ({
+          authorization_endpoint: 'https://pagespace.ai/api/oauth/authorize',
+          token_endpoint: 'https://pagespace.ai/api/oauth/token',
+        }),
+      }),
+    );
+
+    const metadata = await discover('https://pagespace.ai');
+
+    expect(metadata.deviceAuthorizationEndpoint).toBeUndefined();
+  });
+
   it('fetches the well-known path relative to the given host, tolerating a trailing slash', async () => {
     let requestedUrl: string | undefined;
     const fetchImpl = (async (url: string) => {

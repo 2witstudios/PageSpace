@@ -20,6 +20,7 @@ describe('parseArgv', () => {
       force: false,
       help: false,
       version: false,
+      device: false,
     });
   });
 
@@ -69,6 +70,13 @@ describe('parseArgv', () => {
     const result = parseArgv(['logout', '--force']);
     expectCommand(result);
     expect(result.flags.force).toBe(true);
+  });
+
+  it('parses --device as a boolean flag', () => {
+    const result = parseArgv(['login', '--device']);
+    expectCommand(result);
+    expect(result.args).toEqual(['login']);
+    expect(result.flags.device).toBe(true);
   });
 
   it('parses --host with its value', () => {
