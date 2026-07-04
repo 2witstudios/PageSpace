@@ -1,0 +1,443 @@
+[
+  {
+    "name": "list_drives",
+    "required": []
+  },
+  {
+    "name": "create_drive",
+    "required": [
+      "name"
+    ]
+  },
+  {
+    "name": "rename_drive",
+    "required": [
+      "driveId",
+      "name"
+    ]
+  },
+  {
+    "name": "update_drive_context",
+    "required": [
+      "driveId",
+      "drivePrompt"
+    ]
+  },
+  {
+    "name": "list_pages",
+    "required": [
+      "driveSlug",
+      "driveId"
+    ]
+  },
+  {
+    "name": "list_trash",
+    "required": [
+      "driveSlug",
+      "driveId"
+    ]
+  },
+  {
+    "name": "read_page",
+    "required": [
+      "pageId"
+    ]
+  },
+  {
+    "name": "get_page_details",
+    "required": [
+      "pageId"
+    ]
+  },
+  {
+    "name": "create_page",
+    "required": [
+      "driveId",
+      "title",
+      "type"
+    ]
+  },
+  {
+    "name": "rename_page",
+    "required": [
+      "pageId",
+      "title"
+    ]
+  },
+  {
+    "name": "move_page",
+    "required": [
+      "pageId",
+      "position"
+    ]
+  },
+  {
+    "name": "replace_lines",
+    "required": [
+      "pageId",
+      "startLine",
+      "content"
+    ]
+  },
+  {
+    "name": "trash_page",
+    "required": [
+      "pageId"
+    ]
+  },
+  {
+    "name": "trash_drive",
+    "required": [
+      "driveId",
+      "confirmDriveName"
+    ]
+  },
+  {
+    "name": "restore_page",
+    "required": [
+      "pageId"
+    ]
+  },
+  {
+    "name": "restore_drive",
+    "required": [
+      "driveId"
+    ]
+  },
+  {
+    "name": "edit_sheet_cells",
+    "required": [
+      "pageId",
+      "cells"
+    ]
+  },
+  {
+    "name": "create_task",
+    "required": [
+      "pageId",
+      "title"
+    ]
+  },
+  {
+    "name": "update_task",
+    "required": [
+      "pageId",
+      "taskId"
+    ]
+  },
+  {
+    "name": "delete_task",
+    "required": [
+      "pageId",
+      "taskId"
+    ]
+  },
+  {
+    "name": "reorder_task",
+    "required": [
+      "pageId",
+      "taskId",
+      "position"
+    ]
+  },
+  {
+    "name": "create_task_status",
+    "required": [
+      "pageId",
+      "name",
+      "color",
+      "group"
+    ]
+  },
+  {
+    "name": "get_assigned_tasks",
+    "required": []
+  },
+  {
+    "name": "regex_search",
+    "required": [
+      "driveId",
+      "pattern"
+    ]
+  },
+  {
+    "name": "glob_search",
+    "required": [
+      "driveId",
+      "pattern"
+    ]
+  },
+  {
+    "name": "multi_drive_search",
+    "required": [
+      "searchQuery"
+    ]
+  },
+  {
+    "name": "update_agent_config",
+    "required": [
+      "agentPath",
+      "agentId"
+    ]
+  },
+  {
+    "name": "list_agents",
+    "required": [
+      "driveId"
+    ]
+  },
+  {
+    "name": "multi_drive_list_agents",
+    "required": []
+  },
+  {
+    "name": "ask_agent",
+    "required": [
+      "agentPath",
+      "agentId",
+      "question"
+    ]
+  },
+  {
+    "name": "list_calendar_events",
+    "required": [
+      "startDate",
+      "endDate"
+    ]
+  },
+  {
+    "name": "get_calendar_event",
+    "required": [
+      "eventId"
+    ]
+  },
+  {
+    "name": "check_calendar_availability",
+    "required": [
+      "startDate",
+      "endDate"
+    ]
+  },
+  {
+    "name": "create_calendar_event",
+    "required": [
+      "title",
+      "startAt",
+      "endAt"
+    ]
+  },
+  {
+    "name": "update_calendar_event",
+    "required": [
+      "eventId"
+    ]
+  },
+  {
+    "name": "delete_calendar_event",
+    "required": [
+      "eventId"
+    ]
+  },
+  {
+    "name": "rsvp_calendar_event",
+    "required": [
+      "eventId",
+      "status"
+    ]
+  },
+  {
+    "name": "invite_calendar_attendees",
+    "required": [
+      "eventId",
+      "userIds"
+    ]
+  },
+  {
+    "name": "remove_calendar_attendee",
+    "required": [
+      "eventId",
+      "targetUserId"
+    ]
+  },
+  {
+    "name": "list_commands",
+    "required": []
+  },
+  {
+    "name": "create_command",
+    "required": [
+      "trigger",
+      "description",
+      "entryPageId"
+    ]
+  },
+  {
+    "name": "update_command",
+    "required": [
+      "commandId"
+    ]
+  },
+  {
+    "name": "delete_command",
+    "required": [
+      "commandId"
+    ]
+  },
+  {
+    "name": "list_drive_roles",
+    "required": [
+      "driveId"
+    ]
+  },
+  {
+    "name": "get_drive_role",
+    "required": [
+      "driveId",
+      "roleId"
+    ]
+  },
+  {
+    "name": "create_drive_role",
+    "required": [
+      "driveId",
+      "name"
+    ]
+  },
+  {
+    "name": "update_drive_role",
+    "required": [
+      "driveId",
+      "roleId"
+    ]
+  },
+  {
+    "name": "delete_drive_role",
+    "required": [
+      "driveId",
+      "roleId"
+    ]
+  },
+  {
+    "name": "set_role_page_permissions",
+    "required": [
+      "driveId",
+      "roleId",
+      "pageId"
+    ]
+  },
+  {
+    "name": "set_role_drive_wide_permissions",
+    "required": [
+      "driveId",
+      "roleId"
+    ]
+  },
+  {
+    "name": "remove_role_page_permissions",
+    "required": [
+      "driveId",
+      "roleId",
+      "pageId"
+    ]
+  },
+  {
+    "name": "set_calendar_trigger",
+    "required": [
+      "calendarEventId",
+      "agentPageId"
+    ]
+  },
+  {
+    "name": "delete_calendar_trigger",
+    "required": [
+      "calendarEventId"
+    ]
+  },
+  {
+    "name": "set_task_trigger",
+    "required": [
+      "taskId",
+      "triggerType",
+      "agentPageId"
+    ]
+  },
+  {
+    "name": "delete_task_trigger",
+    "required": [
+      "taskId",
+      "triggerType"
+    ]
+  },
+  {
+    "name": "list_workflows",
+    "required": [
+      "driveId"
+    ]
+  },
+  {
+    "name": "create_workflow",
+    "required": [
+      "driveId",
+      "name",
+      "cronExpression",
+      "agentPageId"
+    ]
+  },
+  {
+    "name": "update_workflow",
+    "required": [
+      "workflowId"
+    ]
+  },
+  {
+    "name": "delete_workflow",
+    "required": [
+      "workflowId"
+    ]
+  },
+  {
+    "name": "list_drive_members",
+    "required": [
+      "driveId"
+    ]
+  },
+  {
+    "name": "list_collaborators",
+    "required": []
+  },
+  {
+    "name": "list_models",
+    "required": []
+  },
+  {
+    "name": "list_conversations",
+    "required": [
+      "agentId"
+    ]
+  },
+  {
+    "name": "read_conversation",
+    "required": [
+      "agentId",
+      "conversationId"
+    ]
+  },
+  {
+    "name": "send_channel_message",
+    "required": [
+      "pageId",
+      "content"
+    ]
+  },
+  {
+    "name": "delete_channel_message",
+    "required": [
+      "pageId",
+      "messageId"
+    ]
+  },
+  {
+    "name": "get_activity",
+    "required": []
+  }
+]

@@ -2,8 +2,11 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, isNull } from '@pagespace/db/operators'
 import { mcpTokens } from '@pagespace/db/schema/auth';
+import { oauthAccessTokens } from '@pagespace/db/schema/oauth';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { sessionService, type SessionClaims } from '@pagespace/lib/auth/session-service';
+import { findOAuthAccessTokenByValue } from '@pagespace/lib/auth/token-lookup';
+import { parseScopeList, scopeSetToDriveScopes, type ScopeSet, type DriveScopeRow } from '@pagespace/lib/auth/oauth/scopes';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { getSessionFromCookies } from './cookie-config';
@@ -11,8 +14,9 @@ import { getSessionFromCookies } from './cookie-config';
 const BEARER_PREFIX = 'Bearer ';
 const MCP_TOKEN_PREFIX = 'mcp_';
 const SESSION_TOKEN_PREFIX = 'ps_sess_';
+const OAUTH_ACCESS_TOKEN_PREFIX = 'ps_at_';
 
-export type TokenType = 'mcp' | 'session';
+export type TokenType = 'mcp' | 'session' | 'oauth';
 
 interface BaseAuthDetails {
   userId: string;
@@ -36,7 +40,21 @@ export interface SessionAuthResult extends BaseAuthDetails {
   sessionId: string;
 }
 
-export type AuthResult = MCPAuthResult | SessionAuthResult;
+interface OAuthAuthDetails extends BaseAuthDetails {
+  tokenId: string;
+  scopes: ScopeSet;
+  // Bridge to the mcp_token_drives-shaped capability model (ADR 0002 Decision 2).
+  driveScopes: DriveScopeRow[];
+  // Drive IDs this token is scoped to. Empty array means access to ALL drives
+  // (the `account` scope) — same convention as MCPAuthDetails.allowedDriveIds.
+  allowedDriveIds: string[];
+}
+
+export interface OAuthAuthResult extends OAuthAuthDetails {
+  tokenType: 'oauth';
+}
+
+export type AuthResult = MCPAuthResult | SessionAuthResult | OAuthAuthResult;
 
 export interface AuthError {
   error: NextResponse;
@@ -153,6 +171,72 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
   }
 }
 
+export async function validateOAuthAccessToken(token: string): Promise<OAuthAuthDetails | null> {
+  try {
+    if (!token || !token.startsWith(OAUTH_ACCESS_TOKEN_PREFIX)) {
+      return null;
+    }
+
+    const record = await findOAuthAccessTokenByValue(token);
+    if (!record) {
+      return null;
+    }
+
+    const user = record.user;
+
+    // Revoke on sight, mirroring the mcp_token_user_suspended handling above.
+    if (user.suspendedAt) {
+      logSecurityEvent('unauthorized', {
+        reason: 'oauth_token_user_suspended',
+        userId: record.userId,
+        tokenId: record.id,
+        authType: 'oauth',
+        action: 'revoke_and_deny',
+      });
+
+      await db
+        .update(oauthAccessTokens)
+        .set({ revokedAt: new Date(), revokedReason: 'user_suspended' })
+        .where(eq(oauthAccessTokens.id, record.id));
+
+      return null;
+    }
+
+    if (record.expiresAt.getTime() <= Date.now()) {
+      return null;
+    }
+
+    // Stale token: the user's tokenVersion moved on (password change/global
+    // logout) since this access token was minted — mirrors device-auth-utils.
+    if (record.tokenVersion !== user.tokenVersion) {
+      return null;
+    }
+
+    const parsed = parseScopeList(record.scopes.join(' '));
+    if (!parsed.ok) {
+      // Fail closed: corrupt/unparseable stored scope data must never resolve.
+      return null;
+    }
+
+    const driveScopes = scopeSetToDriveScopes(parsed.scopes);
+    const allowedDriveIds = parsed.scopes.account ? [] : driveScopes.map((scope) => scope.driveId);
+
+    return {
+      userId: record.userId,
+      role: user.role as 'user' | 'admin',
+      tokenVersion: user.tokenVersion,
+      adminRoleVersion: user.adminRoleVersion,
+      tokenId: record.id,
+      scopes: parsed.scopes,
+      driveScopes,
+      allowedDriveIds,
+    };
+  } catch (error) {
+    console.error('validateOAuthAccessToken error', error);
+    return null;
+  }
+}
+
 export async function validateSessionToken(token: string): Promise<SessionClaims | null> {
   try {
     if (!token) {
@@ -185,6 +269,28 @@ export async function authenticateMCPRequest(request: Request): Promise<Authenti
     ...mcpDetails,
     tokenType: 'mcp',
   } satisfies MCPAuthResult;
+}
+
+export async function authenticateOAuthRequest(request: Request): Promise<AuthenticationResult> {
+  const token = getBearerToken(request);
+
+  if (!token || !token.startsWith(OAUTH_ACCESS_TOKEN_PREFIX)) {
+    return {
+      error: unauthorized('OAuth access token required'),
+    };
+  }
+
+  const oauthDetails = await validateOAuthAccessToken(token);
+  if (!oauthDetails) {
+    return {
+      error: unauthorized('Invalid OAuth access token'),
+    };
+  }
+
+  return {
+    ...oauthDetails,
+    tokenType: 'oauth',
+  } satisfies OAuthAuthResult;
 }
 
 export async function authenticateSessionRequest(request: Request): Promise<AuthenticationResult> {
@@ -262,6 +368,10 @@ export function isSessionAuthResult(result: AuthenticationResult): result is Ses
   return !('error' in result) && result.tokenType === 'session';
 }
 
+export function isOAuthAuthResult(result: AuthenticationResult): result is OAuthAuthResult {
+  return !('error' in result) && result.tokenType === 'oauth';
+}
+
 export async function authenticateRequestWithOptions(
   request: Request,
   options: AuthenticateOptions,
@@ -278,6 +388,7 @@ export async function authenticateRequestWithOptions(
   const allowedTypes = new Set(allow);
   const allowMCP = allowedTypes.has('mcp');
   const allowSession = allowedTypes.has('session');
+  const allowOAuth = allowedTypes.has('oauth');
 
   const bearerToken = getBearerToken(request);
 
@@ -290,12 +401,23 @@ export async function authenticateRequestWithOptions(
     return authenticateMCPRequest(request);
   }
 
+  if (bearerToken?.startsWith(OAUTH_ACCESS_TOKEN_PREFIX)) {
+    if (!allowOAuth) {
+      return {
+        error: unauthorized('OAuth tokens are not permitted for this endpoint'),
+      };
+    }
+    return authenticateOAuthRequest(request);
+  }
+
   let authResult: AuthenticationResult;
 
   if (allowSession) {
     authResult = await authenticateSessionRequest(request);
   } else if (allowMCP) {
     authResult = await authenticateMCPRequest(request);
+  } else if (allowOAuth) {
+    authResult = await authenticateOAuthRequest(request);
   } else {
     return {
       error: unauthorized('No authentication methods permitted for this endpoint', 500),
@@ -443,6 +565,9 @@ export function getAllowedDriveIds(auth: AuthResult): string[] {
   if (isMCPAuthResult(auth)) {
     return auth.allowedDriveIds;
   }
+  if (isOAuthAuthResult(auth)) {
+    return auth.allowedDriveIds; // Empty for the `account` scope = full access
+  }
   return []; // Session auth = full access
 }
 
@@ -584,6 +709,7 @@ export function checkMCPCreateScope(
 // Re-export from other auth modules
 export {
   isScopedMCPAuth,
+  isScopedOAuthAuth,
   getPrincipalAccessLevel,
   canPrincipalViewPage,
   canPrincipalEditPage,

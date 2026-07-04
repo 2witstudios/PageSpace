@@ -12,6 +12,11 @@
     "lint": "eslint src"
   },
   "exports": {
+    "./api-contract-version": {
+      "types": "./dist/api-contract-version.d.ts",
+      "import": "./dist/api-contract-version.js",
+      "require": "./dist/api-contract-version.js"
+    },
     "./client-safe": {
       "types": "./dist/client-safe.d.ts",
       "import": "./dist/client-safe.js",
@@ -927,6 +932,51 @@
       "import": "./dist/auth/constants.js",
       "require": "./dist/auth/constants.js"
     },
+    "./auth/oauth/scopes": {
+      "types": "./dist/auth/oauth/scopes.d.ts",
+      "import": "./dist/auth/oauth/scopes.js",
+      "require": "./dist/auth/oauth/scopes.js"
+    },
+    "./auth/oauth/metadata": {
+      "types": "./dist/auth/oauth/metadata.d.ts",
+      "import": "./dist/auth/oauth/metadata.js",
+      "require": "./dist/auth/oauth/metadata.js"
+    },
+    "./auth/oauth/clients": {
+      "types": "./dist/auth/oauth/clients.d.ts",
+      "import": "./dist/auth/oauth/clients.js",
+      "require": "./dist/auth/oauth/clients.js"
+    },
+    "./auth/oauth/authorize-request": {
+      "types": "./dist/auth/oauth/authorize-request.d.ts",
+      "import": "./dist/auth/oauth/authorize-request.js",
+      "require": "./dist/auth/oauth/authorize-request.js"
+    },
+    "./auth/oauth/consent": {
+      "types": "./dist/auth/oauth/consent.d.ts",
+      "import": "./dist/auth/oauth/consent.js",
+      "require": "./dist/auth/oauth/consent.js"
+    },
+    "./auth/oauth/code-lifecycle": {
+      "types": "./dist/auth/oauth/code-lifecycle.d.ts",
+      "import": "./dist/auth/oauth/code-lifecycle.js",
+      "require": "./dist/auth/oauth/code-lifecycle.js"
+    },
+    "./auth/oauth/issue-tokens": {
+      "types": "./dist/auth/oauth/issue-tokens.d.ts",
+      "import": "./dist/auth/oauth/issue-tokens.js",
+      "require": "./dist/auth/oauth/issue-tokens.js"
+    },
+    "./auth/oauth/refresh-rotation": {
+      "types": "./dist/auth/oauth/refresh-rotation.d.ts",
+      "import": "./dist/auth/oauth/refresh-rotation.js",
+      "require": "./dist/auth/oauth/refresh-rotation.js"
+    },
+    "./auth/oauth/user-code": {
+      "types": "./dist/auth/oauth/user-code.d.ts",
+      "import": "./dist/auth/oauth/user-code.js",
+      "require": "./dist/auth/oauth/user-code.js"
+    },
     "./auth/account-lockout": {
       "types": "./dist/auth/account-lockout.d.ts",
       "import": "./dist/auth/account-lockout.js",
@@ -996,6 +1046,11 @@
       "types": "./dist/auth/pkce.d.ts",
       "import": "./dist/auth/pkce.js",
       "require": "./dist/auth/pkce.js"
+    },
+    "./auth/oauth/pkce": {
+      "types": "./dist/auth/oauth/pkce.d.ts",
+      "import": "./dist/auth/oauth/pkce.js",
+      "require": "./dist/auth/oauth/pkce.js"
     },
     "./auth/passkey-service": {
       "types": "./dist/auth/passkey-service.d.ts",
@@ -1707,6 +1762,12 @@
       ],
       "auth/pkce": [
         "./dist/auth/pkce.d.ts"
+      ],
+      "auth/oauth/pkce": [
+        "./dist/auth/oauth/pkce.d.ts"
+      ],
+      "auth/oauth/metadata": [
+        "./dist/auth/oauth/metadata.d.ts"
       ],
       "auth/passkey-service": [
         "./dist/auth/passkey-service.d.ts"

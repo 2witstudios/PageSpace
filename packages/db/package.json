@@ -230,6 +230,10 @@
     "./schema/data-subject-requests": {
       "types": "./dist/schema/data-subject-requests.d.ts",
       "default": "./dist/schema/data-subject-requests.js"
+    },
+    "./schema/oauth": {
+      "types": "./dist/schema/oauth.d.ts",
+      "default": "./dist/schema/oauth.js"
     }
   },
   "scripts": {

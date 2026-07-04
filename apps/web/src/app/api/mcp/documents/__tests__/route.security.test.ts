@@ -27,6 +27,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateMCPRequest: (...args: unknown[]) => mockAuthenticateMCPRequest(...args),
   isAuthError: (result: unknown) => 'error' in (result as object),
   isMCPAuthResult: (result: unknown) => !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'mcp',
+  isOAuthAuthResult: (result: unknown) => !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'oauth',
   // Delegate to the REAL principal dispatch (unit-tested in
   // src/lib/auth/__tests__/principal-permissions.test.ts) so the security
   // assertions below still verify that scoped tokens resolve app-level

@@ -12,8 +12,6 @@ import type {
   DriveInvitedNotification,
   DriveJoinedNotification,
   DriveRoleChangedNotification,
-  MentionNotification,
-  TaskAssignedNotification,
   LegacyNotification,
 } from './types';
 
@@ -119,26 +117,6 @@ export function isDriveRoleChanged(
     notification.metadata != null &&
     typeof notification.metadata === 'object' &&
     'driveName' in notification.metadata;
-}
-
-// Mention guard
-export function isMention(
-  notification: Notification | LegacyNotification
-): notification is MentionNotification {
-  return notification.type === 'MENTION' &&
-    notification.metadata != null &&
-    typeof notification.metadata === 'object' &&
-    'mentionerName' in notification.metadata;
-}
-
-// Task assignment guard
-export function isTaskAssigned(
-  notification: Notification | LegacyNotification
-): notification is TaskAssignedNotification {
-  return notification.type === 'TASK_ASSIGNED' &&
-    notification.metadata != null &&
-    typeof notification.metadata === 'object' &&
-    'taskId' in notification.metadata;
 }
 
 // Helper to check if a notification has a specific metadata field

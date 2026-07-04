@@ -615,6 +615,53 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 15 * 60 * 1000,
     progressiveDelay: false,
   },
+  // OAuth /authorize: GET is the unauthenticated client_id/redirect_uri
+  // probing surface (open-redirect reconnaissance); POST is the session-gated
+  // consent decision. Generous enough for a human clicking through the flow
+  // more than once, tight enough to blunt scripted enumeration.
+  OAUTH_AUTHORIZE: {
+    maxAttempts: 20,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // OAuth /token authorization_code + refresh_token grants: each presents a
+  // high-entropy secret exactly once per legitimate grant, so real traffic is
+  // rare. Tight + progressive to blunt brute-forcing a code/refresh token.
+  OAUTH_TOKEN_EXCHANGE: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: true,
+  },
+  // OAuth /token device_code polling: RFC 8628 expects ~1 poll per
+  // pollIntervalSeconds (5s) from a single legitimate flow — that's already
+  // throttled by decideDevicePoll's own per-record slow_down. This is an
+  // endpoint-level backstop against a client ignoring slow_down or scanning
+  // device codes wholesale, so it sits above single-flow polling volume.
+  OAUTH_DEVICE_POLL: {
+    maxAttempts: 100,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 60 * 1000,
+    progressiveDelay: false,
+  },
+  // OAuth /device_authorization: unauthenticated device/user-code minting.
+  // Limits mass code generation that would exhaust the short user-code space
+  // or flood the device_authorizations table.
+  OAUTH_DEVICE_INIT: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // OAuth /revoke: unauthenticated by design (RFC 7009 forbids an oracle on
+  // outcome), so rate limiting is the only defense against endpoint flooding.
+  OAUTH_REVOKE: {
+    maxAttempts: 20,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
 } as const;
 
 // =============================================================================

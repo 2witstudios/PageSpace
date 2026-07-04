@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { isValidElement } from 'react';
 import { toolRenderers, CLI_TOOL_NAMES } from '../registry';
+import { RichDiffRenderer } from '../RichDiffRenderer';
 
 const CLI_TOOLS = CLI_TOOL_NAMES;
 
@@ -74,6 +76,41 @@ describe('CLI tool renderers (pi)', () => {
   it('write/edit: return non-null success card when output is available', () => {
     expect(toolRenderers['write'](makeCtx('write', { file_path: 'foo.ts' }, 'ok'))).not.toBeNull();
     expect(toolRenderers['edit'](makeCtx('edit', { file_path: 'foo.ts' }, 'ok'))).not.toBeNull();
+  });
+
+  it('write/edit: upgrade to a diff view when the payload carries oldContent/newContent', () => {
+    const ctxWithDiff = (toolName: string): Parameters<(typeof toolRenderers)[string]>[0] => ({
+      toolName,
+      parsedInput: { file_path: 'foo.ts' },
+      parsedOutput: { oldContent: 'old text', newContent: 'new text' },
+      output: 'ok',
+    });
+
+    const writeResult = toolRenderers['write'](ctxWithDiff('write'));
+    const editResult = toolRenderers['edit'](ctxWithDiff('edit'));
+    expect(isValidElement(writeResult) && writeResult.type).toBe(RichDiffRenderer);
+    expect(isValidElement(editResult) && editResult.type).toBe(RichDiffRenderer);
+  });
+
+  it('write/edit: fall back to plain success card when oldContent/newContent are absent (today\'s pagespace-cli payload)', () => {
+    // pagespace-cli currently returns a bare "ok" string, so parsedOutput is {}
+    // — this asserts the fallback keeps working until the CLI reports content.
+    expect(toolRenderers['write'](makeCtx('write', { file_path: 'foo.ts' }, 'ok'))).not.toBeNull();
+    expect(toolRenderers['edit'](makeCtx('edit', { file_path: 'foo.ts' }, 'ok'))).not.toBeNull();
+  });
+
+  it('write/edit: do not upgrade to a diff view when the payload reports failure, even with content fields present', () => {
+    const ctxFailedWithContent = (toolName: string): Parameters<(typeof toolRenderers)[string]>[0] => ({
+      toolName,
+      parsedInput: { file_path: 'foo.ts' },
+      parsedOutput: { success: false, oldContent: 'old text', newContent: 'new text' },
+      output: 'error',
+    });
+
+    const writeResult = toolRenderers['write'](ctxFailedWithContent('write'));
+    const editResult = toolRenderers['edit'](ctxFailedWithContent('edit'));
+    expect(isValidElement(writeResult) && writeResult.type).not.toBe(RichDiffRenderer);
+    expect(isValidElement(editResult) && editResult.type).not.toBe(RichDiffRenderer);
   });
 
   it('ls: returns null when output is not a string', () => {

@@ -105,16 +105,20 @@ export const sessionRepository = {
       columns: {
         id: true,
         name: true,
+        tokenPrefix: true,
         lastUsed: true,
         createdAt: true,
         isScoped: true,
       },
       with: {
         driveScopes: {
-          columns: { driveId: true },
+          columns: { driveId: true, role: true, customRoleId: true },
           with: {
             drive: {
               columns: { id: true, name: true },
+            },
+            customRole: {
+              columns: { id: true, name: true, color: true },
             },
           },
         },
@@ -124,6 +128,7 @@ export const sessionRepository = {
     return tokens.map((token) => ({
       id: token.id,
       name: token.name,
+      tokenPrefix: token.tokenPrefix,
       lastUsed: token.lastUsed,
       createdAt: token.createdAt,
       isScoped: token.isScoped,
@@ -132,6 +137,9 @@ export const sessionRepository = {
         .map((scope) => ({
           id: scope.drive.id,
           name: scope.drive.name,
+          role: scope.role,
+          customRoleId: scope.customRoleId,
+          customRoleName: scope.customRole?.name ?? null,
         })),
     }));
   },

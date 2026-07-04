@@ -151,6 +151,15 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
+// A drive-scoped MCP token (allowedDriveIds non-empty) — matches the
+// isScopedMCPAuth mock above (tokenType === 'mcp' && allowedDriveIds.length > 0).
+const mockScopedMcpAuth = (userId: string) => ({
+  userId,
+  tokenType: 'mcp' as const,
+  tokenId: 'mcp-token-1',
+  allowedDriveIds: [DRIVE_ID],
+});
+
 const createMockEvent = (overrides: Record<string, unknown> = {}) => ({
   id: EVENT_ID,
   driveId: DRIVE_ID,
@@ -323,5 +332,32 @@ describe('PATCH /api/calendar/events/[eventId] — canEditEvent auth policy', ()
 
     // isDriveOwnerOrAdmin should NOT be called; creator short-circuits
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+
+  // #1846 Codex P2 (2nd round): a scoped MCP token can now create a personal
+  // (driveless) event (calendar/events/route.ts fix) — it must also be able
+  // to read/edit/delete that SAME event it created, or the create is a
+  // permanent dead end. It must still have no power over a driveless event
+  // created by a DIFFERENT user.
+  it('returns 200 when a scoped MCP token edits a personal event it created itself', async () => {
+    const personalEvent = createMockEvent({ driveId: null, createdById: CREATOR_ID });
+    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockScopedMcpAuth(CREATOR_ID));
+    setupDbMocksForPatch(personalEvent);
+
+    const response = await PATCH(createPatchRequest(), createContext());
+    expect(response.status).toBe(200);
+    expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when a scoped MCP token tries to edit a personal event created by someone else', async () => {
+    const personalEvent = createMockEvent({ driveId: null, createdById: CREATOR_ID });
+    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockScopedMcpAuth(OUTSIDER_ID));
+    (db.query.calendarEvents.findFirst as Mock).mockResolvedValue(personalEvent);
+
+    const response = await PATCH(createPatchRequest(), createContext());
+    expect(response.status).toBe(403);
+
+    const body = await response.json();
+    expect(body.error).toBe('You do not have permission to edit this event');
   });
 });

@@ -22,6 +22,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
@@ -269,6 +270,15 @@ export async function POST(request: Request) {
     // a supplied conversationId continues that exact conversation; otherwise a
     // new one is minted and returned so the caller can continue it later.
     const activeConversationId: string = conversationId || createId();
+
+    // Eagerly ensure a conversations row exists so this conversation is
+    // listable via GET .../conversations, which joins against `conversations`
+    // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
+    // Without this, chatMessages are persisted but the conversation itself is
+    // invisible to list_conversations. createConversation itself refuses to
+    // claim ownership of a supplied conversationId that already has messages
+    // from a different user (see its doc comment) — safe to call unconditionally.
+    await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
 
     let historyMessages: Array<{ role: string; content: string | null }>;
     if (conversationId) {

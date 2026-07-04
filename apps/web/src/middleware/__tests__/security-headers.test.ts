@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextResponse } from 'next/server';
+import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
 import {
   generateNonce,
   buildCSPPolicy,
@@ -313,6 +314,14 @@ describe('Security Headers', () => {
 
       expect(response.headers.has('Cross-Origin-Embedder-Policy')).toBe(false);
     });
+
+    it('stamps X-PageSpace-API-Version on the 2xx pass-through path (ADR 0001 D2/D7#10)', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, isAPIRoute: true });
+
+      expect(response.headers.get('X-PageSpace-API-Version')).toBe(API_CONTRACT_VERSION);
+    });
   });
 
   describe('createSecureResponse', () => {
@@ -419,6 +428,12 @@ describe('Security Headers', () => {
       const response = createSecureErrorResponse('Error', 500, false);
 
       expect(response.headers.get('Strict-Transport-Security')).toBeNull();
+    });
+
+    it('stamps X-PageSpace-API-Version on the 401/403 early-rejection path (ADR 0001 D2/D7#10)', () => {
+      const response = createSecureErrorResponse({ error: 'Authentication required' }, 401);
+
+      expect(response.headers.get('X-PageSpace-API-Version')).toBe(API_CONTRACT_VERSION);
     });
   });
 

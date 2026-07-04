@@ -10,6 +10,7 @@ import {
 } from './permissions';
 import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
 import type { PermissionLevel, PageWithPermissions } from './permissions';
+import type { DriveScopeRow } from '../auth/oauth/scopes';
 
 /**
  * App-member permission resolution for MCP tokens.
@@ -56,7 +57,7 @@ interface PageTarget {
   isDriveRoot: boolean;
 }
 
-async function fetchPageTarget(targetPageId: string): Promise<PageTarget> {
+export async function fetchPageTarget(targetPageId: string): Promise<PageTarget> {
   const rows = await db
     .select({ driveId: pages.driveId, isPrivate: pages.isPrivate, type: pages.type })
     .from(pages)
@@ -222,7 +223,22 @@ export async function getAppAccessiblePagesInDrive(
 ): Promise<PageWithPermissions[]> {
   const membership = await fetchAppMembershipContext(tokenId, driveId);
   if (!membership) return [];
+  return resolveAccessiblePagesForMembership(membership, driveId);
+}
 
+/**
+ * Shared body for {@link getAppAccessiblePagesInDrive} (MCP token, membership
+ * sourced from a `mcp_token_drives` DB row) and
+ * {@link getScopedAccessiblePagesInDrive} (OAuth token, membership sourced
+ * from a parsed `ScopeSet` — no DB row exists for it). Both entry points
+ * resolve membership their own way, then defer to this one body so the
+ * listing logic (drive-wide fallback, per-page overrides, etc.) is never
+ * duplicated between token types.
+ */
+async function resolveAccessiblePagesForMembership(
+  membership: AppMembershipContext,
+  driveId: string,
+): Promise<PageWithPermissions[]> {
   if (membership.role === null) {
     return getUserAccessiblePagesInDriveWithDetails(membership.ownerUserId, driveId);
   }
@@ -344,4 +360,114 @@ export async function getAppAccessiblePagesInDrive(
     ...p,
     permissions: { canView: true, canEdit: p.type === 'CHANNEL', canShare: false, canDelete: false },
   }));
+}
+
+// ---------------------------------------------------------------------------
+// OAuth-token entry points (Phase 1 task 10, ADR 0002 Decision 2).
+//
+// An OAuth access token's drive scope is a parsed `ScopeSet`, bridged to
+// `DriveScopeRow[]` by `scopeSetToDriveScopes` — the exact `mcp_token_drives`
+// row shape, but there is no DB row: the token id has no corresponding
+// `mcp_token_drives` foreign key (that table's `tokenId` FK only points at
+// `mcp_tokens`). These entry points source membership from the in-memory
+// array instead of a DB join, then defer to the SAME resolver
+// (`resolveExplicitAppRoleAccess`) and DB helpers (`fetchPageTarget`,
+// `fetchCustomRolePermissions`, `getUserAccessLevel`) the MCP-token path
+// uses, so a drive-narrowed OAuth token is indistinguishable in capability
+// from an equivalent scoped MCP token.
+// ---------------------------------------------------------------------------
+
+function findScopeRow(driveScopes: DriveScopeRow[], driveId: string): DriveScopeRow | null {
+  return driveScopes.find((row) => row.driveId === driveId) ?? null;
+}
+
+export async function getScopedAccessLevel(
+  driveScopes: DriveScopeRow[],
+  ownerUserId: string,
+  targetPageId: string,
+): Promise<PermissionLevel | null> {
+  const target = await fetchPageTarget(targetPageId);
+  const row = findScopeRow(driveScopes, target.driveId);
+  if (!row) return null;
+
+  if (row.role === null) {
+    return getUserAccessLevel(ownerUserId, targetPageId);
+  }
+
+  const customRole = row.customRoleId
+    ? await fetchCustomRolePermissions(row.customRoleId, target.driveId)
+    : null;
+
+  return resolveExplicitAppRoleAccess({
+    role: row.role,
+    customRole,
+    customRoleUnresolved: !!row.customRoleId && !customRole,
+    targetPageId,
+    pageType: target.pageType,
+    isPrivate: target.isPrivate,
+    isDriveRoot: target.isDriveRoot,
+  });
+}
+
+/**
+ * Whether the scope has usable access to the drive. An inherit row counts
+ * only while its OWNER still has drive access — mirrors hasAppDriveMembership.
+ */
+export async function hasScopedDriveMembership(
+  driveScopes: DriveScopeRow[],
+  ownerUserId: string,
+  driveId: string,
+): Promise<boolean> {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return false;
+  if (row.role === null) return isUserDriveMember(ownerUserId, driveId);
+  return true;
+}
+
+/** Pure array lookup — no DB, unlike getAppDriveMembership. */
+export function getScopedDriveMembership(
+  driveScopes: DriveScopeRow[],
+  driveId: string,
+): { role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null } | null {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return null;
+  return { role: row.role, customRoleId: row.customRoleId };
+}
+
+/**
+ * Drive-level access. Inherit → the owner's drive-root access (user rule);
+ * explicit → user drive-root parity: any membership gets view+edit, ADMIN
+ * adds share+delete. Mirrors getAppDriveAccessLevel (OAuth's grammar has no
+ * OWNER role — scopeSetToDriveScopes only ever emits 'ADMIN' | 'MEMBER' | null).
+ */
+export async function getScopedDriveAccessLevel(
+  driveScopes: DriveScopeRow[],
+  ownerUserId: string,
+  driveId: string,
+): Promise<PermissionLevel | null> {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return null;
+
+  if (row.role === null) {
+    return getUserAccessLevel(ownerUserId, driveId);
+  }
+
+  const isAdminLike = row.role === 'ADMIN';
+  return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
+}
+
+/**
+ * All pages in a drive visible to the OAuth-scoped principal. Delegates to
+ * the same body getAppAccessiblePagesInDrive uses once membership is resolved.
+ */
+export async function getScopedAccessiblePagesInDrive(
+  driveScopes: DriveScopeRow[],
+  ownerUserId: string,
+  driveId: string,
+): Promise<PageWithPermissions[]> {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return [];
+
+  const membership: AppMembershipContext = { role: row.role, customRoleId: row.customRoleId, ownerUserId };
+  return resolveAccessiblePagesForMembership(membership, driveId);
 }
