@@ -1,5 +1,18 @@
-/** RED stub — real form-encoded token exchange lands in GREEN. */
-import type { ExchangeCode } from './loopback-flow.js';
+/**
+ * The authorization_code + PKCE token exchange (Phase 4 task 3) against the
+ * OAuth 2.1 token endpoint (`apps/web/src/app/api/oauth/token/route.ts`).
+ * Deliberately NOT routed through `PageSpaceClient.invoke` — that pipeline
+ * always attaches a Bearer `Authorization` header from an already-issued
+ * `AuthProvider` and always serializes bodies as JSON, but the token
+ * endpoint is unauthenticated (public client, no secret; RFC 6749 §5.1
+ * requires `application/x-www-form-urlencoded`), which is exactly the
+ * pre-authentication step no `AuthProvider` can exist for yet. The response
+ * shape is still validated with zod rather than trusted blind, and the
+ * resulting tokens flow straight into `PageSpaceClient`/`OAuthTokenProvider`
+ * for every subsequent call.
+ */
+import { z } from 'zod';
+import type { ExchangeCode, ExchangeCodeParams, ExchangedTokens } from './loopback-flow.js';
 
 export class TokenExchangeError extends Error {
   constructor(public readonly code: string) {
@@ -8,8 +21,58 @@ export class TokenExchangeError extends Error {
   }
 }
 
-export function createExchangeCode(_fetchImpl: typeof fetch = fetch): ExchangeCode {
-  return async () => {
-    throw new Error('not implemented');
+const tokenResponseSchema = z.object({
+  access_token: z.string(),
+  token_type: z.string(),
+  expires_in: z.number(),
+  refresh_token: z.string(),
+  scope: z.string(),
+});
+
+function extractErrorCode(json: unknown, status: number): string {
+  if (json !== null && typeof json === 'object' && 'error' in json && typeof (json as Record<string, unknown>).error === 'string') {
+    return (json as Record<string, unknown>).error as string;
+  }
+  return `http_${status}`;
+}
+
+export function createExchangeCode(fetchImpl: typeof fetch = fetch): ExchangeCode {
+  return async (params: ExchangeCodeParams): Promise<ExchangedTokens> => {
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: params.code,
+      redirect_uri: params.redirectUri,
+      client_id: params.clientId,
+      code_verifier: params.codeVerifier,
+    });
+
+    let response: Response;
+    try {
+      response = await fetchImpl(params.tokenEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+    } catch (error) {
+      throw new TokenExchangeError(`network_error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const json: unknown = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new TokenExchangeError(extractErrorCode(json, response.status));
+    }
+
+    const parsed = tokenResponseSchema.safeParse(json);
+    if (!parsed.success) {
+      throw new TokenExchangeError('invalid_response');
+    }
+
+    return {
+      accessToken: parsed.data.access_token,
+      refreshToken: parsed.data.refresh_token,
+      expiresIn: parsed.data.expires_in,
+      scope: parsed.data.scope,
+    };
   };
 }

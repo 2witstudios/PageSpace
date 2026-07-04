@@ -21,14 +21,14 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
   },
 }));
 
-// Mock auth helpers (boundary)
-vi.mock('@/lib/auth/auth-helpers', () => ({
-  requireAuth: vi.fn(),
+// Mock auth (boundary)
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
 }));
 
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
 // Test fixtures
 const mockVerifiedDate = new Date('2024-01-15T10:00:00Z');
@@ -84,7 +84,7 @@ describe('GET /api/auth/me', () => {
     vi.clearAllMocks();
 
     // Default: authenticated user
-    vi.mocked(requireAuth).mockResolvedValue(mockAuthSuccess as never);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthSuccess as never);
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(authRepository.findUserById).mockResolvedValue(mockUser);
   });
@@ -116,7 +116,7 @@ describe('GET /api/auth/me', () => {
         ...mockUser,
         role: 'admin',
       });
-      vi.mocked(requireAuth).mockResolvedValue({
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
         ...mockAuthSuccess,
         role: 'admin',
       } as never);
@@ -131,7 +131,7 @@ describe('GET /api/auth/me', () => {
   describe('authentication', () => {
     it('returns 401 when not authenticated', async () => {
       const mockResponse = new Response('Unauthorized', { status: 401 });
-      vi.mocked(requireAuth).mockResolvedValue(mockResponse as never);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: mockResponse } as never);
       vi.mocked(isAuthError).mockReturnValue(true);
 
       const response = await GET(createRequest());
@@ -143,6 +143,28 @@ describe('GET /api/auth/me', () => {
       await GET(createRequest());
 
       expect(authRepository.findUserById).toHaveBeenCalledWith('test-user-id');
+    });
+
+    it('accepts an OAuth-authenticated identity (CLI `pagespace login`/`whoami`)', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        userId: 'test-user-id',
+        role: 'user',
+        tokenVersion: 0,
+        adminRoleVersion: 0,
+        tokenType: 'oauth',
+        tokenId: 'oauth-token-id',
+        scopes: { account: true, offlineAccess: false, drives: new Map() },
+        driveScopes: [],
+        allowedDriveIds: [],
+      } as never);
+      vi.mocked(isAuthError).mockReturnValue(false);
+
+      const response = await GET(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.email).toBe(mockUser.email);
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth'], requireCSRF: false });
     });
   });
 
