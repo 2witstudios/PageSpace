@@ -87,6 +87,27 @@ export const drivesRenameHandler: CommandHandler = async (ctx, intent) => {
   return EXIT_SUCCESS;
 };
 
+export const drivesSetHomePageHandler: CommandHandler = async (ctx, intent) => {
+  const [driveId, pageIdOrClear] = intent.args;
+  if (!driveId || !pageIdOrClear || intent.args.length > 2) {
+    ctx.stderr.write('Usage: pagespace drives set-home-page <driveId> <pageId|--clear>\n');
+    return EXIT_USAGE_ERROR;
+  }
+
+  const homePageId = pageIdOrClear === '--clear' ? null : pageIdOrClear;
+  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.setHomePage({ driveId, homePageId }));
+  if (!result.ok) return EXIT_RUNTIME_ERROR;
+
+  if (intent.flags.json) {
+    ctx.stdout.write(`${JSON.stringify(result.value)}\n`);
+  } else if (homePageId === null) {
+    ctx.stdout.write(`Cleared home page for drive ${driveId}.\n`);
+  } else {
+    ctx.stdout.write(`Set home page for drive ${driveId} to ${homePageId}.\n`);
+  }
+  return EXIT_SUCCESS;
+};
+
 export const drivesTrashHandler: CommandHandler = async (ctx, intent) => {
   const [driveId] = intent.args;
   if (!driveId) {

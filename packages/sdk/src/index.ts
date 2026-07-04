@@ -111,6 +111,7 @@ export {
   createDrive,
   renameDrive,
   restoreDrive,
+  setHomePage,
   trashDrive,
   updateDriveContext,
 } from './operations/drives.js';

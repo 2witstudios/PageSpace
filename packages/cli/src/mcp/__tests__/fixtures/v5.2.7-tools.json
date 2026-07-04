@@ -24,6 +24,13 @@
     ]
   },
   {
+    "name": "set_home_page",
+    "required": [
+      "driveId",
+      "homePageId"
+    ]
+  },
+  {
     "name": "list_pages",
     "required": [
       "driveSlug",
@@ -77,6 +84,21 @@
       "pageId",
       "startLine",
       "content"
+    ]
+  },
+  {
+    "name": "insert_lines",
+    "required": [
+      "pageId",
+      "startLine",
+      "content"
+    ]
+  },
+  {
+    "name": "delete_lines",
+    "required": [
+      "pageId",
+      "startLine"
     ]
   },
   {
@@ -322,14 +344,20 @@
     "required": [
       "driveId",
       "roleId",
-      "pageId"
+      "pageId",
+      "canView",
+      "canEdit",
+      "canShare"
     ]
   },
   {
     "name": "set_role_drive_wide_permissions",
     "required": [
       "driveId",
-      "roleId"
+      "roleId",
+      "canView",
+      "canEdit",
+      "canShare"
     ]
   },
   {

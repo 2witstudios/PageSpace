@@ -143,6 +143,6 @@ alias is a bridge, not a destination.
 - `PAGESPACE_API_URL` is unchanged.
 - Auth precedence is now: `--token` flag > `PAGESPACE_TOKEN` env (or legacy `PAGESPACE_AUTH_TOKEN`)
   > a stored `pagespace login` credential. The old package only ever supported the env var.
-- The tool surface itself has full parity with `pagespace-mcp` v5.2.2 — see
-  `src/mcp/__tests__/fixtures/README.md` in this package for the mechanical parity gate and the
-  documented v5.2.2→5.2.6 delta.
+- The tool surface itself has full parity with `pagespace-mcp` v5.2.7 (the tool's final,
+  deprecated release) — see `src/mcp/__tests__/fixtures/README.md` in this package for the
+  mechanical parity gate and the documented v5.2.2→v5.2.7 delta.

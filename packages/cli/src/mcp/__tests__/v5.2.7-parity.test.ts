@@ -1,14 +1,15 @@
 /**
- * Tool-surface parity gate vs pagespace-mcp v5.2.2 (Phase 6 task 2).
- *
- * This is the epic's honesty mechanism: it enumerates every tool
- * `pagespace-mcp` had at its v5.2.2 tag (`fixtures/v5.2.2-tools.json`, see
- * `fixtures/README.md` for exactly how that fixture was derived) and fails
- * loudly if the generated MCP surface (`buildOperationRegistry` +
- * `operationToMcpTool`, the same pipeline `pagespace mcp` serves over stdio)
- * is missing any of those tools or any of their v5.2.2-required input
- * fields. Renames/reshapes/drops are only permitted via the explicit,
- * commented map in `fixtures/v5.2.2-parity-map.ts` — never a silent skip.
+ * Tool-surface parity gate vs pagespace-mcp v5.2.7 — the tool's deprecation
+ * target and final release (Phase 6 task 2, re-pegged from the original
+ * v5.2.2 gate). This is the epic's honesty mechanism: it enumerates every
+ * tool `pagespace-mcp` had at its final 5.2.7 state
+ * (`fixtures/v5.2.7-tools.json`, see `fixtures/README.md` for exactly how
+ * that fixture was derived) and fails loudly if the generated MCP surface
+ * (`buildOperationRegistry` + `operationToMcpTool`, the same pipeline
+ * `pagespace mcp` serves over stdio) is missing any of those tools or any of
+ * their v5.2.7-required input fields. Renames/reshapes/drops are only
+ * permitted via the explicit, commented map in
+ * `fixtures/v5.2.7-parity-map.ts` — never a silent skip.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -17,22 +18,17 @@ import { describe, expect, it } from 'vitest';
 import { listOperations } from '@pagespace/sdk';
 import { buildOperationRegistry } from '../serve.js';
 import { operationToMcpTool, type McpToolDefinition } from '../tool-convert.js';
-import { DROPPED_TOOLS, TOOL_NAME_ALIASES, type FieldMapping } from './fixtures/v5.2.2-parity-map.js';
+import { DROPPED_TOOLS, TOOL_NAME_ALIASES, type FieldMapping } from './fixtures/v5.2.7-parity-map.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-interface V522Tool {
+interface V527Tool {
   readonly name: string;
   readonly required: readonly string[];
 }
 
-const fixtureTools: readonly V522Tool[] = JSON.parse(
-  readFileSync(join(__dirname, 'fixtures/v5.2.2-tools.json'), 'utf-8'),
-);
-
-const inventoryDoc = readFileSync(
-  join(__dirname, '../../../../../docs/sdk/operations-inventory.md'),
-  'utf-8',
+const fixtureTools: readonly V527Tool[] = JSON.parse(
+  readFileSync(join(__dirname, 'fixtures/v5.2.7-tools.json'), 'utf-8'),
 );
 
 function generatedSurface(): ReadonlyMap<string, McpToolDefinition & { readonly propertyNames: ReadonlySet<string> }> {
@@ -61,15 +57,17 @@ function resolveExpectedField(fieldMapping: FieldMapping | undefined, oldField: 
   }
 }
 
-describe('v5.2.2 tool-surface parity gate', () => {
-  it('fixture has exactly 67 tools, matching operations-inventory.md\'s stated count', () => {
-    const match = inventoryDoc.match(/Tool count:\s*\*{0,2}(\d+)\s*registered tools/);
-    expect(match, 'expected to find "Tool count: N registered tools" in operations-inventory.md').not.toBeNull();
-    const inventoryCount = Number(match?.[1]);
+describe('v5.2.7 tool-surface parity gate', () => {
+  it('fixture has exactly 70 tools', () => {
+    // Deliberately NOT cross-checked against docs/sdk/operations-inventory.md
+    // here: that doc is frozen Phase 0 ground truth for the ORIGINAL v5.2.2
+    // gate (67 tools) and is never updated for this re-peg. The v5.2.2 -> 70
+    // delta (3 tools added, 2 tools gaining required fields) is documented in
+    // fixtures/README.md instead.
     expect(
       fixtureTools.length,
-      `fixture has ${fixtureTools.length} tools but operations-inventory.md declares ${inventoryCount} — name the delta before changing either`,
-    ).toBe(inventoryCount);
+      `fixture has ${fixtureTools.length} tools but the pinned pagespace-mcp v5.2.7 commit has 70 — see fixtures/README.md`,
+    ).toBe(70);
   });
 
   it('every fixture tool is mapped in EXACTLY one of TOOL_NAME_ALIASES or DROPPED_TOOLS (total, disjoint partition)', () => {
@@ -81,8 +79,8 @@ describe('v5.2.2 tool-surface parity gate', () => {
       if (!inAliases && !inDropped) unmapped.push(tool.name);
       if (inAliases && inDropped) mappedTwice.push(tool.name);
     }
-    expect(unmapped, `v5.2.2 tools with no mapping at all — add each to TOOL_NAME_ALIASES or DROPPED_TOOLS: ${unmapped.join(', ')}`).toEqual([]);
-    expect(mappedTwice, `v5.2.2 tools mapped in BOTH tables (ambiguous): ${mappedTwice.join(', ')}`).toEqual([]);
+    expect(unmapped, `v5.2.7 tools with no mapping at all — add each to TOOL_NAME_ALIASES or DROPPED_TOOLS: ${unmapped.join(', ')}`).toEqual([]);
+    expect(mappedTwice, `v5.2.7 tools mapped in BOTH tables (ambiguous): ${mappedTwice.join(', ')}`).toEqual([]);
   });
 
   it('every DROPPED_TOOLS entry carries a non-empty reason', () => {
@@ -91,7 +89,7 @@ describe('v5.2.2 tool-surface parity gate', () => {
     }
   });
 
-  it('every aliased v5.2.2 tool has a live MCP tool at its mapped operation name', () => {
+  it('every aliased v5.2.7 tool has a live MCP tool at its mapped operation name', () => {
     const surface = generatedSurface();
     const missing: string[] = [];
     for (const tool of fixtureTools) {
@@ -104,7 +102,7 @@ describe('v5.2.2 tool-surface parity gate', () => {
     expect(missing, `missing tools in the generated MCP surface:\n${missing.join('\n')}`).toEqual([]);
   });
 
-  it('every v5.2.2-required field of every aliased tool is present (by name or documented alias) in the generated schema', () => {
+  it('every v5.2.7-required field of every aliased tool is present (by name or documented alias) in the generated schema', () => {
     const surface = generatedSurface();
     const problems: string[] = [];
 

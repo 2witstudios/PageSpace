@@ -20,6 +20,7 @@ import {
   drivesListHandler,
   drivesRenameHandler,
   drivesRestoreHandler,
+  drivesSetHomePageHandler,
   drivesTrashHandler,
 } from '../commands/drives.js';
 import { pagesReadHandler, pagesReplaceLinesHandler } from '../commands/content.js';
@@ -72,6 +73,7 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },
   { path: ['drives', 'rename'], handler: drivesRenameHandler, summary: 'Rename a drive' },
+  { path: ['drives', 'set-home-page'], handler: drivesSetHomePageHandler, summary: "Set (or --clear) a drive's landing page" },
   { path: ['drives', 'trash'], handler: drivesTrashHandler, summary: 'Trash a drive' },
   { path: ['drives', 'restore'], handler: drivesRestoreHandler, summary: 'Restore a trashed drive' },
   { path: ['pages', 'list'], handler: pagesListHandler, summary: 'List pages in a drive' },

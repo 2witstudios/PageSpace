@@ -61,6 +61,7 @@ export {
   drivesListHandler,
   drivesRenameHandler,
   drivesRestoreHandler,
+  drivesSetHomePageHandler,
   drivesTrashHandler,
   renderDrive,
   renderDrivesList,
