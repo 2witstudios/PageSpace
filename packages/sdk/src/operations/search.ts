@@ -76,7 +76,7 @@ export const globSearch = defineOperation({
   name: 'search.glob',
   method: 'GET',
   path: '/api/drives/:driveId/search/glob',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     driveId: z.string(),
     pattern: z.string().min(1),
     includeTypes: includeTypesSchema,
@@ -123,7 +123,7 @@ export const regexSearch = defineOperation({
   name: 'search.regex',
   method: 'GET',
   path: '/api/drives/:driveId/search/regex',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     driveId: z.string(),
     pattern: z.string().min(1),
     searchIn: z.enum(['content', 'title', 'both']).optional(),
@@ -175,7 +175,7 @@ export const multiDriveSearch = defineOperation({
   name: 'search.multiDrive',
   method: 'GET',
   path: '/api/search/multi-drive',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     searchQuery: z.string().min(1),
     searchType: z.enum(['text', 'regex']).optional(),
     // Route clamps to 1-50, default 20 (search/multi-drive/route.ts:26-30).

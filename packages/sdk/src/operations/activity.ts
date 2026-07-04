@@ -124,7 +124,7 @@ export const getActivity = defineOperation({
   name: 'activity.get',
   method: 'GET',
   path: '/api/activities',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     context: z.enum(['user', 'drive', 'page']).optional(),
     driveId: z.string().optional(),
     pageId: z.string().optional(),

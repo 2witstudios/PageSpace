@@ -118,7 +118,7 @@ export const sendChannelMessage = defineOperation({
   name: 'channels.sendMessage',
   method: 'POST',
   path: '/api/channels/:pageId/messages',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     pageId: z.string(),
     // Route coerces a non-string body to '' (`typeof content === 'string' ? content : ''`)
     // and never enforces a minimum length — attachment-only messages send an empty string.
@@ -143,7 +143,7 @@ export const deleteChannelMessage = defineOperation({
   name: 'channels.deleteMessage',
   method: 'DELETE',
   path: '/api/channels/:pageId/messages/:messageId',
-  inputSchema: z.object({ pageId: z.string(), messageId: z.string() }),
+  inputSchema: z.strictObject({ pageId: z.string(), messageId: z.string() }),
   outputSchema: z.object({ success: z.literal(true) }),
   requiredScope: 'drive',
   destructive: true,

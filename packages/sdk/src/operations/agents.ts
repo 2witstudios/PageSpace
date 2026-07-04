@@ -62,6 +62,7 @@ export const listAgents = defineOperation({
   name: 'agents.list',
   method: 'GET',
   path: '/api/drives/:driveId/agents',
+  /** Not `.strict()` — deliberately still accepts (and strips) the old tool's decorative `agentPath`/`driveSlug` fields; see the request-shape test. */
   inputSchema: z.object({
     driveId: z.string(),
     includeSystemPrompt: z.boolean().optional(),
@@ -127,7 +128,7 @@ export const multiDriveListAgents = defineOperation({
   name: 'agents.listMultiDrive',
   method: 'GET',
   path: '/api/ai/page-agents/multi-drive',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     includeSystemPrompt: z.boolean().optional(),
     includeTools: z.boolean().optional(),
     groupByDrive: z.boolean().optional(),
@@ -177,7 +178,7 @@ export const updateAgentConfig = defineOperation({
   name: 'agents.updateConfig',
   method: 'PUT',
   path: '/api/ai/page-agents/:agentId/config',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     agentId: z.string(),
     systemPrompt: z.string().optional(),
     enabledTools: z.array(z.string()).nullable().optional(),
@@ -230,7 +231,7 @@ export const askAgent = defineOperation({
   name: 'agents.ask',
   method: 'POST',
   path: '/api/ai/page-agents/consult',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     agentId: z.string(),
     question: z.string().min(1),
     context: z.string().optional(),
@@ -276,7 +277,7 @@ export const listModels = defineOperation({
   name: 'agents.listModels',
   method: 'GET',
   path: '/api/ai/models',
-  inputSchema: z.object({}),
+  inputSchema: z.strictObject({}),
   outputSchema: listModelsOutputSchema,
   description:
     'List the AI model catalog grouped by provider (D3: the route is public, takes no query params, and returns no top-level `models` array — the old tool\'s provider/freeOnly filtering was dead code). Filter the fetched catalog client-side with `filterModelCatalog`.',

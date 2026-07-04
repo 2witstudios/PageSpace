@@ -80,7 +80,7 @@ export const getPageDetails = defineOperation({
   name: 'pages.details',
   method: 'GET',
   path: '/api/pages/:pageId',
-  inputSchema: z.object({ pageId: z.string() }),
+  inputSchema: z.strictObject({ pageId: z.string() }),
   outputSchema: pageWithDetailsSchema,
   requiredScope: 'drive',
   description: 'Get full page details (metadata, children, and chat messages) by id.',
@@ -97,7 +97,7 @@ export const listPages = defineOperation({
   name: 'pages.list',
   method: 'GET',
   path: '/api/drives/:driveId/pages',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     driveId: z.string(),
     parentId: z.string().optional(),
     recursive: z.boolean().optional(),
@@ -142,7 +142,7 @@ export const listTrash = defineOperation({
   name: 'pages.listTrash',
   method: 'GET',
   path: '/api/drives/:driveId/trash',
-  inputSchema: z.object({ driveId: z.string() }),
+  inputSchema: z.strictObject({ driveId: z.string() }),
   outputSchema: z.array(trashedPageNodeSchema),
   requiredScope: 'drive:admin',
   description: 'List all trashed pages (as a tree) in a drive. Owner/admin only.',
@@ -158,7 +158,7 @@ export const createPage = defineOperation({
   name: 'pages.create',
   method: 'POST',
   path: '/api/pages',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     driveId: z.string().min(1),
     title: z.string().min(1),
     type: pageTypeSchema,
@@ -187,7 +187,7 @@ export const renamePage = defineOperation({
   name: 'pages.rename',
   method: 'PATCH',
   path: '/api/pages/:pageId',
-  inputSchema: z.object({ pageId: z.string(), title: z.string() }),
+  inputSchema: z.strictObject({ pageId: z.string(), title: z.string() }),
   outputSchema: pageDataSchema,
   requiredScope: 'drive',
   description: 'Rename an existing page.',
@@ -204,7 +204,7 @@ export const movePage = defineOperation({
   name: 'pages.move',
   method: 'PATCH',
   path: '/api/pages/reorder',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     pageId: z.string(),
     newParentId: z.string().nullable(),
     newPosition: z.number().finite(),
@@ -225,7 +225,7 @@ export const trashPage = defineOperation({
   name: 'pages.trash',
   method: 'DELETE',
   path: '/api/pages/:pageId',
-  inputSchema: z.object({ pageId: z.string(), trash_children: z.boolean() }),
+  inputSchema: z.strictObject({ pageId: z.string(), trash_children: z.boolean() }),
   outputSchema: z.object({ message: z.string() }),
   requiredScope: 'drive',
   description: 'Move a page to trash (soft delete).',
@@ -240,7 +240,7 @@ export const restorePage = defineOperation({
   name: 'pages.restore',
   method: 'POST',
   path: '/api/pages/:pageId/restore',
-  inputSchema: z.object({ pageId: z.string() }),
+  inputSchema: z.strictObject({ pageId: z.string() }),
   outputSchema: z.object({ message: z.string() }),
   requiredScope: 'drive',
   description: 'Restore a trashed page back to its original location.',

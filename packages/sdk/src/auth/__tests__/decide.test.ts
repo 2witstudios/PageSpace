@@ -11,8 +11,8 @@ import {
 } from '../../errors.js';
 import { classifyRefreshFailure, decideTokenAction, type OAuthTokenState } from '../decide.js';
 
-function authenticated(accessExpiresAt: number): OAuthTokenState {
-  return { status: 'authenticated', accessExpiresAt };
+function authenticated(accessExpiresAt: number, refreshExpiresAt = Number.MAX_SAFE_INTEGER): OAuthTokenState {
+  return { status: 'authenticated', accessExpiresAt, refreshExpiresAt };
 }
 
 describe('decideTokenAction', () => {
@@ -36,14 +36,26 @@ describe('decideTokenAction', () => {
     expect(decideTokenAction(authenticated(-1), 0, 60_000)).toBe('refresh');
   });
 
-  it('returns unauthenticated regardless of the recorded expiry once terminal', () => {
-    const state: OAuthTokenState = { status: 'unauthenticated', accessExpiresAt: Number.MAX_SAFE_INTEGER };
+  it('returns unauthenticated once terminal — the state needs no expiry data at all', () => {
+    const state: OAuthTokenState = { status: 'unauthenticated' };
     expect(decideTokenAction(state, 0, 60_000)).toBe('unauthenticated');
   });
 
   it('honors a caller-configured skew window rather than a hardcoded constant', () => {
     expect(decideTokenAction(authenticated(5_000), 0, 1_000)).toBe('use-cached');
     expect(decideTokenAction(authenticated(5_000), 4_000, 1_000)).toBe('refresh');
+  });
+
+  it('returns unauthenticated instead of refresh once the refresh token itself has expired (no point attempting a doomed refresh call)', () => {
+    expect(decideTokenAction(authenticated(-1, -1), 0, 60_000)).toBe('unauthenticated');
+  });
+
+  it('returns unauthenticated exactly at the refresh-token expiry boundary (now === refreshExpiresAt)', () => {
+    expect(decideTokenAction(authenticated(-1, 1_000), 1_000, 60_000)).toBe('unauthenticated');
+  });
+
+  it('still returns refresh with one ms of margin before the refresh token expires', () => {
+    expect(decideTokenAction(authenticated(-1, 1_001), 1_000, 60_000)).toBe('refresh');
   });
 });
 

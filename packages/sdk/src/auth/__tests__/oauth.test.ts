@@ -203,6 +203,49 @@ describe('OAuthTokenProvider', () => {
     expect(JSON.stringify(provider)).not.toContain(secretAccessToken);
   });
 
+  it('does not fail a concurrent caller when refreshExpiresAt passes while a refresh is already in flight', async () => {
+    const { promise, resolve } = deferred<OAuthTokens>();
+    const refreshAccessToken = vi.fn().mockReturnValue(promise);
+    let now = 0;
+    const provider = new OAuthTokenProvider({
+      initialTokens: makeTokens({ accessExpiresAt: 0, refreshExpiresAt: 100 }),
+      refreshAccessToken,
+      now: () => now,
+      skewMs: 60_000,
+    });
+
+    // First call starts the refresh while the refresh token is still valid.
+    const firstCall = provider.getAccessToken();
+    // Clock advances past refreshExpiresAt while that refresh is still in flight.
+    now = 200;
+    // A second concurrent caller must join the existing flight, not fail closed
+    // on a refreshExpiresAt check against stale (pre-refresh) token data.
+    const secondCall = provider.getAccessToken();
+
+    resolve(makeTokens({ accessToken: 'ps_at_fresh', accessExpiresAt: 300_000, refreshExpiresAt: 400_000 }));
+
+    await expect(firstCall).resolves.toBe('ps_at_fresh');
+    await expect(secondCall).resolves.toBe('ps_at_fresh');
+    expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed without a network call once the refresh token itself has expired', async () => {
+    const refreshAccessToken = vi.fn();
+    const provider = new OAuthTokenProvider({
+      initialTokens: makeTokens({ accessExpiresAt: 0, refreshExpiresAt: 500 }),
+      refreshAccessToken,
+      now: () => 1_000,
+      skewMs: 60_000,
+    });
+
+    await expect(provider.getAccessToken()).rejects.toBeInstanceOf(AuthenticationError);
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+
+    // Stays terminal on a subsequent call too.
+    await expect(provider.getAccessToken()).rejects.toBeInstanceOf(AuthenticationError);
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+  });
+
   it('propagates the refresh HTTP call errors from the injected transport (no bespoke fetch inside the provider)', async () => {
     const transportError = new NetworkError('DNS resolution failed');
     const refreshAccessToken = vi.fn().mockRejectedValue(transportError);

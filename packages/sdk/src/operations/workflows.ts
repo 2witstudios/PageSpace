@@ -74,7 +74,7 @@ export const listWorkflows = defineOperation({
   name: 'workflows.list',
   method: 'GET',
   path: '/api/workflows',
-  inputSchema: z.object({ driveId: z.string().min(1) }),
+  inputSchema: z.strictObject({ driveId: z.string().min(1) }),
   outputSchema: z.array(workflowListItemSchema),
   requiredScope: 'drive:admin',
   description:
@@ -85,19 +85,17 @@ export const createWorkflow = defineOperation({
   name: 'workflows.create',
   method: 'POST',
   path: '/api/workflows',
-  inputSchema: z
-    .object({
-      driveId: z.string().min(1),
-      name: z.string().min(1).max(200),
-      agentPageId: z.string().min(1),
-      prompt: z.string().min(1).optional(),
-      instructionPageId: z.string().nullable().optional(),
-      contextPageIds: z.array(z.string()).default([]),
-      cronExpression: z.string().min(1),
-      timezone: z.string().default('UTC'),
-      isEnabled: z.boolean().default(true),
-    })
-    .strict()
+  inputSchema: z.strictObject({
+    driveId: z.string().min(1),
+    name: z.string().min(1).max(200),
+    agentPageId: z.string().min(1),
+    prompt: z.string().min(1).optional(),
+    instructionPageId: z.string().nullable().optional(),
+    contextPageIds: z.array(z.string()).default([]),
+    cronExpression: z.string().min(1),
+    timezone: z.string().default('UTC'),
+    isEnabled: z.boolean().default(true),
+  })
     .refine((data) => Boolean(data.prompt?.trim()) || Boolean(data.instructionPageId), {
       message: 'Either prompt or instructionPageId is required',
     }),
@@ -111,19 +109,17 @@ export const updateWorkflow = defineOperation({
   name: 'workflows.update',
   method: 'PATCH',
   path: '/api/workflows/:workflowId',
-  inputSchema: z
-    .object({
-      workflowId: z.string(),
-      name: z.string().min(1).max(200).optional(),
-      agentPageId: z.string().min(1).optional(),
-      prompt: z.string().min(1).optional(),
-      instructionPageId: z.string().nullable().optional(),
-      contextPageIds: z.array(z.string()).optional(),
-      cronExpression: z.string().min(1).nullable().optional(),
-      timezone: z.string().optional(),
-      isEnabled: z.boolean().optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    workflowId: z.string(),
+    name: z.string().min(1).max(200).optional(),
+    agentPageId: z.string().min(1).optional(),
+    prompt: z.string().min(1).optional(),
+    instructionPageId: z.string().nullable().optional(),
+    contextPageIds: z.array(z.string()).optional(),
+    cronExpression: z.string().min(1).nullable().optional(),
+    timezone: z.string().optional(),
+    isEnabled: z.boolean().optional(),
+  }),
   outputSchema: workflowRowSchema,
   requiredScope: 'drive:admin',
   description:
@@ -134,7 +130,7 @@ export const deleteWorkflow = defineOperation({
   name: 'workflows.delete',
   method: 'DELETE',
   path: '/api/workflows/:workflowId',
-  inputSchema: z.object({ workflowId: z.string() }),
+  inputSchema: z.strictObject({ workflowId: z.string() }),
   outputSchema: z.object({ success: z.literal(true) }),
   requiredScope: 'drive:admin',
   destructive: true,

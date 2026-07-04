@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import {
+  COMMAND_DESCRIPTION_MAX_LENGTH as LIB_COMMAND_DESCRIPTION_MAX_LENGTH,
+  COMMAND_TRIGGER_MAX_LENGTH as LIB_COMMAND_TRIGGER_MAX_LENGTH,
+  COMMAND_TRIGGER_PATTERN as LIB_COMMAND_TRIGGER_PATTERN,
+} from '@pagespace/lib/commands/command-core';
 import { buildRequest } from '../../transport/build-request.js';
 import { parseResponse } from '../../transport/parse-response.js';
 import { ResponseValidationError } from '../../errors.js';
-import { createCommand, deleteCommand, listCommands, updateCommand } from '../commands.js';
+import {
+  COMMAND_DESCRIPTION_MAX_LENGTH,
+  COMMAND_TRIGGER_MAX_LENGTH,
+  COMMAND_TRIGGER_PATTERN,
+  createCommand,
+  deleteCommand,
+  listCommands,
+  updateCommand,
+} from '../commands.js';
 
 const config = { baseUrl: 'https://pagespace.ai' };
 
@@ -241,5 +254,20 @@ describe('commands.delete — metadata (destructive, non-idempotent)', () => {
 
   it('uses DELETE, which isIdempotentMethod classifies as non-idempotent (no auto-retry)', () => {
     expect(deleteCommand.method).toBe('DELETE');
+  });
+});
+
+describe('inlined validation constants — drift guard vs @pagespace/lib/commands/command-core', () => {
+  it('COMMAND_TRIGGER_PATTERN matches the server source of truth', () => {
+    expect(COMMAND_TRIGGER_PATTERN.source).toBe(LIB_COMMAND_TRIGGER_PATTERN.source);
+    expect(COMMAND_TRIGGER_PATTERN.flags).toBe(LIB_COMMAND_TRIGGER_PATTERN.flags);
+  });
+
+  it('COMMAND_TRIGGER_MAX_LENGTH matches the server source of truth', () => {
+    expect(COMMAND_TRIGGER_MAX_LENGTH).toBe(LIB_COMMAND_TRIGGER_MAX_LENGTH);
+  });
+
+  it('COMMAND_DESCRIPTION_MAX_LENGTH matches the server source of truth', () => {
+    expect(COMMAND_DESCRIPTION_MAX_LENGTH).toBe(LIB_COMMAND_DESCRIPTION_MAX_LENGTH);
   });
 });

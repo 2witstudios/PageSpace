@@ -81,14 +81,32 @@ export class OAuthTokenProvider implements AuthProvider {
   }
 
   async getAccessToken(): Promise<string> {
+    // A refresh already in flight owns the authoritative outcome — join it
+    // rather than re-deciding against `this.#tokens`, which is still the
+    // pre-refresh snapshot until that flight resolves. Without this, a
+    // concurrent caller arriving after `refreshExpiresAt` (measured against
+    // the stale snapshot) would fail closed even though the in-flight
+    // refresh is about to succeed and produce a fresh token pair.
+    if (this.#inFlightRefresh) {
+      return this.#inFlightRefresh;
+    }
+
     const state: OAuthTokenState =
       this.#status === 'unauthenticated'
-        ? { status: 'unauthenticated', accessExpiresAt: this.#tokens.accessExpiresAt }
-        : { status: 'authenticated', accessExpiresAt: this.#tokens.accessExpiresAt };
+        ? { status: 'unauthenticated' }
+        : {
+            status: 'authenticated',
+            accessExpiresAt: this.#tokens.accessExpiresAt,
+            refreshExpiresAt: this.#tokens.refreshExpiresAt,
+          };
 
     const action = decideTokenAction(state, this.#now(), this.#skewMs);
 
     if (action === 'unauthenticated') {
+      // Reached either because a prior refresh was already terminal, or
+      // because refreshExpiresAt has now passed — either way, fail closed
+      // for good rather than re-deciding the same outcome on every call.
+      this.#status = 'unauthenticated';
       throw new AuthenticationError('OAuth credential is unauthenticated; re-login required');
     }
     if (action === 'use-cached') {

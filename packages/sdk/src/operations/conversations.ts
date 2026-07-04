@@ -97,7 +97,7 @@ export const listConversations = defineOperation({
   name: 'conversations.list',
   method: 'GET',
   path: '/api/ai/page-agents/:agentId/conversations',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     agentId: z.string(),
     // Route clamps page to 0-10000 (default 0) and pageSize to 1-200 (default 50).
     page: z.number().int().min(0).max(10000).optional(),
@@ -130,7 +130,7 @@ export const readConversation = defineOperation({
   name: 'conversations.read',
   method: 'GET',
   path: '/api/ai/page-agents/:agentId/conversations/:conversationId/messages',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     agentId: z.string(),
     conversationId: z.string(),
     // Route clamps limit to 1-200 (default 50).

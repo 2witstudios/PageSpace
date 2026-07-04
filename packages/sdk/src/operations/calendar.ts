@@ -57,6 +57,7 @@
  */
 import { z } from 'zod';
 import { defineOperation } from '../registry/define.js';
+import { requirePromptOrInstructionPageId } from './shared-refinements.js';
 
 // ---------------------------------------------------------------------------
 // Shared primitives
@@ -207,16 +208,13 @@ const workflowEventSchema = z.object({
 
 /** `agentTrigger` shared shape (create/setTrigger): requires prompt or instructionPageId. */
 const agentTriggerInputSchema = z
-  .object({
+  .strictObject({
     agentPageId: z.string().min(1),
     prompt: z.string().trim().max(10000).optional(),
     instructionPageId: z.string().nullable().optional(),
     contextPageIds: z.array(z.string()).max(10).optional(),
   })
-  .refine((v) => Boolean(v.prompt) || Boolean(v.instructionPageId), {
-    message: 'agentTrigger needs either a prompt or an instructionPageId',
-    path: ['prompt'],
-  });
+  .refine(...requirePromptOrInstructionPageId());
 
 const successSchema = z.object({ success: z.literal(true) });
 
@@ -228,24 +226,23 @@ export const listCalendarEvents = defineOperation({
   name: 'calendar.list',
   method: 'GET',
   path: '/api/calendar/events',
-  inputSchema: z
-    .object({
-      context: z.enum(['user', 'drive']).optional(),
-      driveId: z.string().optional(),
-      startDate: isoDatetimeSchema,
-      endDate: isoDatetimeSchema,
-      /**
-       * Route truth (`calendar/events/route.ts:30`): coerced server-side via
-       * `z.coerce.boolean()`, which is `Boolean(str)` — ANY non-empty string,
-       * including the literal `"false"`, coerces to `true`. There is
-       * currently no way to exclude personal events from a `context: 'user'`
-       * list through this endpoint; passing `includePersonal: false` has no
-       * effect server-side. Kept faithful to the route's declared input
-       * rather than silently dropped, but documented so callers aren't
-       * surprised.
-       */
-      includePersonal: z.boolean().optional(),
-    })
+  inputSchema: z.strictObject({
+    context: z.enum(['user', 'drive']).optional(),
+    driveId: z.string().optional(),
+    startDate: isoDatetimeSchema,
+    endDate: isoDatetimeSchema,
+    /**
+     * Route truth (`calendar/events/route.ts:30`): coerced server-side via
+     * `z.coerce.boolean()`, which is `Boolean(str)` — ANY non-empty string,
+     * including the literal `"false"`, coerces to `true`. There is
+     * currently no way to exclude personal events from a `context: 'user'`
+     * list through this endpoint; passing `includePersonal: false` has no
+     * effect server-side. Kept faithful to the route's declared input
+     * rather than silently dropped, but documented so callers aren't
+     * surprised.
+     */
+    includePersonal: z.boolean().optional(),
+  })
     .refine((v) => v.context !== 'drive' || Boolean(v.driveId), {
       message: 'driveId is required for drive context',
       path: ['driveId'],
@@ -266,7 +263,7 @@ export const getCalendarEvent = defineOperation({
   name: 'calendar.get',
   method: 'GET',
   path: '/api/calendar/events/:eventId',
-  inputSchema: z.object({ eventId: z.string() }),
+  inputSchema: z.strictObject({ eventId: z.string() }),
   outputSchema: calendarEventSchema,
   description: 'Get a single calendar event by id. Fails closed with 404/403 per canAccessEvent visibility rules.',
 });
@@ -279,24 +276,23 @@ export const createCalendarEvent = defineOperation({
   name: 'calendar.create',
   method: 'POST',
   path: '/api/calendar/events',
-  inputSchema: z
-    .object({
-      driveId: z.string().nullable().optional(),
-      pageId: z.string().nullable().optional(),
-      title: z.string().min(1).max(500),
-      description: z.string().max(10000).nullable().optional(),
-      location: z.string().max(1000).nullable().optional(),
-      startAt: isoDatetimeSchema,
-      endAt: isoDatetimeSchema,
-      allDay: z.boolean().optional(),
-      timezone: z.string().optional(),
-      recurrenceRule: recurrenceRuleInputSchema.nullable().optional(),
-      visibility: eventVisibilityEnum.optional(),
-      color: z.string().optional(),
-      /** D5: the route field is `attendeeIds`, not the old handler's `userIds`. */
-      attendeeIds: z.array(z.string()).optional(),
-      agentTrigger: agentTriggerInputSchema.optional(),
-    })
+  inputSchema: z.strictObject({
+    driveId: z.string().nullable().optional(),
+    pageId: z.string().nullable().optional(),
+    title: z.string().min(1).max(500),
+    description: z.string().max(10000).nullable().optional(),
+    location: z.string().max(1000).nullable().optional(),
+    startAt: isoDatetimeSchema,
+    endAt: isoDatetimeSchema,
+    allDay: z.boolean().optional(),
+    timezone: z.string().optional(),
+    recurrenceRule: recurrenceRuleInputSchema.nullable().optional(),
+    visibility: eventVisibilityEnum.optional(),
+    color: z.string().optional(),
+    /** D5: the route field is `attendeeIds`, not the old handler's `userIds`. */
+    attendeeIds: z.array(z.string()).optional(),
+    agentTrigger: agentTriggerInputSchema.optional(),
+  })
     .refine((v) => !v.agentTrigger || Boolean(v.driveId), {
       message: 'Agent triggers require a drive event',
       path: ['agentTrigger'],
@@ -314,7 +310,7 @@ export const updateCalendarEvent = defineOperation({
   name: 'calendar.update',
   method: 'PATCH',
   path: '/api/calendar/events/:eventId',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     eventId: z.string(),
     title: z.string().min(1).max(500).optional(),
     description: z.string().max(10000).nullable().optional(),
@@ -350,7 +346,7 @@ export const deleteCalendarEvent = defineOperation({
   name: 'calendar.delete',
   method: 'DELETE',
   path: '/api/calendar/events/:eventId',
-  inputSchema: z.object({ eventId: z.string() }),
+  inputSchema: z.strictObject({ eventId: z.string() }),
   outputSchema: z.object({ success: z.boolean() }),
   description: 'Soft-delete (trash) a calendar event. Only the creator or a drive owner/admin may delete it.',
 });
@@ -363,7 +359,7 @@ export const rsvpCalendarEvent = defineOperation({
   name: 'calendar.rsvp',
   method: 'PATCH',
   path: '/api/calendar/events/:eventId/attendees',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     eventId: z.string(),
     /** Full route enum (the old tool only exposed ACCEPTED/DECLINED/TENTATIVE) — PENDING is a legal RSVP too. */
     status: attendeeStatusEnum,
@@ -382,7 +378,7 @@ export const inviteCalendarAttendees = defineOperation({
   name: 'calendar.inviteAttendees',
   method: 'POST',
   path: '/api/calendar/events/:eventId/attendees',
-  inputSchema: z.object({
+  inputSchema: z.strictObject({
     eventId: z.string(),
     userIds: z.array(z.string()).min(1),
     isOptional: z.boolean().optional(),
@@ -413,7 +409,7 @@ export const removeCalendarAttendee = defineOperation({
    * string of a non-GET operation without touching the shared transport.
    */
   path: '/api/calendar/events/:eventId/attendees?userId=:userId',
-  inputSchema: z.object({ eventId: z.string(), userId: z.string() }),
+  inputSchema: z.strictObject({ eventId: z.string(), userId: z.string() }),
   outputSchema: successSchema,
   description:
     "Remove an attendee from an event. The event creator can remove anyone; any attendee can remove themselves. Cannot remove the organizer. userId travels as a query param, never a body field (D6 fix — the route ignores the body).",
@@ -427,15 +423,13 @@ export const setCalendarTrigger = defineOperation({
   name: 'calendar.setTrigger',
   method: 'PUT',
   path: '/api/calendar/events/:eventId/triggers',
-  inputSchema: z
-    .object({
-      eventId: z.string(),
-      agentPageId: z.string().min(1),
-      prompt: z.string().trim().max(10000).optional(),
-      instructionPageId: z.string().nullable().optional(),
-      contextPageIds: z.array(z.string()).max(10).optional(),
-    })
-    .strict()
+  inputSchema: z.strictObject({
+    eventId: z.string(),
+    agentPageId: z.string().min(1),
+    prompt: z.string().trim().max(10000).optional(),
+    instructionPageId: z.string().nullable().optional(),
+    contextPageIds: z.array(z.string()).max(10).optional(),
+  })
     .refine((v) => Boolean(v.prompt) || Boolean(v.instructionPageId), {
       message: 'Either prompt or instructionPageId is required',
       path: ['prompt'],
@@ -453,7 +447,7 @@ export const deleteCalendarTrigger = defineOperation({
   name: 'calendar.deleteTrigger',
   method: 'DELETE',
   path: '/api/calendar/events/:eventId/triggers',
-  inputSchema: z.object({ eventId: z.string() }),
+  inputSchema: z.strictObject({ eventId: z.string() }),
   outputSchema: successSchema,
   description: "Remove the agent trigger from a calendar event. Idempotent — succeeds even if no trigger exists.",
 });
@@ -494,8 +488,9 @@ export function computeFreeSlots(events: readonly TimedEvent[], range: { startAt
 
   for (const event of sorted) {
     const eventStart = new Date(event.startAt);
-    if (eventStart > current) {
-      freeSlots.push({ startAt: current.toISOString(), endAt: eventStart.toISOString() });
+    const gapEnd = eventStart < rangeEnd ? eventStart : rangeEnd;
+    if (gapEnd > current) {
+      freeSlots.push({ startAt: current.toISOString(), endAt: gapEnd.toISOString() });
     }
     const eventEnd = new Date(event.endAt);
     if (eventEnd > current) current = eventEnd;
