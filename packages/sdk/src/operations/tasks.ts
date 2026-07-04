@@ -19,6 +19,7 @@
 import { z } from 'zod';
 import { defineOperation } from '../registry/define.js';
 import { HttpError, isHttpError } from '../errors.js';
+import { requirePromptOrInstructionPageId } from './shared-refinements.js';
 
 /** Exported (unlike status slugs, which are per-list and server-owned) so CLI verbs can validate `--priority` without a second, drifting allowlist. */
 export const priorityEnum = z.enum(['low', 'medium', 'high']);
@@ -79,39 +80,33 @@ const assigneeEntryInputSchema = z.object({ type: z.enum(['user', 'agent']), id:
  * strict XOR; the route never rejects both being present together.
  */
 const agentTriggerInputSchema = z
-  .object({
+  .strictObject({
     agentPageId: z.string().min(1),
     triggerType: triggerTypeEnum.optional().describe('Defaults to "due_date" server-side when omitted.'),
     prompt: z.string().max(10000).optional(),
     instructionPageId: z.string().optional(),
     contextPageIds: z.array(z.string()).max(10).optional(),
   })
-  .strict()
-  .refine((v) => Boolean(v.prompt) || Boolean(v.instructionPageId), {
-    message: 'agentTrigger needs either a prompt or an instructionPageId',
-    path: ['prompt'],
-  });
+  .refine(...requirePromptOrInstructionPageId());
 
 export const createTask = defineOperation({
   name: 'tasks.create',
   method: 'POST',
   path: '/api/pages/:pageId/tasks',
-  inputSchema: z
-    .object({
-      pageId: z.string(),
-      title: z.string().min(1),
-      status: z.string().optional().describe('Status slug. Valid slugs come from read_page on the TASK_LIST page (availableStatuses).'),
-      priority: priorityEnum.optional(),
-      assigneeId: z.string().optional(),
-      assigneeAgentId: z.string().optional(),
-      assigneeIds: z.array(assigneeEntryInputSchema).optional(),
-      dueDate: z.string().optional(),
-      note: z.string().optional(),
-      position: z.number().optional(),
-      timezone: z.string().optional(),
-      agentTrigger: agentTriggerInputSchema.optional(),
-    })
-    .strict()
+  inputSchema: z.strictObject({
+    pageId: z.string(),
+    title: z.string().min(1),
+    status: z.string().optional().describe('Status slug. Valid slugs come from read_page on the TASK_LIST page (availableStatuses).'),
+    priority: priorityEnum.optional(),
+    assigneeId: z.string().optional(),
+    assigneeAgentId: z.string().optional(),
+    assigneeIds: z.array(assigneeEntryInputSchema).optional(),
+    dueDate: z.string().optional(),
+    note: z.string().optional(),
+    position: z.number().optional(),
+    timezone: z.string().optional(),
+    agentTrigger: agentTriggerInputSchema.optional(),
+  })
     .refine(
       (v) => {
         if (!v.agentTrigger) return true;
@@ -129,22 +124,20 @@ export const updateTask = defineOperation({
   name: 'tasks.update',
   method: 'PATCH',
   path: '/api/pages/:pageId/tasks/:taskId',
-  inputSchema: z
-    .object({
-      pageId: z.string(),
-      taskId: z.string(),
-      title: z.string().min(1).optional(),
-      status: z.string().optional().describe('Status slug. Valid slugs come from read_page on the TASK_LIST page (availableStatuses).'),
-      priority: priorityEnum.optional(),
-      assigneeId: z.string().optional(),
-      assigneeAgentId: z.string().optional(),
-      assigneeIds: z.array(assigneeEntryInputSchema).optional(),
-      dueDate: z.string().nullable().optional(),
-      note: z.string().optional(),
-      timezone: z.string().optional(),
-      agentTrigger: agentTriggerInputSchema.optional(),
-    })
-    .strict() // position belongs to tasks.reorder, not tasks.update
+  inputSchema: z.strictObject({
+    pageId: z.string(),
+    taskId: z.string(),
+    title: z.string().min(1).optional(),
+    status: z.string().optional().describe('Status slug. Valid slugs come from read_page on the TASK_LIST page (availableStatuses).'),
+    priority: priorityEnum.optional(),
+    assigneeId: z.string().optional(),
+    assigneeAgentId: z.string().optional(),
+    assigneeIds: z.array(assigneeEntryInputSchema).optional(),
+    dueDate: z.string().nullable().optional(),
+    note: z.string().optional(),
+    timezone: z.string().optional(),
+    agentTrigger: agentTriggerInputSchema.optional(),
+  }) // position belongs to tasks.reorder, not tasks.update
     .refine(
       (v) => {
         if (!v.agentTrigger) return true;
@@ -172,13 +165,11 @@ export const reorderTask = defineOperation({
   name: 'tasks.reorder',
   method: 'PATCH',
   path: '/api/pages/:pageId/tasks/:taskId',
-  inputSchema: z
-    .object({
-      pageId: z.string(),
-      taskId: z.string(),
-      position: z.number(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    pageId: z.string(),
+    taskId: z.string(),
+    position: z.number(),
+  }),
   outputSchema: taskWithRelationsSchema,
   requiredScope: 'drive',
   description: 'Move a task to a new position within its task list (same route as tasks.update, position-only body).',
@@ -188,7 +179,7 @@ export const deleteTask = defineOperation({
   name: 'tasks.delete',
   method: 'DELETE',
   path: '/api/pages/:pageId/tasks/:taskId',
-  inputSchema: z.object({ pageId: z.string(), taskId: z.string() }).strict(),
+  inputSchema: z.strictObject({ pageId: z.string(), taskId: z.string() }),
   outputSchema: z.object({ success: z.boolean() }),
   requiredScope: 'drive',
   description: 'Delete a task by trashing its linked TASK_LIST child page.',
@@ -210,15 +201,13 @@ export const createTaskStatus = defineOperation({
   name: 'tasks.createStatus',
   method: 'POST',
   path: '/api/pages/:pageId/tasks/statuses',
-  inputSchema: z
-    .object({
-      pageId: z.string(),
-      name: z.string().min(1),
-      color: z.string().min(1),
-      group: statusGroupEnum,
-      position: z.number().optional(),
-    })
-    .strict(),
+  inputSchema: z.strictObject({
+    pageId: z.string(),
+    name: z.string().min(1),
+    color: z.string().min(1),
+    group: statusGroupEnum,
+    position: z.number().optional(),
+  }),
   outputSchema: taskStatusConfigSchema,
   requiredScope: 'drive',
   description: 'Create a custom status on a task list. The returned slug becomes a valid value for tasks.create/tasks.update\'s status field.',
@@ -245,17 +234,15 @@ export const setTaskTrigger = defineOperation({
   name: 'tasks.setTrigger',
   method: 'PUT',
   path: '/api/tasks/:taskId/triggers',
-  inputSchema: z
-    .object({
-      taskId: z.string(),
-      triggerType: triggerTypeEnum,
-      agentPageId: z.string().min(1),
-      prompt: z.string().max(10000).optional(),
-      instructionPageId: z.string().nullable().optional(),
-      contextPageIds: z.array(z.string()).max(10).optional(),
-      timezone: z.string().optional(),
-    })
-    .strict()
+  inputSchema: z.strictObject({
+    taskId: z.string(),
+    triggerType: triggerTypeEnum,
+    agentPageId: z.string().min(1),
+    prompt: z.string().max(10000).optional(),
+    instructionPageId: z.string().nullable().optional(),
+    contextPageIds: z.array(z.string()).max(10).optional(),
+    timezone: z.string().optional(),
+  })
     .refine((v) => Boolean(v.prompt?.trim()) || Boolean(v.instructionPageId), {
       message: 'Either prompt or instructionPageId is required',
       path: ['prompt'],
@@ -269,7 +256,7 @@ export const deleteTaskTrigger = defineOperation({
   name: 'tasks.deleteTrigger',
   method: 'DELETE',
   path: '/api/tasks/:taskId/triggers/:triggerType',
-  inputSchema: z.object({ taskId: z.string(), triggerType: triggerTypeEnum }).strict(),
+  inputSchema: z.strictObject({ taskId: z.string(), triggerType: triggerTypeEnum }),
   outputSchema: z.object({ success: z.boolean() }),
   requiredScope: 'drive',
   description: 'Remove one trigger (due_date or completion) from a task.',
@@ -294,25 +281,23 @@ export const getAssignedTasks = defineOperation({
   name: 'tasks.getAssigned',
   method: 'GET',
   path: '/api/tasks',
-  inputSchema: z
-    .object({
-      context: z.enum(['user', 'drive']).optional(),
-      driveId: z.string().optional(),
-      status: z.string().optional(),
-      priority: priorityEnum.optional(),
-      startDate: z.string().optional(),
-      endDate: z.string().optional(),
-      search: z.string().optional(),
-      assigneeId: z.string().optional(),
-      assigneeAgentId: z.string().optional(),
-      showAllAssignees: z.boolean().optional(),
-      includeCompleted: z.boolean().optional(),
-      dueDateFilter: z.enum(['overdue', 'today', 'this_week', 'upcoming']).optional(),
-      statusGroup: z.enum(['all', 'active', 'completed']).optional(),
-      limit: z.number().int().min(1).max(100).optional(),
-      offset: z.number().int().min(0).optional(),
-    })
-    .strict()
+  inputSchema: z.strictObject({
+    context: z.enum(['user', 'drive']).optional(),
+    driveId: z.string().optional(),
+    status: z.string().optional(),
+    priority: priorityEnum.optional(),
+    startDate: z.string().optional(),
+    endDate: z.string().optional(),
+    search: z.string().optional(),
+    assigneeId: z.string().optional(),
+    assigneeAgentId: z.string().optional(),
+    showAllAssignees: z.boolean().optional(),
+    includeCompleted: z.boolean().optional(),
+    dueDateFilter: z.enum(['overdue', 'today', 'this_week', 'upcoming']).optional(),
+    statusGroup: z.enum(['all', 'active', 'completed']).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    offset: z.number().int().min(0).optional(),
+  })
     .refine((v) => v.context !== 'drive' || Boolean(v.driveId), {
       message: 'driveId is required for drive context',
       path: ['driveId'],
