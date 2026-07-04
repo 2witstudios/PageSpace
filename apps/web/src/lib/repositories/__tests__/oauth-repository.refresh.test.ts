@@ -26,10 +26,11 @@ const H = vi.hoisted(() => ({
     string,
     unknown
   >,
+  usersTable: { __table: 'users', id: 'users.id' } as Record<string, unknown>,
   state: { dbTransactionImpl: null as null | ((cb: (tx: unknown) => unknown) => unknown) },
 }));
 
-const { oauthRefreshTokens, oauthAccessTokens } = H;
+const { oauthRefreshTokens, oauthAccessTokens, usersTable } = H;
 
 vi.mock('@pagespace/db/schema/oauth', () => ({
   oauthRefreshTokens: H.oauthRefreshTokens,
@@ -38,7 +39,7 @@ vi.mock('@pagespace/db/schema/oauth', () => ({
   oauthAuthorizationCodes: {},
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
-  users: { __table: 'users', id: 'users.id' },
+  users: H.usersTable,
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ _eq: [a, b] })),
@@ -94,13 +95,17 @@ interface AccessRow {
 
 let refreshRows: RefreshRow[] = [];
 let accessRows: AccessRow[] = [];
+let userSuspendedAt: Date | null = null;
 let lockChain: Promise<unknown> = Promise.resolve();
 
 function makeTx() {
   return {
     select: () => ({
-      from: () => ({
+      from: (table: unknown) => ({
         where: (predicate: Predicate) => {
+          if (table === usersTable) {
+            return Promise.resolve([{ suspendedAt: userSuspendedAt }]);
+          }
           const matches = refreshRows.filter((r) => evalPredicate(predicate, r as unknown as Record<string, unknown>));
           const p = Promise.resolve(matches) as Promise<RefreshRow[]> & { for: (mode: string) => Promise<RefreshRow[]> };
           p.for = () => p;
@@ -174,6 +179,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   refreshRows = [];
   accessRows = [];
+  userSuspendedAt = null;
   lockChain = Promise.resolve();
 });
 
@@ -305,6 +311,45 @@ describe('refreshTokenGrant — reuse detection: the theft scenario end-to-end',
       now: new Date(Date.now() + 61_000),
     });
     expect(legitimateRetry).toEqual({ outcome: 'invalid_grant' });
+  });
+});
+
+describe('refreshTokenGrant — suspended user (zero-trust audit finding)', () => {
+  it('rejects the grant and revokes the whole family when the owning user is suspended, mirroring mcp-token suspension handling', async () => {
+    seedRefreshRow();
+    userSuspendedAt = new Date();
+
+    const result = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: null,
+      now: new Date(),
+    });
+
+    expect(result).toEqual({ outcome: 'invalid_grant' });
+    // No fresh pair minted for a suspended user's refresh attempt.
+    expect(refreshRows).toHaveLength(1);
+    expect(accessRows).toHaveLength(0);
+    // The family is dead, not merely denied this once — a second attempt
+    // (even after "unsuspension" edits the row back) must not somehow still
+    // work off a family we left alive.
+    expect(refreshRows[0].revokedAt).not.toBeNull();
+    expect(refreshRows[0].revokedReason).toBe('user_suspended');
+  });
+
+  it('does not mint or rotate anything for a suspended user even under concurrent refresh attempts', async () => {
+    seedRefreshRow();
+    userSuspendedAt = new Date();
+
+    const [first, second] = await Promise.all([
+      refreshTokenGrant({ refreshToken: REFRESH_TOKEN, clientDbId: CLIENT_DB_ID, requestedScope: null, now: new Date() }),
+      refreshTokenGrant({ refreshToken: REFRESH_TOKEN, clientDbId: CLIENT_DB_ID, requestedScope: null, now: new Date() }),
+    ]);
+
+    expect(first).toEqual({ outcome: 'invalid_grant' });
+    expect(second).toEqual({ outcome: 'invalid_grant' });
+    expect(refreshRows).toHaveLength(1);
+    expect(accessRows).toHaveLength(0);
   });
 });
 

@@ -97,6 +97,7 @@ export interface ExchangeAuthorizationCodeInput {
 export type ExchangeAuthorizationCodeResult =
   | { outcome: 'not_found' }
   | { outcome: 'rejected'; decision: Exclude<CodeExchangeDecision, { status: 'ok' }> }
+  | { outcome: 'user_suspended' }
   | { outcome: 'ok'; userId: string; scopes: string[]; tokens: IssuedTokenPair };
 
 async function revokeTokenFamily(
@@ -178,8 +179,23 @@ export async function exchangeAuthorizationCode(
       return { outcome: 'rejected', decision };
     }
 
-    const userRows = await tx.select({ tokenVersion: users.tokenVersion }).from(users).where(eq(users.id, row.userId));
+    const userRows = await tx
+      .select({ tokenVersion: users.tokenVersion, suspendedAt: users.suspendedAt })
+      .from(users)
+      .where(eq(users.id, row.userId));
     const tokenVersion = userRows[0]?.tokenVersion ?? 0;
+
+    // Zero trust, mirrors mcp-token suspension handling: a suspended user's
+    // authorization code is single-use dead (consumed below) but mints no
+    // tokens at all — never hand out a family that would only be dead on
+    // first use.
+    if (userRows[0]?.suspendedAt) {
+      await tx
+        .update(oauthAuthorizationCodes)
+        .set({ consumedAt: input.now })
+        .where(eq(oauthAuthorizationCodes.id, row.id));
+      return { outcome: 'user_suspended' };
+    }
 
     const tokens = issueInitialTokenPair(input.now);
 
@@ -348,6 +364,20 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
       return { outcome: 'invalid_grant' };
     }
 
+    // Zero trust, mirrors mcp-token suspension handling: a suspended user's
+    // refresh token is not just denied THIS rotation — the whole family is
+    // killed outright, the same way an MCP token is revoked on sight, rather
+    // than left alive to keep minting access tokens that only die on first
+    // use (constant-shape: same invalid_grant a reused/expired token gets).
+    const userRows = await tx
+      .select({ suspendedAt: users.suspendedAt })
+      .from(users)
+      .where(eq(users.id, row.userId));
+    if (userRows[0]?.suspendedAt) {
+      await revokeTokenFamily(tx, row.familyId, input.now, 'user_suspended');
+      return { outcome: 'invalid_grant' };
+    }
+
     let scopes = row.scopes;
     if (input.requestedScope !== null) {
       const requested = parseScopeList(input.requestedScope);
@@ -468,6 +498,7 @@ export type PollDeviceTokenResult =
   | { outcome: 'slow_down' }
   | { outcome: 'expired_token' }
   | { outcome: 'access_denied' }
+  | { outcome: 'user_suspended' }
   | { outcome: 'ok'; userId: string; scopes: string[]; tokens: IssuedTokenPair };
 
 /**
@@ -524,10 +555,16 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
     }
 
     const userRows = await tx
-      .select({ tokenVersion: users.tokenVersion })
+      .select({ tokenVersion: users.tokenVersion, suspendedAt: users.suspendedAt })
       .from(users)
       .where(eq(users.id, decision.grant.userId));
     const tokenVersion = userRows[0]?.tokenVersion ?? 0;
+
+    // Zero trust, mirrors mcp-token suspension handling: an approved device
+    // code whose user is suspended mints no tokens at all.
+    if (userRows[0]?.suspendedAt) {
+      return { outcome: 'user_suspended' };
+    }
 
     const tokens = issueInitialTokenPair(input.now);
 

@@ -98,6 +98,7 @@ let insertedDeviceRows: Record<string, unknown>[] = [];
 let refreshRows: TokenRow[] = [];
 let accessRows: TokenRow[] = [];
 let userTokenVersion = 0;
+let userSuspendedAt: Date | null = null;
 let lockChain: Promise<unknown> = Promise.resolve();
 
 function makeTx() {
@@ -106,7 +107,7 @@ function makeTx() {
       from: (table: unknown) => ({
         where: (predicate: Predicate) => {
           if (table === usersTable) {
-            return Promise.resolve([{ tokenVersion: userTokenVersion }]);
+            return Promise.resolve([{ tokenVersion: userTokenVersion, suspendedAt: userSuspendedAt }]);
           }
           const matches = deviceRow && evalPredicate(predicate, deviceRow as unknown as Record<string, unknown>);
           const rows = matches ? [{ ...deviceRow }] : [];
@@ -214,6 +215,7 @@ beforeEach(() => {
   refreshRows = [];
   accessRows = [];
   userTokenVersion = 0;
+  userSuspendedAt = null;
   lockChain = Promise.resolve();
 });
 
@@ -328,6 +330,17 @@ describe('pollDeviceToken', () => {
     seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, lastPolledAt: null });
     await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
     expect(deviceRow?.lastPolledAt).toBeNull();
+  });
+
+  it('rejects and mints no tokens for an approved device code whose user is suspended (zero-trust audit finding)', async () => {
+    seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account'] });
+    userSuspendedAt = new Date();
+
+    const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+    expect(result).toEqual({ outcome: 'user_suspended' });
+    expect(refreshRows).toHaveLength(0);
+    expect(accessRows).toHaveLength(0);
   });
 });
 

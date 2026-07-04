@@ -71,4 +71,32 @@ describe('validateRedirectUri', () => {
     const bareClient = { clientId: 'x', name: 'X', type: 'public' as const, redirectUris: [], allowedGrantTypes: [], firstParty: false };
     expect(validateRedirectUri(bareClient, 'http://127.0.0.1:1/callback')).toBe(false);
   });
+
+  it('zero-trust audit: alternate loopback IP encodings (decimal/octal/short-form) still resolve to the exact registered host, not a bypass', () => {
+    // The WHATWG URL parser normalizes every one of these into the literal
+    // "127.0.0.1" before validateRedirectUri ever compares hostnames — so
+    // there is no alternate representation that is BOTH accepted here AND
+    // distinct from the registered loopback literal.
+    expect(validateRedirectUri(client, 'http://2130706433/callback')).toBe(true); // decimal
+    expect(validateRedirectUri(client, 'http://0177.0.0.1/callback')).toBe(true); // octal
+    expect(validateRedirectUri(client, 'http://127.1/callback')).toBe(true); // short-form
+  });
+
+  it('zero-trust audit: expanded/alternate IPv6 loopback literals still normalize to [::1]', () => {
+    expect(validateRedirectUri(client, 'http://[0:0:0:0:0:0:0:1]/callback')).toBe(true);
+    expect(validateRedirectUri(client, 'http://[::0:1]/callback')).toBe(true);
+  });
+
+  it('zero-trust audit: a dot-segment path-traversal probe cannot smuggle an unregistered path past the exact-match check', () => {
+    // The URL parser resolves ".." during parsing itself (before this
+    // function ever sees a pathname), so this collapses to "/secret", which
+    // is exactly matched against and rejected the same as any other
+    // unregistered path.
+    expect(validateRedirectUri(client, 'http://127.0.0.1:5000/callback/../secret')).toBe(false);
+    expect(validateRedirectUri(client, 'http://127.0.0.1:5000/callback/../../evil')).toBe(false);
+  });
+
+  it('zero-trust audit: an encoded dot-segment (literal %2e%2e, never decoded into a path separator) is rejected as an unregistered path', () => {
+    expect(validateRedirectUri(client, 'http://127.0.0.1:5000/callback%2e%2e/evil')).toBe(false);
+  });
 });
