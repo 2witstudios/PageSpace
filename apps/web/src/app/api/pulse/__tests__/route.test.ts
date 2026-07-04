@@ -166,7 +166,27 @@ describe('GET /api/pulse — task counts scoped to accessible pages', () => {
   });
 
   it('resolves task counts to 0 when the user has no accessible pages at all', async () => {
-    setupTables([overdueTaskRow()], []); // would count if the filter were missing
+    // One row per bucket so this genuinely exercises the filter for all four
+    // counts, not just overdue (which would otherwise be the only bucket a
+    // single overdue/pending row could ever land in regardless of the filter).
+    setupTables(
+      [
+        overdueTaskRow(), // would count as overdue if the filter were missing
+        overdueTaskRow({
+          // startOfToday exactly: within [startOfToday, endOfToday) so it's
+          // "due today", and since endOfWeek is always >= endOfToday, also
+          // within "due this week" — would count as both if the filter were missing
+          dueDate: new Date('2024-01-10T00:00:00.000Z'),
+        }),
+        overdueTaskRow({
+          // completedThisWeek only requires completedAt >= startOfWeek, and
+          // startOfWeek is always <= startOfToday, so this is always in range
+          status: 'completed',
+          completedAt: new Date('2024-01-10T00:00:00.000Z'),
+        }),
+      ],
+      []
+    );
 
     const response = await GET(new Request('https://example.com/api/pulse'));
     const body = await response.json();
