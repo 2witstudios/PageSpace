@@ -36,8 +36,8 @@ describe('decideTokenAction', () => {
     expect(decideTokenAction(authenticated(-1), 0, 60_000)).toBe('refresh');
   });
 
-  it('returns unauthenticated regardless of the recorded expiry once terminal', () => {
-    const state: OAuthTokenState = { status: 'unauthenticated', accessExpiresAt: Number.MAX_SAFE_INTEGER };
+  it('returns unauthenticated once terminal — the state needs no expiry data at all', () => {
+    const state: OAuthTokenState = { status: 'unauthenticated' };
     expect(decideTokenAction(state, 0, 60_000)).toBe('unauthenticated');
   });
 

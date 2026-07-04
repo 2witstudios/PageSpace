@@ -15,7 +15,7 @@ export type TokenAction = 'use-cached' | 'refresh' | 'unauthenticated';
 
 export type OAuthTokenState =
   | { status: 'authenticated'; accessExpiresAt: number; refreshExpiresAt: number }
-  | { status: 'unauthenticated'; accessExpiresAt: number };
+  | { status: 'unauthenticated' };
 
 /**
  * Decides what an OAuthTokenProvider should do for the next getAccessToken()

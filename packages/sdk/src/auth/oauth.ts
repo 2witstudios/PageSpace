@@ -69,7 +69,7 @@ export class OAuthTokenProvider implements AuthProvider {
   async getAccessToken(): Promise<string> {
     const state: OAuthTokenState =
       this.#status === 'unauthenticated'
-        ? { status: 'unauthenticated', accessExpiresAt: this.#tokens.accessExpiresAt }
+        ? { status: 'unauthenticated' }
         : {
             status: 'authenticated',
             accessExpiresAt: this.#tokens.accessExpiresAt,
