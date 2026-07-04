@@ -219,6 +219,19 @@ describe('drivesSetHomePageHandler', () => {
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('Home page must be a non-trashed page in this drive');
   });
+
+  it('--clear and --json combine correctly: sends homePageId: null and emits exactly the SDK response', async () => {
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({
+      stdout,
+      sdk: fakeSdk({ drives: { setHomePage: async () => ({ ...DRIVE, homePageId: null }) } }),
+    });
+
+    const code = await drivesSetHomePageHandler(ctx, commandIntent(['drv_1', '--clear', '--json']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(JSON.parse(stdout.lines.join(''))).toEqual({ ...DRIVE, homePageId: null });
+  });
 });
 
 describe('drivesTrashHandler (destructive)', () => {
