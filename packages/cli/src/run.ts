@@ -36,6 +36,16 @@ import {
   pagesTreeHandler,
 } from './commands/pages.js';
 import { sheetsEditCellsHandler } from './commands/sheets.js';
+import {
+  tasksAssignedHandler,
+  tasksCreateHandler,
+  tasksCreateStatusHandler,
+  tasksDeleteHandler,
+  tasksListHandler,
+  tasksReorderHandler,
+  tasksStatusesHandler,
+  tasksUpdateHandler,
+} from './commands/tasks.js';
 import { trashListHandler } from './commands/trash.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
@@ -87,6 +97,14 @@ const ROUTES: readonly Route[] = [
   { path: ['pages', 'export'], handler: pagesExportHandler },
   { path: ['sheets', 'edit-cells'], handler: sheetsEditCellsHandler },
   { path: ['trash', 'list'], handler: trashListHandler },
+  { path: ['tasks', 'list'], handler: tasksListHandler },
+  { path: ['tasks', 'create'], handler: tasksCreateHandler },
+  { path: ['tasks', 'update'], handler: tasksUpdateHandler },
+  { path: ['tasks', 'delete'], handler: tasksDeleteHandler },
+  { path: ['tasks', 'reorder'], handler: tasksReorderHandler },
+  { path: ['tasks', 'statuses'], handler: tasksStatusesHandler },
+  { path: ['tasks', 'create-status'], handler: tasksCreateStatusHandler },
+  { path: ['tasks', 'assigned'], handler: tasksAssignedHandler },
 ];
 
 /**

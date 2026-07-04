@@ -77,6 +77,33 @@ export {
 } from './commands/pages.js';
 export { renderTrashTree, trashListHandler } from './commands/trash.js';
 
+// Tasks verbs (Phase 5 task 3) — thin projections over the `tasks.*` SDK
+// operations (and, for list/statuses, the already-wired `pages.read`
+// TASK_LIST branch).
+export {
+  extractTaskCreateFlags,
+  extractTaskStatusCreateFlags,
+  extractTaskUpdateFlags,
+  renderTasksList,
+  renderTaskStatuses,
+  tasksAssignedHandler,
+  tasksCreateHandler,
+  tasksCreateStatusHandler,
+  tasksDeleteHandler,
+  tasksListHandler,
+  tasksReorderHandler,
+  tasksStatusesHandler,
+  tasksUpdateHandler,
+} from './commands/tasks.js';
+export type {
+  ExtractTaskCreateFlagsResult,
+  ExtractTaskStatusCreateFlagsResult,
+  ExtractTaskUpdateFlagsResult,
+  TaskCreateFlags,
+  TaskStatusCreateFlags,
+  TaskUpdateFlags,
+} from './commands/tasks.js';
+
 // Content & export verbs (Phase 5 task 2) — thin projections over the
 // documents/export SDK operations.
 export {
