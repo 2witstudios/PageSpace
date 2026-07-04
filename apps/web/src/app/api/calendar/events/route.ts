@@ -370,9 +370,10 @@ export async function GET(request: Request) {
     // 3. Events where user is an attendee
     const conditions = [];
 
-    // Personal events. A drive-scoped key has no identity power over the
-    // owner's PERSONAL (drive-less) events — it belongs to a workspace.
-    if (params.includePersonal && !isScopedMCPAuth(auth)) {
+    // Personal events. Identity-scoped to the caller (createdById = userId),
+    // so this is safe even for a drive-scoped token: it can only ever see its
+    // own personal events this way, never another user's.
+    if (params.includePersonal) {
       conditions.push(
         and(
           isNull(calendarEvents.driveId),
@@ -459,12 +460,19 @@ export async function GET(request: Request) {
       orderBy: [asc(calendarEvents.startAt)],
     });
 
-    // Scoped keys: the creator/attendee branches above are identity-derived and
-    // can surface events outside the key's drive universe (or personal ones).
-    // Cap the result at the principal's drives — mirrors the calendar tools.
+    // Scoped keys: the attendee branch above is identity-derived and can
+    // surface drive events outside the key's drive universe. Cap drive events
+    // at the principal's drives — mirrors the calendar tools. A driveless
+    // event the token's own user created is exempt from that cap (it has no
+    // drive to be out-of-scope of, and the token still acts on behalf of that
+    // exact identity) — but a driveless event belonging to a DIFFERENT user
+    // (reachable only via the attendee branch) stays capped out.
     const principalDriveIdSet = new Set(driveIds);
     const visibleEvents = isScopedMCPAuth(auth)
-      ? events.filter((e) => e.driveId !== null && principalDriveIdSet.has(e.driveId))
+      ? events.filter((e) =>
+          (e.driveId !== null && principalDriveIdSet.has(e.driveId)) ||
+          (e.driveId === null && e.createdById === userId)
+        )
       : events;
 
     // Annotate events with agent trigger presence
