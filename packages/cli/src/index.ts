@@ -89,6 +89,22 @@ export {
   searchTextHandler,
 } from './commands/search.js';
 
+// Agents, models & activity/channels verbs (Phase 5 task 5) — thin
+// projections over the `agents.*`/`activity.*`/`channels.*` SDK operations
+// (this same task wires the activity/channels namespaces onto the client
+// facade — see `@pagespace/sdk`'s `client.ts`).
+export {
+  agentsAskHandler,
+  agentsConfigHandler,
+  agentsListHandler,
+  modelsListHandler,
+  renderAgentsList,
+  renderAgentsMultiDriveList,
+  renderModelsList,
+} from './commands/agents.js';
+export { activityHandler, renderActivity } from './commands/activity.js';
+export { channelsSendHandler } from './commands/channels.js';
+
 // Tasks verbs (Phase 5 task 3) — thin projections over the `tasks.*` SDK
 // operations (and, for list/statuses, the already-wired `pages.read`
 // TASK_LIST branch).

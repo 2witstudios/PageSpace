@@ -11,6 +11,9 @@ import { createDiscoverMetadata } from './auth/discover.js';
 import { resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
 import { resolveAuth } from './auth/resolve.js';
+import { activityHandler } from './commands/activity.js';
+import { agentsAskHandler, agentsConfigHandler, agentsListHandler, modelsListHandler } from './commands/agents.js';
+import { channelsSendHandler } from './commands/channels.js';
 import {
   drivesCreateHandler,
   drivesListHandler,
@@ -109,6 +112,12 @@ const ROUTES: readonly Route[] = [
   { path: ['search', 'text'], handler: searchTextHandler },
   { path: ['search', 'regex'], handler: searchRegexHandler },
   { path: ['search', 'glob'], handler: searchGlobHandler },
+  { path: ['agents', 'list'], handler: agentsListHandler },
+  { path: ['agents', 'ask'], handler: agentsAskHandler },
+  { path: ['agents', 'config'], handler: agentsConfigHandler },
+  { path: ['models', 'list'], handler: modelsListHandler },
+  { path: ['activity'], handler: activityHandler },
+  { path: ['channels', 'send'], handler: channelsSendHandler },
 ];
 
 /**

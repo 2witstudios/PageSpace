@@ -37,7 +37,9 @@ import {
   type ValidationIssue,
 } from './errors.js';
 import type { AuthProvider } from './auth/provider.js';
+import { getActivity } from './operations/activity.js';
 import { askAgent, listAgents, listModels, multiDriveListAgents, updateAgentConfig } from './operations/agents.js';
+import { sendChannelMessage } from './operations/channels.js';
 import { listConversations, readConversation } from './operations/conversations.js';
 import { createDrive, listDrives, renameDrive, restoreDrive, trashDrive, updateDriveContext } from './operations/drives.js';
 import {
@@ -151,6 +153,12 @@ const DEFAULT_OPERATIONS_MAP = {
     glob: globSearch,
     regex: regexSearch,
     multiDrive: multiDriveSearch,
+  },
+  activity: {
+    get: getActivity,
+  },
+  channels: {
+    send: sendChannelMessage,
   },
 } as const;
 
