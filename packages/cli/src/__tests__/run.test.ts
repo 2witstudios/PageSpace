@@ -90,4 +90,20 @@ describe('run', () => {
     expect(deps.stderr.lines).toEqual([]);
     expect(deleteCalls).toBe(0);
   });
+
+  it('"mcp" is not auth-exempt: fails closed with an actionable message and zero credentials', async () => {
+    const deps = makeDeps(['mcp']);
+    const code = await run(deps);
+    expect(code).not.toBe(EXIT_SUCCESS);
+    expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
+  });
+
+  it('folds the legacy PAGESPACE_AUTH_TOKEN env var into the single auth-resolution path with a deprecation notice, never echoing the token', async () => {
+    const deps = makeDeps(['whoami'], { PAGESPACE_AUTH_TOKEN: 'ps_legacy_secret_value' });
+    await run(deps);
+    const stderrText = deps.stderr.lines.join('');
+    expect(stderrText).toMatch(/PAGESPACE_AUTH_TOKEN/);
+    expect(stderrText).toMatch(/PAGESPACE_TOKEN/);
+    expect(stderrText).not.toContain('ps_legacy_secret_value');
+  });
 });

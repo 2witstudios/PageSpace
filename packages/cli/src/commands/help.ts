@@ -9,6 +9,7 @@ const USAGE_LINES = [
   '  login     Log in via the browser (loopback + PKCE)',
   '  logout    Revoke and remove a stored credential',
   '  whoami    Show the currently authenticated identity',
+  '  mcp       Serve the full operation registry as an MCP stdio server',
   '',
   'Global flags:',
   '  --json          Emit machine-readable JSON on stdout only',

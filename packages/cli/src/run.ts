@@ -8,12 +8,14 @@ import { PageSpaceClient } from '@pagespace/sdk';
 import { parseArgv } from './argv/parse.js';
 import { buildAuthProvider, enforceAuth } from './auth/auth-context.js';
 import { createDiscoverMetadata } from './auth/discover.js';
+import { resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
 import { resolveAuth } from './auth/resolve.js';
 import { helpHandler } from './commands/help.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
+import { mcpHandler } from './commands/mcp.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
 import { tokensCreateHandler } from './commands/tokens/create.js';
@@ -41,6 +43,7 @@ const ROUTES: readonly Route[] = [
   { path: ['tokens', 'create'], handler: tokensCreateHandler },
   { path: ['tokens', 'list'], handler: tokensListHandler },
   { path: ['tokens', 'revoke'], handler: tokensRevokeHandler },
+  { path: ['mcp'], handler: mcpHandler },
 ];
 
 /**
@@ -51,7 +54,8 @@ const ROUTES: readonly Route[] = [
  * "not logged in" is a normal, graceful outcome for them, not a hard
  * failure — routing them through `enforceAuth` first would print this
  * resolver's generic message (and attempt a redundant refresh) ahead of
- * their own, more specific handling.
+ * their own, more specific handling. `mcp` is NOT exempt — it authenticates
+ * through `ctx.sdk` exactly like every other command below.
  */
 const AUTH_EXEMPT_HANDLERS = new Set([helpHandler, loginHandler, logoutHandler, whoamiHandler]);
 
@@ -68,10 +72,15 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     profile: null,
   });
 
+  const envToken = resolveEnvToken(deps.env);
+  if (envToken.deprecationNotice) {
+    deps.stderr.write(`${envToken.deprecationNotice}\n`);
+  }
+
   const credential = await deps.credentialStore.get(host);
   const source = resolveAuth(
     { token: parsed.flags.token },
-    { PAGESPACE_TOKEN: deps.env.PAGESPACE_TOKEN },
+    { PAGESPACE_TOKEN: envToken.token },
     credential ? { [host]: credential } : {},
     host,
   );
