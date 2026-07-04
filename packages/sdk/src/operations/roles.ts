@@ -75,7 +75,7 @@ export const listDriveRoles = defineOperation({
   name: 'roles.list',
   method: 'GET',
   path: '/api/drives/:driveId/roles',
-  inputSchema: z.object({ driveId: z.string() }),
+  inputSchema: z.object({ driveId: z.string() }).strict(),
   outputSchema: z.object({ roles: z.array(driveRoleSchema) }),
   requiredScope: 'drive',
   description: 'List all custom roles defined in a drive. Requires drive membership (owner or member).',
@@ -85,7 +85,7 @@ export const getDriveRole = defineOperation({
   name: 'roles.get',
   method: 'GET',
   path: '/api/drives/:driveId/roles/:roleId',
-  inputSchema: z.object({ driveId: z.string(), roleId: z.string() }),
+  inputSchema: z.object({ driveId: z.string(), roleId: z.string() }).strict(),
   outputSchema: roleEnvelopeSchema,
   requiredScope: 'drive',
   description: 'Get a single drive role with its full permission configuration. Requires drive membership.',
@@ -95,15 +95,17 @@ export const createDriveRole = defineOperation({
   name: 'roles.create',
   method: 'POST',
   path: '/api/drives/:driveId/roles',
-  inputSchema: z.object({
-    driveId: z.string(),
-    name: z.string().min(1).max(50),
-    description: z.string().nullable().optional(),
-    color: z.string().nullable().optional(),
-    isDefault: z.boolean().optional(),
-    permissions: z.record(z.string(), pagePermSchema),
-    driveWidePermissions: pagePermSchema.nullable().optional(),
-  }),
+  inputSchema: z
+    .object({
+      driveId: z.string(),
+      name: z.string().min(1).max(50),
+      description: z.string().nullable().optional(),
+      color: z.string().nullable().optional(),
+      isDefault: z.boolean().optional(),
+      permissions: z.record(z.string(), pagePermSchema),
+      driveWidePermissions: pagePermSchema.nullable().optional(),
+    })
+    .strict(),
   outputSchema: roleEnvelopeSchema,
   requiredScope: 'drive:admin',
   description:
@@ -135,7 +137,7 @@ export const deleteDriveRole = defineOperation({
   name: 'roles.delete',
   method: 'DELETE',
   path: '/api/drives/:driveId/roles/:roleId',
-  inputSchema: z.object({ driveId: z.string(), roleId: z.string() }),
+  inputSchema: z.object({ driveId: z.string(), roleId: z.string() }).strict(),
   outputSchema: z.object({ success: z.literal(true) }),
   requiredScope: 'drive:admin',
   destructive: true,
@@ -147,12 +149,14 @@ export const setRolePagePermissions = defineOperation({
   name: 'roles.setPagePermissions',
   method: 'PATCH',
   path: '/api/drives/:driveId/roles/:roleId',
-  inputSchema: z.object({
-    driveId: z.string(),
-    roleId: z.string(),
-    /** Read-merge-write: pages not named here are untouched. Every entry must be a full triple — this op only sets, never prunes (see roles.removePagePermissions). */
-    permissionsPatch: z.record(z.string(), pagePermSchema),
-  }),
+  inputSchema: z
+    .object({
+      driveId: z.string(),
+      roleId: z.string(),
+      /** Read-merge-write: pages not named here are untouched. Every entry must be a full triple — this op only sets, never prunes (see roles.removePagePermissions). */
+      permissionsPatch: z.record(z.string(), pagePermSchema),
+    })
+    .strict(),
   outputSchema: roleEnvelopeSchema,
   requiredScope: 'drive:admin',
   description:
@@ -163,11 +167,13 @@ export const setRoleDriveWidePermissions = defineOperation({
   name: 'roles.setDriveWidePermissions',
   method: 'PATCH',
   path: '/api/drives/:driveId/roles/:roleId',
-  inputSchema: z.object({
-    driveId: z.string(),
-    roleId: z.string(),
-    driveWidePermissions: pagePermSchema,
-  }),
+  inputSchema: z
+    .object({
+      driveId: z.string(),
+      roleId: z.string(),
+      driveWidePermissions: pagePermSchema,
+    })
+    .strict(),
   outputSchema: roleEnvelopeSchema,
   requiredScope: 'drive:admin',
   description:
@@ -178,12 +184,14 @@ export const removeRolePagePermissions = defineOperation({
   name: 'roles.removePagePermissions',
   method: 'PATCH',
   path: '/api/drives/:driveId/roles/:roleId',
-  inputSchema: z.object({
-    driveId: z.string(),
-    roleId: z.string(),
-    /** Every entry must be `null` (prune) — this op only removes, never sets (see roles.setPagePermissions). */
-    permissionsPatch: z.record(z.string(), z.null()),
-  }),
+  inputSchema: z
+    .object({
+      driveId: z.string(),
+      roleId: z.string(),
+      /** Every entry must be `null` (prune) — this op only removes, never sets (see roles.setPagePermissions). */
+      permissionsPatch: z.record(z.string(), z.null()),
+    })
+    .strict(),
   outputSchema: roleEnvelopeSchema,
   requiredScope: 'drive:admin',
   destructive: true,

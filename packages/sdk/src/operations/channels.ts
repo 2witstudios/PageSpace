@@ -118,17 +118,19 @@ export const sendChannelMessage = defineOperation({
   name: 'channels.sendMessage',
   method: 'POST',
   path: '/api/channels/:pageId/messages',
-  inputSchema: z.object({
-    pageId: z.string(),
-    // Route coerces a non-string body to '' (`typeof content === 'string' ? content : ''`)
-    // and never enforces a minimum length — attachment-only messages send an empty string.
-    content: z.string(),
-    fileId: z.string().optional(),
-    attachmentMeta: attachmentMetaSchema.optional(),
-    parentId: z.string().optional(),
-    alsoSendToParent: z.boolean().optional(),
-    quotedMessageId: z.string().optional(),
-  }),
+  inputSchema: z
+    .object({
+      pageId: z.string(),
+      // Route coerces a non-string body to '' (`typeof content === 'string' ? content : ''`)
+      // and never enforces a minimum length — attachment-only messages send an empty string.
+      content: z.string(),
+      fileId: z.string().optional(),
+      attachmentMeta: attachmentMetaSchema.optional(),
+      parentId: z.string().optional(),
+      alsoSendToParent: z.boolean().optional(),
+      quotedMessageId: z.string().optional(),
+    })
+    .strict(),
   outputSchema: channelMessageSchema,
   requiredScope: 'drive',
   description:
@@ -143,7 +145,7 @@ export const deleteChannelMessage = defineOperation({
   name: 'channels.deleteMessage',
   method: 'DELETE',
   path: '/api/channels/:pageId/messages/:messageId',
-  inputSchema: z.object({ pageId: z.string(), messageId: z.string() }),
+  inputSchema: z.object({ pageId: z.string(), messageId: z.string() }).strict(),
   outputSchema: z.object({ success: z.literal(true) }),
   requiredScope: 'drive',
   destructive: true,

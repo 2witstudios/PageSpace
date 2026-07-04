@@ -173,6 +173,7 @@ export const readDocument = defineOperation({
       startLine: z.number().int().min(1).optional(),
       endLine: z.number().int().min(1).optional(),
     })
+    .strict()
     .refine((v) => v.startLine === undefined || v.endLine === undefined || v.endLine >= v.startLine, {
       message: 'endLine must be >= startLine',
       path: ['endLine'],
@@ -202,6 +203,7 @@ export const replaceLines = defineOperation({
       endLine: z.number().int().min(1).optional(),
       content: z.string(),
     })
+    .strict()
     .refine((v) => v.endLine === undefined || v.endLine >= v.startLine, {
       message: 'endLine must be >= startLine',
       path: ['endLine'],
@@ -227,12 +229,14 @@ export const insertLines = defineOperation({
   name: 'pages.insertLines',
   method: 'POST',
   path: DOCUMENTS_PATH,
-  inputSchema: z.object({
-    operation: z.literal('insert').default('insert'),
-    pageId: z.string(),
-    startLine: z.number().int().min(1),
-    content: z.string(),
-  }),
+  inputSchema: z
+    .object({
+      operation: z.literal('insert').default('insert'),
+      pageId: z.string(),
+      startLine: z.number().int().min(1),
+      content: z.string(),
+    })
+    .strict(),
   outputSchema: z.object({
     pageId: z.string(),
     pageTitle: z.string().nullable(),
@@ -260,6 +264,7 @@ export const deleteLines = defineOperation({
       startLine: z.number().int().min(1),
       endLine: z.number().int().min(1).optional(),
     })
+    .strict()
     .refine((v) => v.endLine === undefined || v.endLine >= v.startLine, {
       message: 'endLine must be >= startLine',
       path: ['endLine'],
@@ -290,18 +295,20 @@ export const editSheetCells = defineOperation({
   name: 'pages.editCells',
   method: 'POST',
   path: DOCUMENTS_PATH,
-  inputSchema: z.object({
-    operation: z.literal('edit-cells').default('edit-cells'),
-    pageId: z.string(),
-    cells: z
-      .array(
-        z.object({
-          address: z.string().trim().regex(cellAddressPattern, 'Invalid A1-style cell address'),
-          value: z.string(),
-        }),
-      )
-      .min(1),
-  }),
+  inputSchema: z
+    .object({
+      operation: z.literal('edit-cells').default('edit-cells'),
+      pageId: z.string(),
+      cells: z
+        .array(
+          z.object({
+            address: z.string().trim().regex(cellAddressPattern, 'Invalid A1-style cell address'),
+            value: z.string(),
+          }),
+        )
+        .min(1),
+    })
+    .strict(),
   outputSchema: z.object({
     pageId: z.string(),
     pageTitle: z.string().nullable(),

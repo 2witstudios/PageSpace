@@ -97,12 +97,14 @@ export const listConversations = defineOperation({
   name: 'conversations.list',
   method: 'GET',
   path: '/api/ai/page-agents/:agentId/conversations',
-  inputSchema: z.object({
-    agentId: z.string(),
-    // Route clamps page to 0-10000 (default 0) and pageSize to 1-200 (default 50).
-    page: z.number().int().min(0).max(10000).optional(),
-    pageSize: z.number().int().min(1).max(200).optional(),
-  }),
+  inputSchema: z
+    .object({
+      agentId: z.string(),
+      // Route clamps page to 0-10000 (default 0) and pageSize to 1-200 (default 50).
+      page: z.number().int().min(0).max(10000).optional(),
+      pageSize: z.number().int().min(1).max(200).optional(),
+    })
+    .strict(),
   outputSchema: listConversationsOutputSchema,
   requiredScope: 'drive',
   description:
@@ -130,14 +132,16 @@ export const readConversation = defineOperation({
   name: 'conversations.read',
   method: 'GET',
   path: '/api/ai/page-agents/:agentId/conversations/:conversationId/messages',
-  inputSchema: z.object({
-    agentId: z.string(),
-    conversationId: z.string(),
-    // Route clamps limit to 1-200 (default 50).
-    limit: z.number().int().min(1).max(200).optional(),
-    cursor: z.string().optional(),
-    direction: z.enum(['before', 'after']).optional(),
-  }),
+  inputSchema: z
+    .object({
+      agentId: z.string(),
+      conversationId: z.string(),
+      // Route clamps limit to 1-200 (default 50).
+      limit: z.number().int().min(1).max(200).optional(),
+      cursor: z.string().optional(),
+      direction: z.enum(['before', 'after']).optional(),
+    })
+    .strict(),
   outputSchema: readConversationOutputSchema,
   requiredScope: 'drive',
   description:

@@ -22,7 +22,7 @@
 import { z } from 'zod';
 import { defineOperation } from '../registry/define.js';
 
-const exportPageInputSchema = z.object({ pageId: z.string() });
+const exportPageInputSchema = z.object({ pageId: z.string() }).strict();
 
 // ---------------------------------------------------------------------------
 // export.pageMarkdown — GET /api/pages/:pageId/export/markdown

@@ -69,7 +69,7 @@ export const listDriveMembers = defineOperation({
   name: 'members.list',
   method: 'GET',
   path: '/api/drives/:driveId/members',
-  inputSchema: z.object({ driveId: z.string() }),
+  inputSchema: z.object({ driveId: z.string() }).strict(),
   outputSchema: z.object({
     members: z.array(driveMemberSchema),
     pendingInvites: z.array(pendingInviteSchema),

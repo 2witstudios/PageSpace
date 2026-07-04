@@ -74,7 +74,7 @@ export const listWorkflows = defineOperation({
   name: 'workflows.list',
   method: 'GET',
   path: '/api/workflows',
-  inputSchema: z.object({ driveId: z.string().min(1) }),
+  inputSchema: z.object({ driveId: z.string().min(1) }).strict(),
   outputSchema: z.array(workflowListItemSchema),
   requiredScope: 'drive:admin',
   description:
@@ -134,7 +134,7 @@ export const deleteWorkflow = defineOperation({
   name: 'workflows.delete',
   method: 'DELETE',
   path: '/api/workflows/:workflowId',
-  inputSchema: z.object({ workflowId: z.string() }),
+  inputSchema: z.object({ workflowId: z.string() }).strict(),
   outputSchema: z.object({ success: z.literal(true) }),
   requiredScope: 'drive:admin',
   destructive: true,

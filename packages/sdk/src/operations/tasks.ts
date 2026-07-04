@@ -86,6 +86,7 @@ const agentTriggerInputSchema = z
     instructionPageId: z.string().optional(),
     contextPageIds: z.array(z.string()).max(10).optional(),
   })
+  .strict()
   .refine((v) => Boolean(v.prompt) || Boolean(v.instructionPageId), {
     message: 'agentTrigger needs either a prompt or an instructionPageId',
     path: ['prompt'],
@@ -110,6 +111,7 @@ export const createTask = defineOperation({
       timezone: z.string().optional(),
       agentTrigger: agentTriggerInputSchema.optional(),
     })
+    .strict()
     .refine(
       (v) => {
         if (!v.agentTrigger) return true;
@@ -170,11 +172,13 @@ export const reorderTask = defineOperation({
   name: 'tasks.reorder',
   method: 'PATCH',
   path: '/api/pages/:pageId/tasks/:taskId',
-  inputSchema: z.object({
-    pageId: z.string(),
-    taskId: z.string(),
-    position: z.number(),
-  }),
+  inputSchema: z
+    .object({
+      pageId: z.string(),
+      taskId: z.string(),
+      position: z.number(),
+    })
+    .strict(),
   outputSchema: taskWithRelationsSchema,
   requiredScope: 'drive',
   description: 'Move a task to a new position within its task list (same route as tasks.update, position-only body).',
@@ -184,7 +188,7 @@ export const deleteTask = defineOperation({
   name: 'tasks.delete',
   method: 'DELETE',
   path: '/api/pages/:pageId/tasks/:taskId',
-  inputSchema: z.object({ pageId: z.string(), taskId: z.string() }),
+  inputSchema: z.object({ pageId: z.string(), taskId: z.string() }).strict(),
   outputSchema: z.object({ success: z.boolean() }),
   requiredScope: 'drive',
   description: 'Delete a task by trashing its linked TASK_LIST child page.',
@@ -206,13 +210,15 @@ export const createTaskStatus = defineOperation({
   name: 'tasks.createStatus',
   method: 'POST',
   path: '/api/pages/:pageId/tasks/statuses',
-  inputSchema: z.object({
-    pageId: z.string(),
-    name: z.string().min(1),
-    color: z.string().min(1),
-    group: statusGroupEnum,
-    position: z.number().optional(),
-  }),
+  inputSchema: z
+    .object({
+      pageId: z.string(),
+      name: z.string().min(1),
+      color: z.string().min(1),
+      group: statusGroupEnum,
+      position: z.number().optional(),
+    })
+    .strict(),
   outputSchema: taskStatusConfigSchema,
   requiredScope: 'drive',
   description: 'Create a custom status on a task list. The returned slug becomes a valid value for tasks.create/tasks.update\'s status field.',
@@ -249,6 +255,7 @@ export const setTaskTrigger = defineOperation({
       contextPageIds: z.array(z.string()).max(10).optional(),
       timezone: z.string().optional(),
     })
+    .strict()
     .refine((v) => Boolean(v.prompt?.trim()) || Boolean(v.instructionPageId), {
       message: 'Either prompt or instructionPageId is required',
       path: ['prompt'],
@@ -262,7 +269,7 @@ export const deleteTaskTrigger = defineOperation({
   name: 'tasks.deleteTrigger',
   method: 'DELETE',
   path: '/api/tasks/:taskId/triggers/:triggerType',
-  inputSchema: z.object({ taskId: z.string(), triggerType: triggerTypeEnum }),
+  inputSchema: z.object({ taskId: z.string(), triggerType: triggerTypeEnum }).strict(),
   outputSchema: z.object({ success: z.boolean() }),
   requiredScope: 'drive',
   description: 'Remove one trigger (due_date or completion) from a task.',
@@ -305,6 +312,7 @@ export const getAssignedTasks = defineOperation({
       limit: z.number().int().min(1).max(100).optional(),
       offset: z.number().int().min(0).optional(),
     })
+    .strict()
     .refine((v) => v.context !== 'drive' || Boolean(v.driveId), {
       message: 'driveId is required for drive context',
       path: ['driveId'],

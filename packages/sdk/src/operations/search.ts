@@ -76,14 +76,16 @@ export const globSearch = defineOperation({
   name: 'search.glob',
   method: 'GET',
   path: '/api/drives/:driveId/search/glob',
-  inputSchema: z.object({
-    driveId: z.string(),
-    pattern: z.string().min(1),
-    includeTypes: includeTypesSchema,
-    // Route clamps to 1-200, default 100 (search/glob/route.ts:39-43); the
-    // SDK rejects out-of-bounds rather than silently relying on the clamp.
-    maxResults: z.number().int().min(1).max(200).optional(),
-  }),
+  inputSchema: z
+    .object({
+      driveId: z.string(),
+      pattern: z.string().min(1),
+      includeTypes: includeTypesSchema,
+      // Route clamps to 1-200, default 100 (search/glob/route.ts:39-43); the
+      // SDK rejects out-of-bounds rather than silently relying on the clamp.
+      maxResults: z.number().int().min(1).max(200).optional(),
+    })
+    .strict(),
   outputSchema: globSearchOutputSchema,
   requiredScope: 'drive',
   description:
@@ -123,13 +125,15 @@ export const regexSearch = defineOperation({
   name: 'search.regex',
   method: 'GET',
   path: '/api/drives/:driveId/search/regex',
-  inputSchema: z.object({
-    driveId: z.string(),
-    pattern: z.string().min(1),
-    searchIn: z.enum(['content', 'title', 'both']).optional(),
-    // Route clamps to 1-100, default 50 (search/regex/route.ts:36-40).
-    maxResults: z.number().int().min(1).max(100).optional(),
-  }),
+  inputSchema: z
+    .object({
+      driveId: z.string(),
+      pattern: z.string().min(1),
+      searchIn: z.enum(['content', 'title', 'both']).optional(),
+      // Route clamps to 1-100, default 50 (search/regex/route.ts:36-40).
+      maxResults: z.number().int().min(1).max(100).optional(),
+    })
+    .strict(),
   outputSchema: regexSearchOutputSchema,
   requiredScope: 'drive',
   description:
@@ -175,12 +179,14 @@ export const multiDriveSearch = defineOperation({
   name: 'search.multiDrive',
   method: 'GET',
   path: '/api/search/multi-drive',
-  inputSchema: z.object({
-    searchQuery: z.string().min(1),
-    searchType: z.enum(['text', 'regex']).optional(),
-    // Route clamps to 1-50, default 20 (search/multi-drive/route.ts:26-30).
-    maxResultsPerDrive: z.number().int().min(1).max(50).optional(),
-  }),
+  inputSchema: z
+    .object({
+      searchQuery: z.string().min(1),
+      searchType: z.enum(['text', 'regex']).optional(),
+      // Route clamps to 1-50, default 20 (search/multi-drive/route.ts:26-30).
+      maxResultsPerDrive: z.number().int().min(1).max(50).optional(),
+    })
+    .strict(),
   outputSchema: multiDriveSearchOutputSchema,
   // No single driveId path param — this enumerates whatever drives the
   // caller's own principal can already access (same rationale as

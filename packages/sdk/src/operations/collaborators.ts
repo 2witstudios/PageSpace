@@ -43,7 +43,7 @@ export const listCollaborators = defineOperation({
   name: 'collaborators.list',
   method: 'GET',
   path: '/api/connections',
-  inputSchema: z.object({ status: connectionStatusSchema.optional() }),
+  inputSchema: z.object({ status: connectionStatusSchema.optional() }).strict(),
   outputSchema: z.object({ connections: z.array(connectionSchema) }),
   description: "List the caller's connections (collaborators). Defaults to ACCEPTED status server-side when omitted.",
 });
