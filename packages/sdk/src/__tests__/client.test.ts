@@ -390,4 +390,53 @@ describe('PageSpaceClient — registry-derived namespaces', () => {
     await expect(client.export.pageMarkdown({ pageId: 'p1' })).resolves.toBe('# Hello');
     await expect(client.export.sheetCsv({ pageId: 'p1' })).resolves.toBe('a,b\n1,2');
   });
+
+  it('exposes the search namespace (Phase 3 task 3 defined the operations; the facade never wired them)', async () => {
+    const globFixture = {
+      success: true,
+      driveSlug: 'engineering',
+      pattern: '**/README*',
+      results: [],
+      totalResults: 0,
+      summary: 'Found 0 pages matching pattern "**/README*"',
+      stats: { totalPagesScanned: 0, matchingPages: 0, documentTypes: [], matchTypes: { path: 0, title: 0 } },
+      nextSteps: [],
+    };
+    const regexFixture = {
+      success: true,
+      driveSlug: 'engineering',
+      pattern: 'TODO',
+      searchIn: 'content',
+      results: [],
+      totalResults: 0,
+      summary: 'Found 0 pages matching pattern "TODO"',
+      stats: { pagesScanned: 0, pagesWithAccess: 0, documentTypes: [] },
+      nextSteps: [],
+    };
+    const multiDriveFixture = {
+      success: true,
+      searchQuery: 'quarterly report',
+      searchType: 'text',
+      results: [],
+      totalDrives: 0,
+      totalMatches: 0,
+      summary: 'Found 0 matches across 0 drives',
+      stats: { drivesSearched: 0, drivesWithResults: 0, totalMatches: 0 },
+      nextSteps: [],
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/search/glob')) return jsonResponse(200, globFixture);
+      if (url.includes('/search/regex')) return jsonResponse(200, regexFixture);
+      return jsonResponse(200, multiDriveFixture);
+    });
+    const client = makeClient({ fetch: fetchMock });
+
+    expect(typeof client.search.glob).toBe('function');
+    expect(typeof client.search.regex).toBe('function');
+    expect(typeof client.search.multiDrive).toBe('function');
+
+    await expect(client.search.glob({ driveId: 'd1', pattern: '**/README*' })).resolves.toEqual(globFixture);
+    await expect(client.search.regex({ driveId: 'd1', pattern: 'TODO' })).resolves.toEqual(regexFixture);
+    await expect(client.search.multiDrive({ searchQuery: 'quarterly report' })).resolves.toEqual(multiDriveFixture);
+  });
 });
