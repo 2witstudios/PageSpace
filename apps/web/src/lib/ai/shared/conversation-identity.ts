@@ -66,3 +66,13 @@ export function canSend(
 ): state is { status: 'ready'; conversationId: string } {
   return state.status === 'ready';
 }
+
+/** The current conversation id, or null if identity isn't resolved yet. */
+export function conversationIdFrom(state: ConversationIdentityState): string | null {
+  return state.status === 'ready' ? state.conversationId : null;
+}
+
+/** True while identity is being determined (the one genuinely async, blocking state). */
+export function isResolving(state: ConversationIdentityState): boolean {
+  return state.status === 'resolving';
+}

@@ -55,6 +55,8 @@ import {
   useProviderSettings,
   useConversations,
   useConversationIdentity,
+  conversationIdFrom,
+  isResolving,
   useChatTransport,
   useStreamingRegistration,
   useSendHandoff,
@@ -285,9 +287,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     retry: retryResolveConversation,
   } = useConversationIdentity({ resolve: resolveConversation });
 
-  const currentConversationId =
-    identityState.status === 'ready' ? identityState.conversationId : null;
-  const isInitialized = identityState.status === 'ready' || identityState.status === 'error';
+  const currentConversationId = conversationIdFrom(identityState);
+  const isInitialized = !isResolving(identityState) && identityState.status !== 'idle';
   const conversationResolveError = identityState.status === 'error' ? identityState.message : null;
 
   // ============================================

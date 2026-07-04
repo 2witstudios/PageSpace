@@ -127,7 +127,8 @@ vi.mock('@/lib/url-state', () => ({
   setConversationId: vi.fn(),
 }));
 
-vi.mock('@/lib/ai/shared', () => ({
+vi.mock('@/lib/ai/shared', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/shared')>()),
   useChatTransport: vi.fn().mockReturnValue(null),
   useStreamingRegistration: vi.fn(),
 }));
@@ -307,6 +308,82 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     await waitFor(() => {
       expect(result.current.refreshSignal).toBe(signalBefore);
     });
+  });
+});
+
+describe('GlobalChatProvider — conversation identity race guards', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSocket._reset();
+    mockStreams.clear();
+    mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
+      selector({ connectionStatus: 'disconnected' })
+    );
+    mockUseAuth.mockReturnValue({ user: { id: USER_ID }, isAuthenticated: true });
+    mockGetBrowserSessionId.mockReturnValue(SESSION_ID_LOCAL);
+    mockConsumeStreamJoin.mockResolvedValue(undefined);
+  });
+
+  const renderProvider = () =>
+    renderHook(() => useGlobalChatConversation(), { wrapper: Wrapper });
+
+  it('given loadConversation is called for a new id while a stale in-flight load is still pending, should not let the stale messages clobber it', async () => {
+    let resolveStaleMessages!: (value: unknown) => void;
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url === '/api/ai/global/active') return okResponse({ id: CONV_ID });
+      if (url === `/api/ai/global/${CONV_ID}/messages?limit=50`) {
+        return new Promise((resolve) => { resolveStaleMessages = resolve; });
+      }
+      if (url === '/api/ai/global/conv-2/messages?limit=50') {
+        return okResponse({ messages: [{ id: 'fresh-msg' }] });
+      }
+      return okResponse({});
+    });
+
+    const { result } = renderProvider();
+
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+
+    // Init's own load is still awaiting messages (resolveStaleMessages not yet
+    // called) when the user switches to a different conversation.
+    await act(async () => {
+      await result.current.loadConversation('conv-2');
+    });
+    expect(result.current.currentConversationId).toBe('conv-2');
+    expect(result.current.initialMessages).toEqual([{ id: 'fresh-msg' }]);
+
+    // The stale init-triggered fetch for CONV_ID now resolves — it must not
+    // overwrite conv-2's identity or messages.
+    await act(async () => {
+      resolveStaleMessages(okResponse({ messages: [{ id: 'stale-msg' }] }));
+      await Promise.resolve();
+    });
+
+    expect(result.current.currentConversationId).toBe('conv-2');
+    expect(result.current.initialMessages).toEqual([{ id: 'fresh-msg' }]);
+  });
+
+  it('given createNewConversation is called while init is still resolving, should adopt the new id synchronously', async () => {
+    mockFetchWithAuth.mockImplementation(() => new Promise(() => {})); // init hangs forever
+
+    const { conversationState } = await import('@/lib/ai/core/conversation-state');
+    vi.mocked(conversationState.createAndSetActiveConversation).mockResolvedValue({
+      id: 'brand-new-conv',
+      type: 'global',
+      title: null,
+      lastMessageAt: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    const { result } = renderProvider();
+
+    expect(result.current.currentConversationId).toBeNull();
+
+    await act(async () => {
+      await result.current.createNewConversation();
+    });
+
+    expect(result.current.currentConversationId).toBe('brand-new-conv');
   });
 });
 

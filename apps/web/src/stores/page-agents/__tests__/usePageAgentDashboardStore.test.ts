@@ -57,6 +57,7 @@ describe('usePageAgentDashboardStore', () => {
     usePageAgentDashboardStore.setState({
       selectedAgent: null,
       isInitialized: false,
+      identity: { status: 'idle' },
       conversationId: null,
       conversationMessages: [],
       isConversationLoading: false,
@@ -398,6 +399,110 @@ describe('usePageAgentDashboardStore', () => {
 
       expect(result.current.isConversationLoading).toBe(false);
       expect(result.current.conversationId).not.toBeNull();
+    });
+  });
+
+  // ============================================
+  // Conversation identity race guards
+  // ============================================
+  describe('conversation identity race guards', () => {
+    it('given loadConversation is called, should set conversationId synchronously — before its own messages fetch resolves', async () => {
+      let resolveFetch!: (value: unknown) => void;
+      mockFetchWithAuth.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadPromise!: Promise<void>;
+      act(() => {
+        loadPromise = result.current.loadConversation('picked-from-history');
+      });
+
+      expect(result.current.conversationId).toBe('picked-from-history');
+
+      resolveFetch({ ok: true, json: async () => ({ messages: [] }) });
+      await act(() => loadPromise);
+    });
+
+    it('given loadMostRecentConversation resolves AFTER createNewConversation already set a newer identity, should not clobber the newer conversationId', async () => {
+      let resolveMostRecentList!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('limit=1')) {
+          return new Promise((resolve) => { resolveMostRecentList = resolve; });
+        }
+        // The stale conversation's message fetch, and createNewConversation's
+        // persist POST, both resolve immediately — only the list lookup is delayed.
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadMostRecentPromise!: Promise<void>;
+      act(() => {
+        loadMostRecentPromise = result.current.loadMostRecentConversation();
+      });
+
+      // User creates a new conversation while loadMostRecentConversation is still in flight.
+      let newId!: string | null;
+      await act(async () => {
+        newId = await result.current.createNewConversation();
+      });
+      expect(result.current.conversationId).toBe(newId);
+
+      // The stale loadMostRecentConversation fetch now resolves with a DIFFERENT,
+      // older conversation — it must not overwrite the just-created one.
+      await act(async () => {
+        resolveMostRecentList({ ok: true, json: async () => ({ conversations: [{ id: 'stale-old-conv' }] }) });
+        await loadMostRecentPromise;
+      });
+
+      expect(result.current.conversationId).toBe(newId);
+      expect(result.current.conversationMessages).toEqual([]);
+    });
+
+    it('given loadMostRecentConversation applies messages, should drop them if the user switched conversation before the fetch resolved', async () => {
+      let resolveMostRecentList!: (value: unknown) => void;
+      let resolveMostRecentMessages!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('limit=1')) {
+          return new Promise((resolve) => { resolveMostRecentList = resolve; });
+        }
+        if (url.includes('stale-most-recent')) {
+          return new Promise((resolve) => { resolveMostRecentMessages = resolve; });
+        }
+        // loadConversation's own messages fetch (for the user's picked conversation).
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadMostRecentPromise!: Promise<void>;
+      act(() => {
+        loadMostRecentPromise = result.current.loadMostRecentConversation();
+      });
+
+      await act(async () => {
+        resolveMostRecentList({ ok: true, json: async () => ({ conversations: [{ id: 'stale-most-recent' }] }) });
+        // Let the list-fetch .then chain run so the messages fetch is issued
+        // (and resolveMostRecentMessages captured) before the user switches away.
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      act(() => {
+        result.current.loadConversation('user-picked-conv');
+      });
+      expect(result.current.conversationId).toBe('user-picked-conv');
+
+      await act(async () => {
+        resolveMostRecentMessages({ ok: true, json: async () => ({ messages: [{ id: 'stale-msg' }] }) });
+        await loadMostRecentPromise;
+      });
+
+      expect(result.current.conversationId).toBe('user-picked-conv');
+      expect(result.current.conversationMessages).toEqual([]);
     });
   });
 

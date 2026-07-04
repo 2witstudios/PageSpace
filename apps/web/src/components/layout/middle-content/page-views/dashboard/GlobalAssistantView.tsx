@@ -1007,7 +1007,7 @@ const GlobalAssistantView: React.FC = () => {
         onStop={effectiveStop}
         isStreaming={effectiveIsStreaming}
         isLoading={isLoading}
-        disabled={!isAnyProviderConfigured}
+        disabled={!isAnyProviderConfigured || !isInitialized}
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
         driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id}
         crossDrive={!selectedAgent}

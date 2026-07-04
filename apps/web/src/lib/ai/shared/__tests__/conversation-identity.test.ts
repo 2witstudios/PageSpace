@@ -7,6 +7,8 @@ import { describe, it, expect } from 'vitest';
 import {
   conversationIdentityReducer,
   canSend,
+  conversationIdFrom,
+  isResolving,
   type ConversationIdentityState,
 } from '../conversation-identity';
 
@@ -127,5 +129,41 @@ describe('canSend', () => {
 
   it('given an error state, should return false', () => {
     expect(canSend({ status: 'error', message: 'oops' })).toBe(false);
+  });
+});
+
+describe('conversationIdFrom', () => {
+  it('given a ready state, should return its conversationId', () => {
+    expect(conversationIdFrom({ status: 'ready', conversationId: 'conv-1' })).toBe('conv-1');
+  });
+
+  it('given an idle state, should return null', () => {
+    expect(conversationIdFrom({ status: 'idle' })).toBeNull();
+  });
+
+  it('given a resolving state, should return null', () => {
+    expect(conversationIdFrom({ status: 'resolving' })).toBeNull();
+  });
+
+  it('given an error state, should return null', () => {
+    expect(conversationIdFrom({ status: 'error', message: 'oops' })).toBeNull();
+  });
+});
+
+describe('isResolving', () => {
+  it('given a resolving state, should return true', () => {
+    expect(isResolving({ status: 'resolving' })).toBe(true);
+  });
+
+  it('given a ready state, should return false', () => {
+    expect(isResolving({ status: 'ready', conversationId: 'conv-1' })).toBe(false);
+  });
+
+  it('given an idle state, should return false', () => {
+    expect(isResolving({ status: 'idle' })).toBe(false);
+  });
+
+  it('given an error state, should return false', () => {
+    expect(isResolving({ status: 'error', message: 'oops' })).toBe(false);
   });
 });
