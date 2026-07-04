@@ -111,10 +111,13 @@ export const sessionRepository = {
       },
       with: {
         driveScopes: {
-          columns: { driveId: true },
+          columns: { driveId: true, role: true, customRoleId: true },
           with: {
             drive: {
               columns: { id: true, name: true },
+            },
+            customRole: {
+              columns: { id: true, name: true, color: true },
             },
           },
         },
@@ -132,6 +135,9 @@ export const sessionRepository = {
         .map((scope) => ({
           id: scope.drive.id,
           name: scope.drive.name,
+          role: scope.role,
+          customRoleId: scope.customRoleId,
+          customRoleName: scope.customRole?.name ?? null,
         })),
     }));
   },
