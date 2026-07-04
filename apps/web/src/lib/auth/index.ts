@@ -709,6 +709,7 @@ export function checkMCPCreateScope(
 // Re-export from other auth modules
 export {
   isScopedMCPAuth,
+  isScopedOAuthAuth,
   getPrincipalAccessLevel,
   canPrincipalViewPage,
   canPrincipalEditPage,

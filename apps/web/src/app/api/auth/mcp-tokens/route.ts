@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -30,10 +30,23 @@ const createTokenSchema = z.object({
   })).optional(),
 }).refine(d => !(d.drives && d.driveIds), { message: 'Provide drives or driveIds, not both' });
 
+// A drive-scoped OAuth token acts as an app member for that drive only (ADR
+// 0002 Decision 2) — it must never mint, list, or manage the full mcp_*
+// credential surface. Only a full-user credential (session, or an
+// account-scoped OAuth token) may reach this route.
+function rejectScopedOAuth(auth: Parameters<typeof isScopedOAuthAuth>[0]): NextResponse | null {
+  if (isScopedOAuthAuth(auth)) {
+    return NextResponse.json({ error: 'insufficient_scope' }, { status: 403 });
+  }
+  return null;
+}
+
 // POST: Create a new MCP token
 export async function POST(req: NextRequest) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   try {
@@ -128,6 +141,8 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   try {

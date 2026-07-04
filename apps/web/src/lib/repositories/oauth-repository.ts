@@ -197,24 +197,30 @@ export async function exchangeAuthorizationCode(
       return { outcome: 'user_suspended' };
     }
 
-    const tokens = issueInitialTokenPair(input.now);
+    // F1 (ADR 0003, OIDC-standard): a refresh token is only minted when the
+    // granted scope set includes offline_access — otherwise this is an
+    // access-only grant.
+    const offlineAccess = row.scopes.includes('offline_access');
+    const tokens = issueInitialTokenPair(input.now, offlineAccess);
 
     await tx
       .update(oauthAuthorizationCodes)
       .set({ consumedAt: input.now, issuedFamilyId: tokens.familyId })
       .where(eq(oauthAuthorizationCodes.id, row.id));
 
-    await tx.insert(oauthRefreshTokens).values({
-      tokenHash: tokens.refreshTokenHash,
-      tokenPrefix: tokens.refreshTokenPrefix,
-      familyId: tokens.familyId,
-      clientId: input.clientDbId,
-      userId: row.userId,
-      scopes: row.scopes,
-      tokenVersion,
-      expiresAt: tokens.refreshExpiresAt,
-      familyExpiresAt: tokens.familyExpiresAt,
-    });
+    if (tokens.refreshToken !== undefined) {
+      await tx.insert(oauthRefreshTokens).values({
+        tokenHash: tokens.refreshTokenHash,
+        tokenPrefix: tokens.refreshTokenPrefix,
+        familyId: tokens.familyId,
+        clientId: input.clientDbId,
+        userId: row.userId,
+        scopes: row.scopes,
+        tokenVersion,
+        expiresAt: tokens.refreshExpiresAt,
+        familyExpiresAt: tokens.familyExpiresAt,
+      });
+    }
 
     await tx.insert(oauthAccessTokens).values({
       tokenHash: tokens.accessTokenHash,
@@ -340,13 +346,24 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
       return { outcome: 'invalid_grant' };
     }
 
+    // Fetched up front (not just for the suspension check below): the
+    // decision itself needs the user's CURRENT tokenVersion to detect a
+    // global "logout all devices" that happened since this token's snapshot.
+    const userRows = await tx
+      .select({ suspendedAt: users.suspendedAt, tokenVersion: users.tokenVersion })
+      .from(users)
+      .where(eq(users.id, row.userId));
+    const currentTokenVersion = userRows[0]?.tokenVersion ?? 0;
+
     const decision = decideRefreshRotation(
       {
         expiresAt: row.expiresAt,
         familyExpiresAt: row.familyExpiresAt,
         revokedAt: row.revokedAt,
         replacedByTokenId: row.replacedByTokenId,
+        tokenVersion: row.tokenVersion,
       },
+      currentTokenVersion,
       input.now,
       false,
     );
@@ -369,10 +386,6 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
     // killed outright, the same way an MCP token is revoked on sight, rather
     // than left alive to keep minting access tokens that only die on first
     // use (constant-shape: same invalid_grant a reused/expired token gets).
-    const userRows = await tx
-      .select({ suspendedAt: users.suspendedAt })
-      .from(users)
-      .where(eq(users.id, row.userId));
     if (userRows[0]?.suspendedAt) {
       await revokeTokenFamily(tx, row.familyId, input.now, 'user_suspended');
       return { outcome: 'invalid_grant' };
@@ -388,26 +401,32 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
       scopes = formatScopeSet(requested.scopes).split(' ');
     }
 
-    const newRefreshId = createId();
-    const tokens = issueRotatedTokenPair(input.now, row.familyId, row.familyExpiresAt);
+    // F1 (ADR 0003, OIDC-standard): a client that narrows scope to drop
+    // offline_access ends the refresh chain here — the rotated pair is
+    // access-only and there is nothing left to replace the presented token.
+    const offlineAccess = scopes.includes('offline_access');
+    const newRefreshId = offlineAccess ? createId() : null;
+    const tokens = issueRotatedTokenPair(input.now, row.familyId, row.familyExpiresAt, offlineAccess);
 
     await tx
       .update(oauthRefreshTokens)
       .set({ revokedAt: input.now, revokedReason: 'rotated', replacedByTokenId: newRefreshId })
       .where(eq(oauthRefreshTokens.id, row.id));
 
-    await tx.insert(oauthRefreshTokens).values({
-      id: newRefreshId,
-      tokenHash: tokens.refreshTokenHash,
-      tokenPrefix: tokens.refreshTokenPrefix,
-      familyId: tokens.familyId,
-      clientId: input.clientDbId,
-      userId: row.userId,
-      scopes,
-      tokenVersion: row.tokenVersion,
-      expiresAt: tokens.refreshExpiresAt,
-      familyExpiresAt: tokens.familyExpiresAt,
-    });
+    if (tokens.refreshToken !== undefined && newRefreshId !== null) {
+      await tx.insert(oauthRefreshTokens).values({
+        id: newRefreshId,
+        tokenHash: tokens.refreshTokenHash,
+        tokenPrefix: tokens.refreshTokenPrefix,
+        familyId: tokens.familyId,
+        clientId: input.clientDbId,
+        userId: row.userId,
+        scopes,
+        tokenVersion: row.tokenVersion,
+        expiresAt: tokens.refreshExpiresAt,
+        familyExpiresAt: tokens.familyExpiresAt,
+      });
+    }
 
     await tx.insert(oauthAccessTokens).values({
       tokenHash: tokens.accessTokenHash,
@@ -566,19 +585,23 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
       return { outcome: 'user_suspended' };
     }
 
-    const tokens = issueInitialTokenPair(input.now);
+    // F1 (ADR 0003, OIDC-standard): access-only unless offline_access was granted.
+    const offlineAccess = decision.grant.scopes.includes('offline_access');
+    const tokens = issueInitialTokenPair(input.now, offlineAccess);
 
-    await tx.insert(oauthRefreshTokens).values({
-      tokenHash: tokens.refreshTokenHash,
-      tokenPrefix: tokens.refreshTokenPrefix,
-      familyId: tokens.familyId,
-      clientId: input.clientDbId,
-      userId: decision.grant.userId,
-      scopes: decision.grant.scopes,
-      tokenVersion,
-      expiresAt: tokens.refreshExpiresAt,
-      familyExpiresAt: tokens.familyExpiresAt,
-    });
+    if (tokens.refreshToken !== undefined) {
+      await tx.insert(oauthRefreshTokens).values({
+        tokenHash: tokens.refreshTokenHash,
+        tokenPrefix: tokens.refreshTokenPrefix,
+        familyId: tokens.familyId,
+        clientId: input.clientDbId,
+        userId: decision.grant.userId,
+        scopes: decision.grant.scopes,
+        tokenVersion,
+        expiresAt: tokens.refreshExpiresAt,
+        familyExpiresAt: tokens.familyExpiresAt,
+      });
+    }
 
     await tx.insert(oauthAccessTokens).values({
       tokenHash: tokens.accessTokenHash,

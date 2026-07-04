@@ -4,13 +4,23 @@
  * the user code from scratch — never trusts an earlier /verify call — then
  * records the decision via `decideDeviceApproval` (task 4, not
  * reimplemented).
+ *
+ * Approval additionally enforces the SAME grant-authority caps the
+ * authorization-code consent screen enforces (ADR 0002 Decision 2, P1b): the
+ * device code's requested scopes are re-checked against the approving user's
+ * actual drive access immediately before `recordDeviceApproval`, so a user
+ * cannot approve a scope (e.g. `drive:<id>:admin`) they have no authority to
+ * grant. A code that can't be looked up here is left to `recordDeviceApproval`
+ * to reject on its own terms (not_found/expired/already_settled).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
-import { recordDeviceApproval } from '@/lib/repositories/oauth-repository';
+import { parseScopeList, checkGrantAuthority } from '@pagespace/lib/auth/oauth/scopes';
+import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
+import { recordDeviceApproval, verifyDeviceUserCode } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const bodySchema = z.object({
@@ -46,6 +56,25 @@ export async function POST(req: NextRequest) {
   }
 
   const normalized = normalizeUserCode(body.userCode);
+
+  if (body.action === 'approve') {
+    const lookup = await verifyDeviceUserCode({ userCode: normalized, now: new Date() });
+    if (lookup.outcome === 'ok') {
+      const parsed = parseScopeList(lookup.scopes.join(' '));
+      const authority =
+        parsed.ok && checkGrantAuthority(parsed.scopes, await resolveGrantAuthority(parsed.scopes, auth.userId));
+
+      if (!authority || !authority.ok) {
+        auditRequest(req, {
+          eventType: 'authz.access.denied',
+          userId: auth.userId,
+          details: { oauthEvent: 'device_decision_scope_denied' },
+        });
+        return NextResponse.json({ error: 'invalid_scope' }, { status: 400 });
+      }
+    }
+  }
+
   const result = await recordDeviceApproval({
     userCode: normalized,
     action: body.action,

@@ -26,6 +26,8 @@ export interface RefreshTokenRecord {
   revokedAt: Date | null;
   /** The token this one was rotated into, if any. */
   replacedByTokenId: string | null;
+  /** The user's `tokenVersion` snapshotted at this token's issuance/rotation. */
+  tokenVersion: number;
 }
 
 export type RefreshRotationDecision =
@@ -36,7 +38,11 @@ export type RefreshRotationDecision =
   | { ok: false; reason: 'expired' | 'family_expired'; revokeFamily: false }
   /** In-window but the cache lost the pair — an infra gap, not theft. */
   | { ok: false; reason: 'grace_cache_miss'; revokeFamily: false }
-  | { ok: false; reason: 'reuse_detected'; revokeFamily: true };
+  | { ok: false; reason: 'reuse_detected'; revokeFamily: true }
+  /** The user's tokenVersion has advanced since this token was issued (a
+   *  global "logout all devices") — refuse, but the family is NOT revoked:
+   *  this is not attacker behavior. */
+  | { ok: false; reason: 'version_mismatch'; revokeFamily: false };
 
 /**
  * Decide what a presented refresh token means right now.
@@ -55,10 +61,14 @@ export type RefreshRotationDecision =
  *  2. family_expired — the absolute 90-day cap wins over a still-live
  *     per-token TTL; it is fixed at first issuance and never extended.
  *  3. expired — the per-token 30-day TTL.
- *  4. otherwise — rotate: issue a fresh pair, revoke the presented token.
+ *  4. version_mismatch — the user's tokenVersion has advanced since this
+ *     token's snapshot (a global "logout all devices"). Refused, but the
+ *     family is left alone: this is an intentional logout, not theft.
+ *  5. otherwise — rotate: issue a fresh pair, revoke the presented token.
  */
 export function decideRefreshRotation(
   record: RefreshTokenRecord,
+  userTokenVersion: number,
   now: Date,
   graceCacheHit: boolean,
 ): RefreshRotationDecision {
@@ -81,6 +91,10 @@ export function decideRefreshRotation(
 
   if (now.getTime() >= record.expiresAt.getTime()) {
     return { ok: false, reason: 'expired', revokeFamily: false };
+  }
+
+  if (record.tokenVersion !== userTokenVersion) {
+    return { ok: false, reason: 'version_mismatch', revokeFamily: false };
   }
 
   return { ok: true, action: 'rotate' };

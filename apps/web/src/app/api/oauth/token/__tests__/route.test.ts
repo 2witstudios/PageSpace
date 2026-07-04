@@ -231,6 +231,59 @@ describe('POST /api/oauth/token — happy path', () => {
   });
 });
 
+describe('POST /api/oauth/token — F1: refresh_token omitted from the response when offline_access was not granted', () => {
+  it('authorization_code grant: no refresh_token key at all in an access-only response', async () => {
+    exchangeAuthorizationCode.mockResolvedValue({
+      outcome: 'ok',
+      userId: 'user-1',
+      scopes: ['account'],
+      tokens: { ...okTokens, refreshToken: undefined },
+    });
+
+    const res = await POST(tokenRequest(validFields()) as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      access_token: okTokens.accessToken,
+      token_type: 'Bearer',
+      expires_in: 15 * 60,
+      scope: 'account',
+    });
+    expect('refresh_token' in body).toBe(false);
+  });
+
+  it('refresh_token grant: no refresh_token key at all when the rotated pair is access-only', async () => {
+    refreshTokenGrant.mockResolvedValue({
+      outcome: 'ok',
+      userId: 'user-1',
+      scopes: ['account'],
+      tokens: { ...okTokens, refreshToken: undefined },
+    });
+
+    const res = await POST(tokenRequest(refreshFields()) as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect('refresh_token' in body).toBe(false);
+  });
+
+  it('device_code grant: no refresh_token key at all when the device grant is access-only', async () => {
+    pollDeviceToken.mockResolvedValue({
+      outcome: 'ok',
+      userId: 'user-1',
+      scopes: ['account'],
+      tokens: { ...okTokens, refreshToken: undefined },
+    });
+
+    const res = await POST(tokenRequest(deviceFields()) as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect('refresh_token' in body).toBe(false);
+  });
+});
+
 describe('POST /api/oauth/token — constant-shape failures (no oracle)', () => {
   const CONSTANT_BODY = { error: 'invalid_grant' };
 

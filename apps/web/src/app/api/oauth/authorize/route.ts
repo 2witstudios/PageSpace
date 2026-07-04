@@ -24,11 +24,10 @@ import {
   type AuthorizeRequestParams,
 } from '@pagespace/lib/auth/oauth/authorize-request';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { checkGrantAuthority, formatScopeSet, type GrantAuthority } from '@pagespace/lib/auth/oauth/scopes';
+import { checkGrantAuthority, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import { AUTHORIZATION_CODE_TTL_SECONDS } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import { customRoleBelongsToDrive, getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
+import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
 import { ensureOAuthClientRow, createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
@@ -180,23 +179,7 @@ export async function POST(req: NextRequest) {
   // Decision 2). Any violation rejects the entire request — no partial grant,
   // uniform `invalid_scope` (no oracle distinguishing "no access" from "role
   // not grantable" on an endpoint reachable pre-consent by arbitrary clients).
-  const authorityMap = new Map<string, GrantAuthority extends ReadonlyMap<string, infer V> ? V : never>();
-  for (const [driveId, scope] of result.scopes.drives) {
-    const access = await getDriveAccess(driveId, auth.userId);
-    const ownCustomRoleId = await getMemberCustomRoleId(driveId, auth.userId);
-    const customRoleOk =
-      scope.role.kind === 'custom' ? await customRoleBelongsToDrive(scope.role.customRoleId, driveId) : true;
-
-    authorityMap.set(driveId, {
-      isOwner: access.isOwner,
-      isMember: access.isMember,
-      isAdmin: access.isAdmin,
-      ownCustomRoleId,
-      roleBelongsToDrive: () => customRoleOk,
-    });
-  }
-
-  const authority = checkGrantAuthority(result.scopes, authorityMap);
+  const authority = checkGrantAuthority(result.scopes, await resolveGrantAuthority(result.scopes, auth.userId));
   if (!authority.ok) {
     return NextResponse.json({
       redirectUri: buildRedirectWithParams(result.redirectUri, { error: 'invalid_scope', state: result.state }),

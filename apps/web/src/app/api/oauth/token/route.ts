@@ -30,7 +30,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getClientIP } from '@/lib/auth';
 import { getRegisteredClient, type RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { ACCESS_TOKEN_TTL_SECONDS } from '@pagespace/lib/auth/oauth/issue-tokens';
+import { ACCESS_TOKEN_TTL_SECONDS, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import {
   ensureOAuthClientRow,
   exchangeAuthorizationCode,
@@ -42,6 +42,22 @@ import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/l
 
 function noStoreJson(body: Record<string, unknown>, status: number): NextResponse {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
+}
+
+/**
+ * RFC 6749 §5.1 success body for all three grants. `refresh_token` is
+ * `undefined` whenever F1 (ADR 0003, offline_access gating) minted an
+ * access-only pair — `JSON.stringify` drops `undefined`-valued keys, so the
+ * field is absent from the wire response entirely, not merely null.
+ */
+function tokenSuccessBody(tokens: IssuedTokenPair, scopes: string[]): Record<string, unknown> {
+  return {
+    access_token: tokens.accessToken,
+    token_type: 'Bearer',
+    expires_in: ACCESS_TOKEN_TTL_SECONDS,
+    refresh_token: tokens.refreshToken,
+    scope: scopes.join(' '),
+  };
 }
 
 const INVALID_REQUEST = { error: 'invalid_request' };
@@ -98,14 +114,20 @@ type ResolvedClient = { client: RegisteredClient; clientDbId: string };
 type ClientResolution = ResolvedClient | { rejection: NextResponse };
 
 /**
- * Resolve and validate the requesting client — shared by both grants.
- * Unknown client_id and a public client presenting a client_secret are the
- * SAME two rejections (`invalid_grant` / `invalid_request`) either grant
- * produces; one guard, not two divergent copies.
+ * Resolve and validate the requesting client — shared by all three grants.
+ * Unknown client_id, a public client presenting a client_secret, and a grant
+ * type outside the client's `allowedGrantTypes` (defined but previously
+ * unenforced, `clients.ts:19`) all collapse to the SAME rejections
+ * (`invalid_grant` / `invalid_request`) every grant produces; one guard, not
+ * divergent copies per grant handler.
  */
-async function resolveClient(form: URLSearchParams, clientId: string): Promise<ClientResolution> {
+async function resolveClient(form: URLSearchParams, clientId: string, grantType: string): Promise<ClientResolution> {
   const client = getRegisteredClient(clientId);
   if (!client) {
+    return { rejection: noStoreJson(INVALID_GRANT, 400) };
+  }
+
+  if (!client.allowedGrantTypes.includes(grantType)) {
     return { rejection: noStoreJson(INVALID_GRANT, 400) };
   }
 
@@ -134,7 +156,7 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
   const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
   if (rateLimited) return rateLimited;
 
-  const resolved = await resolveClient(form, clientId);
+  const resolved = await resolveClient(form, clientId, 'authorization_code');
   if ('rejection' in resolved) return resolved.rejection;
   const { client, clientDbId } = resolved;
 
@@ -160,16 +182,7 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
     details: { clientId: client.clientId, oauthEvent: 'code_exchange' },
   });
 
-  return noStoreJson(
-    {
-      access_token: result.tokens.accessToken,
-      token_type: 'Bearer',
-      expires_in: ACCESS_TOKEN_TTL_SECONDS,
-      refresh_token: result.tokens.refreshToken,
-      scope: result.scopes.join(' '),
-    },
-    200,
-  );
+  return noStoreJson(tokenSuccessBody(result.tokens, result.scopes), 200);
 }
 
 async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
@@ -183,7 +196,7 @@ async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams):
   const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
   if (rateLimited) return rateLimited;
 
-  const resolved = await resolveClient(form, clientId);
+  const resolved = await resolveClient(form, clientId, 'refresh_token');
   if ('rejection' in resolved) return resolved.rejection;
   const { client, clientDbId } = resolved;
 
@@ -216,16 +229,7 @@ async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams):
     details: { clientId: client.clientId, oauthEvent: 'refresh_rotated' },
   });
 
-  return noStoreJson(
-    {
-      access_token: result.tokens.accessToken,
-      token_type: 'Bearer',
-      expires_in: ACCESS_TOKEN_TTL_SECONDS,
-      refresh_token: result.tokens.refreshToken,
-      scope: result.scopes.join(' '),
-    },
-    200,
-  );
+  return noStoreJson(tokenSuccessBody(result.tokens, result.scopes), 200);
 }
 
 /**
@@ -257,7 +261,7 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
   const rateLimited = await checkDevicePollRateLimit(req, clientId);
   if (rateLimited) return rateLimited;
 
-  const resolved = await resolveClient(form, clientId);
+  const resolved = await resolveClient(form, clientId, 'urn:ietf:params:oauth:grant-type:device_code');
   if ('rejection' in resolved) return resolved.rejection;
   const { client, clientDbId } = resolved;
 
@@ -277,16 +281,7 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
     details: { clientId: client.clientId, oauthEvent: 'device_poll_granted' },
   });
 
-  return noStoreJson(
-    {
-      access_token: result.tokens.accessToken,
-      token_type: 'Bearer',
-      expires_in: ACCESS_TOKEN_TTL_SECONDS,
-      refresh_token: result.tokens.refreshToken,
-      scope: result.scopes.join(' '),
-    },
-    200,
-  );
+  return noStoreJson(tokenSuccessBody(result.tokens, result.scopes), 200);
 }
 
 export async function POST(req: NextRequest) {
