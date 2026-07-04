@@ -42,7 +42,7 @@ describe('createSheetsEditCellsHandler', () => {
     const code = await handler(ctx, commandIntent(['pg_1']));
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect(editCells).toHaveBeenCalledWith({ pageId: 'pg_1', cells: [{ address: 'A1', value: '5' }] });
+    expect(editCells).toHaveBeenCalledWith({ operation: 'edit-cells', pageId: 'pg_1', cells: [{ address: 'A1', value: '5' }] });
   });
 
   it('reads cells from --json-input when given, never touching stdin', async () => {
@@ -55,7 +55,7 @@ describe('createSheetsEditCellsHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(readStdin).not.toHaveBeenCalled();
-    expect(editCells).toHaveBeenCalledWith({ pageId: 'pg_1', cells: [{ address: 'B2', value: '7' }] });
+    expect(editCells).toHaveBeenCalledWith({ operation: 'edit-cells', pageId: 'pg_1', cells: [{ address: 'B2', value: '7' }] });
   });
 
   it('rejects malformed JSON input as a usage error before any network call', async () => {

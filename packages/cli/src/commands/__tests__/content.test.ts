@@ -36,7 +36,7 @@ describe('pagesReadHandler', () => {
     const code = await pagesReadHandler(ctx, commandIntent(['pg_1']));
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect(read).toHaveBeenCalledWith({ pageId: 'pg_1', startLine: undefined, endLine: undefined });
+    expect(read).toHaveBeenCalledWith({ operation: 'read', pageId: 'pg_1', startLine: undefined, endLine: undefined });
   });
 
   it('passes --start/--end through as a numeric range', async () => {
@@ -46,7 +46,7 @@ describe('pagesReadHandler', () => {
     const code = await pagesReadHandler(ctx, commandIntent(['pg_1', '--start', '2', '--end', '5']));
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect(read).toHaveBeenCalledWith({ pageId: 'pg_1', startLine: 2, endLine: 5 });
+    expect(read).toHaveBeenCalledWith({ operation: 'read', pageId: 'pg_1', startLine: 2, endLine: 5 });
   });
 
   it('rejects an out-of-order range as a usage error before any network call', async () => {
@@ -153,7 +153,7 @@ describe('createPagesReplaceLinesHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(readFile).not.toHaveBeenCalled();
-    expect(replaceLines).toHaveBeenCalledWith({ pageId: 'pg_1', startLine: 2, endLine: undefined, content: 'replacement text\n\n' });
+    expect(replaceLines).toHaveBeenCalledWith({ operation: 'replace', pageId: 'pg_1', startLine: 2, endLine: undefined, content: 'replacement text\n\n' });
   });
 
   it('reads content from --file when given, byte-exact, never touching stdin', async () => {
@@ -168,7 +168,7 @@ describe('createPagesReplaceLinesHandler', () => {
     expect(code).toBe(EXIT_SUCCESS);
     expect(readStdin).not.toHaveBeenCalled();
     expect(readFile).toHaveBeenCalledWith('/tmp/new.md');
-    expect(replaceLines).toHaveBeenCalledWith({ pageId: 'pg_1', startLine: 2, endLine: 3, content: 'content of /tmp/new.md' });
+    expect(replaceLines).toHaveBeenCalledWith({ operation: 'replace', pageId: 'pg_1', startLine: 2, endLine: 3, content: 'content of /tmp/new.md' });
   });
 
   it('--json emits exactly the SDK response', async () => {

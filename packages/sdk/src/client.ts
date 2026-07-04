@@ -51,6 +51,7 @@ import {
   trashPage,
 } from './operations/pages.js';
 import { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
+import { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
 import {
   createDriveRole,
   deleteDriveRole,
@@ -135,6 +136,10 @@ const DEFAULT_OPERATIONS_MAP = {
   conversations: {
     list: listConversations,
     read: readConversation,
+  },
+  export: {
+    pageMarkdown: exportPageMarkdown,
+    sheetCsv: exportSheetCsv,
   },
   tokens: {
     create: createMcpToken,

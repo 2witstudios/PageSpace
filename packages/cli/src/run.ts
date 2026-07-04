@@ -18,6 +18,8 @@ import {
   drivesRestoreHandler,
   drivesTrashHandler,
 } from './commands/drives.js';
+import { pagesReadHandler, pagesReplaceLinesHandler } from './commands/content.js';
+import { pagesExportHandler } from './commands/export.js';
 import { helpHandler } from './commands/help.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
@@ -33,6 +35,7 @@ import {
   pagesTrashHandler,
   pagesTreeHandler,
 } from './commands/pages.js';
+import { sheetsEditCellsHandler } from './commands/sheets.js';
 import { trashListHandler } from './commands/trash.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
@@ -79,6 +82,10 @@ const ROUTES: readonly Route[] = [
   { path: ['pages', 'move'], handler: pagesMoveHandler },
   { path: ['pages', 'trash'], handler: pagesTrashHandler },
   { path: ['pages', 'restore'], handler: pagesRestoreHandler },
+  { path: ['pages', 'read'], handler: pagesReadHandler },
+  { path: ['pages', 'replace-lines'], handler: pagesReplaceLinesHandler },
+  { path: ['pages', 'export'], handler: pagesExportHandler },
+  { path: ['sheets', 'edit-cells'], handler: sheetsEditCellsHandler },
   { path: ['trash', 'list'], handler: trashListHandler },
 ];
 

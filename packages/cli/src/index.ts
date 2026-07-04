@@ -76,6 +76,20 @@ export {
   renderPagesTree,
 } from './commands/pages.js';
 export { renderTrashTree, trashListHandler } from './commands/trash.js';
+
+// Content & export verbs (Phase 5 task 2) — thin projections over the
+// documents/export SDK operations.
+export {
+  createPagesReplaceLinesHandler,
+  extractLineRangeFlags,
+  pagesReadHandler,
+  pagesReplaceLinesHandler,
+} from './commands/content.js';
+export type { ContentSourceDeps } from './commands/content.js';
+export { createSheetsEditCellsHandler, sheetsEditCellsHandler } from './commands/sheets.js';
+export type { SheetsEditCellsDeps } from './commands/sheets.js';
+export { createPagesExportHandler, pagesExportHandler } from './commands/export.js';
+export type { PagesExportDeps } from './commands/export.js';
 export {
   createLoginHandler,
   DEFAULT_LOGIN_SCOPE,
