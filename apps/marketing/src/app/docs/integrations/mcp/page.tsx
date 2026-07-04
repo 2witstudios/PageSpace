@@ -3,49 +3,73 @@ import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
   title: "MCP Integration",
-  description: "Connect AI tools like Claude Desktop, Claude Code, and Cursor to PageSpace via the Model Context Protocol. Create tokens, configure servers, and wire up external clients.",
+  description: "Connect AI tools like Claude Desktop, Claude Code, and Cursor to PageSpace via the Model Context Protocol. Log in with the pagespace CLI, or use a scoped token for agents and CI.",
   path: "/docs/integrations/mcp",
-  keywords: ["MCP", "Model Context Protocol", "AI integration", "Claude", "Cursor", "API tokens"],
+  keywords: ["MCP", "Model Context Protocol", "AI integration", "Claude", "Cursor", "API tokens", "pagespace CLI"],
 });
 
 const content = `
 # MCP Integration
 
-PageSpace speaks the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) — an open standard for giving AI tools access to external data and actions. The companion \`pagespace-mcp\` npm package runs locally as an MCP server and lets tools like Claude Desktop, Claude Code, and Cursor read and write your PageSpace workspace.
+PageSpace speaks the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) — an open standard for giving AI tools access to external data and actions. The \`pagespace\` CLI runs \`pagespace mcp\`, a local MCP server that lets tools like Claude Desktop, Claude Code, and Cursor read and write your PageSpace workspace.
 
 \`\`\`
-AI tool (MCP client)  →  pagespace-mcp (MCP server)  →  PageSpace API
+AI tool (MCP client)  →  pagespace mcp (MCP server)  →  PageSpace API
                                                          ↓
                                                     Your workspace
 \`\`\`
 
-Tokens authenticate as your user. Every operation runs with your permissions; drive-scoped tokens restrict access further.
+Every operation runs with the permissions of whoever (or whatever) authenticated — a human via \`pagespace login\`, or a scoped token for an agent or CI job.
 
-## Step 1: Create an MCP token
+## Step 1: Install the CLI and authenticate
 
-1. Open **Settings > MCP** in PageSpace.
-2. Click **Create Token** and give it a name.
-3. Copy the token. It starts with \`mcp_\` and is shown **once** — only a SHA3-256 hash is stored server-side.
-4. Optionally scope the token to specific drives, and give it a role. A scoped token joins those drives as an **app** — it appears on each drive's member list, and its access is governed by the role you give it there. Scoped tokens cannot create new drives.
+\`\`\`bash
+npm install -g @pagespace/cli
+pagespace login
+\`\`\`
+
+\`pagespace login\` opens a browser, completes an OAuth login, and stores the credential locally — \`pagespace mcp\` picks it up automatically, no token to copy or paste.
+
+**Agents, CI, and service accounts** don't have a browser to log in with. Mint a scoped token instead, either from the CLI or from **Settings > MCP**:
+
+\`\`\`bash
+pagespace tokens create --name "Claude Desktop" --drive <driveId>
+\`\`\`
+
+This prints a token starting with \`mcp_\`, shown **once** — only a SHA3-256 hash is stored server-side. Scope it to specific drives and it joins those drives as an **app** on the member list, governed by the role you give it there; scoped tokens cannot create new drives.
 
 ## Step 2: Configure your AI tool
 
-The config format follows the standard MCP \`mcpServers\` schema:
+Logged in with \`pagespace login\`? No token needed in the config — \`pagespace mcp\` reads your stored login:
 
 \`\`\`json
 {
   "mcpServers": {
     "pagespace": {
-      "command": "npx",
-      "args": ["-y", "pagespace-mcp@latest"],
+      "command": "pagespace",
+      "args": ["mcp"]
+    }
+  }
+}
+\`\`\`
+
+Using a scoped token instead (agents, CI, headless):
+
+\`\`\`json
+{
+  "mcpServers": {
+    "pagespace": {
+      "command": "pagespace",
+      "args": ["mcp"],
       "env": {
-        "PAGESPACE_API_URL": "https://pagespace.ai",
-        "PAGESPACE_AUTH_TOKEN": "mcp_your_token_here"
+        "PAGESPACE_TOKEN": "mcp_your_token_here"
       }
     }
   }
 }
 \`\`\`
+
+\`PAGESPACE_API_URL\` overrides the default \`https://pagespace.ai\` host for self-hosted instances.
 
 ### Claude Desktop
 
@@ -56,10 +80,8 @@ Edit \`claude_desktop_config.json\`:
 ### Claude Code
 
 \`\`\`bash
-claude mcp add pagespace -- npx -y pagespace-mcp@latest
+claude mcp add pagespace -- pagespace mcp
 \`\`\`
-
-Then set \`PAGESPACE_API_URL\` and \`PAGESPACE_AUTH_TOKEN\` in your environment.
 
 ### Cursor
 
@@ -67,7 +89,7 @@ Then set \`PAGESPACE_API_URL\` and \`PAGESPACE_AUTH_TOKEN\` in your environment.
 
 ## Step 3: Capabilities
 
-Once connected, \`pagespace-mcp\` exposes tools that wrap the PageSpace API. The exact tool list ships with the npm package and evolves independently; the [pagespace-mcp README](https://www.npmjs.com/package/pagespace-mcp) is the authoritative reference.
+\`pagespace mcp\` generates its tool list mechanically from the same operation registry that powers the \`pagespace\` CLI and \`@pagespace/sdk\`, so the tool surface can't drift from what the CLI itself supports.
 
 At a minimum the server covers:
 
@@ -87,10 +109,10 @@ Every tool respects the caller's permissions. If you cannot view a page in the w
 
 ## Use an agent as an OpenAI-compatible model
 
-The same MCP token also unlocks an **OpenAI-compatible API**, so any tool that speaks the OpenAI Chat Completions format can talk to one of your PageSpace agents as if it were a model.
+Any token also unlocks an **OpenAI-compatible API**, so any tool that speaks the OpenAI Chat Completions format can talk to one of your PageSpace agents as if it were a model.
 
 - **Base URL** — \`https://pagespace.ai/api/v1\`
-- **API key** — your MCP token (\`mcp_...\`)
+- **API key** — your token (\`mcp_...\`)
 - **Model** — \`ps-agent://<pageId>\`, the id of the AI Chat page you want to run. Copy it from the agent's settings tab.
 
 \`\`\`bash
@@ -108,21 +130,25 @@ The agent replies with its own system prompt and tools, and runs those tools ser
 
 ## Token security
 
-- **Scoped access** — restrict a token to specific drives at creation.
-- **Instant revocation** — revoke from **Settings > MCP** to cut a token off immediately.
+- **Scoped access** — restrict a token to specific drives at creation, from the CLI (\`pagespace tokens create --drive <id>\`) or **Settings > MCP**.
+- **Instant revocation** — \`pagespace tokens revoke <tokenId>\`, or revoke from **Settings > MCP**, cuts a token off immediately.
 - **Audit logging** — token create/revoke/use events land in the audit log with the token identifier.
 - **Hash-only storage** — the database stores a SHA3-256 hash, never the raw token. Losing a token means creating a new one.
 - **No automatic expiry** — tokens live until revoked. Rotate on whatever cadence fits your risk model.
 
 ## Troubleshooting
 
-**Token rejected**: confirm it hasn't been revoked in **Settings > MCP** and that it starts with \`mcp_\`.
+**Token rejected**: confirm it hasn't been revoked (\`pagespace tokens list\` or **Settings > MCP**) and that it starts with \`mcp_\`.
 
-**Connection refused**: check \`PAGESPACE_API_URL\` is correct and reachable from the machine running the MCP server.
+**Connection refused**: check \`PAGESPACE_API_URL\` (or \`--host\`) is correct and reachable from the machine running \`pagespace mcp\`.
 
-**Permission denied**: MCP inherits your user permissions. If you lost access to a drive, the token stops seeing it too.
+**Permission denied**: MCP inherits the caller's permissions. If you lost access to a drive, the token or login stops seeing it too.
 
-**Server fails to start**: run \`npx -y pagespace-mcp@latest --help\` to confirm the package installs.
+**Server fails to start**: run \`pagespace whoami\` to confirm you're authenticated, and \`pagespace --version\` to confirm the CLI installed correctly.
+
+## Using the older \`pagespace-mcp\` package?
+
+\`pagespace-mcp\` still works — it now prints a one-line deprecation notice to stderr pointing at the migration guide in the [\`@pagespace/cli\` repository](https://github.com/2witstudios/PageSpace/blob/master/packages/cli/docs/migrating-from-pagespace-mcp.md). Move to \`@pagespace/cli\` on your own schedule; the tool surface is unchanged, only how you install and authenticate it is.
 `;
 
 export default function MCPPage() {
