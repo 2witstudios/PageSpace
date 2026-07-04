@@ -18,6 +18,7 @@ export interface ParsedFlags {
   readonly force: boolean;
   readonly help: boolean;
   readonly version: boolean;
+  readonly device: boolean;
 }
 
 export interface CommandIntent {
@@ -35,7 +36,7 @@ export interface UsageError {
 export type ParseResult = CommandIntent | UsageError;
 
 const VALUE_FLAGS = new Set(['--host', '--token']);
-const BOOLEAN_FLAGS = new Set(['--json', '--yes', '--all', '--force', '--help', '--version']);
+const BOOLEAN_FLAGS = new Set(['--json', '--yes', '--all', '--force', '--help', '--version', '--device']);
 
 export function parseArgv(argv: readonly string[]): ParseResult {
   let json = false;
@@ -46,6 +47,7 @@ export function parseArgv(argv: readonly string[]): ParseResult {
   let force = false;
   let help = false;
   let version = false;
+  let device = false;
   const args: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -68,7 +70,8 @@ export function parseArgv(argv: readonly string[]): ParseResult {
       else if (current === '--all') all = true;
       else if (current === '--force') force = true;
       else if (current === '--help') help = true;
-      else version = true;
+      else if (current === '--version') version = true;
+      else device = true;
       continue;
     }
 
@@ -82,6 +85,6 @@ export function parseArgv(argv: readonly string[]): ParseResult {
   return {
     kind: 'command',
     args,
-    flags: { json, host, token, yes, all, force, help, version },
+    flags: { json, host, token, yes, all, force, help, version, device },
   };
 }

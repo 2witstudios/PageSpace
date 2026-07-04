@@ -24,6 +24,8 @@ import type { CredentialStore } from '../credentials/store.js';
 export interface DiscoveredMetadata {
   readonly authorizationEndpoint: string;
   readonly tokenEndpoint: string;
+  /** RFC 8628 §4 — present when the server supports the device-authorization grant; read by `device-flow.ts`. */
+  readonly deviceAuthorizationEndpoint?: string;
 }
 export type DiscoverMetadata = (host: string) => Promise<DiscoveredMetadata>;
 

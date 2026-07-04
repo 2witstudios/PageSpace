@@ -8,6 +8,7 @@ import { PageSpaceClient, StaticTokenProvider } from '@pagespace/sdk';
 import { parseArgv } from './argv/parse.js';
 import { helpHandler } from './commands/help.js';
 import { loginHandler } from './commands/login.js';
+import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
@@ -59,6 +60,9 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   }
   if (parsed.flags.help && parsed.args.length === 0) {
     return helpHandler(ctx, parsed);
+  }
+  if (parsed.args.length === 1 && parsed.args[0] === 'login' && parsed.flags.device) {
+    return loginDeviceHandler(ctx, parsed);
   }
 
   const resolution = resolveRoute(ROUTES, parsed.args);
