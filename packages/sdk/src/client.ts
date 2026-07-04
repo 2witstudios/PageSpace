@@ -73,6 +73,7 @@ import {
   updateTask,
 } from './operations/tasks.js';
 import { createMcpToken, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
+import { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
 import { buildRequest } from './transport/build-request.js';
@@ -145,6 +146,11 @@ const DEFAULT_OPERATIONS_MAP = {
     create: createMcpToken,
     list: listMcpTokens,
     revoke: revokeMcpToken,
+  },
+  search: {
+    glob: globSearch,
+    regex: regexSearch,
+    multiDrive: multiDriveSearch,
   },
 } as const;
 

@@ -25,6 +25,7 @@ import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
 import { mcpHandler } from './commands/mcp.js';
+import { searchGlobHandler, searchRegexHandler, searchTextHandler } from './commands/search.js';
 import {
   pagesCreateHandler,
   pagesListHandler,
@@ -105,6 +106,9 @@ const ROUTES: readonly Route[] = [
   { path: ['tasks', 'statuses'], handler: tasksStatusesHandler },
   { path: ['tasks', 'create-status'], handler: tasksCreateStatusHandler },
   { path: ['tasks', 'assigned'], handler: tasksAssignedHandler },
+  { path: ['search', 'text'], handler: searchTextHandler },
+  { path: ['search', 'regex'], handler: searchRegexHandler },
+  { path: ['search', 'glob'], handler: searchGlobHandler },
 ];
 
 /**
