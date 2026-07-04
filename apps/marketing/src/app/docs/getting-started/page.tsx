@@ -22,7 +22,7 @@ Sign up at **pagespace.ai** — there are no passwords. Pick one:
 - **Magic link**: enter your email and click the link we send.
 - **Google** or **Apple** OAuth.
 
-No credit card required. The free tier includes 500 MB storage, ${MONTHLY_CREDITS.free}/month of AI credits, and a 20 MB max file size.
+No credit card required. The free tier includes 500 MB storage, ${MONTHLY_CREDITS.free}/month of credits, and a 20 MB max file size.
 
 After signup, PageSpace sets you up with a starter **drive** (workspace) so you can jump straight in.
 
@@ -70,7 +70,7 @@ PageSpace gives you one catalogue of models from many vendors, organised by vend
 | xAI | Grok 4 family |
 | DeepSeek, Qwen, Mistral, Moonshot, MiniMax, Meta, and more | Additional open and frontier models in the catalogue |
 
-Open **Settings > AI** to pick a model. The model you pick becomes your account-level default; any individual AI Chat page can override it. Each call draws from your plan's monthly AI-credit allowance based on the model's real cost. Free accounts use a curated allowlist — \`openai/gpt-5.3-chat\` (default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family — while paid plans unlock the full catalogue.
+Open **Settings > AI** to pick a model. The model you pick becomes your account-level default; any individual AI Chat page can override it. Each call draws from your plan's monthly credit allowance based on the model's real cost. Free accounts use a curated allowlist — \`openai/gpt-5.3-chat\` (default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family — while paid plans unlock the full catalogue.
 
 ## 5. Create an AI Agent
 

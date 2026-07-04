@@ -152,7 +152,7 @@ export default async function BlogPostPage(
           <div className="mx-auto max-w-2xl text-center">
             <h2 className="text-2xl font-bold mb-4">Ready to try PageSpace?</h2>
             <p className="text-muted-foreground mb-6">
-              Start free with {MONTHLY_CREDITS.free}/month in AI credits. No
+              Start free with {MONTHLY_CREDITS.free}/month in credits. No
               credit card required.
             </p>
             <Button size="lg" asChild>

@@ -83,6 +83,10 @@
       "types": "./dist/schema/email-notifications.d.ts",
       "default": "./dist/schema/email-notifications.js"
     },
+    "./schema/toast-notification-preferences": {
+      "types": "./dist/schema/toast-notification-preferences.d.ts",
+      "default": "./dist/schema/toast-notification-preferences.js"
+    },
     "./schema/feedback": {
       "types": "./dist/schema/feedback.d.ts",
       "default": "./dist/schema/feedback.js"

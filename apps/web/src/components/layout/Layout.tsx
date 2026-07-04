@@ -3,6 +3,7 @@
 import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccessRevocation } from "@/hooks/useAccessRevocation";
+import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
@@ -128,6 +129,9 @@ function Layout({ children }: LayoutProps) {
 
   // Handle real-time permission revocation (zero-trust security)
   useAccessRevocation();
+
+  // Show live toast popups for new notifications, anywhere in the app
+  useNotificationToasts();
 
   // Monitor performance
   usePerformanceMonitor();

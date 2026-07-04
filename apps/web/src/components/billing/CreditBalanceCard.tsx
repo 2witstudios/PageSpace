@@ -30,7 +30,7 @@ export function CreditBalanceCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Coins className="h-5 w-5" />
-          AI Credits
+          Credits
         </CardTitle>
         <CardDescription>
           Credits power AI features. Your monthly allowance renews each billing period; purchased top-up credits never expire.

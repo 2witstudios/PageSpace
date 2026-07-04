@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
 	"scopes" jsonb NOT NULL,
 	"expiresAt" timestamp NOT NULL,
 	"consumedAt" timestamp,
+	"issuedFamilyId" text,
 	"createdAt" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "oauth_authorization_codes_codeHash_unique" UNIQUE("codeHash")
 );

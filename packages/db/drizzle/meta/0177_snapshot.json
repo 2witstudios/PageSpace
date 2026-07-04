@@ -1,6 +1,6 @@
 {
-  "id": "6f919f8d-1379-4fed-baa6-09f7bb480b8b",
-  "prevId": "fda0fe1b-62f6-4e7e-af8f-dca0489d36db",
+  "id": "c1cf102c-fb01-46d5-abf7-a9a974474d30",
+  "prevId": "23721768-a9e0-46a0-9145-0baaa7797cb6",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -5252,6 +5252,73 @@
         "email_notification_preferences_userId_users_id_fk": {
           "name": "email_notification_preferences_userId_users_id_fk",
           "tableFrom": "email_notification_preferences",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.user_toast_notification_preferences": {
+      "name": "user_toast_notification_preferences",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "level": {
+          "name": "level",
+          "type": "toast_notification_level",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'all'"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "user_toast_notification_preferences_user_idx": {
+          "name": "user_toast_notification_preferences_user_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "user_toast_notification_preferences_userId_users_id_fk": {
+          "name": "user_toast_notification_preferences_userId_users_id_fk",
+          "tableFrom": "user_toast_notification_preferences",
           "tableTo": "users",
           "columnsFrom": [
             "userId"
@@ -18482,6 +18549,15 @@
         "TOS_PRIVACY_UPDATED",
         "MENTION",
         "TASK_ASSIGNED"
+      ]
+    },
+    "public.toast_notification_level": {
+      "name": "toast_notification_level",
+      "schema": "public",
+      "values": [
+        "all",
+        "mentions",
+        "off"
       ]
     },
     "public.display_preference_type": {

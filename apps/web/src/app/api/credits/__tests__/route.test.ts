@@ -48,7 +48,7 @@ describe('GET /api/credits', () => {
   it('returns the user balance summary', async () => {
     const res = await GET(createMockRequest('https://example.com/api/credits'));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(summary);
+    expect(await res.json()).toEqual({ ...summary, subscriptionTier: 'pro' });
   });
 
   it("resolves the user's tier and passes it to getCreditBalance", async () => {

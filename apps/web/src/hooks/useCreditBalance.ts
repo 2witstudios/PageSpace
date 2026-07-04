@@ -5,6 +5,7 @@ import useSWR from 'swr';
 import { useSocketStore } from '@/stores/useSocketStore';
 import type { CreditsEventPayload } from '@/lib/websocket';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import type { SubscriptionTier } from '@/lib/subscription/plans';
 
 /**
  * Client view of `GET /api/credits`. Mirrors the `CreditBalanceSummary` shape from
@@ -24,6 +25,7 @@ export interface CreditBalance {
   debt: number;
   spendable: number;
   reserved: number;
+  subscriptionTier: SubscriptionTier;
 }
 
 const fetcher = async (url: string): Promise<CreditBalance> => {
@@ -36,12 +38,13 @@ const fetcher = async (url: string): Promise<CreditBalance> => {
 
 /**
  * Pure: fold an authoritative `credits:updated` payload into the cached balance. The
- * payload carries the full server-computed balance, so we replace the per-user fields
- * wholesale.
+ * payload carries the full server-computed balance except `subscriptionTier` (tier
+ * only changes via a Stripe subscription webhook, never via the settle/top-up events
+ * that trigger this push) — callers must merge in the previously-cached tier.
  */
 export function applyCreditsPayload(
   payload: CreditsEventPayload,
-): CreditBalance {
+): Omit<CreditBalance, 'subscriptionTier'> {
   return {
     billingEnabled: payload.billingEnabled,
     monthly: payload.monthly,
@@ -92,7 +95,16 @@ export function useCreditBalance() {
     if (!socket) return;
 
     const handleCreditsUpdated = (payload: CreditsEventPayload) => {
-      mutate(() => applyCreditsPayload(payload), CREDITS_PUSH_MUTATE_OPTIONS);
+      mutate(
+        // Skip the merge (leave the cache as-is) if the initial fetch hasn't
+        // resolved yet — defaulting subscriptionTier to 'free' here would briefly
+        // mis-show the upgrade CTA to a paid user. This also means the balance
+        // fields in this particular push are deferred rather than applied early,
+        // but that's fine: the initial GET is already in flight in this window
+        // and lands within moments regardless of what this handler does.
+        (prev) => (prev ? { ...applyCreditsPayload(payload), subscriptionTier: prev.subscriptionTier } : prev),
+        CREDITS_PUSH_MUTATE_OPTIONS,
+      );
     };
 
     socket.on('credits:updated', handleCreditsUpdated);
