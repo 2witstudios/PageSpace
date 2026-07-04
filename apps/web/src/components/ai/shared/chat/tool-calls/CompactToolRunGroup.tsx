@@ -1,8 +1,8 @@
 import React, { useMemo } from 'react';
 import { ChevronDown, ChevronRight, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import { CompactToolCallRenderer, TOOL_NAME_MAP } from './CompactToolCallRenderer';
-import { summarizeToolRun } from './tool-significance';
-import { useAutoCollapseOnComplete, type RunStatus } from './useAutoCollapseOnComplete';
+import { summarizeToolRun, computeToolRunStatus } from './tool-significance';
+import { useAutoCollapseOnComplete } from './useAutoCollapseOnComplete';
 import type { ProcessedToolPart } from '../message-types';
 
 interface CompactToolRunGroupProps {
@@ -12,25 +12,6 @@ interface CompactToolRunGroupProps {
   setToolCallOpen: (toolCallId: string, open: boolean) => void;
 }
 
-const toStatus = (state: ProcessedToolPart['state']): RunStatus => {
-  switch (state) {
-    case 'output-error':
-      return 'error';
-    case 'output-available':
-    case 'done':
-      return 'complete';
-    default:
-      return 'running';
-  }
-};
-
-const computeStatus = (parts: ProcessedToolPart[]): RunStatus => {
-  const statuses = parts.map(p => toStatus(p.state));
-  if (statuses.includes('error')) return 'error';
-  if (statuses.includes('running')) return 'running';
-  return 'complete';
-};
-
 /**
  * Compact sibling of ToolRunGroup for the sidebar AI assistant tab, which
  * uses a bespoke useState expand pattern rather than shadcn Collapsible.
@@ -39,7 +20,7 @@ const computeStatus = (parts: ProcessedToolPart[]): RunStatus => {
  * respect a manual toggle afterward.
  */
 export const CompactToolRunGroup: React.FC<CompactToolRunGroupProps> = React.memo(function CompactToolRunGroup({ parts, getToolCallOpen, setToolCallOpen }) {
-  const status = useMemo(() => computeStatus(parts), [parts]);
+  const status = useMemo(() => computeToolRunStatus(parts), [parts]);
   const { open: expanded, onOpenChange } = useAutoCollapseOnComplete(status);
 
   const summary = useMemo(() => summarizeToolRun(parts, TOOL_NAME_MAP), [parts]);

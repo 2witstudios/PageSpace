@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { Tool, ToolContent, ToolHeader } from '@/components/ai/ui/tool';
 import { ToolCallRenderer, TOOL_NAME_MAP } from './ToolCallRenderer';
-import { summarizeToolRun } from './tool-significance';
+import { summarizeToolRun, computeToolRunStatus } from './tool-significance';
 import { useAutoCollapseOnComplete, type RunStatus } from './useAutoCollapseOnComplete';
 import type { ProcessedToolPart } from '../message-types';
 
@@ -19,25 +19,6 @@ interface ToolRunGroupProps {
   setToolCallOpen: (toolCallId: string, open: boolean) => void;
 }
 
-const toRunStatus = (state: ProcessedToolPart['state']): RunStatus => {
-  switch (state) {
-    case 'output-error':
-      return 'error';
-    case 'output-available':
-    case 'done':
-      return 'complete';
-    default:
-      return 'running';
-  }
-};
-
-const computeRunStatus = (parts: ProcessedToolPart[]): RunStatus => {
-  const statuses = parts.map(p => toRunStatus(p.state));
-  if (statuses.includes('error')) return 'error';
-  if (statuses.includes('running')) return 'running';
-  return 'complete';
-};
-
 const HEADER_STATE_FOR_STATUS: Record<RunStatus, 'input-available' | 'output-available' | 'output-error'> = {
   running: 'input-available',
   error: 'output-error',
@@ -50,7 +31,7 @@ const HEADER_STATE_FOR_STATUS: Record<RunStatus, 'input-available' | 'output-ava
  * the unmodified ToolCallRenderer, just nested one level deeper.
  */
 export const ToolRunGroup: React.FC<ToolRunGroupProps> = React.memo(function ToolRunGroup({ parts, getToolCallOpen, setToolCallOpen }) {
-  const status = useMemo(() => computeRunStatus(parts), [parts]);
+  const status = useMemo(() => computeToolRunStatus(parts), [parts]);
   const { open, onOpenChange } = useAutoCollapseOnComplete(status);
   const summary = useMemo(() => summarizeToolRun(parts, TOOL_NAME_MAP), [parts]);
 

@@ -1,4 +1,5 @@
-import React, { useState, memo, useMemo } from 'react';
+import React, { memo, useMemo } from 'react';
+import { useControllableState } from '@radix-ui/react-use-controllable-state';
 import {
   FolderOpen,
   Plus,
@@ -25,9 +26,7 @@ import { TaskRenderer } from './TaskRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { renderToolContent } from './registry';
-import { isHiddenTool } from './tool-significance';
-import { parseIntegrationToolName, isIntegrationTool } from '@pagespace/lib/integrations/converter/ai-sdk';
-import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
 
 interface ToolPart {
   type: string;
@@ -106,13 +105,19 @@ export const TOOL_NAME_MAP: Record<string, string> = {
 
 // Internal renderer component with hooks
 const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; expanded?: boolean; onExpandedChange?: (expanded: boolean) => void }> = memo(function CompactToolCallRendererInternal({ part, toolName, expanded: expandedProp, onExpandedChange }) {
-  const [internalExpanded, setInternalExpanded] = useState(false);
-  const isExpanded = expandedProp ?? internalExpanded;
-  const toggleExpanded = () => {
-    const next = !isExpanded;
-    onExpandedChange?.(next);
-    if (expandedProp === undefined) setInternalExpanded(next);
-  };
+  // Decide controlled-ness once, based on whether onExpandedChange is
+  // provided at all (not on expandedProp's value): useControllableState
+  // treats `prop === undefined` as "uncontrolled" and warns the moment it
+  // flips to a boolean for the same instance. When a caller opts into
+  // control, `prop` must be a boolean from the very first render — never
+  // undefined — so this instance never actually switches modes. See the
+  // identical fix in ToolCallRenderer.tsx's collapsibleProps.
+  const [isExpanded, setIsExpanded] = useControllableState({
+    prop: onExpandedChange ? (expandedProp ?? false) : undefined,
+    defaultProp: false,
+    onChange: onExpandedChange,
+  });
+  const toggleExpanded = () => setIsExpanded(!isExpanded);
 
   const state = part.state;
   const input = part.input;
@@ -180,19 +185,11 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
 
   // Memoize formatted tool name
   const formattedToolName = useMemo(() => {
-    if (isIntegrationTool(toolName)) {
-      const parsed = parseIntegrationToolName(toolName);
-      if (parsed) {
-        const provider = getBuiltinProvider(parsed.providerSlug);
-        const tool = provider?.tools.find(t => t.id === parsed.toolId);
-        if (tool) return tool.name;
-        return parsed.toolId.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-      }
-    }
-    return TOOL_NAME_MAP[toolName] || toolName
-      .split('_')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+    return (
+      resolveIntegrationToolLabel(toolName) ||
+      TOOL_NAME_MAP[toolName] ||
+      toolName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+    );
   }, [toolName]);
 
   // Memoize descriptive title
@@ -355,23 +352,23 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
 });
 
 export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = memo(function CompactToolCallRenderer({ part, expanded, onExpandedChange }) {
-  let toolName = part.toolName || part.type?.replace('tool-', '') || '';
-  let resolvedPart = part;
+  const dispatch = dispatchToolCall(part, TASK_TOOL_NAMES);
 
-  if (isHiddenTool(toolName)) return null;
-
-  if (toolName === 'execute_tool') {
-    const raw = safeJsonParse(part.input);
-    const innerName = typeof raw?.tool_name === 'string' ? raw.tool_name : null;
-    if (innerName) {
-      toolName = innerName;
-      resolvedPart = { ...part, input: raw?.parameters ?? {} };
-    }
+  switch (dispatch.kind) {
+    case 'hidden':
+      return null;
+    case 'task':
+      return <TaskRenderer part={dispatch.part} />;
+    case 'agent':
+      return <PageAgentConversationRenderer part={dispatch.part} />;
+    case 'generic':
+      return (
+        <CompactToolCallRendererInternal
+          part={dispatch.part}
+          toolName={dispatch.toolName}
+          expanded={expanded}
+          onExpandedChange={onExpandedChange}
+        />
+      );
   }
-
-  if (isHiddenTool(toolName)) return null;
-
-  if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
-  if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;
-  return <CompactToolCallRendererInternal part={resolvedPart} toolName={toolName} expanded={expanded} onExpandedChange={onExpandedChange} />;
 });

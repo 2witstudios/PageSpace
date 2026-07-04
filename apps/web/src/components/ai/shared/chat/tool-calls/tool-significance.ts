@@ -1,7 +1,7 @@
-import { parseIntegrationToolName, isIntegrationTool } from '@pagespace/lib/integrations/converter/ai-sdk';
-import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 import { toTitleCase } from '@/lib/utils/formatters';
 import { SPECIAL_HANDLED_TOOLS } from './registry';
+import { resolveIntegrationToolLabel } from './tool-call-dispatch';
+import type { RunStatus } from './useAutoCollapseOnComplete';
 import type { ProcessedToolPart } from '../message-types';
 
 /**
@@ -74,19 +74,36 @@ export function resolveEffectiveToolName(toolName: string, input: unknown): stri
  * Shared display-name formatter for the ToolRunGroup summary line. Takes the
  * caller's own name map (main vs compact renderers keep divergent labels) so
  * this doesn't force those two maps to merge, only avoids adding a third copy
- * of the integration-tool lookup + fallback formatting logic.
+ * of the integration-tool lookup + fallback formatting logic (shared via
+ * resolveIntegrationToolLabel — the same helper ToolCallRenderer/
+ * CompactToolCallRenderer use for their own formattedToolName).
  */
 export function getDisplayToolName(toolName: string, nameMap: Record<string, string>): string {
-  if (isIntegrationTool(toolName)) {
-    const parsed = parseIntegrationToolName(toolName);
-    if (parsed) {
-      const provider = getBuiltinProvider(parsed.providerSlug);
-      const tool = provider?.tools.find(t => t.id === parsed.toolId);
-      if (tool) return tool.name;
-      return toTitleCase(parsed.toolId);
-    }
+  return resolveIntegrationToolLabel(toolName) || nameMap[toolName] || toTitleCase(toolName);
+}
+
+const toRunStatus = (state: ProcessedToolPart['state']): RunStatus => {
+  switch (state) {
+    case 'output-error':
+      return 'error';
+    case 'output-available':
+    case 'done':
+      return 'complete';
+    default:
+      return 'running';
   }
-  return nameMap[toolName] || toTitleCase(toolName);
+};
+
+/**
+ * Shared run-status aggregation for ToolRunGroup and CompactToolRunGroup:
+ * a run is 'error' if any call errored, 'running' if any call is still in
+ * flight (and none have errored), otherwise 'complete'.
+ */
+export function computeToolRunStatus(parts: ProcessedToolPart[]): RunStatus {
+  const statuses = parts.map(p => toRunStatus(p.state));
+  if (statuses.includes('error')) return 'error';
+  if (statuses.includes('running')) return 'running';
+  return 'complete';
 }
 
 /**
