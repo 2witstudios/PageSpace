@@ -11,11 +11,29 @@ import { createDiscoverMetadata } from './auth/discover.js';
 import { resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
 import { resolveAuth } from './auth/resolve.js';
+import {
+  drivesCreateHandler,
+  drivesListHandler,
+  drivesRenameHandler,
+  drivesRestoreHandler,
+  drivesTrashHandler,
+} from './commands/drives.js';
 import { helpHandler } from './commands/help.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
 import { mcpHandler } from './commands/mcp.js';
+import {
+  pagesCreateHandler,
+  pagesListHandler,
+  pagesMoveHandler,
+  pagesReadDetailsHandler,
+  pagesRenameHandler,
+  pagesRestoreHandler,
+  pagesTrashHandler,
+  pagesTreeHandler,
+} from './commands/pages.js';
+import { trashListHandler } from './commands/trash.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
 import { tokensCreateHandler } from './commands/tokens/create.js';
@@ -33,6 +51,10 @@ export interface RunDependencies {
   readonly stdout: OutputSink;
   readonly stderr: OutputSink;
   readonly credentialStore: CredentialStore;
+  /** Defaults to `false` (fail-closed) when omitted — only `bin.ts` knows the real terminal state. */
+  readonly isTTY?: boolean;
+  /** Defaults to a function that never resolves truthily when omitted; only called when `isTTY` is true. */
+  readonly prompt?: (message: string) => Promise<string>;
 }
 
 const ROUTES: readonly Route[] = [
@@ -44,6 +66,20 @@ const ROUTES: readonly Route[] = [
   { path: ['tokens', 'list'], handler: tokensListHandler },
   { path: ['tokens', 'revoke'], handler: tokensRevokeHandler },
   { path: ['mcp'], handler: mcpHandler },
+  { path: ['drives', 'list'], handler: drivesListHandler },
+  { path: ['drives', 'create'], handler: drivesCreateHandler },
+  { path: ['drives', 'rename'], handler: drivesRenameHandler },
+  { path: ['drives', 'trash'], handler: drivesTrashHandler },
+  { path: ['drives', 'restore'], handler: drivesRestoreHandler },
+  { path: ['pages', 'list'], handler: pagesListHandler },
+  { path: ['pages', 'tree'], handler: pagesTreeHandler },
+  { path: ['pages', 'read-details'], handler: pagesReadDetailsHandler },
+  { path: ['pages', 'create'], handler: pagesCreateHandler },
+  { path: ['pages', 'rename'], handler: pagesRenameHandler },
+  { path: ['pages', 'move'], handler: pagesMoveHandler },
+  { path: ['pages', 'trash'], handler: pagesTrashHandler },
+  { path: ['pages', 'restore'], handler: pagesRestoreHandler },
+  { path: ['trash', 'list'], handler: trashListHandler },
 ];
 
 /**
@@ -98,6 +134,8 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     stderr: deps.stderr,
     env: deps.env,
     credentialStore: deps.credentialStore,
+    isTTY: deps.isTTY ?? false,
+    prompt: deps.prompt ?? (async () => ''),
   };
 
   if (parsed.flags.version) {

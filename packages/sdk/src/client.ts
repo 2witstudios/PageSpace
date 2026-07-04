@@ -39,7 +39,7 @@ import {
 import type { AuthProvider } from './auth/provider.js';
 import { askAgent, listAgents, listModels, multiDriveListAgents, updateAgentConfig } from './operations/agents.js';
 import { listConversations, readConversation } from './operations/conversations.js';
-import { listDrives } from './operations/drives.js';
+import { createDrive, listDrives, renameDrive, restoreDrive, trashDrive, updateDriveContext } from './operations/drives.js';
 import {
   createPage,
   getPageDetails,
@@ -82,7 +82,14 @@ import { computeBackoff, DEFAULT_RETRY_POLICY, isIdempotentMethod, type Jitter, 
 import { checkServerCompatibility, MIN_SERVER_API_VERSION } from './version.js';
 
 const DEFAULT_OPERATIONS_MAP = {
-  drives: { list: listDrives },
+  drives: {
+    list: listDrives,
+    create: createDrive,
+    rename: renameDrive,
+    updateContext: updateDriveContext,
+    trash: trashDrive,
+    restore: restoreDrive,
+  },
   pages: {
     list: listPages,
     listTrash: listTrash,

@@ -38,6 +38,19 @@ export function createFakeContext(overrides: Partial<HandlerContext> = {}): Hand
     stderr: createRecordingSink(),
     env: {},
     credentialStore: createFakeCredentialStore(),
+    isTTY: false,
+    prompt: async () => '',
     ...overrides,
   };
+}
+
+/**
+ * Casts a plain object stubbing only the namespace methods a command actually
+ * calls into a `PageSpaceClient` — the class has private fields, so no object
+ * literal is structurally assignable without this. Command tests build the
+ * minimal shape they need (e.g. `{ drives: { list: async () => [...] } }`)
+ * and pass the result as `createFakeContext({ sdk: fakeSdk(...) })`.
+ */
+export function fakeSdk(shape: Record<string, unknown>): PageSpaceClient {
+  return shape as unknown as PageSpaceClient;
 }
