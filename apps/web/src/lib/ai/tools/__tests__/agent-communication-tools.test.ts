@@ -137,6 +137,11 @@ vi.mock('../../core/message-utils', () => ({
   saveMessageToDatabase: vi.fn(),
   convertDbMessageToUIMessage: vi.fn((msg) => msg),
 }));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    createConversation: vi.fn().mockResolvedValue(undefined),
+  },
+}));
 vi.mock('../../core/provider-factory', () => ({
   createAIProvider: vi.fn(),
   isProviderError: vi.fn(() => false),
@@ -162,6 +167,7 @@ import { resolvePageAgentIntegrationTools } from '../../core/integration-tool-re
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { prepareHistoryForModel, finishModelRequest } from '../../core/context-assembly';
 import { runCompaction } from '../../core/compaction/compaction-service';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 const mockDb = vi.mocked(db);
 const mockCanActorViewPage = vi.mocked(canActorViewPage);
@@ -733,6 +739,71 @@ describe('agent-communication-tools', () => {
           sourceAgentId: null,
           role: 'user',
         });
+      });
+    });
+
+    describe('conversation listing index (#1837 finding #1)', () => {
+      const mockAgent = {
+        id: 'target-agent-1',
+        title: 'Target Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        isTrashed: false,
+      };
+
+      beforeEach(() => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgent);
+      });
+
+      it('creates a conversations row so a new conversation is listable', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'target-agent-1',
+            question: 'New question',
+          },
+          context
+        );
+
+        expect(conversationRepository.createConversation).toHaveBeenCalledWith(
+          'mock-cuid',
+          'user-123',
+          'target-agent-1',
+        );
+      });
+
+      it('creates the row for a continued conversation too (idempotent upsert)', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'target-agent-1',
+            question: 'Follow-up',
+            conversationId: 'conv-a',
+          },
+          context
+        );
+
+        expect(conversationRepository.createConversation).toHaveBeenCalledWith(
+          'conv-a',
+          'user-123',
+          'target-agent-1',
+        );
       });
     });
 

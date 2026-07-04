@@ -502,8 +502,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
 
     // Create agent trigger workflow if requested
+    let agentTriggerResult: Awaited<ReturnType<typeof createTaskTriggerWorkflow>> | undefined;
     if (agentTrigger && taskListPage.driveId) {
-      await createTaskTriggerWorkflow({
+      agentTriggerResult = await createTaskTriggerWorkflow({
         database: tx,
         driveId: taskListPage.driveId,
         userId,
@@ -515,7 +516,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       });
     }
 
-    return { task: newTask, page: taskPage };
+    return { task: newTask, page: taskPage, agentTriggerResult };
   });
 
   // Fetch task with relations (including assignees)
@@ -607,5 +608,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     ...taskWithRelations,
     title: createdTitle,
     pageId: result.page.id,
+    ...(result.agentTriggerResult
+      ? {
+          agentTrigger: {
+            workflowId: result.agentTriggerResult.workflowId,
+            triggerId: result.agentTriggerResult.triggerId,
+            triggerType: result.agentTriggerResult.triggerType,
+            nextRunAt: result.agentTriggerResult.nextRunAt,
+            isEnabled: result.agentTriggerResult.isEnabled,
+          },
+        }
+      : {}),
   }, { status: 201 });
 }

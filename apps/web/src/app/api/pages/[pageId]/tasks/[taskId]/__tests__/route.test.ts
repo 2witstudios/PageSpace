@@ -1215,6 +1215,37 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     }));
   });
 
+  it('#1837 finding #10 — echoes the created trigger in the response, not just the generic task block', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, dueDate: new Date('2025-06-01') });
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupTransaction({ ...baseTask, dueDate: new Date('2025-06-01') });
+    setupRelationsLookup({ ...baseTask, dueDate: new Date('2025-06-01'), assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    vi.mocked(getUserTimezone).mockResolvedValue('America/New_York');
+    vi.mocked(createTaskTriggerWorkflow).mockResolvedValueOnce({
+      workflowId: 'wf-1',
+      triggerId: 'trg-1',
+      triggerType: 'due_date',
+      nextRunAt: new Date('2025-06-01'),
+      isEnabled: true,
+    });
+
+    const response = await PATCH(createPatchRequest({
+      agentTrigger: { agentPageId: 'agent-1', prompt: 'go', triggerType: 'due_date' },
+    }), context);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.agentTrigger).toEqual({
+      workflowId: 'wf-1',
+      triggerId: 'trg-1',
+      triggerType: 'due_date',
+      nextRunAt: expect.any(String),
+      isEnabled: true,
+    });
+  });
+
   it('returns 400 for a due_date agentTrigger when the task has no due date', async () => {
     setupAuth();
     setupCanEdit(true);

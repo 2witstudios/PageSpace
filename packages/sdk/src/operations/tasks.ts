@@ -61,6 +61,15 @@ const taskItemBaseSchema = z.object({
   updatedAt: z.string(),
 });
 
+/** Echoed back only when this call's inline `agentTrigger` created/updated a trigger — see tasks/[taskId]/route.ts and tasks/route.ts. */
+const taskAgentTriggerResultSchema = z.object({
+  workflowId: z.string(),
+  triggerId: z.string(),
+  triggerType: triggerTypeEnum,
+  nextRunAt: z.string().nullable(),
+  isEnabled: z.boolean(),
+});
+
 /** `{ ...taskWithRelations, title }` shape returned by create_task/update_task/reorder_task. */
 const taskWithRelationsSchema = taskItemBaseSchema.extend({
   assignee: userRefSchema,
@@ -69,6 +78,7 @@ const taskWithRelationsSchema = taskItemBaseSchema.extend({
   page: z.object({ id: z.string(), title: z.string().nullable() }).nullable(),
   assignees: z.array(assigneeEntrySchema),
   title: z.string(),
+  agentTrigger: taskAgentTriggerResultSchema.optional(),
 });
 
 const assigneeEntryInputSchema = z.object({ type: z.enum(['user', 'agent']), id: z.string() });

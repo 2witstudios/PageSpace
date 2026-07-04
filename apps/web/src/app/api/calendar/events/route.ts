@@ -524,9 +524,15 @@ export async function POST(request: Request) {
       ? parseNaiveDatetimeInTimezone(body.endAt, data.timezone)
       : data.endAt;
 
-    // Check MCP create scope (scoped tokens can only create in their allowed drives)
-    const createScopeError = checkMCPCreateScope(auth, data.driveId ?? null);
-    if (createScopeError) return createScopeError;
+    // Check MCP create scope (scoped tokens can only create in their allowed drives).
+    // Only applies when a driveId is actually supplied — checkMCPCreateScope treats a
+    // null targetDriveId as "creating a brand-new drive" (its real caller is POST
+    // /api/drives). A personal (driveless) event isn't scoped to any drive, so a
+    // scoped token may always create one for its own user.
+    if (data.driveId) {
+      const createScopeError = checkMCPCreateScope(auth, data.driveId);
+      if (createScopeError) return createScopeError;
+    }
 
     // Validate drive access if driveId is provided
     if (data.driveId) {

@@ -360,11 +360,12 @@ export async function PATCH(
   }
 
   // Create the agent trigger workflow after the transaction commits, mirroring update_task.
+  let agentTriggerResult: Awaited<ReturnType<typeof createTaskTriggerWorkflow>> | undefined;
   if (normalizedAgentTrigger && taskListPage?.driveId) {
     const resolvedTimezone = typeof timezone === 'string' && timezone.trim()
       ? timezone.trim()
       : (await getUserTimezone(userId)) || 'UTC';
-    await createTaskTriggerWorkflow({
+    agentTriggerResult = await createTaskTriggerWorkflow({
       database: db,
       driveId: taskListPage.driveId,
       userId,
@@ -448,7 +449,23 @@ export async function PATCH(
     }
   }
 
-  const responseBody = { ...taskWithRelations, title: responseTitle };
+  // Surface the trigger created/updated by an inline agentTrigger — otherwise
+  // the response is indistinguishable from an update that touched no trigger.
+  const responseBody = {
+    ...taskWithRelations,
+    title: responseTitle,
+    ...(agentTriggerResult
+      ? {
+          agentTrigger: {
+            workflowId: agentTriggerResult.workflowId,
+            triggerId: agentTriggerResult.triggerId,
+            triggerType: agentTriggerResult.triggerType,
+            nextRunAt: agentTriggerResult.nextRunAt,
+            isEnabled: agentTriggerResult.isEnabled,
+          },
+        }
+      : {}),
+  };
 
   // Broadcast events
   const broadcasts: Promise<void>[] = [
