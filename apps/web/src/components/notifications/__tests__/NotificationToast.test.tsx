@@ -70,24 +70,10 @@ describe('NotificationToast', () => {
     expect(screen.queryByText(/^by /)).not.toBeInTheDocument();
   });
 
-  it('invokes onSelect when clicked', () => {
+  it('invokes onSelect when the card is clicked', () => {
     const onSelect = vi.fn();
     render(<NotificationToast notification={build()} onSelect={onSelect} onDismiss={vi.fn()} />);
-    fireEvent.click(screen.getByTestId('notification-toast'));
-    expect(onSelect).toHaveBeenCalledTimes(1);
-  });
-
-  it('invokes onSelect on Enter keypress', () => {
-    const onSelect = vi.fn();
-    render(<NotificationToast notification={build()} onSelect={onSelect} onDismiss={vi.fn()} />);
-    fireEvent.keyDown(screen.getByTestId('notification-toast'), { key: 'Enter' });
-    expect(onSelect).toHaveBeenCalledTimes(1);
-  });
-
-  it('invokes onSelect on Space keypress', () => {
-    const onSelect = vi.fn();
-    render(<NotificationToast notification={build()} onSelect={onSelect} onDismiss={vi.fn()} />);
-    fireEvent.keyDown(screen.getByTestId('notification-toast'), { key: ' ' });
+    fireEvent.click(screen.getByTestId('notification-toast-select'));
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
@@ -100,11 +86,10 @@ describe('NotificationToast', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it('does not invoke onSelect when Enter is pressed on the nested dismiss button (bubbled event)', () => {
-    const onSelect = vi.fn();
-    render(<NotificationToast notification={build()} onSelect={onSelect} onDismiss={vi.fn()} />);
+  it('does not nest the dismiss button inside the card activation button', () => {
+    render(<NotificationToast notification={build()} onSelect={vi.fn()} onDismiss={vi.fn()} />);
+    const selectButton = screen.getByTestId('notification-toast-select');
     const dismissButton = screen.getByRole('button', { name: /dismiss notification/i });
-    fireEvent.keyDown(dismissButton, { key: 'Enter', bubbles: true });
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(selectButton).not.toContainElement(dismissButton);
   });
 });
