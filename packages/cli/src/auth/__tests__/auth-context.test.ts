@@ -137,6 +137,32 @@ describe('buildAuthProvider — profile source (silent OAuth refresh)', () => {
     });
   });
 
+  it('persists the LIVE server-granted scope from the refresh response, not the stale locally-cached scopes, when the server narrows the grant', async () => {
+    const store = fakeStoreSpy();
+    const provider = buildAuthProvider(
+      { kind: 'profile', host: HOST, credential: CREDENTIAL },
+      {
+        discoverMetadata: async () => ({ authorizationEndpoint: 'https://x/authorize', tokenEndpoint: 'https://x/token' }),
+        createRefreshAccessToken: () => async () => ({
+          accessToken: 'ps_at_fresh',
+          accessExpiresAt: 999_999_999,
+          refreshToken: 'ps_rt_rotated',
+          refreshExpiresAt: 999_999_999,
+          scope: 'account',
+        }),
+        credentialStore: store,
+        now: () => Date.parse('2026-07-03T12:00:00.000Z'),
+      },
+    );
+
+    await provider.getAccessToken();
+
+    // CREDENTIAL.scopes is ['account', 'offline_access'] — the live response
+    // narrowed to just 'account', and every command that refreshes (not
+    // just `whoami`) must persist that, not the stale cached value.
+    expect(store.setCalls[0]?.credential.scopes).toEqual(['account']);
+  });
+
   it('a definitive refresh failure rejects getAccessToken with AuthenticationError and never persists anything', async () => {
     const store = fakeStoreSpy();
     const provider = buildAuthProvider(

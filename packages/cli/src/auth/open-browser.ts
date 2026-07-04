@@ -23,6 +23,18 @@ import type { OpenBrowser } from './loopback-flow.js';
  * (standard CommandLineToArgvW convention — only `"`/`\` are special, not
  * shell metacharacters), which Node's default (non-verbatim) argument
  * quoting already handles safely.
+ *
+ * Known trade-off, accepted deliberately: `url.dll,FileProtocolHandler` is
+ * an undocumented Shell32 entry point (not a public Win32 API), and
+ * `rundll32.exe` is a binary some AV/EDR products flag as a "living off the
+ * land" technique on managed machines. Weighed against the alternative
+ * (constructing a `powershell -Command Start-Process '<url>'` string,
+ * which reintroduces a shell-string-interpolation surface — a different
+ * flavor of the exact injection class this fix removes), avoiding any
+ * shell entirely was judged the safer choice for an untrusted-URL sink. If
+ * this ever needs revisiting (EDR blocking, a future Windows removing the
+ * entry point), the PowerShell route is the documented-API fallback, done
+ * carefully with `-EncodedCommand` rather than string interpolation.
  */
 function commandFor(url: string, platform: NodeJS.Platform): { readonly command: string; readonly args: readonly string[] } {
   if (platform === 'darwin') return { command: 'open', args: [url] };
