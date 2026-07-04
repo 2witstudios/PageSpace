@@ -260,6 +260,7 @@ export default function MCPSettingsView() {
   const [newDriveRoles, setNewDriveRoles] = useState<Record<string, DriveRoleSelection>>({});
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingTokenId, setEditingTokenId] = useState<string | null>(null);
+  const [editingTokenWasUnscoped, setEditingTokenWasUnscoped] = useState(false);
   const [editSelectedDriveIds, setEditSelectedDriveIds] = useState<string[]>([]);
   const [editDriveRoles, setEditDriveRoles] = useState<Record<string, DriveRoleSelection>>({});
   const [editingScopes, setEditingScopes] = useState(false);
@@ -422,6 +423,7 @@ export default function MCPSettingsView() {
 
   const openEditDialog = (token: MCPToken) => {
     setEditingTokenId(token.id);
+    setEditingTokenWasUnscoped(!token.isScoped);
     setEditSelectedDriveIds(token.driveScopes.map(scope => scope.id));
     const roles: Record<string, DriveRoleSelection> = {};
     token.driveScopes.forEach(scope => {
@@ -447,6 +449,17 @@ export default function MCPSettingsView() {
   const updateTokenScopes = async () => {
     if (!editingTokenId) return;
 
+    // This token currently has access to ALL drives (unscoped). Saving with no
+    // drives selected would silently convert it to a NO-access token instead of
+    // preserving all-drives access — require explicit confirmation for that case.
+    if (editingTokenWasUnscoped && editSelectedDriveIds.length === 0) {
+      const confirmed = window.confirm(
+        'This token currently has access to ALL your drives. Saving with no drives ' +
+        'selected will restrict it to NO drives, not leave it unrestricted. Continue?'
+      );
+      if (!confirmed) return;
+    }
+
     setEditingScopes(true);
     try {
       const driveScopesPayload = editSelectedDriveIds.map(id => {
@@ -470,6 +483,7 @@ export default function MCPSettingsView() {
       ));
       setEditDialogOpen(false);
       setEditingTokenId(null);
+      setEditingTokenWasUnscoped(false);
       setEditSelectedDriveIds([]);
       setEditDriveRoles({});
       toast.success('Token scopes updated successfully');
@@ -792,6 +806,7 @@ export default function MCPSettingsView() {
           setEditDialogOpen(open);
           if (!open) {
             setEditingTokenId(null);
+            setEditingTokenWasUnscoped(false);
             setEditSelectedDriveIds([]);
             setEditDriveRoles({});
           }
@@ -811,7 +826,9 @@ export default function MCPSettingsView() {
               </div>
               <p className="text-sm text-muted-foreground">
                 {editSelectedDriveIds.length === 0
-                  ? 'This token will have access to 0 drives.'
+                  ? editingTokenWasUnscoped
+                    ? 'This token currently has access to ALL your drives. Selecting none and saving will restrict it to NO drives, not leave it unrestricted.'
+                    : 'This token will have access to 0 drives.'
                   : `This token will only have access to ${editSelectedDriveIds.length} selected drive${editSelectedDriveIds.length === 1 ? '' : 's'}.`}
               </p>
 

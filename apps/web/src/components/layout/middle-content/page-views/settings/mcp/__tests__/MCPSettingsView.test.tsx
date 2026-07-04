@@ -52,6 +52,15 @@ const tokenB = () => ({
   driveScopes: [{ id: DRIVE_TWO.id, name: DRIVE_TWO.name, role: null, customRoleId: null, customRoleName: null }],
 });
 
+const unscopedToken = () => ({
+  id: 'token-unscoped',
+  name: 'All-Drives Token',
+  lastUsed: null,
+  createdAt: '2026-01-01T00:00:00Z',
+  isScoped: false,
+  driveScopes: [],
+});
+
 const jsonResponse = (body: unknown) =>
   new Response(JSON.stringify(body), {
     status: 200,
@@ -76,7 +85,7 @@ const cannedFetch = (tokens: unknown[], drives: unknown[] = [DRIVE_ONE, DRIVE_TW
 const renderView = async (tokens: unknown[] = [tokenA(), tokenB()], drives: unknown[] = [DRIVE_ONE, DRIVE_TWO]) => {
   cannedFetch(tokens, drives);
   render(<MCPSettingsView />);
-  await waitFor(() => expect(screen.getByText('Token A')).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Your Tokens' })).toBeInTheDocument());
 };
 
 const getCardFor = (tokenName: string) =>
@@ -243,6 +252,46 @@ describe('MCPSettingsView — edit token drive scopes', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Some drives are not accessible'));
     expect(screen.getByRole('dialog', { name: /edit token drive scopes/i })).toBeInTheDocument();
     expect(within(getCardFor('Token A')).getByText(/Access:/)).toHaveTextContent('Drive One');
+  });
+
+  it('warns before silently converting an unscoped (all-drives) token to zero access', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await renderView([unscopedToken()]);
+
+    await userEvent.click(within(getCardFor('All-Drives Token')).getByRole('button', { name: /edit token scopes/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit token drive scopes/i });
+    expect(dialog).toHaveTextContent(/currently has access to all your drives/i);
+
+    // Pressing Save with nothing selected must prompt for confirmation before
+    // silently downgrading an all-drives token to a zero-drive token.
+    await userEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringMatching(/ALL your drives/));
+    expect(patchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: /edit token drive scopes/i })).toBeInTheDocument();
+
+    // Confirming proceeds with the explicit empty-array revoke.
+    confirmSpy.mockReturnValue(true);
+    patchMock.mockResolvedValueOnce({ id: 'token-unscoped', name: 'All-Drives Token', driveScopes: [] });
+    await userEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith('/api/auth/mcp-tokens/token-unscoped', { drives: [] })
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it('does not prompt for confirmation when saving an already-scoped token with a non-empty selection', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    patchMock.mockResolvedValueOnce({ id: 'token-1', name: 'Token A', driveScopes: [] });
+    await renderView();
+
+    await userEvent.click(within(getCardFor('Token A')).getByRole('button', { name: /edit token scopes/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit token drive scopes/i });
+    await userEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(patchMock).toHaveBeenCalled());
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   it('editing token A does not affect token B’s checkbox state', async () => {
