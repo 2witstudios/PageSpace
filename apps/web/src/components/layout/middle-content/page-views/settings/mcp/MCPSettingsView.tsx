@@ -107,14 +107,20 @@ function DriveRoleSelect({
   roles: DriveRoleOption[] | undefined;
   onChange: (driveId: string, value: string) => void;
 }) {
+  const currentValue = selectValueForRole(selection);
+  // Always render the currently-selected option even if the caller's ceiling would
+  // otherwise hide it (e.g. Admin was granted earlier while the caller had a higher
+  // role and they've since been downgraded to Member) — otherwise Radix Select shows
+  // a blank trigger instead of the token's actual, still-in-effect scope.
+  const showAdmin = callerRole !== 'MEMBER' || currentValue === ADMIN_VALUE;
   return (
-    <Select value={selectValueForRole(selection)} onValueChange={(value) => onChange(driveId, value)}>
+    <Select value={currentValue} onValueChange={(value) => onChange(driveId, value)}>
       <SelectTrigger className="h-8 text-xs w-full" aria-label={`Role for ${driveName}`}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={INHERIT_VALUE}>Inherit my access</SelectItem>
-        {callerRole !== 'MEMBER' && <SelectItem value={ADMIN_VALUE}>Admin</SelectItem>}
+        {showAdmin && <SelectItem value={ADMIN_VALUE}>Admin</SelectItem>}
         <SelectItem value={MEMBER_VALUE}>Member</SelectItem>
         {roles && roles.length > 0 && (
           <>
@@ -771,7 +777,9 @@ export default function MCPSettingsView() {
                     {token.driveScopes && token.driveScopes.length > 0 && (
                       <div className="text-xs text-muted-foreground">
                         Access: {token.driveScopes.map(d => {
-                          const roleLabel = d.role === 'ADMIN' ? 'Admin' : d.customRoleName || null;
+                          const roleLabel = d.role === 'ADMIN'
+                            ? 'Admin'
+                            : d.customRoleName || (d.role === 'MEMBER' ? 'Member' : null);
                           return roleLabel ? `${d.name} (${roleLabel})` : d.name;
                         }).join(', ')}
                       </div>

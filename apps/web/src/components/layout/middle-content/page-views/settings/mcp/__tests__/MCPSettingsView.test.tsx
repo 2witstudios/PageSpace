@@ -191,6 +191,22 @@ describe('MCPSettingsView — edit token drive scopes', () => {
     expect(screen.queryByRole('option', { name: /^admin$/i })).not.toBeInTheDocument();
   });
 
+  it('still shows Admin as the current value on a Member-ceiling drive if it was already granted', async () => {
+    // Edge case: Admin was granted while the caller had higher access, and they've
+    // since been downgraded to Member on that drive. The scope is still in effect
+    // server-side, so the picker must reflect it rather than showing a blank trigger.
+    await renderView(
+      [{ ...tokenA(), driveScopes: [{ id: DRIVE_MEMBER_ONLY.id, name: DRIVE_MEMBER_ONLY.name, role: 'ADMIN', customRoleId: null, customRoleName: null }] }],
+      [DRIVE_MEMBER_ONLY]
+    );
+
+    await userEvent.click(within(getCardFor('Token A')).getByRole('button', { name: /edit token scopes/i }));
+    await screen.findByRole('dialog', { name: /edit token drive scopes/i });
+
+    const roleSelect = screen.getByRole('combobox', { name: /role for drive three/i });
+    expect(roleSelect).toHaveTextContent(/^admin$/i);
+  });
+
   it('lists the drive’s custom roles (fetched from /api/drives/:id/roles) and submits the chosen customRoleId', async () => {
     patchMock.mockResolvedValueOnce({ id: 'token-1', name: 'Token A', driveScopes: [] });
     await renderView();
@@ -238,6 +254,20 @@ describe('MCPSettingsView — edit token drive scopes', () => {
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => expect(within(getCardFor('Token A')).getByText(/Access:/)).toHaveTextContent('Drive One (Admin)'));
+  });
+
+  it('labels an explicit Member scope distinctly from inherit in the row summary', async () => {
+    patchMock.mockResolvedValueOnce({ id: 'token-1', name: 'Token A', driveScopes: [] });
+    await renderView();
+
+    await userEvent.click(within(getCardFor('Token A')).getByRole('button', { name: /edit token scopes/i }));
+    await screen.findByRole('dialog', { name: /edit token drive scopes/i });
+    await selectRoleOption('drive one', /^member$/i);
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // Distinguishes an explicit Member downgrade from the default "inherit my access"
+    // (role: null), which renders with no suffix at all.
+    await waitFor(() => expect(within(getCardFor('Token A')).getByText(/Access:/)).toHaveTextContent('Drive One (Member)'));
   });
 
   it('on rejection keeps the dialog open, toasts an error, and leaves token state unchanged', async () => {
