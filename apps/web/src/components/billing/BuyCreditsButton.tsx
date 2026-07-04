@@ -111,7 +111,12 @@ export function BuyCreditsButton({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <div className="flex items-center justify-between px-2 py-1.5">
+          {/* Plain content (not a DropdownMenuItem), same reasoning as the custom-amount
+              block below: stop keydown propagation so Radix typeahead doesn't hijack it. */}
+          <div
+            className="flex items-center justify-between px-2 py-1.5"
+            onKeyDown={(e) => e.stopPropagation()}
+          >
             <DropdownMenuLabel className="p-0">Add credits</DropdownMenuLabel>
             {pathname !== '/settings/usage' && (
               <button
