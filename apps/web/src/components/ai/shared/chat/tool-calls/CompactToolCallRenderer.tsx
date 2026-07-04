@@ -334,7 +334,9 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
   return (
     <div className="py-0.5 text-[11px] max-w-full">
       <button
+        type="button"
         onClick={toggleExpanded}
+        aria-expanded={isExpanded}
         className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full"
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}

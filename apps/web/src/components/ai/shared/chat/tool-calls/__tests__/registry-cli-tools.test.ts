@@ -99,6 +99,20 @@ describe('CLI tool renderers (pi)', () => {
     expect(toolRenderers['edit'](makeCtx('edit', { file_path: 'foo.ts' }, 'ok'))).not.toBeNull();
   });
 
+  it('write/edit: do not upgrade to a diff view when the payload reports failure, even with content fields present', () => {
+    const ctxFailedWithContent = (toolName: string): Parameters<(typeof toolRenderers)[string]>[0] => ({
+      toolName,
+      parsedInput: { file_path: 'foo.ts' },
+      parsedOutput: { success: false, oldContent: 'old text', newContent: 'new text' },
+      output: 'error',
+    });
+
+    const writeResult = toolRenderers['write'](ctxFailedWithContent('write'));
+    const editResult = toolRenderers['edit'](ctxFailedWithContent('edit'));
+    expect(isValidElement(writeResult) && writeResult.type).not.toBe(RichDiffRenderer);
+    expect(isValidElement(editResult) && editResult.type).not.toBe(RichDiffRenderer);
+  });
+
   it('ls: returns null when output is not a string', () => {
     const result = toolRenderers['ls'](makeCtx('ls', { path: '.' }, null));
     expect(result).toBeNull();

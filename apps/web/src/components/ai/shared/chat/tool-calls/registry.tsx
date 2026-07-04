@@ -1133,8 +1133,10 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     if (output == null) return null;
     // pagespace-cli returns a bare "ok" string today, so parsedOutput won't
     // carry oldContent/newContent yet — this upgrades automatically once the
-    // CLI reports before/after content instead of just success.
-    if (typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
+    // CLI reports before/after content instead of just success. Gated on
+    // `success` (mirroring insert_content) so a future failed write carrying
+    // stale content fields doesn't render as if it succeeded.
+    if (parsedOutput.success !== false && typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
       return (
         <RichDiffRenderer
           title={(parsedInput?.file_path as string | undefined) ?? 'File'}
@@ -1154,8 +1156,8 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 
   edit: ({ parsedInput, parsedOutput, output }) => {
     if (output == null) return null;
-    // Same opportunistic upgrade as `write` above.
-    if (typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
+    // Same opportunistic upgrade as `write` above, same success gating.
+    if (parsedOutput.success !== false && typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
       return (
         <RichDiffRenderer
           title={(parsedInput?.file_path as string | undefined) ?? 'File'}
