@@ -3,10 +3,13 @@
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { PLANS } from '@/lib/subscription/plans';
+import { cn } from '@/lib/utils';
 
 interface UpgradeTierButtonProps {
   /** Whether the current user is on the free tier — the only tier this CTA targets. */
   isFree: boolean;
+  /** Merged over the default classes — e.g. to drop the navbar's `hidden sm:flex` collapsing on a full-width surface. */
+  className?: string;
 }
 
 const UpgradeIcon = PLANS.pro.icon;
@@ -19,7 +22,7 @@ const UpgradeIcon = PLANS.pro.icon;
  * billingEnabled, so a second useCreditBalance() instance here would just add a
  * redundant SWR/socket subscription for data the parent already has.
  */
-export function UpgradeTierButton({ isFree }: UpgradeTierButtonProps) {
+export function UpgradeTierButton({ isFree, className }: UpgradeTierButtonProps) {
   const router = useRouter();
 
   if (!isFree) return null;
@@ -29,7 +32,10 @@ export function UpgradeTierButton({ isFree }: UpgradeTierButtonProps) {
       variant="outline"
       size="sm"
       onClick={() => router.push('/settings/plan')}
-      className="hidden sm:flex items-center gap-1.5 border-primary/30 text-primary hover:bg-primary/10"
+      className={cn(
+        'hidden sm:flex items-center gap-1.5 border-primary/30 text-primary hover:bg-primary/10',
+        className,
+      )}
     >
       <UpgradeIcon className="h-4 w-4" />
       Upgrade

@@ -7,6 +7,7 @@ import { Coins } from 'lucide-react';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
+import { UpgradeTierButton } from '@/components/billing/UpgradeTierButton';
 import { formatCreditCount, formatCreditCountSigned } from '@/lib/subscription/credits';
 
 /**
@@ -24,6 +25,7 @@ export function CreditBalanceCard() {
   }
 
   const renewDate = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd) : null;
+  const isFree = balance?.subscriptionTier === 'free';
 
   return (
     <Card>
@@ -95,7 +97,10 @@ export function CreditBalanceCard() {
                 )}
               </div>
             </div>
-            {showBilling && <BuyCreditsButton variant="default" size="default" />}
+            <div className="flex items-center gap-2">
+              <UpgradeTierButton isFree={isFree} className="flex" />
+              {showBilling && <BuyCreditsButton variant="default" size="default" />}
+            </div>
           </div>
         ) : null}
       </CardContent>

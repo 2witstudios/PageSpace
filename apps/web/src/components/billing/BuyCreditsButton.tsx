@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -49,6 +49,7 @@ export function BuyCreditsButton({
   label = 'Buy credits',
 }: BuyCreditsButtonProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const { showBilling } = useBillingVisibility();
   const { balance } = useCreditBalance();
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
@@ -110,7 +111,18 @@ export function BuyCreditsButton({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuLabel>Add credits</DropdownMenuLabel>
+          <div className="flex items-center justify-between px-2 py-1.5">
+            <DropdownMenuLabel className="p-0">Add credits</DropdownMenuLabel>
+            {pathname !== '/settings/usage' && (
+              <button
+                type="button"
+                onClick={() => router.push('/settings/usage')}
+                className="text-xs text-muted-foreground hover:underline"
+              >
+                View usage →
+              </button>
+            )}
+          </div>
           <DropdownMenuSeparator />
           {CREDIT_PACK_LIST.map((pack) => (
             <DropdownMenuItem
