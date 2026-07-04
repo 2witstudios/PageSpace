@@ -206,8 +206,18 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; ope
   );
 
   // Render with rich content (no Parameters/Result wrappers)
+  // Only pass open/onOpenChange (making the Collapsible controlled) when a
+  // caller actually provides onOpenChange — otherwise Radix's
+  // useControllableState would see `open` flip from undefined to a boolean
+  // the first time an ancestor records a manual toggle, logging an
+  // uncontrolled-to-controlled warning even though nothing is visibly wrong.
+  // Deciding controlled-ness once, up front, based on onOpenChange's
+  // presence (rather than open's value) means a given mounted instance never
+  // changes modes across its lifetime.
+  const collapsibleProps = onOpenChange ? { open: open ?? false, onOpenChange } : {};
+
   return (
-    <Tool className="my-2" open={open} onOpenChange={onOpenChange}>
+    <Tool className="my-2" {...collapsibleProps}>
       <ToolHeader
         title={descriptiveTitle}
         type={`tool-${toolName}`}

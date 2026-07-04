@@ -53,6 +53,42 @@ describe('useAutoCollapseOnComplete', () => {
     expect(result.current.open).toBe(true); // pending close was cancelled, not just delayed
   });
 
+  it('stays open through 3 sequential tool calls, then closes once after the last one', () => {
+    // A real agent turn: each call completes before the next starts, so
+    // status genuinely bounces complete -> running between every step.
+    const { result, rerender } = renderHook(
+      ({ status }: { status: RunStatus }) => useAutoCollapseOnComplete(status),
+      { initialProps: { status: 'running' as RunStatus } },
+    );
+
+    // Call 1 completes, call 2 starts before the debounce fires.
+    rerender({ status: 'complete' });
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(result.current.open).toBe(true);
+    rerender({ status: 'running' });
+    expect(result.current.open).toBe(true);
+
+    // Call 2 completes, call 3 starts before the debounce fires.
+    rerender({ status: 'complete' });
+    act(() => { vi.advanceTimersByTime(700); });
+    expect(result.current.open).toBe(true);
+    rerender({ status: 'running' });
+    expect(result.current.open).toBe(true);
+
+    // Call 3 completes — this time nothing else starts, so the debounce
+    // should run to completion and close the group exactly once.
+    rerender({ status: 'complete' });
+    act(() => { vi.advanceTimersByTime(999); });
+    expect(result.current.open).toBe(true);
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(result.current.open).toBe(false);
+
+    // No further, redundant close should fire on subsequent idle re-renders.
+    rerender({ status: 'complete' });
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(result.current.open).toBe(false);
+  });
+
   it('collapses only after status holds complete for the full delay', () => {
     const { result, rerender } = renderHook(
       ({ status }: { status: RunStatus }) => useAutoCollapseOnComplete(status),
