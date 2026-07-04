@@ -134,6 +134,21 @@ export { tokensListHandler } from './commands/tokens/list.js';
 export { createTokensRevokeHandler, tokensRevokeHandler } from './commands/tokens/revoke.js';
 export type { RevokeHandlerDeps } from './commands/tokens/revoke.js';
 
+// Legacy `PAGESPACE_AUTH_TOKEN` env var support (Phase 6 task 1) — folded
+// into `run.ts`'s single auth-resolution path, never a second one.
+export { resolveEnvToken } from './auth/legacy-token-env.js';
+export type { ResolvedEnvToken } from './auth/legacy-token-env.js';
+
+// `pagespace mcp` — the stdio MCP adapter generated from the operation
+// registry (Phase 6 task 1). `mcp/serve.ts` walks the registry into MCP
+// tool definitions via the pure conversion in `mcp/tool-convert.ts`.
+export { operationToMcpTool, validateToolInput, formatInvalidInputResult, formatSdkErrorResult, formatSuccessResult, formatUnknownToolResult } from './mcp/tool-convert.js';
+export type { McpCallResult, McpJsonSchema, McpTextContent, McpToolAnnotations, McpToolDefinition, ValidatedToolInput } from './mcp/tool-convert.js';
+export { buildOperationRegistry, createMcpServer } from './mcp/serve.js';
+export type { CreateMcpServerOptions, McpSdkClient } from './mcp/serve.js';
+export { createMcpHandler, mcpHandler } from './commands/mcp.js';
+export type { McpHandlerDeps } from './commands/mcp.js';
+
 // Composition root.
 export { run } from './run.js';
 export type { RunDependencies } from './run.js';
