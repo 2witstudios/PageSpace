@@ -88,17 +88,44 @@ export function generateTitle(preview: string): string {
 
 export const conversationRepository = {
   /**
-   * Eagerly create a conversations row when a new conversation session is started.
-   * This establishes ownership (userId) and sets isShared=false (private by default).
+   * Eagerly create a conversations row when a conversation session is started
+   * or continued. This establishes ownership (userId) and sets isShared=false
+   * (private by default). Idempotent and safe to call on every turn of a
+   * conversation — a cheap indexed lookup short-circuits once the row exists.
+   *
+   * Refuses to claim a caller-supplied conversationId that belongs to someone
+   * else: a legacy conversation (real chat_messages, no conversations row
+   * yet) must not be "claimable" by a different caller who supplies its ID —
+   * ownership-gated actions elsewhere (e.g. conversation deletion) trust
+   * conversations.userId. Centralized here (rather than at each call site)
+   * so every caller — including pre-existing ones — gets this guarantee.
    */
-  async createConversation(conversationId: string, userId: string, agentId: string): Promise<void> {
+  async createConversation(conversationId: string, userId: string, pageId: string): Promise<void> {
+    const [existing] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    if (existing) return;
+
+    const priorMessages = await db
+      .select({ userId: chatMessages.userId })
+      .from(chatMessages)
+      .where(and(
+        eq(chatMessages.pageId, pageId),
+        eq(chatMessages.conversationId, conversationId),
+        eq(chatMessages.isActive, true),
+      ));
+    const hasConflictingOwner = priorMessages.some((m) => m.userId !== null && m.userId !== userId);
+    if (hasConflictingOwner) return;
+
     await db
       .insert(conversations)
       .values({
         id: conversationId,
         userId,
         type: 'page',
-        contextId: agentId,
+        contextId: pageId,
         isShared: false,
         updatedAt: new Date(),
       })

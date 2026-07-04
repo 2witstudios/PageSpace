@@ -4,7 +4,7 @@ import { eq, and, desc, asc, inArray, count, isNotNull } from '@pagespace/db/ope
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
-import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
+import { createTaskTriggerWorkflow, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth'
@@ -502,7 +502,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
 
     // Create agent trigger workflow if requested
-    let agentTriggerResult: Awaited<ReturnType<typeof createTaskTriggerWorkflow>> | undefined;
+    let agentTriggerResult: TaskTriggerWorkflowResult | undefined;
     if (agentTrigger && taskListPage.driveId) {
       agentTriggerResult = await createTaskTriggerWorkflow({
         database: tx,
@@ -608,16 +608,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     ...taskWithRelations,
     title: createdTitle,
     pageId: result.page.id,
-    ...(result.agentTriggerResult
-      ? {
-          agentTrigger: {
-            workflowId: result.agentTriggerResult.workflowId,
-            triggerId: result.agentTriggerResult.triggerId,
-            triggerType: result.agentTriggerResult.triggerType,
-            nextRunAt: result.agentTriggerResult.nextRunAt,
-            isEnabled: result.agentTriggerResult.isEnabled,
-          },
-        }
-      : {}),
+    ...(result.agentTriggerResult ? { agentTrigger: result.agentTriggerResult } : {}),
   }, { status: 201 });
 }

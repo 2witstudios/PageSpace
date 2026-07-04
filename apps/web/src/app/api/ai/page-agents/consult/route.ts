@@ -271,7 +271,16 @@ export async function POST(request: Request) {
     // new one is minted and returned so the caller can continue it later.
     const activeConversationId: string = conversationId || createId();
 
-    let historyMessages: Array<{ role: string; content: string | null; userId: string | null }>;
+    // Eagerly ensure a conversations row exists so this conversation is
+    // listable via GET .../conversations, which joins against `conversations`
+    // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
+    // Without this, chatMessages are persisted but the conversation itself is
+    // invisible to list_conversations. createConversation itself refuses to
+    // claim ownership of a supplied conversationId that already has messages
+    // from a different user (see its doc comment) — safe to call unconditionally.
+    await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
+
+    let historyMessages: Array<{ role: string; content: string | null }>;
     if (conversationId) {
       // Scoped to this conversation only, in chronological order.
       historyMessages = await db
@@ -295,25 +304,6 @@ export async function POST(request: Request) {
         .orderBy(desc(chatMessages.createdAt))
         .limit(10);
       historyMessages = recentMessages.slice().reverse();
-    }
-
-    // Eagerly ensure a conversations row exists so this conversation is
-    // listable via GET .../conversations, which joins against `conversations`
-    // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
-    // Without this, chatMessages are persisted but the conversation itself is
-    // invisible to list_conversations. Idempotent via onConflictDoNothing —
-    // EXCEPT a caller-supplied conversationId must not be allowed to claim
-    // ownership of pre-existing history it doesn't own: a legacy conversation
-    // (real chat_messages, no conversations row yet — exactly the backfill
-    // case this fixes) could otherwise be "claimed" by any other caller who
-    // learns the ID, and ownership-gated actions elsewhere (e.g. conversation
-    // deletion) trust conversations.userId. Only backfill ownership when no
-    // existing message in this conversation belongs to a different user.
-    const hasConflictingOwner = Boolean(conversationId) && historyMessages.some(
-      (m) => m.userId !== null && m.userId !== userId
-    );
-    if (!hasConflictingOwner) {
-      await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
     }
 
     // Build conversation messages (exclude system - handled separately)

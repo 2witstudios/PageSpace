@@ -74,11 +74,6 @@ vi.mock('@pagespace/db/schema/auth', () => ({
   users: { __table: 'users', id: 'id', subscriptionTier: 'subscriptionTier' },
 }));
 
-// Mutable per-test fixture — tests reassign this to inject prior chat_messages
-// rows (including their authoring userId) for the conversationId-continuation
-// path, without touching the shared mock plumbing below.
-let CHAT_MESSAGES_RESULT: Array<{ role: string; content: string; userId: string | null }> = [];
-
 vi.mock('@pagespace/db/db', () => {
   function makeBuilder() {
     let table: { __table?: string } | undefined;
@@ -95,7 +90,7 @@ vi.mock('@pagespace/db/db', () => {
           if (table?.__table === 'pages') return resolve([AGENT_ROW]);
           if (table?.__table === 'users') return resolve([GATE_USER_ROW]);
           if (table?.__table === 'drives') return resolve([DRIVE_ROW]);
-          if (table?.__table === 'chatMessages') return resolve(CHAT_MESSAGES_RESULT);
+          if (table?.__table === 'chatMessages') return resolve([]);
           return resolve([]);
         } catch (e) {
           return reject?.(e);
@@ -187,7 +182,6 @@ describe('POST /api/ai/page-agents/consult — conversation listing index', () =
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
-    CHAT_MESSAGES_RESULT = [];
   });
 
   it('creates a conversations row so the conversation is listable', async () => {
@@ -205,31 +199,12 @@ describe('POST /api/ai/page-agents/consult — conversation listing index', () =
     expect(createConversation).toHaveBeenCalledWith('conv-a', 'user-1', 'agent-1');
   });
 
-  it('does NOT claim ownership of a supplied conversationId that belongs to a different user (Codex P2)', async () => {
-    // conv-a already has real chat_messages authored by a DIFFERENT user
-    // (the exact pre-fix "legacy conversation, no conversations row yet"
-    // shape) — the caller here ('user-1') must not be able to backfill
-    // themselves in as the owner just by supplying that ID.
-    CHAT_MESSAGES_RESULT = [
-      { role: 'user', content: 'someone else asked this', userId: 'victim-user' },
-      { role: 'assistant', content: 'answer', userId: null },
-    ];
-
-    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'Hijack attempt', conversationId: 'conv-a' }));
-    expect(response.status).toBe(200);
-
-    expect(createConversation).not.toHaveBeenCalled();
-  });
-
-  it('still claims ownership when the caller authored the existing messages themselves', async () => {
-    CHAT_MESSAGES_RESULT = [
-      { role: 'user', content: 'my earlier question', userId: 'user-1' },
-      { role: 'assistant', content: 'answer', userId: null },
-    ];
-
-    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'Follow-up', conversationId: 'conv-a' }));
-    expect(response.status).toBe(200);
-
-    expect(createConversation).toHaveBeenCalledWith('conv-a', 'user-1', 'agent-1');
-  });
+  // The ownership-conflict guard (a supplied conversationId must not let a
+  // different caller claim someone else's conversation — Codex P2 on #1846)
+  // now lives inside conversationRepository.createConversation itself, so
+  // every caller gets it "for free" without a call-site check. That
+  // behavior is unit-tested directly against the repository in
+  // apps/web/src/lib/repositories/__tests__/conversation-repository.test.ts;
+  // this route always calls createConversation unconditionally (mocked
+  // above), so there's nothing conflict-specific to assert here.
 });

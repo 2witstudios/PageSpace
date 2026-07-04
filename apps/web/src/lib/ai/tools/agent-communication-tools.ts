@@ -445,9 +445,17 @@ export const agentCommunicationTools = {
         // 3. Create or use existing conversation
         const activeConversationId = conversationId || createId();
 
+        // Eagerly ensure a conversations row exists so this conversation is
+        // listable via GET .../conversations (same fix as the consult route,
+        // #1837 finding #1) — without it, chat_messages are persisted but the
+        // listing query's ownership join never matches. createConversation
+        // itself refuses to claim ownership of a supplied conversationId that
+        // already has messages from a different user (see its doc comment) —
+        // safe to call unconditionally.
+        await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
+
         // 4. Load conversation history if continuing an existing conversation
         let messages: UIMessage[] = [];
-        let hasConflictingOwner = false;
         if (conversationId) {
           // Load existing conversation history
           const dbMessages = await db
@@ -460,15 +468,6 @@ export const agentCommunicationTools = {
             ))
             .orderBy(chatMessages.createdAt);
 
-          // A legacy conversation (real chat_messages, no conversations row yet
-          // — exactly the backfill case below) must not be "claimable" by a
-          // different caller who supplies its ID: ownership-gated actions
-          // elsewhere trust conversations.userId. Only backfill ownership when
-          // no existing message here belongs to a different user.
-          hasConflictingOwner = dbMessages.some(
-            (m) => m.userId !== null && m.userId !== userId
-          );
-
           messages = dbMessages.map(convertDbMessageToUIMessage);
 
           loggers.ai.debug('Loaded conversation history for ask_agent:', {
@@ -476,16 +475,6 @@ export const agentCommunicationTools = {
             messageCount: messages.length,
             agentId
           });
-        }
-
-        // Eagerly ensure a conversations row exists so this conversation is
-        // listable via GET .../conversations (same fix as the consult route,
-        // #1837 finding #1) — without it, chat_messages are persisted but the
-        // listing query's ownership join never matches. Idempotent via
-        // onConflictDoNothing; skipped entirely when it would misattribute an
-        // existing conversation to the wrong owner (see hasConflictingOwner above).
-        if (!hasConflictingOwner) {
-          await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
         }
 
         // 5. Build and save the user's question message

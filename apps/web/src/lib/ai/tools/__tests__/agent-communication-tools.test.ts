@@ -806,75 +806,15 @@ describe('agent-communication-tools', () => {
         );
       });
 
-      it('does NOT claim ownership of a supplied conversationId that belongs to a different user (Codex P2)', async () => {
-        // conv-a already has real chat_messages authored by a DIFFERENT user —
-        // the exact pre-fix "legacy conversation, no conversations row yet"
-        // shape. The caller here ('user-123') must not be able to backfill
-        // themselves in as the owner just by supplying that ID.
-        vi.mocked(mockDb.select).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue([
-                { id: 'm1', role: 'user', content: 'someone else asked this', userId: 'victim-user' },
-                { id: 'm2', role: 'assistant', content: 'answer', userId: null },
-              ]),
-            }),
-          }),
-        } as never);
-
-        const context = {
-          toolCallId: '1',
-          messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
-        };
-
-        await agentCommunicationTools.ask_agent!.execute!(
-          {
-            agentPath: '/test/agent',
-            agentId: 'target-agent-1',
-            question: 'Hijack attempt',
-            conversationId: 'conv-a',
-          },
-          context
-        );
-
-        expect(conversationRepository.createConversation).not.toHaveBeenCalled();
-      });
-
-      it('still claims ownership when the caller authored the existing messages themselves', async () => {
-        vi.mocked(mockDb.select).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue([
-                { id: 'm1', role: 'user', content: 'my earlier question', userId: 'user-123' },
-                { id: 'm2', role: 'assistant', content: 'answer', userId: null },
-              ]),
-            }),
-          }),
-        } as never);
-
-        const context = {
-          toolCallId: '1',
-          messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
-        };
-
-        await agentCommunicationTools.ask_agent!.execute!(
-          {
-            agentPath: '/test/agent',
-            agentId: 'target-agent-1',
-            question: 'Follow-up',
-            conversationId: 'conv-a',
-          },
-          context
-        );
-
-        expect(conversationRepository.createConversation).toHaveBeenCalledWith(
-          'conv-a',
-          'user-123',
-          'target-agent-1',
-        );
-      });
+      // The ownership-conflict guard (a supplied conversationId must not let
+      // a different caller claim someone else's conversation — Codex P2 on
+      // #1846) now lives inside conversationRepository.createConversation
+      // itself, so every caller (including this tool) gets it "for free"
+      // without a call-site check. That behavior is unit-tested directly
+      // against the repository in
+      // apps/web/src/lib/repositories/__tests__/conversation-repository.test.ts;
+      // this tool always calls createConversation unconditionally (mocked
+      // above), so there's nothing conflict-specific to assert here.
     });
 
     describe('compaction-aware context assembly', () => {
