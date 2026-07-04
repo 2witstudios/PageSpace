@@ -25,7 +25,7 @@ const { tools } = await import(toolsPath);
 
 const extracted = tools.map((tool) => ({
   name: tool.name,
-  required: tool.inputSchema.required ?? [],
+  required: tool.inputSchema?.required ?? [],
 }));
 
 console.log(JSON.stringify(extracted, null, 2));

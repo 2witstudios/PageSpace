@@ -8,14 +8,14 @@ tool's final, deprecated release (`package.json` version `5.2.7`,
 `chore: final deprecated release (5.2.7) — point at @pagespace/cli`) — the
 actual deprecation target, not an intermediate snapshot.
 
-`pagespace-mcp` (`/Users/jono/production/pagespace-mcp`) has no git tag for
+`pagespace-mcp` (`/path/to/pagespace-mcp`) has no git tag for
 5.2.7 — its only tags are `v4.0.1` and `v5.2.2` — so the pin is the immutable
 commit SHA at the tip of `pu/final-deprecated-version`:
 `494204446bd1b87cdcfe0323795ee220e3566ecf`.
 
 ## How `v5.2.7-tools.json` was generated
 
-1. `cd /Users/jono/production/pagespace-mcp && git show 494204446bd1b87cdcfe0323795ee220e3566ecf:src/tools.js > /tmp/v527-tools.mjs`
+1. `cd /path/to/pagespace-mcp && git show 494204446bd1b87cdcfe0323795ee220e3566ecf:src/tools.js > /tmp/v527-tools.mjs`
    — extracts `src/tools.js` as it existed at that commit, without touching
    the working tree.
 2. `bun run extract-v5.2.7-tools.mjs /tmp/v527-tools.mjs > v5.2.7-tools.json`
@@ -65,8 +65,8 @@ this re-peg.
 
 ## Regenerating
 
-```
-cd /Users/jono/production/pagespace-mcp
+```bash
+cd /path/to/pagespace-mcp
 git show 494204446bd1b87cdcfe0323795ee220e3566ecf:src/tools.js > /tmp/v527-tools.mjs
 cd -
 bun run packages/cli/src/mcp/__tests__/fixtures/extract-v5.2.7-tools.mjs /tmp/v527-tools.mjs \
@@ -84,7 +84,7 @@ re-pins the parity contract to a newer target.
 The original gate (superseded by the above) was generated the same way,
 pinned to the `v5.2.2` git tag instead of a commit SHA:
 
-1. `cd /Users/jono/production/pagespace-mcp && git show v5.2.2:src/tools.js > /tmp/v522-tools.mjs`
+1. `cd /path/to/pagespace-mcp && git show v5.2.2:src/tools.js > /tmp/v522-tools.mjs`
    — extracts `src/tools.js` as it existed at the `v5.2.2` tag (commit
    `93ee576`, "chore: bump to 5.2.2").
 2. The same extraction script (then named `extract-v5.2.2-tools.mjs`)
