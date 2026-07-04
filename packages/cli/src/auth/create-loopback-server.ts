@@ -28,6 +28,9 @@ export function createLoopbackServer(): Promise<LoopbackServer> {
       const url = new URL(req.url ?? '/', `http://${LOOPBACK_HOST}`);
       const query: Record<string, string> = {};
       url.searchParams.forEach((value, key) => {
+        // The OAuth callback query is attacker-influenceable; never let a query
+        // key write to a prototype-polluting property (remote property injection).
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') return;
         query[key] = value;
       });
 

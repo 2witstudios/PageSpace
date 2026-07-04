@@ -28,6 +28,28 @@ describe('createLoopbackServer', () => {
     }
   });
 
+  it('does not let a query key inject onto the object (remote property injection guard)', async () => {
+    const server = await createLoopbackServer();
+    try {
+      const pending = server.nextCallback();
+      const responsePromise = fetch(
+        `http://127.0.0.1:${server.port}/callback?constructor=pwned&__proto__=pwned&code=ok&state=s`,
+      );
+      const callback = await pending;
+      await server.finish('ok');
+      await responsePromise;
+
+      expect(callback.query.code).toBe('ok');
+      expect(callback.query.state).toBe('s');
+      // Dangerous keys were skipped: `constructor` is still the native constructor,
+      // not the attacker's string, and no prototype was polluted.
+      expect(callback.query.constructor).not.toBe('pwned');
+      expect(Object.prototype.hasOwnProperty.call(callback.query, '__proto__')).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('finish() sends the given HTML back to the requester', async () => {
     const server = await createLoopbackServer();
     try {
