@@ -96,6 +96,7 @@ interface AccessRow {
 let refreshRows: RefreshRow[] = [];
 let accessRows: AccessRow[] = [];
 let userSuspendedAt: Date | null = null;
+let userTokenVersion = 0;
 let lockChain: Promise<unknown> = Promise.resolve();
 
 function makeTx() {
@@ -104,7 +105,7 @@ function makeTx() {
       from: (table: unknown) => ({
         where: (predicate: Predicate) => {
           if (table === usersTable) {
-            return Promise.resolve([{ suspendedAt: userSuspendedAt }]);
+            return Promise.resolve([{ suspendedAt: userSuspendedAt, tokenVersion: userTokenVersion }]);
           }
           const matches = refreshRows.filter((r) => evalPredicate(predicate, r as unknown as Record<string, unknown>));
           const p = Promise.resolve(matches) as Promise<RefreshRow[]> & { for: (mode: string) => Promise<RefreshRow[]> };
@@ -162,7 +163,11 @@ function seedRefreshRow(overrides: Partial<RefreshRow> = {}): RefreshRow {
     clientId: CLIENT_DB_ID,
     familyId: FAMILY_ID,
     userId: USER_ID,
-    scopes: ['account'],
+    // offline_access included by default: a stored refresh-token row only
+    // ever exists because offline_access was granted at issuance, so the
+    // pre-existing rotation fixtures below keep exercising that path; the F1
+    // gate tests further down explicitly narrow it away.
+    scopes: ['account', 'offline_access'],
     tokenVersion: 0,
     expiresAt: new Date(Date.now() + 30 * DAY),
     familyExpiresAt: new Date(Date.now() + 90 * DAY),
@@ -180,6 +185,7 @@ beforeEach(() => {
   refreshRows = [];
   accessRows = [];
   userSuspendedAt = null;
+  userTokenVersion = 0;
   lockChain = Promise.resolve();
 });
 
@@ -205,7 +211,7 @@ describe('refreshTokenGrant — happy path', () => {
     expect(refreshRows[0].replacedByTokenId).not.toBeNull();
     expect(refreshRows).toHaveLength(2);
     expect(accessRows).toHaveLength(1);
-    expect(refreshRows[1].tokenHash).toBe(hashToken(result.tokens.refreshToken));
+    expect(refreshRows[1].tokenHash).toBe(hashToken(result.tokens.refreshToken!));
     expect(refreshRows[1].familyId).toBe(FAMILY_ID);
   });
 
@@ -299,13 +305,13 @@ describe('refreshTokenGrant — reuse detection: the theft scenario end-to-end',
     expect(attackerAttempt).toEqual({ outcome: 'invalid_grant' });
 
     // The entire family is dead: the legitimate client's brand-new refresh token is also revoked.
-    const legitimateNewRow = refreshRows.find((r) => r.tokenHash === hashToken(legitimate.tokens.refreshToken));
+    const legitimateNewRow = refreshRows.find((r) => r.tokenHash === hashToken(legitimate.tokens.refreshToken!));
     expect(legitimateNewRow?.revokedAt).not.toBeNull();
     expect(accessRows.every((r) => r.revokedAt !== null)).toBe(true);
 
     // Locked out: the legitimate client can no longer refresh with its (now-revoked) new token either.
     const legitimateRetry = await refreshTokenGrant({
-      refreshToken: legitimate.tokens.refreshToken,
+      refreshToken: legitimate.tokens.refreshToken!,
       clientDbId: CLIENT_DB_ID,
       requestedScope: null,
       now: new Date(Date.now() + 61_000),
@@ -355,20 +361,24 @@ describe('refreshTokenGrant — suspended user (zero-trust audit finding)', () =
 
 describe('refreshTokenGrant — scope narrowing', () => {
   it('narrows scope on request and persists only the narrowed set on the new tokens', async () => {
-    seedRefreshRow({ scopes: ['account', 'offline_access'] });
+    // Keep offline_access in the narrowed request so this test's focus (only
+    // the narrowed set is persisted) stays independent of the F1 gate, which
+    // has its own dedicated tests below. `account` and `drive:*` scopes are
+    // mutually exclusive by grammar, so narrow among drive scopes instead.
+    seedRefreshRow({ scopes: ['offline_access', 'drive:abc12345', 'drive:xyz98765'] });
 
     const result = await refreshTokenGrant({
       refreshToken: REFRESH_TOKEN,
       clientDbId: CLIENT_DB_ID,
-      requestedScope: 'account',
+      requestedScope: 'offline_access drive:abc12345',
       now: new Date(),
     });
 
     expect(result.outcome).toBe('ok');
     if (result.outcome !== 'ok') throw new Error('unreachable');
-    expect(result.scopes).toEqual(['account']);
-    expect(refreshRows[1].scopes).toEqual(['account']);
-    expect(accessRows[0].scopes).toEqual(['account']);
+    expect(result.scopes).toEqual(['offline_access', 'drive:abc12345']);
+    expect(refreshRows[1].scopes).toEqual(['offline_access', 'drive:abc12345']);
+    expect(accessRows[0].scopes).toEqual(['offline_access', 'drive:abc12345']);
   });
 
   it('rejects any scope escalation attempt with invalid_scope', async () => {
@@ -404,10 +414,142 @@ describe('refreshTokenGrant — concurrent refresh yields exactly one winner', (
     // rejection must not revoke the winner's brand-new pair.
     const winner = first.outcome === 'ok' ? first : second;
     if (winner.outcome !== 'ok') throw new Error('unreachable');
-    const winnerRow = refreshRows.find((r) => r.tokenHash === hashToken(winner.tokens.refreshToken));
+    const winnerRow = refreshRows.find((r) => r.tokenHash === hashToken(winner.tokens.refreshToken!));
     expect(winnerRow?.revokedAt).toBeFalsy();
 
     expect(refreshRows).toHaveLength(2);
     expect(accessRows).toHaveLength(1);
+  });
+});
+
+describe('refreshTokenGrant — F1: refresh token gated on offline_access', () => {
+  it('narrowing the request scope to drop offline_access ends the family: rotated pair is access-only', async () => {
+    seedRefreshRow({ scopes: ['account', 'offline_access'] });
+
+    const result = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: 'account',
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok');
+    if (result.outcome !== 'ok') throw new Error('unreachable');
+    expect(result.scopes).toEqual(['account']);
+    expect(result.tokens.refreshToken).toBeUndefined();
+    expect(result.tokens.accessToken).toMatch(/^ps_at_/);
+    // The presented token is still revoked (rotation always consumes it),
+    // but no new refresh row is inserted since the narrowed set has no
+    // offline_access to carry forward.
+    expect(refreshRows).toHaveLength(1);
+    expect(refreshRows[0].revokedAt).not.toBeNull();
+    expect(accessRows).toHaveLength(1);
+    expect(accessRows[0].scopes).toEqual(['account']);
+  });
+
+  it('a terminal (access-only) rotation still records revokedReason "rotated" (honest null replacedByTokenId), so a benign in-window retry is NOT mistaken for reuse (Codex P2)', async () => {
+    seedRefreshRow({ scopes: ['account', 'offline_access'] });
+
+    const result = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: 'account',
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok');
+    // decideRefreshRotation's grace-window branch keys off revokedReason ===
+    // 'rotated' (not replacedByTokenId, which is honestly null here — there
+    // really is no next refresh row for a terminal rotation). Without this,
+    // ANY presentation of this now-revoked token (even a benign
+    // dropped-connection retry inside the 30s window) would fall straight
+    // through to reuse_detected and revoke the whole family, including the
+    // access token this call just issued.
+    expect(refreshRows[0].revokedReason).toBe('rotated');
+    expect(refreshRows[0].replacedByTokenId).toBeNull();
+  });
+
+  it('a benign duplicate/retry within the grace window on a terminal rotation does NOT revoke the family (Codex P2)', async () => {
+    seedRefreshRow({ scopes: ['account', 'offline_access'] });
+
+    const t0 = new Date();
+    const first = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: 'account', // drops offline_access -> terminal, access-only
+      now: t0,
+    });
+    expect(first.outcome).toBe('ok');
+    if (first.outcome !== 'ok') throw new Error('unreachable');
+    expect(first.tokens.refreshToken).toBeUndefined();
+
+    // A benign duplicate/retry (e.g. a dropped-connection retry) presents the
+    // SAME (now-revoked) old token again, within the 30s grace window.
+    const retryNow = new Date(t0.getTime() + 5_000);
+    const retry = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: 'account',
+      now: retryNow,
+    });
+
+    // The retry itself still fails — there's no grace cache to replay from
+    // (deferred infra, same as the non-terminal case) — but critically the
+    // family must NOT be revoked: the access token from the first
+    // (successful) response must remain valid.
+    expect(retry).toEqual({ outcome: 'invalid_grant' });
+    expect(accessRows).toHaveLength(1);
+    expect(accessRows[0].revokedAt).toBeFalsy();
+  });
+
+  it('keeps minting a refresh token across rotation while offline_access remains granted', async () => {
+    seedRefreshRow({ scopes: ['account', 'offline_access'] });
+
+    const result = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: null,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok');
+    if (result.outcome !== 'ok') throw new Error('unreachable');
+    expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
+    expect(refreshRows).toHaveLength(2);
+  });
+});
+
+describe('refreshTokenGrant — tokenVersion mismatch (global logout, ADR 0003 §6-§7)', () => {
+  it('refuses a refresh whose snapshot tokenVersion no longer matches the user, WITHOUT revoking the family (logout ≠ theft)', async () => {
+    seedRefreshRow({ tokenVersion: 1 });
+    userTokenVersion = 2;
+
+    const result = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: null,
+      now: new Date(),
+    });
+
+    expect(result).toEqual({ outcome: 'invalid_grant' });
+    // Family untouched: not revoked, no new tokens minted, but the presented
+    // token itself is also left alone (this is not a rotation, and not theft).
+    expect(refreshRows).toHaveLength(1);
+    expect(refreshRows[0].revokedAt).toBeNull();
+    expect(accessRows).toHaveLength(0);
+  });
+
+  it('allows the refresh when the snapshot tokenVersion matches the user', async () => {
+    seedRefreshRow({ tokenVersion: 2 });
+    userTokenVersion = 2;
+
+    const result = await refreshTokenGrant({
+      refreshToken: REFRESH_TOKEN,
+      clientDbId: CLIENT_DB_ID,
+      requestedScope: null,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok');
   });
 });

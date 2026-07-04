@@ -189,7 +189,10 @@ function seedCodeRow(overrides: Partial<CodeRow> = {}): void {
     codeHash: hashToken(CODE),
     clientId: CLIENT_DB_ID,
     userId: USER_ID,
-    scopes: ['account'],
+    // offline_access included by default so the pre-existing happy-path
+    // fixtures below exercise refresh-token issuance as before; the F1 gate
+    // tests further down explicitly override this to exercise access-only.
+    scopes: ['account', 'offline_access'],
     redirectUri: REDIRECT_URI,
     codeChallenge: deriveCodeChallenge(CODE_VERIFIER),
     codeChallengeMethod: 'S256',
@@ -225,7 +228,7 @@ describe('exchangeAuthorizationCode — happy path', () => {
     expect(result.outcome).toBe('ok');
     if (result.outcome !== 'ok') throw new Error('unreachable');
     expect(result.userId).toBe(USER_ID);
-    expect(result.scopes).toEqual(['account']);
+    expect(result.scopes).toEqual(['account', 'offline_access']);
     expect(result.tokens.accessToken).toMatch(/^ps_at_/);
     expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
 
@@ -233,7 +236,7 @@ describe('exchangeAuthorizationCode — happy path', () => {
     expect(codeRow?.issuedFamilyId).toBe(result.tokens.familyId);
     expect(refreshRows).toHaveLength(1);
     expect(accessRows).toHaveLength(1);
-    expect(refreshRows[0].tokenHash).toBe(hashToken(result.tokens.refreshToken));
+    expect(refreshRows[0].tokenHash).toBe(hashToken(result.tokens.refreshToken!));
     expect(accessRows[0].tokenHash).toBe(hashToken(result.tokens.accessToken));
   });
 
@@ -409,6 +412,46 @@ describe('exchangeAuthorizationCode — atomic single-use consumption under a ra
     expect(refreshRows[0].revokedAt).not.toBeNull();
     expect(accessRows[0].revokedAt).not.toBeNull();
     // No new tokens were minted for the replay.
+    expect(refreshRows).toHaveLength(1);
+    expect(accessRows).toHaveLength(1);
+  });
+});
+
+describe('exchangeAuthorizationCode — F1: refresh token gated on offline_access', () => {
+  it('mints an access-only grant (no refresh row, no refresh_token) when offline_access was not requested', async () => {
+    seedCodeRow({ scopes: ['account'] });
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok');
+    if (result.outcome !== 'ok') throw new Error('unreachable');
+    expect(result.tokens.accessToken).toMatch(/^ps_at_/);
+    expect(result.tokens.refreshToken).toBeUndefined();
+    expect(refreshRows).toHaveLength(0);
+    expect(accessRows).toHaveLength(1);
+    expect(codeRow?.issuedFamilyId).toBe(result.tokens.familyId);
+  });
+
+  it('mints a refresh token when offline_access was requested', async () => {
+    seedCodeRow({ scopes: ['account', 'offline_access'] });
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok');
+    if (result.outcome !== 'ok') throw new Error('unreachable');
+    expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
     expect(refreshRows).toHaveLength(1);
     expect(accessRows).toHaveLength(1);
   });

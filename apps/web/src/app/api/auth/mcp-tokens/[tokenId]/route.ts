@@ -7,6 +7,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { normalizeDriveScopes } from '@pagespace/lib/auth/mcp-token-scopes';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { rejectScopedOAuth } from '../scope-guard';
 
 // 'oauth' lets the pagespace CLI (`pagespace tokens revoke`) authenticate
 // with an OAuth access token instead of a session cookie — see the sibling
@@ -36,6 +37,8 @@ export async function DELETE(
 ) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   const { tokenId } = await context.params;
@@ -74,6 +77,8 @@ export async function PATCH(
 ) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   const { tokenId } = await context.params;

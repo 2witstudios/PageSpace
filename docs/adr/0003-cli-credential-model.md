@@ -89,6 +89,20 @@ The `client_id` for the first-party CLI, redirect-URI rules for the loopback cal
 
 ## 3. Decision D2 — Token format, lifetimes, rotation (the exact contract)
 
+**F1 (post-review amendment) — refresh issuance is gated on `offline_access`.**
+A refresh token (`ps_rt_*`) is minted — at initial issuance (`authorization_code`
+or `device_code` grant) or at rotation (`refresh_token` grant) — **only** when
+the granted scope set includes the `offline_access` scope (OIDC-standard); a
+grant without it is access-token-only, and the token response omits
+`refresh_token` entirely rather than sending a token nobody asked to keep
+alive. `pagespace login` always requests `account offline_access`
+(`packages/cli/src/commands/login.ts` `DEFAULT_LOGIN_SCOPE`), so the CLI's
+normal login flow is unaffected and always receives a refresh token. A client
+that narrows scope on a `refresh_token` grant (RFC 6749 §6) to drop
+`offline_access` gets one final access-only pair and ends the refresh chain —
+the presented token is still consumed (rotation semantics), but there is
+nothing left to rotate into on a subsequent call.
+
 ### 3.1 Format and storage at rest (server)
 
 - Access token: **`ps_at_*`**; refresh token: **`ps_rt_*`**. Both opaque, 32 bytes base64url entropy via `generateOpaqueToken` — `TokenType` union and the `isValidTokenFormat` regex are extended with `at|rt` (`packages/lib/src/auth/opaque-tokens.ts:10,32`). No JWTs, no embedded claims — all context (user, client, scopes, family, expiry) lives in DB rows keyed by SHA3-256 hash (`token-utils.ts:42-44`), plaintext never stored, raw value returned exactly once at issuance. `tokenPrefix` (first 12 chars) stored for debugging only (`token-utils.ts:47-59`).

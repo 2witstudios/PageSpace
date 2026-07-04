@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import {
   issuedTokenLifetimes,
   issueInitialTokenPair,
+  issueRotatedTokenPair,
   ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_TTL_SECONDS,
   REFRESH_TOKEN_FAMILY_TTL_SECONDS,
@@ -51,17 +52,17 @@ describe('issuedTokenLifetimes', () => {
 });
 
 describe('issueInitialTokenPair', () => {
-  it('mints ps_at_*/ps_rt_* tokens that pass the opaque-token format gate', () => {
-    const pair = issueInitialTokenPair(new Date());
+  it('mints ps_at_*/ps_rt_* tokens that pass the opaque-token format gate when offline_access is granted', () => {
+    const pair = issueInitialTokenPair(new Date(), true);
 
     expect(isValidTokenFormat(pair.accessToken)).toBe(true);
-    expect(isValidTokenFormat(pair.refreshToken)).toBe(true);
+    expect(isValidTokenFormat(pair.refreshToken!)).toBe(true);
     expect(getTokenType(pair.accessToken)).toBe('at');
-    expect(getTokenType(pair.refreshToken)).toBe('rt');
+    expect(getTokenType(pair.refreshToken!)).toBe('rt');
   });
 
   it('never returns the raw token as its own hash', () => {
-    const pair = issueInitialTokenPair(new Date());
+    const pair = issueInitialTokenPair(new Date(), true);
 
     expect(pair.accessTokenHash).not.toBe(pair.accessToken);
     expect(pair.refreshTokenHash).not.toBe(pair.refreshToken);
@@ -71,20 +72,61 @@ describe('issueInitialTokenPair', () => {
 
   it('fixes familyExpiresAt at 90 days from now and clamps refresh accordingly', () => {
     const now = new Date('2026-01-01T00:00:00Z');
-    const pair = issueInitialTokenPair(now);
+    const pair = issueInitialTokenPair(now, true);
 
     expect(pair.familyExpiresAt.getTime()).toBe(now.getTime() + REFRESH_TOKEN_FAMILY_TTL_SECONDS * 1000);
-    expect(pair.refreshExpiresAt.getTime()).toBe(now.getTime() + REFRESH_TOKEN_TTL_SECONDS * 1000);
+    expect(pair.refreshExpiresAt!.getTime()).toBe(now.getTime() + REFRESH_TOKEN_TTL_SECONDS * 1000);
     expect(pair.accessExpiresAt.getTime()).toBe(now.getTime() + ACCESS_TOKEN_TTL_SECONDS * 1000);
   });
 
   it('generates a fresh familyId and fresh tokens on every call (never reused)', () => {
     const now = new Date();
-    const first = issueInitialTokenPair(now);
-    const second = issueInitialTokenPair(now);
+    const first = issueInitialTokenPair(now, true);
+    const second = issueInitialTokenPair(now, true);
 
     expect(first.familyId).not.toBe(second.familyId);
     expect(first.accessToken).not.toBe(second.accessToken);
     expect(first.refreshToken).not.toBe(second.refreshToken);
+  });
+
+  describe('F1 — refresh token gated on offline_access', () => {
+    it('mints no refresh token at all when offline_access was not granted', () => {
+      const pair = issueInitialTokenPair(new Date(), false);
+
+      expect(pair.refreshToken).toBeUndefined();
+      expect(pair.refreshTokenHash).toBeUndefined();
+      expect(pair.refreshTokenPrefix).toBeUndefined();
+      expect(pair.refreshExpiresAt).toBeUndefined();
+    });
+
+    it('still mints a valid access token and family metadata when offline_access is absent', () => {
+      const now = new Date('2026-01-01T00:00:00Z');
+      const pair = issueInitialTokenPair(now, false);
+
+      expect(isValidTokenFormat(pair.accessToken)).toBe(true);
+      expect(pair.familyId).toBeTruthy();
+      expect(pair.familyExpiresAt.getTime()).toBe(now.getTime() + REFRESH_TOKEN_FAMILY_TTL_SECONDS * 1000);
+    });
+  });
+});
+
+describe('issueRotatedTokenPair — F1 refresh token gated on offline_access', () => {
+  it('mints a refresh token when offline_access is granted', () => {
+    const now = new Date();
+    const pair = issueRotatedTokenPair(now, 'family-1', new Date(now.getTime() + 1000), true);
+
+    expect(isValidTokenFormat(pair.refreshToken!)).toBe(true);
+    expect(pair.familyId).toBe('family-1');
+  });
+
+  it('mints no refresh token when offline_access is not granted', () => {
+    const now = new Date();
+    const pair = issueRotatedTokenPair(now, 'family-1', new Date(now.getTime() + 1000), false);
+
+    expect(pair.refreshToken).toBeUndefined();
+    expect(pair.refreshTokenHash).toBeUndefined();
+    expect(pair.refreshTokenPrefix).toBeUndefined();
+    expect(pair.refreshExpiresAt).toBeUndefined();
+    expect(isValidTokenFormat(pair.accessToken)).toBe(true);
   });
 });

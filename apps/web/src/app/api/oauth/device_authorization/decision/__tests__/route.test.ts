@@ -22,11 +22,25 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 }));
 
 const recordDeviceApproval = vi.fn();
+const verifyDeviceUserCode = vi.fn();
 vi.mock('@/lib/repositories/oauth-repository', () => ({
   recordDeviceApproval: (...args: unknown[]) => recordDeviceApproval(...args),
+  verifyDeviceUserCode: (...args: unknown[]) => verifyDeviceUserCode(...args),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+const getDriveAccess = vi.fn();
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: (...args: unknown[]) => getDriveAccess(...args),
+}));
+
+const getMemberCustomRoleId = vi.fn();
+const customRoleBelongsToDrive = vi.fn();
+vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
+  getMemberCustomRoleId: (...args: unknown[]) => getMemberCustomRoleId(...args),
+  customRoleBelongsToDrive: (...args: unknown[]) => customRoleBelongsToDrive(...args),
+}));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
@@ -54,6 +68,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(AUTHENTICATED as never);
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
+  // Default: the presented user code isn't found by the read-only scope
+  // lookup — most tests below exercise deny/rate-limit/not-found paths that
+  // never need it, and recordDeviceApproval independently re-validates.
+  verifyDeviceUserCode.mockResolvedValue({ outcome: 'not_found' });
+  getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+  getMemberCustomRoleId.mockResolvedValue(null);
+  customRoleBelongsToDrive.mockResolvedValue(true);
 });
 
 describe('POST /api/oauth/device_authorization/decision — CSRF/session gate', () => {
@@ -167,5 +188,66 @@ describe('POST /api/oauth/device_authorization/decision — outcomes', () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'invalid_request' });
     expect(recordDeviceApproval).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/device_authorization/decision — P1b: grant-authority check before approval', () => {
+  it('rejects approving a scope the user cannot grant (e.g. drive:admin without admin/owner authority), never recording approval', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:admin'] });
+    getDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER' });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_scope' });
+    expect(recordDeviceApproval).not.toHaveBeenCalled();
+  });
+
+  it('rejects approving a drive the user has no access to at all', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345'] });
+    getDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false, isMember: false, role: null });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_scope' });
+    expect(recordDeviceApproval).not.toHaveBeenCalled();
+  });
+
+  it('allows approving a device code that requested NO scope at all (vacuous authority pass, matching device_authorization/route.ts allowing an empty scope) — regression guard', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: [] });
+    recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, action: 'approved' });
+    expect(recordDeviceApproval).toHaveBeenCalled();
+    // Nothing to authorize, so no drive-access lookups should even run.
+    expect(getDriveAccess).not.toHaveBeenCalled();
+  });
+
+  it('allows approving a scope the user has authority to grant', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:member'] });
+    getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+    recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, action: 'approved' });
+    expect(recordDeviceApproval).toHaveBeenCalled();
+  });
+
+  it('does not run the authority check for a deny decision', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:admin'] });
+    getDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false, isMember: false, role: null });
+    recordDeviceApproval.mockResolvedValue({ outcome: 'denied' });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'deny' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, action: 'denied' });
+    expect(recordDeviceApproval).toHaveBeenCalled();
   });
 });

@@ -7,6 +7,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { rejectScopedOAuth } from './scope-guard';
 
 // 'oauth' lets the pagespace CLI (which never holds a session cookie —
 // `pagespace tokens create/list` authenticates with an OAuth access token
@@ -34,6 +35,8 @@ const createTokenSchema = z.object({
 export async function POST(req: NextRequest) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   try {
@@ -128,6 +131,8 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   try {

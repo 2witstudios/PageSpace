@@ -40,32 +40,43 @@ export function issuedTokenLifetimes(now: Date, familyExpiresAt: Date): IssuedTo
   return { accessExpiresAt, refreshExpiresAt };
 }
 
-export interface IssuedTokenPair {
+/**
+ * The refresh-token fields are a discriminated union rather than plain
+ * optionals: `offline_access` gating (F1) means a caller must not be able to
+ * read `refreshTokenHash` etc. after only checking `refreshToken`, so
+ * narrowing on `refreshToken !== undefined` narrows the whole branch.
+ */
+export type IssuedTokenPair = {
   accessToken: string;
   accessTokenHash: string;
   accessTokenPrefix: string;
   accessExpiresAt: Date;
-  refreshToken: string;
-  refreshTokenHash: string;
-  refreshTokenPrefix: string;
-  refreshExpiresAt: Date;
   familyId: string;
   familyExpiresAt: Date;
-}
+} & (
+  | { refreshToken: string; refreshTokenHash: string; refreshTokenPrefix: string; refreshExpiresAt: Date }
+  | { refreshToken?: undefined; refreshTokenHash?: undefined; refreshTokenPrefix?: undefined; refreshExpiresAt?: undefined }
+);
 
 /**
  * Mint the initial token pair for a brand-new refresh-token family — the
  * authorization_code grant always starts a family, it never rotates one.
  * `familyExpiresAt` is fixed here, at first issuance, and is never extended
  * (ADR 0003 §3.2-3.3): every later rotation clamps its refresh TTL against
- * this same absolute boundary.
+ * this same absolute boundary. `offlineAccess` gates refresh-token minting
+ * (F1, OIDC-standard, ADR 0003): without it, only an access token is issued.
  */
-export function issueInitialTokenPair(now: Date): IssuedTokenPair {
+export function issueInitialTokenPair(now: Date, offlineAccess: boolean): IssuedTokenPair {
   const familyId = createId();
   const familyExpiresAt = new Date(now.getTime() + REFRESH_TOKEN_FAMILY_TTL_SECONDS * 1000);
   const { accessExpiresAt, refreshExpiresAt } = issuedTokenLifetimes(now, familyExpiresAt);
 
   const access = generateOpaqueToken('at');
+
+  if (!offlineAccess) {
+    return { accessToken: access.token, accessTokenHash: access.tokenHash, accessTokenPrefix: access.tokenPrefix, accessExpiresAt, familyId, familyExpiresAt };
+  }
+
   const refresh = generateOpaqueToken('rt');
 
   return {
@@ -87,12 +98,25 @@ export function issueInitialTokenPair(now: Date): IssuedTokenPair {
  * ADR 0003 §3.3). `familyId`/`familyExpiresAt` are carried over unchanged
  * from the presented token's record — only the authorization_code grant
  * starts a new family; rotation clamps its refresh TTL against the family's
- * original absolute boundary, never resets it.
+ * original absolute boundary, never resets it. `offlineAccess` gates
+ * refresh-token minting the same way `issueInitialTokenPair` does (F1) — a
+ * client that narrows scope to drop `offline_access` mid-rotation gets an
+ * access-only pair and no further refresh token.
  */
-export function issueRotatedTokenPair(now: Date, familyId: string, familyExpiresAt: Date): IssuedTokenPair {
+export function issueRotatedTokenPair(
+  now: Date,
+  familyId: string,
+  familyExpiresAt: Date,
+  offlineAccess: boolean,
+): IssuedTokenPair {
   const { accessExpiresAt, refreshExpiresAt } = issuedTokenLifetimes(now, familyExpiresAt);
 
   const access = generateOpaqueToken('at');
+
+  if (!offlineAccess) {
+    return { accessToken: access.token, accessTokenHash: access.tokenHash, accessTokenPrefix: access.tokenPrefix, accessExpiresAt, familyId, familyExpiresAt };
+  }
+
   const refresh = generateOpaqueToken('rt');
 
   return {

@@ -323,7 +323,7 @@ describe('pollDeviceToken', () => {
     expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
     expect(refreshRows).toHaveLength(1);
     expect(accessRows).toHaveLength(1);
-    expect(refreshRows[0].tokenHash).toBe(hashToken(result.tokens.refreshToken));
+    expect(refreshRows[0].tokenHash).toBe(hashToken(result.tokens.refreshToken!));
   });
 
   it('does not persist lastPolledAt for an already-settled (approved) record', async () => {
@@ -341,6 +341,32 @@ describe('pollDeviceToken', () => {
     expect(result).toEqual({ outcome: 'user_suspended' });
     expect(refreshRows).toHaveLength(0);
     expect(accessRows).toHaveLength(0);
+  });
+
+  describe('F1 — refresh token gated on offline_access', () => {
+    it('mints an access-only grant (no refresh row, no refresh_token) when offline_access was not requested', async () => {
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account'] });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+      expect(result.outcome).toBe('ok');
+      if (result.outcome !== 'ok') throw new Error('unreachable');
+      expect(result.tokens.accessToken).toMatch(/^ps_at_/);
+      expect(result.tokens.refreshToken).toBeUndefined();
+      expect(refreshRows).toHaveLength(0);
+      expect(accessRows).toHaveLength(1);
+    });
+
+    it('mints a refresh token when offline_access was requested', async () => {
+      seedDeviceRow({ approvedAt: new Date(), userId: USER_ID, scopes: ['account', 'offline_access'] });
+
+      const result = await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() });
+
+      expect(result.outcome).toBe('ok');
+      if (result.outcome !== 'ok') throw new Error('unreachable');
+      expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
+      expect(refreshRows).toHaveLength(1);
+    });
   });
 });
 
