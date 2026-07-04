@@ -7,6 +7,8 @@
 // Main renderer
 export { ToolCallRenderer } from './ToolCallRenderer';
 export { CompactToolCallRenderer } from './CompactToolCallRenderer';
+export { ToolRunGroup } from './ToolRunGroup';
+export { CompactToolRunGroup } from './CompactToolRunGroup';
 
 // Task renderers
 export { TaskRenderer } from './TaskRenderer';

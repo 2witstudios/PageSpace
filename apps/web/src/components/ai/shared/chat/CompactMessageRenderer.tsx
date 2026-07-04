@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CompactToolCallRenderer } from './tool-calls';
+import { CompactToolCallRenderer, CompactToolRunGroup } from './tool-calls';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
 import { MessageEditor } from './MessageEditor';
@@ -10,8 +10,9 @@ import { useAuth } from '@/hooks/useAuth';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
+import { useToolCallOpenState } from './useToolCallOpenState';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 import { ImageMessageContent } from './ImageMessageContent';
 import styles from './CompactMessageRenderer.module.css';
@@ -253,6 +254,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   // Standard Message Rendering
   // ============================================
   const groupedParts = useGroupedParts(message.parts);
+  const { getToolCallOpen, setToolCallOpen } = useToolCallOpenState();
 
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
@@ -342,7 +344,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   // ============================================
   // Render standard messages
   // ============================================
-  const hasToolCalls = groupedParts.some(g => isProcessedToolPart(g));
+  const hasToolCalls = groupedParts.some(g => isProcessedToolPart(g) || isToolRunGroupPart(g));
 
   return (
     <>
@@ -381,6 +383,16 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 compact
               />
             );
+          } else if (isToolRunGroupPart(group)) {
+            return (
+              <div key={`${message.id}-toolrun-${index}`} className="mt-1">
+                <CompactToolRunGroup
+                  parts={group.parts}
+                  getToolCallOpen={getToolCallOpen}
+                  setToolCallOpen={setToolCallOpen}
+                />
+              </div>
+            );
           } else if (isProcessedToolPart(group)) {
             return (
               <div key={`${message.id}-tool-${index}`} className="mt-1">
@@ -393,6 +405,8 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                     output: group.output,
                     state: group.state,
                   }}
+                  expanded={getToolCallOpen(group.toolCallId)}
+                  onExpandedChange={(next) => setToolCallOpen(group.toolCallId, next)}
                 />
               </div>
             );
