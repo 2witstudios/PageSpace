@@ -324,6 +324,84 @@ describe('usePageAgentDashboardStore', () => {
   });
 
   // ============================================
+  // createNewConversation Tests
+  // ============================================
+  describe('createNewConversation', () => {
+    it('given an agent is selected, should set conversationId synchronously with a client-generated id before the create request resolves', async () => {
+      let resolveFetch!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation(() => new Promise((resolve) => { resolveFetch = resolve; }));
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let createPromise!: Promise<string | null>;
+      act(() => {
+        createPromise = result.current.createNewConversation();
+      });
+
+      // Identity must be set before the network request resolves.
+      const generatedId = result.current.conversationId;
+      expect(typeof generatedId).toBe('string');
+      expect(generatedId).not.toBeNull();
+      expect(result.current.conversationAgentId).toBe(mockAgent.id);
+
+      resolveFetch({ ok: true, json: async () => ({ conversationId: generatedId }) });
+      const resolvedId = await act(() => createPromise);
+      expect(resolvedId).toBe(generatedId);
+    });
+
+    it('given no agent is selected, should return null and not touch conversation state', async () => {
+      usePageAgentDashboardStore.setState({ selectedAgent: null });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let createPromise!: Promise<string | null>;
+      act(() => {
+        createPromise = result.current.createNewConversation();
+      });
+
+      const resolvedId = await act(() => createPromise);
+      expect(resolvedId).toBeNull();
+      expect(result.current.conversationId).toBeNull();
+    });
+
+    it('given the create request ultimately fails, should not retract the already-issued conversationId', async () => {
+      mockFetchWithAuth.mockResolvedValue({ ok: false });
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let createPromise!: Promise<string | null>;
+      act(() => {
+        createPromise = result.current.createNewConversation();
+      });
+      const issuedId = result.current.conversationId;
+
+      await act(() => createPromise);
+      expect(result.current.conversationId).toBe(issuedId);
+    });
+  });
+
+  // ============================================
+  // loadMostRecentConversation -> createNewConversation fallback
+  // ============================================
+  describe('loadMostRecentConversation falling back to createNewConversation', () => {
+    it('given the agent has no existing conversations, should not leave isConversationLoading stuck true', async () => {
+      // First fetch (fetchMostRecentAgentConversation) resolves with no conversations;
+      // second fetch (the create POST) resolves ok.
+      mockFetchWithAuth
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ conversations: [] }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ conversationId: 'new-conv' }) });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      await act(() => result.current.loadMostRecentConversation());
+
+      expect(result.current.isConversationLoading).toBe(false);
+      expect(result.current.conversationId).not.toBeNull();
+    });
+  });
+
+  // ============================================
   // Type Safety Tests
   // ============================================
   describe('type safety', () => {

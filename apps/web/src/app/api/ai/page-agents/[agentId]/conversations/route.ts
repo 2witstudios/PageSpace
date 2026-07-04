@@ -178,12 +178,17 @@ export async function POST(
       );
     }
 
-    // Parse request body (optional custom title)
+    // Parse request body (optional custom title, optional client-generated id)
     const body = await request.json().catch(() => ({}));
     const customTitle = body.title;
 
-    // Generate new conversation ID using createId
-    const conversationId = createId();
+    // Prefer a client-generated id (cuid2) so the caller knows its conversation
+    // id synchronously, before this request resolves. Fall back to generating
+    // one server-side for callers that don't supply it.
+    const conversationId: string =
+      typeof body.conversationId === 'string' && body.conversationId.length > 0
+        ? body.conversationId
+        : createId();
 
     // Eagerly persist ownership so privacy filtering works immediately.
     // isShared defaults to false — conversation is private to this user.

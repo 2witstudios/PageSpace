@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { UIMessage } from 'ai';
+import { createId } from '@paralleldrive/cuid2';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
   createAgentConversation,
@@ -209,35 +210,35 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
   },
 
   /**
-   * Create a new conversation for the current agent
+   * Create a new conversation for the current agent. The id is generated
+   * client-side (cuid2) and set synchronously — the create POST below is a
+   * fire-and-forget, idempotent persist, not the mechanism used to learn the
+   * id. This closes the race where a send fired before the old server-round-trip
+   * resolved would carry a stale conversationId.
    */
   createNewConversation: async () => {
     const agent = get().selectedAgent;
     if (!agent) return null;
 
-    set({ isConversationLoading: true });
+    const conversationId = createId();
+    set({
+      conversationId,
+      conversationMessages: [],
+      conversationAgentId: agent.id,
+      conversationLoadSignal: get().conversationLoadSignal + 1,
+    });
+
+    // Update URL for bookmarkability
+    setChatParams({ agentId: agent.id, conversationId }, 'push');
 
     try {
-      const newConversationId = await createAgentConversation(agent.id);
-
-      set({
-        conversationId: newConversationId,
-        conversationMessages: [],
-        conversationAgentId: agent.id,
-        isConversationLoading: false,
-        conversationLoadSignal: get().conversationLoadSignal + 1,
-      });
-
-      // Update URL for bookmarkability
-      setChatParams({ agentId: agent.id, conversationId: newConversationId }, 'push');
-
-      return newConversationId;
+      await createAgentConversation(agent.id, conversationId);
     } catch (error) {
       console.error('Failed to create new conversation:', error);
       toast.error('Failed to create new conversation');
-      set({ isConversationLoading: false });
-      return null;
     }
+
+    return conversationId;
   },
 
   /**
@@ -307,7 +308,10 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
         return;
       }
 
-      // No existing conversation - create a new one
+      // No existing conversation - create a new one. createNewConversation no
+      // longer touches isConversationLoading itself (it sets identity
+      // synchronously), so this branch must clear it.
+      set({ isConversationLoading: false });
       await get().createNewConversation();
     } catch (error) {
       console.error('Failed to load most recent conversation:', error);
