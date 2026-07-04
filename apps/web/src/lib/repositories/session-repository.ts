@@ -105,6 +105,7 @@ export const sessionRepository = {
       columns: {
         id: true,
         name: true,
+        tokenPrefix: true,
         lastUsed: true,
         createdAt: true,
         isScoped: true,
@@ -124,6 +125,7 @@ export const sessionRepository = {
     return tokens.map((token) => ({
       id: token.id,
       name: token.name,
+      tokenPrefix: token.tokenPrefix,
       lastUsed: token.lastUsed,
       createdAt: token.createdAt,
       isScoped: token.isScoped,

@@ -16,6 +16,9 @@ import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
+import { tokensCreateHandler } from './commands/tokens/create.js';
+import { tokensListHandler } from './commands/tokens/list.js';
+import { tokensRevokeHandler } from './commands/tokens/revoke.js';
 import { resolveConfig } from './config/resolve.js';
 import type { CredentialStore } from './credentials/store.js';
 import { EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
@@ -35,6 +38,9 @@ const ROUTES: readonly Route[] = [
   { path: ['login'], handler: loginHandler },
   { path: ['logout'], handler: logoutHandler },
   { path: ['whoami'], handler: whoamiHandler },
+  { path: ['tokens', 'create'], handler: tokensCreateHandler },
+  { path: ['tokens', 'list'], handler: tokensListHandler },
+  { path: ['tokens', 'revoke'], handler: tokensRevokeHandler },
 ];
 
 /**

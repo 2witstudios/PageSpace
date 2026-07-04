@@ -110,6 +110,20 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
     expect(response.status).toBe(401);
   });
 
+  it('allows OAuth bearer tokens (CLI `pagespace tokens revoke`), not just session cookies', async () => {
+    const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+      method: 'DELETE',
+      headers: { 'X-CSRF-Token': 'valid-csrf-token' },
+    });
+
+    await DELETE(request, createContext());
+
+    expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+      request,
+      expect.objectContaining({ allow: expect.arrayContaining(['oauth']) })
+    );
+  });
+
   it('returns 404 when token not found', async () => {
     vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockResolvedValue(null);
 

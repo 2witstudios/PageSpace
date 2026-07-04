@@ -124,6 +124,20 @@ describe('parseArgv', () => {
     expect(JSON.stringify(result)).not.toContain('super-secret-value');
   });
 
+  it('passes an unrecognized flag through into args once a command path has started', () => {
+    const result = parseArgv(['tokens', 'create', '--name', 'CI bot', '--drive', 'drv1', '--role', 'member']);
+    expectCommand(result);
+    expect(result.args).toEqual(['tokens', 'create', '--name', 'CI bot', '--drive', 'drv1', '--role', 'member']);
+  });
+
+  it('still extracts known global flags interleaved among command-specific ones', () => {
+    const result = parseArgv(['tokens', 'create', '--name', 'CI bot', '--json', '--yes']);
+    expectCommand(result);
+    expect(result.args).toEqual(['tokens', 'create', '--name', 'CI bot']);
+    expect(result.flags.json).toBe(true);
+    expect(result.flags.yes).toBe(true);
+  });
+
   it('is a pure function: identical input produces a deep-equal result', () => {
     const argv = ['--json', 'tokens', 'create', '--yes'];
     expect(parseArgv(argv)).toEqual(parseArgv(argv));

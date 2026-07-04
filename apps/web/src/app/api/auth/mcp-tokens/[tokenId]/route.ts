@@ -8,7 +8,10 @@ import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activi
 import { normalizeDriveScopes } from '@pagespace/lib/auth/mcp-token-scopes';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 
-const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+// 'oauth' lets the pagespace CLI (`pagespace tokens revoke`) authenticate
+// with an OAuth access token instead of a session cookie — see the sibling
+// mcp-tokens/route.ts for the read/write route this pairs with.
+const AUTH_OPTIONS = { allow: ['session', 'oauth'] as const, requireCSRF: true };
 
 // Schema for PATCH (editing drive scopes on an existing token)
 const updateTokenScopesSchema = z.object({

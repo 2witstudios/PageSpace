@@ -124,6 +124,16 @@ export { createRefreshAccessToken } from './auth/silent-refresh.js';
 export { buildAuthProvider, enforceAuth, FailingAuthProvider } from './auth/auth-context.js';
 export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } from './auth/auth-context.js';
 
+// `tokens create/list/revoke` (Phase 4 task 6). Auth flows only through
+// ctx.sdk (task 7's resolver, enforced by run.ts before dispatch) — these
+// commands have no auth wiring of their own.
+export { parseTokensCreateArgs, parseTokensRevokeArgs } from './commands/tokens/args.js';
+export type { CreateTokenArgs, DriveScopeArg, RevokeTokenArgs } from './commands/tokens/args.js';
+export { tokensCreateHandler } from './commands/tokens/create.js';
+export { tokensListHandler } from './commands/tokens/list.js';
+export { createTokensRevokeHandler, tokensRevokeHandler } from './commands/tokens/revoke.js';
+export type { RevokeHandlerDeps } from './commands/tokens/revoke.js';
+
 // Composition root.
 export { run } from './run.js';
 export type { RunDependencies } from './run.js';

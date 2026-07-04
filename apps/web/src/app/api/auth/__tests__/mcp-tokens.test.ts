@@ -313,7 +313,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: true }
+          { allow: ['session', 'oauth'], requireCSRF: true }
         );
       });
     });
@@ -441,7 +441,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: false }
+          { allow: ['session', 'oauth'], requireCSRF: false }
         );
       });
     });
@@ -575,7 +575,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: true }
+          { allow: ['session', 'oauth'], requireCSRF: true }
         );
       });
     });
