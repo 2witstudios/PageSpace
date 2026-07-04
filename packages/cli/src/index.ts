@@ -48,6 +48,40 @@ export type { ExitCode } from './exit-codes.js';
 // Built-in commands.
 export { helpHandler } from './commands/help.js';
 export { CLI_VERSION, versionHandler } from './commands/version.js';
+export {
+  createLoginHandler,
+  DEFAULT_LOGIN_SCOPE,
+  DEFAULT_LOGIN_TIMEOUT_MS,
+  DEFAULT_MAX_PORT_ATTEMPTS,
+  loginHandler,
+} from './commands/login.js';
+export type { LoginHandlerDeps } from './commands/login.js';
+
+// Login flow — the pure loopback+PKCE state machine (Phase 4 task 3) and its
+// production effect adapters, reused by `pagespace whoami`/`logout` (task 5).
+export { runLoopbackLogin } from './auth/loopback-flow.js';
+export type {
+  ConfirmIdentity,
+  DiscoverMetadata,
+  DiscoveredMetadata,
+  ExchangeCode,
+  ExchangeCodeParams,
+  ExchangedTokens,
+  Identity,
+  LoopbackCallback,
+  LoopbackLoginDeps,
+  LoopbackLoginResult,
+  LoopbackServer,
+  OpenBrowser,
+  RandomBytes,
+  StartLoopbackServer,
+  WaitMs,
+} from './auth/loopback-flow.js';
+export { createLoopbackServer, LOOPBACK_HOST, PortBindError } from './auth/create-loopback-server.js';
+export { createDiscoverMetadata, DiscoveryError } from './auth/discover.js';
+export { createExchangeCode, TokenExchangeError } from './auth/exchange-code.js';
+export { confirmIdentity, whoamiOperation } from './auth/confirm-identity.js';
+export { openBrowser } from './auth/open-browser.js';
 
 // Composition root.
 export { run } from './run.js';
