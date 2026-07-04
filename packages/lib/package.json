@@ -12,6 +12,11 @@
     "lint": "eslint src"
   },
   "exports": {
+    "./api-contract-version": {
+      "types": "./dist/api-contract-version.d.ts",
+      "import": "./dist/api-contract-version.js",
+      "require": "./dist/api-contract-version.js"
+    },
     "./client-safe": {
       "types": "./dist/client-safe.d.ts",
       "import": "./dist/client-safe.js",

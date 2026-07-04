@@ -442,6 +442,7 @@
         "@capgo/capacitor-social-login": "^7.0.5",
         "@eslint/eslintrc": "^3",
         "@next/eslint-plugin-next": "15.5.18",
+        "@pagespace/sdk": "workspace:*",
         "@tailwindcss/postcss": "^4",
         "@types/jsdom": "^21.1.7",
         "@types/node": "^20",

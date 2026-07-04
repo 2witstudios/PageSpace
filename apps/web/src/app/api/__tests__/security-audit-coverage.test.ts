@@ -33,6 +33,7 @@ const AUDIT_CALL_PATTERN =
 const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- Public/unauthenticated endpoints (no user context to audit) ---
   ['health', 'Infrastructure health probe, no auth or user data'],
+  ['version', 'ADR 0001 D2 public handshake endpoint, no auth or user data, constant response'],
   ['compiled-css', 'Static CSS compilation, no user context'],
   ['contact', 'Public contact form, no authenticated user'],
   ['avatar/[userId]/[filename]', 'Public asset serving, no auth required'],
