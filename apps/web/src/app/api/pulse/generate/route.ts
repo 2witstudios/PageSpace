@@ -501,7 +501,7 @@ export async function POST(req: Request) {
     // ========================================
     const endOfToday = new Date(startOfToday.getTime() + 24 * 60 * 60 * 1000);
 
-    const overdueTasks = await db
+    const overdueTasks = driveIds.length > 0 ? await db
       .select({ title: pages.title, priority: taskItems.priority })
       .from(taskItems)
       .innerJoin(pages, eq(pages.id, taskItems.pageId))
@@ -509,13 +509,15 @@ export async function POST(req: Request) {
         and(
           or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
           ne(taskItems.status, 'completed'),
-          lt(taskItems.dueDate, startOfToday)
+          lt(taskItems.dueDate, startOfToday),
+          inArray(pages.driveId, driveIds),
+          eq(pages.isTrashed, false)
         )
       )
       .orderBy(desc(taskItems.priority))
-      .limit(5);
+      .limit(5) : [];
 
-    const todayTasks = await db
+    const todayTasks = driveIds.length > 0 ? await db
       .select({ title: pages.title, priority: taskItems.priority })
       .from(taskItems)
       .innerJoin(pages, eq(pages.id, taskItems.pageId))
@@ -524,10 +526,12 @@ export async function POST(req: Request) {
           or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
           ne(taskItems.status, 'completed'),
           gte(taskItems.dueDate, startOfToday),
-          lt(taskItems.dueDate, endOfToday)
+          lt(taskItems.dueDate, endOfToday),
+          inArray(pages.driveId, driveIds),
+          eq(pages.isTrashed, false)
         )
       )
-      .limit(5);
+      .limit(5) : [];
 
     // ========================================
     // 10. CALENDAR EVENTS
