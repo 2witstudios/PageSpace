@@ -39,7 +39,21 @@ import {
 import type { AuthProvider } from './auth/provider.js';
 import { getActivity } from './operations/activity.js';
 import { askAgent, listAgents, listModels, multiDriveListAgents, updateAgentConfig } from './operations/agents.js';
-import { sendChannelMessage } from './operations/channels.js';
+import {
+  createCalendarEvent,
+  deleteCalendarEvent,
+  deleteCalendarTrigger,
+  getCalendarEvent,
+  inviteCalendarAttendees,
+  listCalendarEvents,
+  removeCalendarAttendee,
+  rsvpCalendarEvent,
+  setCalendarTrigger,
+  updateCalendarEvent,
+} from './operations/calendar.js';
+import { deleteChannelMessage, sendChannelMessage } from './operations/channels.js';
+import { listCollaborators } from './operations/collaborators.js';
+import { createCommand, deleteCommand, listCommands, updateCommand } from './operations/commands.js';
 import { listConversations, readConversation } from './operations/conversations.js';
 import { createDrive, listDrives, renameDrive, restoreDrive, trashDrive, updateDriveContext } from './operations/drives.js';
 import {
@@ -54,6 +68,7 @@ import {
 } from './operations/pages.js';
 import { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
 import { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
+import { listDriveMembers } from './operations/members.js';
 import {
   createDriveRole,
   deleteDriveRole,
@@ -76,6 +91,7 @@ import {
 } from './operations/tasks.js';
 import { createMcpToken, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
 import { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
+import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
 import { buildRequest } from './transport/build-request.js';
@@ -159,6 +175,37 @@ const DEFAULT_OPERATIONS_MAP = {
   },
   channels: {
     send: sendChannelMessage,
+    delete: deleteChannelMessage,
+  },
+  calendar: {
+    list: listCalendarEvents,
+    get: getCalendarEvent,
+    create: createCalendarEvent,
+    update: updateCalendarEvent,
+    delete: deleteCalendarEvent,
+    rsvp: rsvpCalendarEvent,
+    inviteAttendees: inviteCalendarAttendees,
+    removeAttendee: removeCalendarAttendee,
+    setTrigger: setCalendarTrigger,
+    deleteTrigger: deleteCalendarTrigger,
+  },
+  collaborators: {
+    list: listCollaborators,
+  },
+  commands: {
+    list: listCommands,
+    create: createCommand,
+    update: updateCommand,
+    delete: deleteCommand,
+  },
+  members: {
+    list: listDriveMembers,
+  },
+  workflows: {
+    list: listWorkflows,
+    create: createWorkflow,
+    update: updateWorkflow,
+    delete: deleteWorkflow,
   },
 } as const;
 
@@ -208,6 +255,16 @@ function delay(ms: number): Promise<void> {
 
 function flattenOperations(map: OperationsMap): Operation[] {
   return Object.values(map).flatMap((methods) => Object.values(methods));
+}
+
+/**
+ * Every operation actually wired into the facade, across every namespace —
+ * the structural-completeness regression gate (`client-facade-completeness.test.ts`)
+ * diffs this against the full operation registry so a new operation left out
+ * of `DEFAULT_OPERATIONS_MAP` fails the suite instead of going unnoticed.
+ */
+export function listWiredOperations(): readonly Operation[] {
+  return flattenOperations(DEFAULT_OPERATIONS_MAP);
 }
 
 function buildNamespaces(
