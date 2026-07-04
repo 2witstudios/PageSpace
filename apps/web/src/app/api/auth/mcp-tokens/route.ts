@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -7,6 +7,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { rejectScopedOAuth } from './scope-guard';
 
 // 'oauth' lets the pagespace CLI (which never holds a session cookie —
 // `pagespace tokens create/list` authenticates with an OAuth access token
@@ -29,17 +30,6 @@ const createTokenSchema = z.object({
     customRoleId: z.string().optional(),
   })).optional(),
 }).refine(d => !(d.drives && d.driveIds), { message: 'Provide drives or driveIds, not both' });
-
-// A drive-scoped OAuth token acts as an app member for that drive only (ADR
-// 0002 Decision 2) — it must never mint, list, or manage the full mcp_*
-// credential surface. Only a full-user credential (session, or an
-// account-scoped OAuth token) may reach this route.
-function rejectScopedOAuth(auth: Parameters<typeof isScopedOAuthAuth>[0]): NextResponse | null {
-  if (isScopedOAuthAuth(auth)) {
-    return NextResponse.json({ error: 'insufficient_scope' }, { status: 403 });
-  }
-  return null;
-}
 
 // POST: Create a new MCP token
 export async function POST(req: NextRequest) {

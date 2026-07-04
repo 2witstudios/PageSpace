@@ -16,7 +16,7 @@ function liveRecord(overrides: Partial<RefreshTokenRecord> = {}): RefreshTokenRe
     expiresAt: new Date(Date.now() + 30 * DAY),
     familyExpiresAt: new Date(Date.now() + 90 * DAY),
     revokedAt: null,
-    replacedByTokenId: null,
+    revokedReason: null,
     tokenVersion: 0,
     ...overrides,
   };
@@ -68,10 +68,10 @@ describe('decideRefreshRotation — expiry', () => {
 });
 
 describe('decideRefreshRotation — reuse detection, grace window, grace-cache miss (ADR 0003 §7.3)', () => {
-  it('29s after revocation, replacedByTokenId set, graceCacheHit true → grace-replay', () => {
+  it('29s after revocation, revokedReason "rotated", graceCacheHit true → grace-replay', () => {
     const revokedAt = new Date();
     const now = new Date(revokedAt.getTime() + 29_000);
-    const record = liveRecord({ revokedAt, replacedByTokenId: 'next-token-id' });
+    const record = liveRecord({ revokedAt, revokedReason: 'rotated' });
 
     expect(decideRefreshRotation(record, 0, now, true)).toEqual({ ok: true, action: 'grace-replay' });
   });
@@ -79,7 +79,22 @@ describe('decideRefreshRotation — reuse detection, grace window, grace-cache m
   it('same inputs with graceCacheHit false → grace_cache_miss (NOT theft — family untouched)', () => {
     const revokedAt = new Date();
     const now = new Date(revokedAt.getTime() + 29_000);
-    const record = liveRecord({ revokedAt, replacedByTokenId: 'next-token-id' });
+    const record = liveRecord({ revokedAt, revokedReason: 'rotated' });
+
+    expect(decideRefreshRotation(record, 0, now, false)).toEqual({
+      ok: false,
+      reason: 'grace_cache_miss',
+      revokeFamily: false,
+    });
+  });
+
+  it('a TERMINAL rotation (F1: offline_access dropped, no next refresh token minted) still grants grace — revokedReason is "rotated" regardless of whether a replacement was minted', () => {
+    const revokedAt = new Date();
+    const now = new Date(revokedAt.getTime() + 5_000);
+    // A terminal rotation revokes the presented token for the SAME reason
+    // ('rotated') as any other rotation — it just doesn't mint a next
+    // refresh token. The grace-window branch must not require one.
+    const record = liveRecord({ revokedAt, revokedReason: 'rotated' });
 
     expect(decideRefreshRotation(record, 0, now, false)).toEqual({
       ok: false,
@@ -91,7 +106,7 @@ describe('decideRefreshRotation — reuse detection, grace window, grace-cache m
   it('31s after revocation (outside the 30s window), graceCacheHit true → reuse_detected regardless', () => {
     const revokedAt = new Date();
     const now = new Date(revokedAt.getTime() + 31_000);
-    const record = liveRecord({ revokedAt, replacedByTokenId: 'next-token-id' });
+    const record = liveRecord({ revokedAt, revokedReason: 'rotated' });
 
     expect(decideRefreshRotation(record, 0, now, true)).toEqual({
       ok: false,
@@ -103,7 +118,7 @@ describe('decideRefreshRotation — reuse detection, grace window, grace-cache m
   it('31s after revocation, graceCacheHit false → reuse_detected (same as true — cache state never overrides an out-of-window reuse)', () => {
     const revokedAt = new Date();
     const now = new Date(revokedAt.getTime() + 31_000);
-    const record = liveRecord({ revokedAt, replacedByTokenId: 'next-token-id' });
+    const record = liveRecord({ revokedAt, revokedReason: 'rotated' });
 
     expect(decideRefreshRotation(record, 0, now, false)).toEqual({
       ok: false,
@@ -115,7 +130,7 @@ describe('decideRefreshRotation — reuse detection, grace window, grace-cache m
   it('exactly at the 30s boundary is treated as OUTSIDE the window (fail closed) → reuse_detected', () => {
     const revokedAt = new Date();
     const now = new Date(revokedAt.getTime() + REFRESH_GRACE_WINDOW_MS);
-    const record = liveRecord({ revokedAt, replacedByTokenId: 'next-token-id' });
+    const record = liveRecord({ revokedAt, revokedReason: 'rotated' });
 
     expect(decideRefreshRotation(record, 0, now, true)).toEqual({
       ok: false,
@@ -124,10 +139,22 @@ describe('decideRefreshRotation — reuse detection, grace window, grace-cache m
     });
   });
 
-  it('revoked with no replacedByTokenId (e.g. already family-revoked) is reuse_detected even within 30s — no legitimate replacement to replay', () => {
+  it('revoked for reuse_detected (e.g. already family-revoked) is reuse_detected even within 30s — no legitimate rotation to explain the duplicate', () => {
     const revokedAt = new Date();
     const now = new Date(revokedAt.getTime() + 1_000);
-    const record = liveRecord({ revokedAt, replacedByTokenId: null });
+    const record = liveRecord({ revokedAt, revokedReason: 'reuse_detected' });
+
+    expect(decideRefreshRotation(record, 0, now, true)).toEqual({
+      ok: false,
+      reason: 'reuse_detected',
+      revokeFamily: true,
+    });
+  });
+
+  it('revoked for user_suspended is reuse_detected even within 30s — suspension is not a benign rotation', () => {
+    const revokedAt = new Date();
+    const now = new Date(revokedAt.getTime() + 1_000);
+    const record = liveRecord({ revokedAt, revokedReason: 'user_suspended' });
 
     expect(decideRefreshRotation(record, 0, now, true)).toEqual({
       ok: false,
@@ -144,7 +171,7 @@ describe('decideRefreshRotation — reuse detection, grace window, grace-cache m
 
     // Attacker replays the now-revoked, rotated-away token well after the grace window.
     const attackerNow = new Date(t0.getTime() + 60_000);
-    const stolenRecord = liveRecord({ revokedAt: t0, replacedByTokenId: 'legit-next-token-id' });
+    const stolenRecord = liveRecord({ revokedAt: t0, revokedReason: 'rotated' });
     const attackerDecision = decideRefreshRotation(stolenRecord, 0, attackerNow, false);
 
     expect(attackerDecision).toEqual({ ok: false, reason: 'reuse_detected', revokeFamily: true });
@@ -173,7 +200,7 @@ describe('decideRefreshRotation — tokenVersion mismatch (global logout, ADR 00
   it('reuse detection still takes precedence over a version mismatch (revocation checked first)', () => {
     const revokedAt = new Date();
     const now = new Date(revokedAt.getTime() + 60_000);
-    const record = liveRecord({ revokedAt, replacedByTokenId: 'next-token-id', tokenVersion: 1 });
+    const record = liveRecord({ revokedAt, revokedReason: 'rotated', tokenVersion: 1 });
 
     expect(decideRefreshRotation(record, 2, now, false)).toEqual({
       ok: false,

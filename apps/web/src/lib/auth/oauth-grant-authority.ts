@@ -12,22 +12,26 @@ import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { customRoleBelongsToDrive, getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
 
 export async function resolveGrantAuthority(scopes: ScopeSet, userId: string): Promise<GrantAuthority> {
-  const authorityMap = new Map<string, GrantAuthority extends ReadonlyMap<string, infer V> ? V : never>();
+  const entries = await Promise.all(
+    Array.from(scopes.drives, async ([driveId, scope]) => {
+      const [access, ownCustomRoleId, customRoleOk] = await Promise.all([
+        getDriveAccess(driveId, userId),
+        getMemberCustomRoleId(driveId, userId),
+        scope.role.kind === 'custom' ? customRoleBelongsToDrive(scope.role.customRoleId, driveId) : Promise.resolve(true),
+      ]);
 
-  for (const [driveId, scope] of scopes.drives) {
-    const access = await getDriveAccess(driveId, userId);
-    const ownCustomRoleId = await getMemberCustomRoleId(driveId, userId);
-    const customRoleOk =
-      scope.role.kind === 'custom' ? await customRoleBelongsToDrive(scope.role.customRoleId, driveId) : true;
+      return [
+        driveId,
+        {
+          isOwner: access.isOwner,
+          isMember: access.isMember,
+          isAdmin: access.isAdmin,
+          ownCustomRoleId,
+          roleBelongsToDrive: () => customRoleOk,
+        },
+      ] as const;
+    }),
+  );
 
-    authorityMap.set(driveId, {
-      isOwner: access.isOwner,
-      isMember: access.isMember,
-      isAdmin: access.isAdmin,
-      ownCustomRoleId,
-      roleBelongsToDrive: () => customRoleOk,
-    });
-  }
-
-  return authorityMap;
+  return new Map(entries);
 }

@@ -447,7 +447,7 @@ describe('refreshTokenGrant — F1: refresh token gated on offline_access', () =
     expect(accessRows[0].scopes).toEqual(['account']);
   });
 
-  it('a terminal (access-only) rotation still marks replacedByTokenId non-null, so a benign in-window retry is NOT mistaken for reuse (Codex P2)', async () => {
+  it('a terminal (access-only) rotation still records revokedReason "rotated" (honest null replacedByTokenId), so a benign in-window retry is NOT mistaken for reuse (Codex P2)', async () => {
     seedRefreshRow({ scopes: ['account', 'offline_access'] });
 
     const result = await refreshTokenGrant({
@@ -458,12 +458,15 @@ describe('refreshTokenGrant — F1: refresh token gated on offline_access', () =
     });
 
     expect(result.outcome).toBe('ok');
-    // decideRefreshRotation's grace-window branch only applies when
-    // replacedByTokenId !== null — without a marker here, ANY presentation of
-    // this now-revoked token (even a benign dropped-connection retry inside
-    // the 30s window) falls straight through to reuse_detected and revokes
-    // the whole family, including the access token this call just issued.
-    expect(refreshRows[0].replacedByTokenId).not.toBeNull();
+    // decideRefreshRotation's grace-window branch keys off revokedReason ===
+    // 'rotated' (not replacedByTokenId, which is honestly null here — there
+    // really is no next refresh row for a terminal rotation). Without this,
+    // ANY presentation of this now-revoked token (even a benign
+    // dropped-connection retry inside the 30s window) would fall straight
+    // through to reuse_detected and revoke the whole family, including the
+    // access token this call just issued.
+    expect(refreshRows[0].revokedReason).toBe('rotated');
+    expect(refreshRows[0].replacedByTokenId).toBeNull();
   });
 
   it('a benign duplicate/retry within the grace window on a terminal rotation does NOT revoke the family (Codex P2)', async () => {

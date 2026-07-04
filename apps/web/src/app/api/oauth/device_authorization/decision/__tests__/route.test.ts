@@ -214,6 +214,19 @@ describe('POST /api/oauth/device_authorization/decision — P1b: grant-authority
     expect(recordDeviceApproval).not.toHaveBeenCalled();
   });
 
+  it('allows approving a device code that requested NO scope at all (vacuous authority pass, matching device_authorization/route.ts allowing an empty scope) — regression guard', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: [] });
+    recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, action: 'approved' });
+    expect(recordDeviceApproval).toHaveBeenCalled();
+    // Nothing to authorize, so no drive-access lookups should even run.
+    expect(getDriveAccess).not.toHaveBeenCalled();
+  });
+
   it('allows approving a scope the user has authority to grant', async () => {
     verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:member'] });
     getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });

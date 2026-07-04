@@ -59,7 +59,13 @@ export async function POST(req: NextRequest) {
 
   if (body.action === 'approve') {
     const lookup = await verifyDeviceUserCode({ userCode: normalized, now: new Date() });
-    if (lookup.outcome === 'ok') {
+    // An empty scope list is a legitimate device-authorization request
+    // (device_authorization/route.ts leaves `scopes: []` when the initial
+    // POST omits `scope` entirely) — nothing to authorize, so skip straight
+    // to recordDeviceApproval. `parseScopeList` rejects an empty string
+    // outright (`empty_scope`), which is correct for the wire-level `scope`
+    // grammar but would wrongly block approval of this valid empty case.
+    if (lookup.outcome === 'ok' && lookup.scopes.length > 0) {
       const parsed = parseScopeList(lookup.scopes.join(' '));
       const authority =
         parsed.ok && checkGrantAuthority(parsed.scopes, await resolveGrantAuthority(parsed.scopes, auth.userId));

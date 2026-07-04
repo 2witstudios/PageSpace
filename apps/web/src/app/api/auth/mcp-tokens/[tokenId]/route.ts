@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { normalizeDriveScopes } from '@pagespace/lib/auth/mcp-token-scopes';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { rejectScopedOAuth } from '../scope-guard';
 
 // 'oauth' lets the pagespace CLI (`pagespace tokens revoke`) authenticate
 // with an OAuth access token instead of a session cookie — see the sibling
@@ -28,17 +29,6 @@ const updateTokenScopesSchema = z.object({
 }).refine(d => d.drives !== undefined || d.driveIds !== undefined, {
   message: 'Provide drives or driveIds',
 });
-
-// A drive-scoped OAuth token acts as an app member for that drive only (ADR
-// 0002 Decision 2) — it must never manage the full mcp_* credential surface.
-// Only a full-user credential (session, or an account-scoped OAuth token) may
-// reach this route.
-function rejectScopedOAuth(auth: Parameters<typeof isScopedOAuthAuth>[0]): NextResponse | null {
-  if (isScopedOAuthAuth(auth)) {
-    return NextResponse.json({ error: 'insufficient_scope' }, { status: 403 });
-  }
-  return null;
-}
 
 // DELETE: Revoke an MCP token
 export async function DELETE(
