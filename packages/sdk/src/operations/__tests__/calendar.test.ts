@@ -655,6 +655,14 @@ describe('computeFreeSlots — pure availability computation (check_calendar_ava
     ]);
   });
 
+  it('clamps a free-slot end to the range end when an event starts after the range (overruns end)', () => {
+    const slots = computeFreeSlots(
+      [{ startAt: '2026-02-01T18:00:00.000Z', endAt: '2026-02-01T19:00:00.000Z' }],
+      { startAt: '2026-02-01T09:00:00.000Z', endAt: '2026-02-01T17:00:00.000Z' },
+    );
+    expect(slots).toEqual([{ startAt: '2026-02-01T09:00:00.000Z', endAt: '2026-02-01T17:00:00.000Z' }]);
+  });
+
   it('is order-independent — unsorted input events produce the same result as sorted input', () => {
     const events = [
       { startAt: '2026-02-01T05:00:00.000Z', endAt: '2026-02-01T06:00:00.000Z' },

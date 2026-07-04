@@ -213,6 +213,7 @@ const agentTriggerInputSchema = z
     instructionPageId: z.string().nullable().optional(),
     contextPageIds: z.array(z.string()).max(10).optional(),
   })
+  .strict()
   .refine((v) => Boolean(v.prompt) || Boolean(v.instructionPageId), {
     message: 'agentTrigger needs either a prompt or an instructionPageId',
     path: ['prompt'],
@@ -246,6 +247,7 @@ export const listCalendarEvents = defineOperation({
        */
       includePersonal: z.boolean().optional(),
     })
+    .strict()
     .refine((v) => v.context !== 'drive' || Boolean(v.driveId), {
       message: 'driveId is required for drive context',
       path: ['driveId'],
@@ -266,7 +268,7 @@ export const getCalendarEvent = defineOperation({
   name: 'calendar.get',
   method: 'GET',
   path: '/api/calendar/events/:eventId',
-  inputSchema: z.object({ eventId: z.string() }),
+  inputSchema: z.object({ eventId: z.string() }).strict(),
   outputSchema: calendarEventSchema,
   description: 'Get a single calendar event by id. Fails closed with 404/403 per canAccessEvent visibility rules.',
 });
@@ -297,6 +299,7 @@ export const createCalendarEvent = defineOperation({
       attendeeIds: z.array(z.string()).optional(),
       agentTrigger: agentTriggerInputSchema.optional(),
     })
+    .strict()
     .refine((v) => !v.agentTrigger || Boolean(v.driveId), {
       message: 'Agent triggers require a drive event',
       path: ['agentTrigger'],
@@ -314,29 +317,31 @@ export const updateCalendarEvent = defineOperation({
   name: 'calendar.update',
   method: 'PATCH',
   path: '/api/calendar/events/:eventId',
-  inputSchema: z.object({
-    eventId: z.string(),
-    title: z.string().min(1).max(500).optional(),
-    description: z.string().max(10000).nullable().optional(),
-    location: z.string().max(1000).nullable().optional(),
-    startAt: isoDatetimeSchema.optional(),
-    endAt: isoDatetimeSchema.optional(),
-    allDay: z.boolean().optional(),
-    timezone: z.string().optional(),
-    recurrenceRule: recurrenceRuleInputSchema.nullable().optional(),
-    visibility: eventVisibilityEnum.optional(),
-    color: z.string().optional(),
-    pageId: z.string().nullable().optional(),
-    /**
-     * Three-state field, not a default: `undefined` leaves any existing
-     * trigger alone, `null` removes it, an object upserts it. The route
-     * requires the event to already have a driveId for the object case, but
-     * that isn't visible from this input alone (unlike create), so it's not
-     * refined client-side — mirrors `tasks.update`'s precedent of not
-     * failing closed on server-only state.
-     */
-    agentTrigger: agentTriggerInputSchema.nullable().optional(),
-  }),
+  inputSchema: z
+    .object({
+      eventId: z.string(),
+      title: z.string().min(1).max(500).optional(),
+      description: z.string().max(10000).nullable().optional(),
+      location: z.string().max(1000).nullable().optional(),
+      startAt: isoDatetimeSchema.optional(),
+      endAt: isoDatetimeSchema.optional(),
+      allDay: z.boolean().optional(),
+      timezone: z.string().optional(),
+      recurrenceRule: recurrenceRuleInputSchema.nullable().optional(),
+      visibility: eventVisibilityEnum.optional(),
+      color: z.string().optional(),
+      pageId: z.string().nullable().optional(),
+      /**
+       * Three-state field, not a default: `undefined` leaves any existing
+       * trigger alone, `null` removes it, an object upserts it. The route
+       * requires the event to already have a driveId for the object case, but
+       * that isn't visible from this input alone (unlike create), so it's not
+       * refined client-side — mirrors `tasks.update`'s precedent of not
+       * failing closed on server-only state.
+       */
+      agentTrigger: agentTriggerInputSchema.nullable().optional(),
+    })
+    .strict(),
   outputSchema: calendarEventSchema,
   description:
     'Update a calendar event\'s fields. agentTrigger is three-state: omit to leave it alone, null to remove it, or an object to upsert it (requires the event already have a drive).',
@@ -350,7 +355,7 @@ export const deleteCalendarEvent = defineOperation({
   name: 'calendar.delete',
   method: 'DELETE',
   path: '/api/calendar/events/:eventId',
-  inputSchema: z.object({ eventId: z.string() }),
+  inputSchema: z.object({ eventId: z.string() }).strict(),
   outputSchema: z.object({ success: z.boolean() }),
   description: 'Soft-delete (trash) a calendar event. Only the creator or a drive owner/admin may delete it.',
 });
@@ -363,12 +368,14 @@ export const rsvpCalendarEvent = defineOperation({
   name: 'calendar.rsvp',
   method: 'PATCH',
   path: '/api/calendar/events/:eventId/attendees',
-  inputSchema: z.object({
-    eventId: z.string(),
-    /** Full route enum (the old tool only exposed ACCEPTED/DECLINED/TENTATIVE) — PENDING is a legal RSVP too. */
-    status: attendeeStatusEnum,
-    responseNote: z.string().max(500).nullable().optional(),
-  }),
+  inputSchema: z
+    .object({
+      eventId: z.string(),
+      /** Full route enum (the old tool only exposed ACCEPTED/DECLINED/TENTATIVE) — PENDING is a legal RSVP too. */
+      status: attendeeStatusEnum,
+      responseNote: z.string().max(500).nullable().optional(),
+    })
+    .strict(),
   outputSchema: attendeeBaseSchema,
   description:
     "Update the caller's own RSVP status for an event. Returns the bare updated attendee row (no nested user). The caller must already be an attendee.",
@@ -382,11 +389,13 @@ export const inviteCalendarAttendees = defineOperation({
   name: 'calendar.inviteAttendees',
   method: 'POST',
   path: '/api/calendar/events/:eventId/attendees',
-  inputSchema: z.object({
-    eventId: z.string(),
-    userIds: z.array(z.string()).min(1),
-    isOptional: z.boolean().optional(),
-  }),
+  inputSchema: z
+    .object({
+      eventId: z.string(),
+      userIds: z.array(z.string()).min(1),
+      isOptional: z.boolean().optional(),
+    })
+    .strict(),
   /**
    * The route has two 200 shapes: `{attendees}` normally, or `{message}`
    * when every requested user is already an attendee (route source:
@@ -413,7 +422,7 @@ export const removeCalendarAttendee = defineOperation({
    * string of a non-GET operation without touching the shared transport.
    */
   path: '/api/calendar/events/:eventId/attendees?userId=:userId',
-  inputSchema: z.object({ eventId: z.string(), userId: z.string() }),
+  inputSchema: z.object({ eventId: z.string(), userId: z.string() }).strict(),
   outputSchema: successSchema,
   description:
     "Remove an attendee from an event. The event creator can remove anyone; any attendee can remove themselves. Cannot remove the organizer. userId travels as a query param, never a body field (D6 fix — the route ignores the body).",
@@ -453,7 +462,7 @@ export const deleteCalendarTrigger = defineOperation({
   name: 'calendar.deleteTrigger',
   method: 'DELETE',
   path: '/api/calendar/events/:eventId/triggers',
-  inputSchema: z.object({ eventId: z.string() }),
+  inputSchema: z.object({ eventId: z.string() }).strict(),
   outputSchema: successSchema,
   description: "Remove the agent trigger from a calendar event. Idempotent — succeeds even if no trigger exists.",
 });
@@ -494,8 +503,9 @@ export function computeFreeSlots(events: readonly TimedEvent[], range: { startAt
 
   for (const event of sorted) {
     const eventStart = new Date(event.startAt);
-    if (eventStart > current) {
-      freeSlots.push({ startAt: current.toISOString(), endAt: eventStart.toISOString() });
+    const gapEnd = eventStart < rangeEnd ? eventStart : rangeEnd;
+    if (gapEnd > current) {
+      freeSlots.push({ startAt: current.toISOString(), endAt: gapEnd.toISOString() });
     }
     const eventEnd = new Date(event.endAt);
     if (eventEnd > current) current = eventEnd;
