@@ -123,6 +123,21 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
   describe('POST /api/auth/mcp-tokens', () => {
     describe('authentication', () => {
+      it('allows OAuth bearer tokens (CLI `pagespace tokens create`), not just session cookies', async () => {
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Token' }),
+        });
+
+        await POST(request);
+
+        expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+          request,
+          expect.objectContaining({ allow: expect.arrayContaining(['oauth']) })
+        );
+      });
+
       it('returns auth error response when not authenticated', async () => {
         const mockErrorResponse = Response.json({ error: 'Unauthorized' }, { status: 401 });
         vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
@@ -326,6 +341,20 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
   describe('GET /api/auth/mcp-tokens', () => {
     describe('authentication', () => {
+      it('allows OAuth bearer tokens (CLI `pagespace tokens list`), not just session cookies', async () => {
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'GET',
+          headers: { Cookie: 'ps_session=valid-token' },
+        });
+
+        await GET(request);
+
+        expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+          request,
+          expect.objectContaining({ allow: expect.arrayContaining(['oauth']) })
+        );
+      });
+
       it('returns auth error response when not authenticated', async () => {
         const mockErrorResponse = Response.json({ error: 'Unauthorized' }, { status: 401 });
         vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
@@ -370,6 +399,31 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(response.status).toBe(200);
         expect(body[0].driveScopes.length).toBe(1);
         expect(body[0].driveScopes[0].id).toBe('drive-1');
+      });
+
+      it('includes tokenPrefix in the response so the CLI can display it without ever showing the full token', async () => {
+        vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([
+          {
+            id: 'token-1',
+            name: 'Token 1',
+            tokenPrefix: 'mcp_abcdefghijk',
+            lastUsed: null,
+            createdAt: new Date(),
+            isScoped: true,
+            driveScopes: [],
+          },
+        ] as never);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'GET',
+          headers: { Cookie: 'ps_session=valid-token' },
+        });
+
+        const response = await GET(request);
+        const body = await response.json();
+
+        expect(body[0].tokenPrefix).toBe('mcp_abcdefghijk');
+        expect(JSON.stringify(body)).not.toContain('"token":');
       });
 
       it('includes isScoped field in response', async () => {
