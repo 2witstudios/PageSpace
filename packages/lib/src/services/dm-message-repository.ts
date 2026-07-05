@@ -91,6 +91,12 @@ export interface ValidateAttachmentForDmInput {
  * has its own parent-locking transaction, so attachment validation stays outside
  * it here. The top-level send path uses `insertDmMessageWithAttachment` instead,
  * which validates and inserts inside a single transaction.
+ *
+ * This pre-check takes no lock on `files`/`fileConversations`, so unlike the
+ * top-level path it is NOT race-safe against a concurrent `purgeInactiveMessages`
+ * cleanup — the reply (or its `alsoSendToParent` mirror) can still commit
+ * referencing a link that purge drops in the gap between this check and the
+ * reply's insert. Accepted, tracked gap: see issue #1865.
  */
 async function validateAttachmentForDm(
   input: ValidateAttachmentForDmInput
@@ -369,11 +375,14 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
         fileId: directMessages.fileId,
       });
 
-    const purgedAttachmentPairs = purgedMessages.flatMap((message) =>
-      message.fileId
-        ? [{ fileId: message.fileId, conversationId: message.conversationId }]
-        : []
-    );
+    const purgedAttachmentPairKeys = new Set<string>();
+    const purgedAttachmentPairs = purgedMessages.flatMap((message) => {
+      if (!message.fileId) return [];
+      const key = `${message.fileId}:${message.conversationId}`;
+      if (purgedAttachmentPairKeys.has(key)) return [];
+      purgedAttachmentPairKeys.add(key);
+      return [{ fileId: message.fileId, conversationId: message.conversationId }];
+    });
 
     if (purgedAttachmentPairs.length > 0) {
       const pairValues = () =>

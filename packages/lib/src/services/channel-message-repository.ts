@@ -118,6 +118,11 @@ async function loadChannelMessageWithRelations(id: string) {
  * has its own parent-locking transaction, so attachment validation stays outside
  * it here. The top-level send path uses `insertChannelMessageWithAttachment`
  * instead, which validates and inserts inside a single transaction.
+ *
+ * This pre-check takes no lock on `files`, so unlike the top-level path it is
+ * NOT race-safe against a concurrent file delete — a delete landing between
+ * this check and the reply's (or its mirror's) insert can still turn into a
+ * DB error instead of a clean rejection. Accepted, tracked gap: see issue #1865.
  */
 async function fileExists(fileId: string): Promise<boolean> {
   const row = await db.query.files.findFirst({

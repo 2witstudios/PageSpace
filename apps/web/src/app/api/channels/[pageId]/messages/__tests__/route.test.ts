@@ -660,7 +660,7 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     vi.unstubAllGlobals();
   });
 
-  it('routes top-level posts through insertChannelMessage (no thread helper)', async () => {
+  it('routes top-level posts through insertChannelMessageWithAttachment (no thread helper)', async () => {
     const res = await callPost({ content: 'hi' });
 
     expect(res.status).toBe(201);

@@ -323,9 +323,12 @@ describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
 
     assert({
       given: 'a channel message insert with a valid fileId',
-      should: 'invoke .for("update") against files exactly once before inserting',
-      actual: testDbState.selectsForUpdate('files').length,
-      expected: 1,
+      should: 'invoke .for("update") against files exactly once before inserting, all inside a single db.transaction',
+      actual: {
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: { fileLocks: 1, transactionCalls: 1 },
     });
   });
 

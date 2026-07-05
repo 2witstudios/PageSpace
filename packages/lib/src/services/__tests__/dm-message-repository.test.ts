@@ -979,14 +979,21 @@ describe('dmMessageRepository.insertDmMessageWithAttachment', () => {
     const inserted = testDbState.rows('directMessages')[0];
     assert({
       given: 'a fileId owned by the sender and linked to the conversation',
-      should: 'lock both the file and link rows exactly once, then insert the message referencing the file',
+      should: 'lock both the file and link rows exactly once, then insert the message referencing the file, all inside a single db.transaction',
       actual: {
         kind: result.kind,
         insertedFileId: inserted?.fileId,
         fileLocks: testDbState.selectsForUpdate('files').length,
         linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+        transactionCalls: testDbState.transactionCalls(),
       },
-      expected: { kind: 'ok', insertedFileId: 'file-1', fileLocks: 1, linkLocks: 1 },
+      expected: {
+        kind: 'ok',
+        insertedFileId: 'file-1',
+        fileLocks: 1,
+        linkLocks: 1,
+        transactionCalls: 1,
+      },
     });
   });
 
