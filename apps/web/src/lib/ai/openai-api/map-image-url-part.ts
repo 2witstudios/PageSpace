@@ -1,22 +1,18 @@
 /**
- * Pure mapper from an OpenAI-format `image_url` content part to PageSpace's internal
- * file-part shape (mirrors the AI SDK's FileUIPart). Extracted so the OpenAI-compat
- * message normalizer (validate-inference-request.ts) stays a thin caller and the
- * mapping/rejection rules are unit-testable in isolation.
+ * Pure mapper from an OpenAI-format `image_url` content part to the AI SDK's FileUIPart
+ * shape. Extracted so the OpenAI-compat message normalizer (validate-inference-request.ts)
+ * stays a thin caller and the mapping/rejection rules are unit-testable in isolation.
  *
  * PageSpace only accepts inline data: URLs for images — there is no server-side fetch
  * of remote URLs, so a remote http(s) image_url is rejected here rather than silently
- * dropped or fetched.
+ * dropped or fetched. The data: URL must carry a MIME segment because FileUIPart
+ * requires a mediaType (and the downstream image validator rejects MIME-less data URLs
+ * anyway).
  */
-export interface FilePart {
-  type: 'file';
-  url: string;
-  mediaType?: string;
-  filename?: string;
-}
+import type { FileUIPart } from 'ai';
 
 export type ImageUrlMapResult =
-  | { ok: true; part: FilePart }
+  | { ok: true; part: FileUIPart }
   | { ok: false; error: string };
 
 const DATA_URL_MEDIA_TYPE = /^data:([^;,]+)/;
@@ -33,5 +29,8 @@ export const mapImageUrlPartToFilePart = (part: Record<string, unknown>): ImageU
   }
 
   const match = DATA_URL_MEDIA_TYPE.exec(url);
-  return { ok: true, part: { type: 'file', url, mediaType: match?.[1] } };
+  if (!match) {
+    return { ok: false, error: 'image_url data: URL must include a MIME type (e.g. data:image/png;base64,...)' };
+  }
+  return { ok: true, part: { type: 'file', url, mediaType: match[1] } };
 };

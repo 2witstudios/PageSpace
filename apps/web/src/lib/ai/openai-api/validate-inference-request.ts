@@ -44,14 +44,16 @@ type NormalizeMessageResult =
 const normalizeMessage = (msg: Record<string, unknown>): NormalizeMessageResult => {
   const id = typeof msg.id === 'string' ? msg.id : createId();
   if (Array.isArray(msg.parts)) {
+    // Pre-built parts arrays are client-controlled and pass through unverified here;
+    // the route validates any file parts they carry before inference.
     return { ok: true, message: { ...msg, id } as unknown as UIMessage };
   }
   const role = msg.role as UIMessage['role'];
   if (typeof msg.content === 'string') {
-    return { ok: true, message: { id, role, parts: [{ type: 'text' as const, text: msg.content }] } as unknown as UIMessage };
+    return { ok: true, message: { id, role, parts: [{ type: 'text', text: msg.content }] } };
   }
   if (Array.isArray(msg.content)) {
-    const parts: Array<Record<string, unknown>> = [];
+    const parts: UIMessage['parts'] = [];
     for (const c of msg.content as Array<Record<string, unknown>>) {
       if (c.type === 'text' && typeof c.text === 'string') {
         parts.push({ type: 'text', text: c.text });
@@ -60,12 +62,12 @@ const normalizeMessage = (msg: Record<string, unknown>): NormalizeMessageResult 
         if (!mapped.ok) {
           return { ok: false, error: mapped.error };
         }
-        parts.push({ ...mapped.part });
+        parts.push(mapped.part);
       }
     }
-    return { ok: true, message: { id, role, parts } as unknown as UIMessage };
+    return { ok: true, message: { id, role, parts } };
   }
-  return { ok: true, message: { id, role, parts: [] } as unknown as UIMessage };
+  return { ok: true, message: { id, role, parts: [] } };
 };
 
 type NormalizeResult =

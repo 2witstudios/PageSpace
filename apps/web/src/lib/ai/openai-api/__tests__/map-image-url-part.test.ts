@@ -47,14 +47,14 @@ describe('mapImageUrlPartToFilePart', () => {
     });
   });
 
-  test('data: URL with no explicit mediaType', () => {
+  test('data: URL with no MIME type segment is rejected', () => {
     const part = { type: 'image_url', image_url: { url: 'data:,plaintext' } };
     const result = mapImageUrlPartToFilePart(part);
     assert({
       given: 'a data: URL with no MIME type segment',
-      should: 'return ok:true with mediaType undefined',
+      should: 'return ok:false — FileUIPart requires a mediaType and the image validator would reject it downstream anyway',
       actual: result,
-      expected: { ok: true, part: { type: 'file', url: 'data:,plaintext', mediaType: undefined } },
+      expected: { ok: false, error: 'image_url data: URL must include a MIME type (e.g. data:image/png;base64,...)' },
     });
   });
 });
