@@ -37,7 +37,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 const mockListChannelMessages = vi.fn();
 const mockListChannelThreadReplies = vi.fn();
 const mockFindChannelMessageInPage = vi.fn();
-const mockInsertChannelMessage = vi.fn();
+const mockInsertChannelMessageWithAttachment = vi.fn();
 const mockInsertChannelThreadReply = vi.fn();
 const mockUpsertChannelReadStatus = vi.fn();
 const mockLoadChannelMessageWithRelations = vi.fn();
@@ -48,7 +48,7 @@ vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
     listChannelMessages: (...args: unknown[]) => mockListChannelMessages(...args),
     listChannelThreadReplies: (...args: unknown[]) => mockListChannelThreadReplies(...args),
     findChannelMessageInPage: (...args: unknown[]) => mockFindChannelMessageInPage(...args),
-    insertChannelMessage: (...args: unknown[]) => mockInsertChannelMessage(...args),
+    insertChannelMessageWithAttachment: (...args: unknown[]) => mockInsertChannelMessageWithAttachment(...args),
     insertChannelThreadReply: (...args: unknown[]) => mockInsertChannelThreadReply(...args),
     upsertChannelReadStatus: (...args: unknown[]) => mockUpsertChannelReadStatus(...args),
     loadChannelMessageWithRelations: (...args: unknown[]) => mockLoadChannelMessageWithRelations(...args),
@@ -319,7 +319,7 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
         alsoSendToParent: false,
       })
     );
-    expect(mockInsertChannelMessage).not.toHaveBeenCalled();
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
     // Replying in a thread is NOT the same as reading the channel — the
     // thread path must NOT upsert channelReadStatus (which would silently
     // mark unread top-level messages as read).
@@ -645,7 +645,7 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
-    mockInsertChannelMessage.mockResolvedValue({ id: 'msg-1' });
+    mockInsertChannelMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: { id: 'msg-1' } });
     mockUpsertChannelReadStatus.mockResolvedValue(undefined);
     mockLoadChannelMessageWithRelations.mockResolvedValue({
       id: 'msg-1',
@@ -664,7 +664,7 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     const res = await callPost({ content: 'hi' });
 
     expect(res.status).toBe(201);
-    expect(mockInsertChannelMessage).toHaveBeenCalledWith(
+    expect(mockInsertChannelMessageWithAttachment).toHaveBeenCalledWith(
       expect.objectContaining({ pageId: PAGE_ID, userId: USER_ID, content: 'hi' })
     );
     expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
@@ -677,7 +677,7 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     const res = await callPost({ content: 'hi' });
 
     expect(res.status).toBe(401);
-    expect(mockInsertChannelMessage).not.toHaveBeenCalled();
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
   });
 });
 
@@ -692,7 +692,7 @@ describe('POST /api/channels/[pageId]/messages (top-level — mention notificati
     fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
-    mockInsertChannelMessage.mockResolvedValue({ id: 'msg-1' });
+    mockInsertChannelMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: { id: 'msg-1' } });
     mockUpsertChannelReadStatus.mockResolvedValue(undefined);
     mockLoadChannelMessageWithRelations.mockResolvedValue({
       id: 'msg-1',

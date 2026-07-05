@@ -86,6 +86,12 @@ export interface ValidateAttachmentForDmInput {
   senderId: string;
 }
 
+/**
+ * Standalone pre-check used only by the thread-reply path — `insertDmThreadReply`
+ * has its own parent-locking transaction, so attachment validation stays outside
+ * it here. The top-level send path uses `insertDmMessageWithAttachment` instead,
+ * which validates and inserts inside a single transaction.
+ */
 async function validateAttachmentForDm(
   input: ValidateAttachmentForDmInput
 ): Promise<AttachmentValidation> {
@@ -130,19 +136,68 @@ export interface InsertDmMessageInput {
 
 export type DmMessageRow = InferSelectModel<typeof directMessages>;
 
-async function insertDmMessage(input: InsertDmMessageInput): Promise<DmMessageRow> {
-  const [row] = await db
-    .insert(directMessages)
-    .values({
-      conversationId: input.conversationId,
-      senderId: input.senderId,
-      content: input.content,
-      fileId: input.fileId,
-      attachmentMeta: input.attachmentMeta,
-      quotedMessageId: input.quotedMessageId ?? null,
-    })
-    .returning();
-  return row;
+export type InsertDmMessageResult =
+  | { kind: 'ok'; message: DmMessageRow }
+  | { kind: 'not_found' }
+  | { kind: 'wrong_owner' }
+  | { kind: 'not_linked' };
+
+/**
+ * Validates the attachment (if any) and inserts the top-level DM in one
+ * transaction. Without this, a validate-then-insert-later split lets a
+ * concurrent `purgeInactiveMessages` orphan-link cleanup delete the
+ * `fileConversations` row between our validation read and the INSERT — the
+ * SELECT ... FOR UPDATE locks below block that DELETE until this tx commits,
+ * so purge's NOT EXISTS check always sees the message we're about to write.
+ */
+async function insertDmMessageWithAttachment(
+  input: InsertDmMessageInput
+): Promise<InsertDmMessageResult> {
+  return db.transaction(async (tx) => {
+    if (input.fileId) {
+      const [file] = await tx
+        .select({ id: files.id, createdBy: files.createdBy })
+        .from(files)
+        .where(eq(files.id, input.fileId))
+        .for('update');
+
+      if (!file) {
+        return { kind: 'not_found' };
+      }
+      if (file.createdBy !== input.senderId) {
+        return { kind: 'wrong_owner' };
+      }
+
+      const [link] = await tx
+        .select({ fileId: fileConversations.fileId })
+        .from(fileConversations)
+        .where(
+          and(
+            eq(fileConversations.fileId, input.fileId),
+            eq(fileConversations.conversationId, input.conversationId)
+          )
+        )
+        .for('update');
+
+      if (!link) {
+        return { kind: 'not_linked' };
+      }
+    }
+
+    const [row] = await tx
+      .insert(directMessages)
+      .values({
+        conversationId: input.conversationId,
+        senderId: input.senderId,
+        content: input.content,
+        fileId: input.fileId,
+        attachmentMeta: input.attachmentMeta,
+        quotedMessageId: input.quotedMessageId ?? null,
+      })
+      .returning();
+
+    return { kind: 'ok', message: row };
+  });
 }
 
 export interface UpdateConversationLastMessageInput {
@@ -680,7 +735,7 @@ async function removeDmReaction(input: DmReactionInput): Promise<number> {
 export const dmMessageRepository = {
   findConversationForParticipant,
   validateAttachmentForDm,
-  insertDmMessage,
+  insertDmMessageWithAttachment,
   updateConversationLastMessage,
   findActiveMessage,
   findMessageInConversation,

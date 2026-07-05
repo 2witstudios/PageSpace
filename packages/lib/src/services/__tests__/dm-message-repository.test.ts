@@ -871,14 +871,19 @@ describe('dmMessageRepository.removeDmReaction', () => {
   });
 });
 
-describe('dmMessageRepository.insertDmMessage', () => {
+describe('dmMessageRepository.insertDmMessageWithAttachment', () => {
+  const baseInput = {
+    conversationId: 'conv-1',
+    senderId: 'user-1',
+    content: 'hello',
+    fileId: null as string | null,
+    attachmentMeta: null,
+  };
+
   it('persists an explicit quotedMessageId on the row when provided', async () => {
-    await dmMessageRepository.insertDmMessage({
-      conversationId: 'conv-1',
-      senderId: 'user-1',
+    await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
       content: 'inline quote reply',
-      fileId: null,
-      attachmentMeta: null,
       quotedMessageId: 'quoted-dm-1',
     });
 
@@ -892,12 +897,9 @@ describe('dmMessageRepository.insertDmMessage', () => {
   });
 
   it('persists null quotedMessageId when the caller omits the field', async () => {
-    await dmMessageRepository.insertDmMessage({
-      conversationId: 'conv-1',
-      senderId: 'user-1',
+    await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
       content: 'plain top-level message',
-      fileId: null,
-      attachmentMeta: null,
     });
 
     const inserted = testDbState.rows('directMessages')[0];
@@ -906,6 +908,91 @@ describe('dmMessageRepository.insertDmMessage', () => {
       should: 'still write the column as null rather than dropping it from the payload',
       actual: inserted.quotedMessageId,
       expected: null,
+    });
+  });
+
+  it('inserts without touching files/fileConversations when no fileId is provided', async () => {
+    const result = await dmMessageRepository.insertDmMessageWithAttachment(baseInput);
+
+    assert({
+      given: 'a text-only top-level DM',
+      should: 'return kind ok, insert the row, and never lock files or fileConversations',
+      actual: {
+        kind: result.kind,
+        rowCount: testDbState.count('directMessages'),
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+      },
+      expected: { kind: 'ok', rowCount: 1, fileLocks: 0, linkLocks: 0 },
+    });
+  });
+
+  it('validates and inserts atomically when fileId is owned by the sender and linked to the conversation', async () => {
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-1' }]);
+    testDbState.seed('fileConversations', [{ fileId: 'file-1', conversationId: 'conv-1' }]);
+
+    const result = await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      fileId: 'file-1',
+    });
+
+    const inserted = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'a fileId owned by the sender and linked to the conversation',
+      should: 'lock both the file and link rows exactly once, then insert the message referencing the file',
+      actual: {
+        kind: result.kind,
+        insertedFileId: inserted?.fileId,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+      },
+      expected: { kind: 'ok', insertedFileId: 'file-1', fileLocks: 1, linkLocks: 1 },
+    });
+  });
+
+  it('rejects with not_found and inserts nothing when the file does not exist', async () => {
+    const result = await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      fileId: 'missing-file',
+    });
+
+    assert({
+      given: 'a fileId with no matching file row',
+      should: 'return not_found without inserting a message',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'not_found', rowCount: 0 },
+    });
+  });
+
+  it('rejects with wrong_owner and inserts nothing when the file belongs to another user', async () => {
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'someone-else' }]);
+
+    const result = await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      fileId: 'file-1',
+    });
+
+    assert({
+      given: 'a fileId owned by a different user than the sender',
+      should: 'return wrong_owner without inserting a message',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'wrong_owner', rowCount: 0 },
+    });
+  });
+
+  it('rejects with not_linked and inserts nothing when the file is not linked to this conversation', async () => {
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-1' }]);
+
+    const result = await dmMessageRepository.insertDmMessageWithAttachment({
+      ...baseInput,
+      fileId: 'file-1',
+    });
+
+    assert({
+      given: 'a fileId owned by the sender but not linked to the conversation',
+      should: 'return not_linked without inserting a message',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'not_linked', rowCount: 0 },
     });
   });
 });

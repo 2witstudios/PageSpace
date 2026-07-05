@@ -113,6 +113,12 @@ async function loadChannelMessageWithRelations(id: string) {
   });
 }
 
+/**
+ * Standalone pre-check used only by the thread-reply path — `insertChannelThreadReply`
+ * has its own parent-locking transaction, so attachment validation stays outside
+ * it here. The top-level send path uses `insertChannelMessageWithAttachment`
+ * instead, which validates and inserts inside a single transaction.
+ */
 async function fileExists(fileId: string): Promise<boolean> {
   const row = await db.query.files.findFirst({
     where: eq(files.id, fileId),
@@ -130,21 +136,46 @@ export interface InsertChannelMessageInput {
   quotedMessageId?: string | null;
 }
 
-async function insertChannelMessage(
+export type InsertChannelMessageResult =
+  | { kind: 'ok'; message: ChannelMessageRow }
+  | { kind: 'not_found' };
+
+/**
+ * Validates the attachment (if any) and inserts the top-level channel
+ * message in one transaction. The SELECT ... FOR UPDATE lock on `files`
+ * blocks a concurrent delete of that row until this tx commits, so the
+ * insert can never land pointing at a fileId that vanished mid-request.
+ */
+async function insertChannelMessageWithAttachment(
   input: InsertChannelMessageInput
-): Promise<ChannelMessageRow> {
-  const [row] = await db
-    .insert(channelMessages)
-    .values({
-      pageId: input.pageId,
-      userId: input.userId,
-      content: input.content,
-      fileId: input.fileId,
-      attachmentMeta: input.attachmentMeta,
-      quotedMessageId: input.quotedMessageId ?? null,
-    })
-    .returning();
-  return row;
+): Promise<InsertChannelMessageResult> {
+  return db.transaction(async (tx) => {
+    if (input.fileId) {
+      const [file] = await tx
+        .select({ id: files.id })
+        .from(files)
+        .where(eq(files.id, input.fileId))
+        .for('update');
+
+      if (!file) {
+        return { kind: 'not_found' };
+      }
+    }
+
+    const [row] = await tx
+      .insert(channelMessages)
+      .values({
+        pageId: input.pageId,
+        userId: input.userId,
+        content: input.content,
+        fileId: input.fileId,
+        attachmentMeta: input.attachmentMeta,
+        quotedMessageId: input.quotedMessageId ?? null,
+      })
+      .returning();
+
+    return { kind: 'ok', message: row };
+  });
 }
 
 export interface UpsertChannelReadStatusInput {
@@ -513,7 +544,7 @@ export const channelMessageRepository = {
   findChannelMessageInPage,
   loadChannelMessageWithRelations,
   fileExists,
-  insertChannelMessage,
+  insertChannelMessageWithAttachment,
   upsertChannelReadStatus,
   updateChannelMessageContent,
   softDeleteChannelMessage,
