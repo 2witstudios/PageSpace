@@ -13,6 +13,7 @@
 import { randomBytes } from 'node:crypto';
 import { PAGESPACE_CLI_CLIENT_ID } from '../auth/client.js';
 import { resolveConfig } from '../config/resolve.js';
+import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
 import { createCredentialStore } from '../credentials/store.js';
 import type { CredentialStore } from '../credentials/store.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../exit-codes.js';
@@ -23,6 +24,7 @@ import { createExchangeCode } from '../auth/exchange-code.js';
 import { createLoopbackServer } from '../auth/create-loopback-server.js';
 import { openBrowser } from '../auth/open-browser.js';
 import { runLoopbackLogin } from '../auth/loopback-flow.js';
+import { resolveProfileName } from '../auth/resolve.js';
 import type {
   ConfirmIdentity,
   DiscoverMetadata,
@@ -58,12 +60,17 @@ export function createLoginHandler(deps: LoginHandlerDeps): CommandHandler {
       env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
       profile: null,
     });
+    const profileName = resolveProfileName(
+      { profile: intent.flags.profile },
+      { PAGESPACE_PROFILE: ctx.env.PAGESPACE_PROFILE },
+    );
 
     const store = deps.createCredentialStore();
-    const existing = await store.get(host);
+    const existing = await store.get(host, profileName);
     if (existing && !intent.flags.yes) {
+      const profileNote = profileName === DEFAULT_PROFILE_NAME ? '' : ` (profile "${profileName}")`;
       ctx.stderr.write(
-        `A stored credential for ${host} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host}" first.\n`,
+        `A stored credential for ${host}${profileNote} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host}" first.\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }
@@ -88,6 +95,7 @@ export function createLoginHandler(deps: LoginHandlerDeps): CommandHandler {
       confirmIdentity: deps.confirmIdentity,
       credentialStore: store,
       now: deps.now,
+      profile: profileName,
     });
 
     switch (result.outcome) {

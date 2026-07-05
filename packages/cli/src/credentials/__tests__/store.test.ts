@@ -77,6 +77,46 @@ describe('CompositeCredentialStore — keychain available', () => {
 
     expect(await store.get('pagespace.ai')).toBeNull();
   });
+
+  describe('named profiles', () => {
+    it('stores a named profile under a distinct keychain account key, coexisting with "default"', async () => {
+      const keychain = createFakeKeychainAdapter();
+      const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), fakeSink());
+
+      await store.set('pagespace.ai', CRED_A);
+      await store.set('pagespace.ai', CRED_B, 'work');
+
+      expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+      expect(await store.get('pagespace.ai', 'work')).toEqual(CRED_B);
+      expect(keychain.calls).toContain('setSecret:pagespace.ai');
+      expect(keychain.calls.some((call) => call.startsWith('setSecret:') && call !== 'setSecret:pagespace.ai')).toBe(true);
+    });
+
+    it('list(profile) only reports hosts with that profile stored', async () => {
+      const keychain = createFakeKeychainAdapter();
+      const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), fakeSink());
+
+      await store.set('pagespace.ai', CRED_A);
+      await store.set('pagespace.ai', CRED_B, 'work');
+      await store.set('self-hosted.example', CRED_B);
+
+      expect((await store.list()).map((entry) => entry.host).sort()).toEqual(['pagespace.ai', 'self-hosted.example']);
+      expect(await store.list('work')).toEqual([{ host: 'pagespace.ai', tokenPrefix: CRED_B.refreshToken.slice(0, 12) }]);
+    });
+
+    it('delete(host, profile) removes only the named profile, leaving "default" intact', async () => {
+      const keychain = createFakeKeychainAdapter();
+      const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), fakeSink());
+
+      await store.set('pagespace.ai', CRED_A);
+      await store.set('pagespace.ai', CRED_B, 'work');
+
+      await store.delete('pagespace.ai', 'work');
+
+      expect(await store.get('pagespace.ai', 'work')).toBeNull();
+      expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+    });
+  });
 });
 
 describe('CompositeCredentialStore — keychain unavailable', () => {

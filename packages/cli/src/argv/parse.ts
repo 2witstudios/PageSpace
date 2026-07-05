@@ -15,7 +15,7 @@
  * preceding positional token is a hard usage error (there is no command yet
  * to hand it to).
  *
- * Value-bearing flags (`--host`, `--token`) also accept the equals-joined
+ * Value-bearing flags (`--host`, `--token`, `--profile`) also accept the equals-joined
  * form (`--host=value`), not just space-separated (`--host value`) —
  * resolved before any other grammar rule so `--host=-looks-like-a-flag` is
  * unambiguously a value, not a following flag. Boolean flags (`--json`,
@@ -29,6 +29,7 @@ export interface ParsedFlags {
   readonly json: boolean;
   readonly host: string | undefined;
   readonly token: string | undefined;
+  readonly profile: string | undefined;
   readonly yes: boolean;
   readonly all: boolean;
   readonly force: boolean;
@@ -51,13 +52,14 @@ export interface UsageError {
 
 export type ParseResult = CommandIntent | UsageError;
 
-const VALUE_FLAGS = new Set(['--host', '--token']);
+const VALUE_FLAGS = new Set(['--host', '--token', '--profile']);
 const BOOLEAN_FLAGS = new Set(['--json', '--yes', '--all', '--force', '--help', '--version', '--device']);
 
 export function parseArgv(argv: readonly string[]): ParseResult {
   let json = false;
   let host: string | undefined;
   let token: string | undefined;
+  let profile: string | undefined;
   let yes = false;
   let all = false;
   let force = false;
@@ -79,7 +81,8 @@ export function parseArgv(argv: readonly string[]): ParseResult {
         return { kind: 'usage-error', message: `Flag ${flagName} requires a value.` };
       }
       if (flagName === '--host') host = value;
-      else token = value;
+      else if (flagName === '--token') token = value;
+      else profile = value;
       if (inlineValue === undefined) i += 1;
       continue;
     }
@@ -109,6 +112,6 @@ export function parseArgv(argv: readonly string[]): ParseResult {
   return {
     kind: 'command',
     args,
-    flags: { json, host, token, yes, all, force, help, version, device },
+    flags: { json, host, token, profile, yes, all, force, help, version, device },
   };
 }

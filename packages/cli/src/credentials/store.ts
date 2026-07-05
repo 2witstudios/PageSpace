@@ -8,9 +8,9 @@
  * mid-session (that would make "where did this write go?" nondeterministic).
  */
 import { FileCredentialStore } from './file-store.js';
-import { createNativeKeychainAdapter } from './keychain.js';
+import { createNativeKeychainAdapter, keychainAccountKey, parseKeychainAccountKey } from './keychain.js';
 import type { KeychainAdapter } from './keychain.js';
-import { parseHostCredential, serializeHostCredential, tokenPrefix } from './serialize.js';
+import { DEFAULT_PROFILE_NAME, parseHostCredential, serializeHostCredential, tokenPrefix } from './serialize.js';
 import type { CredentialSummary, HostCredential } from './serialize.js';
 
 export interface OutputSink {
@@ -18,10 +18,10 @@ export interface OutputSink {
 }
 
 export interface CredentialStore {
-  get(host: string): Promise<HostCredential | null>;
-  set(host: string, credential: HostCredential): Promise<void>;
-  delete(host: string): Promise<void>;
-  list(): Promise<readonly CredentialSummary[]>;
+  get(host: string, profile?: string): Promise<HostCredential | null>;
+  set(host: string, credential: HostCredential, profile?: string): Promise<void>;
+  delete(host: string, profile?: string): Promise<void>;
+  list(profile?: string): Promise<readonly CredentialSummary[]>;
 }
 
 const KEYCHAIN_UNAVAILABLE_NOTICE =
@@ -37,42 +37,44 @@ export class CompositeCredentialStore implements CredentialStore {
     private readonly stderr: OutputSink,
   ) {}
 
-  async get(host: string): Promise<HostCredential | null> {
+  async get(host: string, profile: string = DEFAULT_PROFILE_NAME): Promise<HostCredential | null> {
     return this.withFallback(
       async () => {
-        const secret = await this.keychain.getSecret(host);
+        const secret = await this.keychain.getSecret(keychainAccountKey(host, profile));
         return secret === null ? null : parseHostCredential(secret);
       },
-      () => this.fileStore.get(host),
+      () => this.fileStore.get(host, profile),
     );
   }
 
-  async set(host: string, credential: HostCredential): Promise<void> {
+  async set(host: string, credential: HostCredential, profile: string = DEFAULT_PROFILE_NAME): Promise<void> {
     return this.withFallback(
-      () => this.keychain.setSecret(host, serializeHostCredential(credential)),
-      () => this.fileStore.set(host, credential),
+      () => this.keychain.setSecret(keychainAccountKey(host, profile), serializeHostCredential(credential)),
+      () => this.fileStore.set(host, credential, profile),
     );
   }
 
-  async delete(host: string): Promise<void> {
+  async delete(host: string, profile: string = DEFAULT_PROFILE_NAME): Promise<void> {
     return this.withFallback(
-      () => this.keychain.deleteSecret(host),
-      () => this.fileStore.delete(host),
+      () => this.keychain.deleteSecret(keychainAccountKey(host, profile)),
+      () => this.fileStore.delete(host, profile),
     );
   }
 
-  async list(): Promise<readonly CredentialSummary[]> {
+  async list(profile: string = DEFAULT_PROFILE_NAME): Promise<readonly CredentialSummary[]> {
     return this.withFallback(
       async () => {
         const secrets = await this.keychain.listSecrets();
-        return [...secrets]
+        return secrets
+          .map((entry) => ({ ...parseKeychainAccountKey(entry.account), secret: entry.secret }))
+          .filter((entry) => entry.profile === profile)
           .map((entry) => ({
-            host: entry.account,
+            host: entry.host,
             tokenPrefix: tokenPrefix(parseHostCredential(entry.secret).refreshToken),
           }))
           .sort((a, b) => a.host.localeCompare(b.host));
       },
-      () => this.fileStore.list(),
+      () => this.fileStore.list(profile),
     );
   }
 

@@ -10,7 +10,7 @@ import { buildAuthProvider, enforceAuth } from './auth/auth-context.js';
 import { createDiscoverMetadata } from './auth/discover.js';
 import { resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
-import { resolveAuth } from './auth/resolve.js';
+import { resolveAuth, resolveProfileName } from './auth/resolve.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
@@ -66,12 +66,14 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     deps.stderr.write(`${envToken.deprecationNotice}\n`);
   }
 
-  const credential = await deps.credentialStore.get(host);
+  const profileName = resolveProfileName({ profile: parsed.flags.profile }, { PAGESPACE_PROFILE: deps.env.PAGESPACE_PROFILE });
+  const credential = await deps.credentialStore.get(host, profileName);
   const source = resolveAuth(
     { token: parsed.flags.token },
     { PAGESPACE_TOKEN: envToken.token },
-    credential ? { [host]: credential } : {},
+    credential ? { [host]: { [profileName]: credential } } : {},
     host,
+    profileName,
   );
 
   const auth = buildAuthProvider(source, {

@@ -15,16 +15,27 @@ const FIXED_TOKENS = {
   scope: 'account offline_access',
 };
 
+/** Seeds every entry as that host's "default" profile -- named profiles are added independently via set(). */
 function fakeStore(initial: Map<string, HostCredential> = new Map()): CredentialStore {
+  const hosts = new Map<string, Map<string, HostCredential>>();
+  for (const [host, credential] of initial) {
+    hosts.set(host, new Map([['default', credential]]));
+  }
+
   return {
-    get: async (host) => initial.get(host) ?? null,
-    set: async (host, credential) => {
-      initial.set(host, credential);
+    get: async (host, profile = 'default') => hosts.get(host)?.get(profile) ?? null,
+    set: async (host, credential, profile = 'default') => {
+      const profiles = hosts.get(host) ?? new Map<string, HostCredential>();
+      profiles.set(profile, credential);
+      hosts.set(host, profiles);
     },
-    delete: async (host) => {
-      initial.delete(host);
+    delete: async (host, profile = 'default') => {
+      hosts.get(host)?.delete(profile);
     },
-    list: async () => [...initial.entries()].map(([host, credential]) => ({ host, tokenPrefix: credential.refreshToken.slice(0, 12) })),
+    list: async () =>
+      [...hosts.entries()]
+        .filter(([, profiles]) => profiles.has('default'))
+        .map(([host, profiles]) => ({ host, tokenPrefix: profiles.get('default')!.refreshToken.slice(0, 12) })),
   };
 }
 

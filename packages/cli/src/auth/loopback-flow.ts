@@ -20,6 +20,7 @@
  * no caller can accidentally print or log one.
  */
 import { deriveCodeChallenge, generateCodeVerifier } from '@pagespace/sdk';
+import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
 import type { CredentialStore } from '../credentials/store.js';
 
 export interface DiscoveredMetadata {
@@ -89,6 +90,8 @@ export interface LoopbackLoginDeps {
   readonly confirmIdentity: ConfirmIdentity;
   readonly credentialStore: Pick<CredentialStore, 'set'>;
   readonly now: () => number;
+  /** Which named profile to store the credential under. Defaults to `"default"`. */
+  readonly profile?: string;
 }
 
 export type LoopbackLoginResult =
@@ -330,12 +333,16 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
       return { outcome: 'token_exchange_failed', message: error instanceof Error ? error.message : String(error) };
     }
 
-    await deps.credentialStore.set(deps.host, {
-      refreshToken: tokens.refreshToken,
-      clientId: deps.clientId,
-      scopes: tokens.scope.split(' ').filter(Boolean),
-      createdAt: new Date(deps.now()).toISOString(),
-    });
+    await deps.credentialStore.set(
+      deps.host,
+      {
+        refreshToken: tokens.refreshToken,
+        clientId: deps.clientId,
+        scopes: tokens.scope.split(' ').filter(Boolean),
+        createdAt: new Date(deps.now()).toISOString(),
+      },
+      deps.profile ?? DEFAULT_PROFILE_NAME,
+    );
 
     await server.finish(SUCCESS_HTML);
 

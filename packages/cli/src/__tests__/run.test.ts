@@ -98,6 +98,48 @@ describe('run', () => {
     expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
   });
 
+  it('resolves the profile from --profile and looks up the credential store under that profile name', async () => {
+    const profilesSeen: Array<string | undefined> = [];
+    const store = {
+      ...createFakeCredentialStore(),
+      async get(host: string, profile?: string) {
+        profilesSeen.push(profile);
+        return null;
+      },
+    };
+    const deps = { ...makeDeps(['whoami', '--profile', 'work']), credentialStore: store };
+    await run(deps);
+    expect(profilesSeen).toEqual(['work']);
+  });
+
+  it('PAGESPACE_PROFILE env selects the profile when --profile is absent', async () => {
+    const profilesSeen: Array<string | undefined> = [];
+    const store = {
+      ...createFakeCredentialStore(),
+      async get(host: string, profile?: string) {
+        profilesSeen.push(profile);
+        return null;
+      },
+    };
+    const deps = { ...makeDeps(['whoami'], { PAGESPACE_PROFILE: 'work' }), credentialStore: store };
+    await run(deps);
+    expect(profilesSeen).toEqual(['work']);
+  });
+
+  it('defaults to the "default" profile when neither --profile nor PAGESPACE_PROFILE is given', async () => {
+    const profilesSeen: Array<string | undefined> = [];
+    const store = {
+      ...createFakeCredentialStore(),
+      async get(host: string, profile?: string) {
+        profilesSeen.push(profile);
+        return null;
+      },
+    };
+    const deps = { ...makeDeps(['whoami']), credentialStore: store };
+    await run(deps);
+    expect(profilesSeen).toEqual(['default']);
+  });
+
   it('folds the legacy PAGESPACE_AUTH_TOKEN env var into the single auth-resolution path with a deprecation notice, never echoing the token', async () => {
     const deps = makeDeps(['whoami'], { PAGESPACE_AUTH_TOKEN: 'ps_legacy_secret_value' });
     await run(deps);

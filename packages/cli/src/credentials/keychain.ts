@@ -15,6 +15,7 @@
  * promise from `getSecret`/`setSecret`/etc., which `CompositeCredentialStore`
  * already catches and degrades on.
  */
+import { DEFAULT_PROFILE_NAME } from './serialize.js';
 
 export type KeyringModule = typeof import('@napi-rs/keyring');
 export type LoadKeyring = () => Promise<KeyringModule>;
@@ -22,6 +23,35 @@ export type LoadKeyring = () => Promise<KeyringModule>;
 const SERVICE = 'pagespace-cli';
 
 const defaultLoadKeyring: LoadKeyring = () => import('@napi-rs/keyring');
+
+/**
+ * Every existing keychain entry was written with the account key set to the
+ * plain host string (one credential per host). A NUL byte can never appear
+ * in a URL/hostname, so using it as a separator lets a "default"-profile
+ * account key stay byte-for-byte identical to what's already on disk in
+ * users' OS keychains (zero behavior change on upgrade) while any
+ * additionally-named profile gets a distinct, unambiguous account key —
+ * unlike a printable delimiter such as ":", which collides with hosts that
+ * already contain one (e.g. "https://..." or "localhost:3000").
+ */
+const PROFILE_KEY_SEPARATOR = '\u0000';
+
+export function keychainAccountKey(host: string, profile: string = DEFAULT_PROFILE_NAME): string {
+  return profile === DEFAULT_PROFILE_NAME ? host : `${host}${PROFILE_KEY_SEPARATOR}${profile}`;
+}
+
+export interface KeychainAccount {
+  readonly host: string;
+  readonly profile: string;
+}
+
+export function parseKeychainAccountKey(account: string): KeychainAccount {
+  const separatorIndex = account.indexOf(PROFILE_KEY_SEPARATOR);
+  if (separatorIndex === -1) {
+    return { host: account, profile: DEFAULT_PROFILE_NAME };
+  }
+  return { host: account.slice(0, separatorIndex), profile: account.slice(separatorIndex + 1) };
+}
 
 export interface KeychainCredential {
   readonly account: string;

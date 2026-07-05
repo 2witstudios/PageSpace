@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CredentialsFileFormatError,
+  DEFAULT_PROFILE_NAME,
   emptyCredentialsFile,
   getHost,
   isSecureMode,
@@ -31,8 +32,8 @@ const CRED_B: HostCredential = {
 };
 
 describe('emptyCredentialsFile', () => {
-  it('starts with version 1 and no hosts', () => {
-    expect(emptyCredentialsFile()).toEqual({ version: 1, hosts: {} });
+  it('starts with version 2 and no hosts', () => {
+    expect(emptyCredentialsFile()).toEqual({ version: 2, hosts: {} });
   });
 });
 
@@ -40,7 +41,7 @@ describe('upsertHost / getHost / removeHost', () => {
   it('is pure: does not mutate the input file', () => {
     const file = emptyCredentialsFile();
     const next = upsertHost(file, 'pagespace.ai', CRED_A);
-    expect(file).toEqual({ version: 1, hosts: {} });
+    expect(file).toEqual({ version: 2, hosts: {} });
     expect(getHost(next, 'pagespace.ai')).toEqual(CRED_A);
   });
 
@@ -109,6 +110,120 @@ describe('serializeCredentialsFile / parseCredentialsFile round-trip', () => {
       hosts: {
         'pagespace.ai': { refreshToken: 't', clientId: 'x', scopes: [1, 2], createdAt: '2026-01-01T00:00:00.000Z' },
       },
+    });
+    expect(() => parseCredentialsFile(raw)).toThrow(CredentialsFileFormatError);
+  });
+});
+
+describe('v1 -> v2 migration (automatic, one-time, on read)', () => {
+  const v1Raw = JSON.stringify({
+    version: 1,
+    hosts: {
+      'pagespace.ai': CRED_A,
+      'self-hosted.example': CRED_B,
+    },
+  });
+
+  it('reads a v1 file back as version 2, folding each host into its "default" profile', () => {
+    const file = parseCredentialsFile(v1Raw);
+    expect(file.version).toBe(2);
+    expect(file).toEqual({
+      version: 2,
+      hosts: {
+        'pagespace.ai': { profiles: { default: CRED_A } },
+        'self-hosted.example': { profiles: { default: CRED_B } },
+      },
+    });
+  });
+
+  it('a migrated v1 credential reads back identically through the profile-aware API, with zero behavior change', () => {
+    const file = parseCredentialsFile(v1Raw);
+    expect(getHost(file, 'pagespace.ai')).toEqual(CRED_A);
+    expect(getHost(file, 'pagespace.ai', DEFAULT_PROFILE_NAME)).toEqual(CRED_A);
+    expect(getHost(file, 'self-hosted.example')).toEqual(CRED_B);
+    expect(listSummaries(file)).toEqual([
+      { host: 'pagespace.ai', tokenPrefix: tokenPrefix(CRED_A.refreshToken) },
+      { host: 'self-hosted.example', tokenPrefix: tokenPrefix(CRED_B.refreshToken) },
+    ]);
+  });
+
+  it('still rejects a malformed v1 host entry during migration', () => {
+    const raw = JSON.stringify({
+      version: 1,
+      hosts: { 'pagespace.ai': { clientId: 'x', scopes: [], createdAt: '2026-01-01T00:00:00.000Z' } },
+    });
+    expect(() => parseCredentialsFile(raw)).toThrow(CredentialsFileFormatError);
+  });
+});
+
+describe('named profiles (v2)', () => {
+  it('upsertHost defaults to the "default" profile, leaving other profiles for the same host untouched', () => {
+    let file = emptyCredentialsFile();
+    file = upsertHost(file, 'pagespace.ai', CRED_A);
+    file = upsertHost(file, 'pagespace.ai', CRED_B, 'work');
+
+    expect(getHost(file, 'pagespace.ai')).toEqual(CRED_A);
+    expect(getHost(file, 'pagespace.ai', 'default')).toEqual(CRED_A);
+    expect(getHost(file, 'pagespace.ai', 'work')).toEqual(CRED_B);
+  });
+
+  it('getHost returns null for a profile that was never stored', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    expect(getHost(file, 'pagespace.ai', 'work')).toBeNull();
+  });
+
+  it('removeHost drops only the named profile, leaving sibling profiles for the same host intact', () => {
+    let file = emptyCredentialsFile();
+    file = upsertHost(file, 'pagespace.ai', CRED_A, 'default');
+    file = upsertHost(file, 'pagespace.ai', CRED_B, 'work');
+
+    const next = removeHost(file, 'pagespace.ai', 'work');
+
+    expect(getHost(next, 'pagespace.ai', 'work')).toBeNull();
+    expect(getHost(next, 'pagespace.ai', 'default')).toEqual(CRED_A);
+  });
+
+  it('removeHost drops the host entirely once its last profile is removed', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    const next = removeHost(file, 'pagespace.ai', 'default');
+    expect(next.hosts['pagespace.ai']).toBeUndefined();
+  });
+
+  it('removeHost of an unknown profile on a known host is a no-op', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    expect(removeHost(file, 'pagespace.ai', 'unknown-profile')).toEqual(file);
+  });
+
+  it('listSummaries(file, profile) only reports hosts that have that profile stored', () => {
+    let file = emptyCredentialsFile();
+    file = upsertHost(file, 'pagespace.ai', CRED_A, 'default');
+    file = upsertHost(file, 'pagespace.ai', CRED_B, 'work');
+    file = upsertHost(file, 'self-hosted.example', CRED_B, 'default');
+
+    expect(listSummaries(file, 'default')).toEqual([
+      { host: 'pagespace.ai', tokenPrefix: tokenPrefix(CRED_A.refreshToken) },
+      { host: 'self-hosted.example', tokenPrefix: tokenPrefix(CRED_B.refreshToken) },
+    ]);
+    expect(listSummaries(file, 'work')).toEqual([{ host: 'pagespace.ai', tokenPrefix: tokenPrefix(CRED_B.refreshToken) }]);
+  });
+
+  it('round-trips a multi-profile file through serialize/parse', () => {
+    let file = emptyCredentialsFile();
+    file = upsertHost(file, 'pagespace.ai', CRED_A, 'default');
+    file = upsertHost(file, 'pagespace.ai', CRED_B, 'work');
+
+    expect(parseCredentialsFile(serializeCredentialsFile(file))).toEqual(file);
+  });
+
+  it('rejects a v2 host entry missing a "profiles" object', () => {
+    const raw = JSON.stringify({ version: 2, hosts: { 'pagespace.ai': { notProfiles: {} } } });
+    expect(() => parseCredentialsFile(raw)).toThrow(CredentialsFileFormatError);
+  });
+
+  it('rejects a v2 profile entry that is a malformed credential', () => {
+    const raw = JSON.stringify({
+      version: 2,
+      hosts: { 'pagespace.ai': { profiles: { default: { clientId: 'x' } } } },
     });
     expect(() => parseCredentialsFile(raw)).toThrow(CredentialsFileFormatError);
   });

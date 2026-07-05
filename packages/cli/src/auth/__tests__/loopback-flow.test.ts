@@ -169,6 +169,31 @@ describe('runLoopbackLogin — happy path', () => {
     expect(authorizeUrl.searchParams.get('redirect_uri')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
   });
 
+  it('persists the credential under deps.profile when given, defaulting to "default" when omitted', async () => {
+    const setCalls: Array<{ host: string; profile: string | undefined }> = [];
+    const { deps } = baseDeps({
+      credentialStore: {
+        set: async (host, _credential, profile) => {
+          setCalls.push({ host, profile });
+        },
+      },
+    });
+    const fake = createFakeServer();
+
+    await runLoopbackLogin({
+      ...deps,
+      profile: 'work',
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(setCalls).toEqual([{ host: 'https://pagespace.ai', profile: 'work' }]);
+  });
+
   it('never exposes the access or refresh token anywhere in the returned result', async () => {
     const { deps } = baseDeps();
     const fake = createFakeServer();
