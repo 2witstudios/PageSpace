@@ -52,7 +52,10 @@ export function hasFileParts(message: UIMessage): boolean {
 }
 
 /**
- * Validate all file parts in a user message.
+ * Validate all file parts in a message. Named for its original call site (validating the
+ * caller's own user message before inference); the checks below are structural and apply
+ * to a message's file parts regardless of role, so callers may also use it on assistant
+ * messages that carry file parts (e.g. resent history) to close the same bypass.
  * Checks:
  * 1. File part count limit
  * 2. Per-image data URL size limit
