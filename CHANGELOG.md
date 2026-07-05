@@ -36,6 +36,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Drive role permission updates are now atomic** — granting or revoking a role's per-page
+  permission (via the share dialog, the roles API, or an AI agent tool) could previously race a
+  concurrent grant/revoke on the same role and silently drop it, because the update read the
+  role's permissions, merged in JS, and wrote the whole map back with no lock in between. Updates
+  now merge under a row lock inside a transaction, and setting a role as default no longer risks a
+  database deadlock or two roles ending up marked default at once.
 - **AI streams no longer lose mid-response content when the server process restarts** — an
   in-progress AI reply's content is now checkpointed to the database as it streams, so reopening
   the channel (or resuming on mobile) shows the restored partial answer instead of a stalled

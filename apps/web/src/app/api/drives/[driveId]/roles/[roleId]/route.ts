@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch, mergeRolePermissionsPatch } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -125,16 +125,17 @@ export async function PATCH(
       return NextResponse.json({ error: 'Invalid permissionsPatch structure' }, { status: 400 });
     }
 
-    const resolvedPermissions = permissionsPatch !== undefined
-      ? mergeRolePermissionsPatch(existingRole.permissions, permissionsPatch)
-      : permissions;
-
+    // Forward permissionsPatch to the service untouched: updateDriveRole
+    // merges it against the role row it locks inside its transaction. Merging
+    // here against the unlocked `existingRole` read above would reintroduce
+    // the read-modify-write race the patch input exists to prevent.
     const { role: updatedRole } = await updateDriveRole(driveId, roleId, {
       name,
       description,
       color,
       isDefault,
-      permissions: resolvedPermissions,
+      permissions,
+      ...(permissionsPatch !== undefined && { permissionsPatch }),
       ...(driveWidePermissions !== undefined && { driveWidePermissions }),
     });
 
@@ -152,7 +153,9 @@ export async function PATCH(
       roleId,
       roleName: updatedRole.name,
       driveId,
-      permissions: resolvedPermissions ? summarizePermissions(resolvedPermissions) : undefined,
+      permissions: (permissions !== undefined || permissionsPatch !== undefined)
+        ? summarizePermissions(updatedRole.permissions)
+        : undefined,
       previousPermissions: summarizePermissions(existingRole.permissions),
       driveWidePermissions: driveWidePermissions !== undefined ? (driveWidePermissions ?? null) : undefined,
       previousDriveWidePermissions: existingRole.driveWidePermissions ?? null,
