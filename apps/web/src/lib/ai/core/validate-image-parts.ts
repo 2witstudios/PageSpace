@@ -10,6 +10,7 @@ import {
   isAllowedImageType,
   extractBase64DataUrl,
 } from '@/lib/validation/image-validation';
+import { parseChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
 
 const MAX_FILE_PARTS_PER_MESSAGE = 5;
 const MAX_DATA_URL_LENGTH = 4 * 1024 * 1024; // 4MB per data URL
@@ -81,6 +82,14 @@ export function validateUserMessageFileParts(
     const part = fileParts[i];
     const url = part.url;
     const filename = part.filename || `image-${i + 1}`;
+
+    // Already-persisted attachment echoed back by the client (e.g. resend/regenerate
+    // resubmitting history that now carries a presigned chat-attachment GET URL instead
+    // of the original data: URL) — it was validated when first uploaded, so skip the
+    // new-upload checks below rather than rejecting it as an invalid data URL.
+    if (parseChatAttachmentStorageKey(url)) {
+      continue;
+    }
 
     // Size check
     if (url.length > MAX_DATA_URL_LENGTH) {

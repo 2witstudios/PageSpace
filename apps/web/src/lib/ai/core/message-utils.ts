@@ -10,7 +10,7 @@ import { chatMessages } from '@pagespace/db/schema/core'
 import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
-import { uploadChatAttachment, getChatAttachmentUrl } from '@/lib/upload/chat-attachment-storage';
+import { uploadChatAttachment, getChatAttachmentUrl, parseChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
 
 /** Parse a `data:<mediaType>;base64,<data>` URL into its raw bytes and media type. */
 function decodeDataUrl(dataUrl: string): { buffer: Buffer; mediaType: string } | null {
@@ -281,22 +281,30 @@ function parseToolResults(raw: unknown): ToolResult[] {
  * Convert database message to UIMessage format with tool parts
  */
 export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): Promise<UIMessage> {
-  // Parse structured content
-  if (dbMessage.content) {
-    try {
-      const parsed = JSON.parse(dbMessage.content);
-      if (parsed.textParts && parsed.partsOrder) {
-        debugLogAI('Reconstructing message with structured content', {
-          textPartsCount: parsed.textParts.length,
-          totalPartsCount: parsed.partsOrder.length
-        });
+  const parsed = parseStructuredContent(dbMessage.content);
+  if (parsed) {
+    debugLogAI('Reconstructing message with structured content', {
+      textPartsCount: parsed.textParts.length,
+      totalPartsCount: parsed.partsOrder.length
+    });
 
-        const structured = await reconstructMessageFromStructuredContent(dbMessage, parsed);
-        return { ...structured, userName: dbMessage.userName } as ExtendedUIMessage;
-      }
-    } catch {
-      // Content is plain text, not structured
-      debugLogAI('Using plain text content for message', { messageId: dbMessage.id });
+    try {
+      const structured = await reconstructFromStructuredContent(dbMessage, parsed);
+      return { ...structured, userName: dbMessage.userName } as ExtendedUIMessage;
+    } catch (error) {
+      // Reconstruction failed (e.g. S3 presign error) — fall back to the
+      // original plain-text content rather than leaking the raw structured
+      // JSON to the user and the model.
+      loggers.ai.error('Failed to reconstruct structured message content', error as Error, { messageId: dbMessage.id });
+      return {
+        id: dbMessage.id,
+        role: dbMessage.role as 'user' | 'assistant' | 'system',
+        parts: [{ type: 'text' as const, text: parsed.originalContent || '' }],
+        createdAt: dbMessage.createdAt,
+        editedAt: dbMessage.editedAt,
+        messageType: dbMessage.messageType || 'standard',
+        userName: dbMessage.userName,
+      } as ExtendedUIMessage;
     }
   }
 
@@ -310,6 +318,17 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
     messageType: dbMessage.messageType || 'standard',
     userName: dbMessage.userName,
   } as ExtendedUIMessage;
+}
+
+/** Parse persisted structured content, returning null for plain-text (legacy) content. */
+function parseStructuredContent(content: string | null | undefined): StructuredContentData | null {
+  if (!content) return null;
+  try {
+    const parsed = JSON.parse(content);
+    return parsed && parsed.textParts && parsed.partsOrder ? parsed as StructuredContentData : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -408,16 +427,6 @@ async function reconstructFromStructuredContent(
 }
 
 /**
- * Reconstruct message from structured content (new format with chronological ordering)
- */
-async function reconstructMessageFromStructuredContent(
-  dbMessage: DatabaseMessage,
-  structuredData: StructuredContentData
-): Promise<UIMessage> {
-  return reconstructFromStructuredContent(dbMessage, structuredData);
-}
-
-/**
  * Extract structured content data from UIMessage parts for database storage
  */
 export async function extractStructuredContentFromParts(uiParts: UIMessage['parts'], originalContent: string): Promise<string> {
@@ -429,12 +438,20 @@ export async function extractStructuredContentFromParts(uiParts: UIMessage['part
     uiParts
       .filter(isFilePart)
       .map(async (fp): Promise<PersistedFilePart> => {
+        // Echoed back from a previous reconstruction (resend/regenerate resubmits
+        // history containing our own presigned GET URL) — recover the stable
+        // storageKey instead of persisting the URL, which expires in an hour.
+        const echoedStorageKey = parseChatAttachmentStorageKey(fp.url);
+        if (echoedStorageKey) {
+          return { storageKey: echoedStorageKey, mediaType: fp.mediaType, filename: fp.filename };
+        }
         const decoded = decodeDataUrl(fp.url);
         if (!decoded) {
           return { url: fp.url, mediaType: fp.mediaType, filename: fp.filename };
         }
-        const { storageKey } = await uploadChatAttachment(decoded.buffer, fp.mediaType || decoded.mediaType);
-        return { storageKey, mediaType: fp.mediaType, filename: fp.filename };
+        const mediaType = fp.mediaType || decoded.mediaType;
+        const { storageKey } = await uploadChatAttachment(decoded.buffer, mediaType);
+        return { storageKey, mediaType, filename: fp.filename };
       })
   );
 
@@ -553,21 +570,25 @@ export async function saveMessageToDatabase({
  * Convert Global Assistant database message to UIMessage format
  */
 export async function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssistantMessage): Promise<UIMessage> {
-  // Parse structured content
-  if (dbMessage.content) {
-    try {
-      const parsed = JSON.parse(dbMessage.content);
-      if (parsed.textParts && parsed.partsOrder) {
-        debugLogAI('Global Assistant: Reconstructing message with structured content', {
-          textPartsCount: parsed.textParts.length,
-          totalPartsCount: parsed.partsOrder.length
-        });
+  const parsed = parseStructuredContent(dbMessage.content);
+  if (parsed) {
+    debugLogAI('Global Assistant: Reconstructing message with structured content', {
+      textPartsCount: parsed.textParts.length,
+      totalPartsCount: parsed.partsOrder.length
+    });
 
-        return await reconstructGlobalAssistantMessageFromStructuredContent(dbMessage, parsed);
-      }
-    } catch {
-      // Content is plain text, not structured
-      debugLogAI('Global Assistant: Using plain text content for message', { messageId: dbMessage.id });
+    try {
+      return await reconstructFromStructuredContent(dbMessage, parsed);
+    } catch (error) {
+      loggers.ai.error('Failed to reconstruct structured global assistant message content', error as Error, { messageId: dbMessage.id });
+      return {
+        id: dbMessage.id,
+        role: dbMessage.role as 'user' | 'assistant' | 'system',
+        parts: [{ type: 'text' as const, text: parsed.originalContent || '' }],
+        createdAt: dbMessage.createdAt,
+        editedAt: dbMessage.editedAt,
+        messageType: dbMessage.messageType || 'standard',
+      } as ExtendedUIMessage;
     }
   }
 
@@ -581,17 +602,6 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
     messageType: dbMessage.messageType || 'standard',
   } as ExtendedUIMessage;
 }
-
-/**
- * Reconstruct Global Assistant message from structured content (new format with chronological ordering)
- */
-async function reconstructGlobalAssistantMessageFromStructuredContent(
-  dbMessage: GlobalAssistantMessage,
-  structuredData: StructuredContentData
-): Promise<UIMessage> {
-  return reconstructFromStructuredContent(dbMessage, structuredData);
-}
-
 
 /**
  * Save a Global Assistant message with tool calls and results to the database

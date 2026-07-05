@@ -1,22 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockCheckObjectExists = vi.fn();
-const mockIssuePresignedPutUrl = vi.fn();
+const mockPutObject = vi.fn();
 
 vi.mock('@/lib/upload/s3-effects', () => ({
   checkObjectExists: (...args: unknown[]) => mockCheckObjectExists(...args),
-  issuePresignedPutUrl: (...args: unknown[]) => mockIssuePresignedPutUrl(...args),
+  putObject: (...args: unknown[]) => mockPutObject(...args),
 }));
 
-const mockFetch = vi.fn();
-vi.stubGlobal('fetch', mockFetch);
-
-import { buildChatAttachmentKey, uploadChatAttachment } from '../chat-attachment-storage';
+import { buildChatAttachmentKey, uploadChatAttachment, parseChatAttachmentStorageKey } from '../chat-attachment-storage';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockIssuePresignedPutUrl.mockResolvedValue('https://signed.example.com/put');
-  mockFetch.mockResolvedValue({ ok: true, status: 200 });
+  mockPutObject.mockResolvedValue(undefined);
 });
 
 describe('buildChatAttachmentKey', () => {
@@ -31,36 +27,22 @@ describe('uploadChatAttachment', () => {
   const buffer = Buffer.from('hello world');
   const mediaType = 'image/png';
 
-  it('given the object already exists, should skip the presigned PUT entirely (dedup)', async () => {
+  it('given the object already exists, should skip the PUT entirely (dedup)', async () => {
     mockCheckObjectExists.mockResolvedValue(true);
 
     const result = await uploadChatAttachment(buffer, mediaType);
 
-    expect(mockIssuePresignedPutUrl).not.toHaveBeenCalled();
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockPutObject).not.toHaveBeenCalled();
     expect(result.storageKey.startsWith('files/')).toBe(false);
     expect(result.storageKey).toBe(buildChatAttachmentKey(result.contentHash));
   });
 
-  it('given the object does not exist, should issue a presigned PUT and upload the bytes', async () => {
+  it('given the object does not exist, should PUT the bytes directly to S3', async () => {
     mockCheckObjectExists.mockResolvedValue(false);
 
     const result = await uploadChatAttachment(buffer, mediaType);
 
-    expect(mockIssuePresignedPutUrl).toHaveBeenCalledWith(
-      result.storageKey,
-      mediaType,
-      buffer.byteLength,
-      expect.any(Number),
-    );
-    expect(mockFetch).toHaveBeenCalledWith(
-      'https://signed.example.com/put',
-      expect.objectContaining({
-        method: 'PUT',
-        body: buffer,
-        headers: expect.objectContaining({ 'Content-Type': mediaType }),
-      }),
-    );
+    expect(mockPutObject).toHaveBeenCalledWith(result.storageKey, buffer, mediaType);
   });
 
   it('given the same bytes twice, should produce the same content-addressed storage key', async () => {
@@ -73,11 +55,11 @@ describe('uploadChatAttachment', () => {
     expect(second.contentHash).toBe(first.contentHash);
   });
 
-  it('given the PUT response is not ok, should throw', async () => {
+  it('given the PUT rejects, should propagate the error', async () => {
     mockCheckObjectExists.mockResolvedValue(false);
-    mockFetch.mockResolvedValue({ ok: false, status: 500 });
+    mockPutObject.mockRejectedValue(new Error('S3 unavailable'));
 
-    await expect(uploadChatAttachment(buffer, mediaType)).rejects.toThrow();
+    await expect(uploadChatAttachment(buffer, mediaType)).rejects.toThrow('S3 unavailable');
   });
 
   it('given a buffer over the 4MB cap, should throw without touching S3', async () => {
@@ -86,8 +68,7 @@ describe('uploadChatAttachment', () => {
     await expect(uploadChatAttachment(oversized, mediaType)).rejects.toThrow(/exceeds/i);
 
     expect(mockCheckObjectExists).not.toHaveBeenCalled();
-    expect(mockIssuePresignedPutUrl).not.toHaveBeenCalled();
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockPutObject).not.toHaveBeenCalled();
   });
 
   it('given a buffer exactly at the 4MB cap, should upload normally', async () => {
@@ -97,6 +78,37 @@ describe('uploadChatAttachment', () => {
     const result = await uploadChatAttachment(atLimit, mediaType);
 
     expect(result.storageKey).toBe(buildChatAttachmentKey(result.contentHash));
-    expect(mockFetch).toHaveBeenCalled();
+    expect(mockPutObject).toHaveBeenCalled();
+  });
+});
+
+describe('parseChatAttachmentStorageKey', () => {
+  it('given a presigned GET URL for a chat attachment, should recover the storage key', () => {
+    const url = 'https://bucket.example.com/chat-attachments/' +
+      'a'.repeat(64) +
+      '/original?X-Amz-Signature=abc&X-Amz-Expires=3600';
+
+    expect(parseChatAttachmentStorageKey(url)).toBe(`chat-attachments/${'a'.repeat(64)}/original`);
+  });
+
+  it('given a path-style S3 URL with a bucket prefix, should still recover the storage key', () => {
+    const url = 'https://s3.example.com/my-bucket/chat-attachments/' +
+      'b'.repeat(64) +
+      '/original?X-Amz-Signature=abc';
+
+    expect(parseChatAttachmentStorageKey(url)).toBe(`chat-attachments/${'b'.repeat(64)}/original`);
+  });
+
+  it('given an arbitrary external URL, should return null', () => {
+    expect(parseChatAttachmentStorageKey('https://example.com/img.png')).toBeNull();
+  });
+
+  it('given a data: URL, should return null', () => {
+    expect(parseChatAttachmentStorageKey('data:image/png;base64,aGVsbG8=')).toBeNull();
+  });
+
+  it('given a hash of the wrong length, should return null', () => {
+    const url = 'https://bucket.example.com/chat-attachments/deadbeef/original';
+    expect(parseChatAttachmentStorageKey(url)).toBeNull();
   });
 });
