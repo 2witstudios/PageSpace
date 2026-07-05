@@ -2,12 +2,17 @@ import { useCallback, useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { UIMessage } from 'ai';
+import { createId } from '@paralleldrive/cuid2';
 import { toast } from 'sonner';
 import { AgentInfo, isValidAgentInfo } from '@/types/agent';
 import {
   createAgentConversation,
   fetchAgentConversationMessages,
   fetchMostRecentAgentConversation,
+  conversationIdentityReducer,
+  conversationIdFrom,
+  isResolving,
+  type ConversationIdentityState,
 } from '@/lib/ai/shared';
 
 /**
@@ -26,14 +31,26 @@ interface TransferFromDashboardPayload {
   messages: UIMessage[];
 }
 
+const IDLE_IDENTITY: ConversationIdentityState = { status: 'idle' };
+
 interface SidebarAgentStoreState {
   // Agent selection
   selectedAgent: SidebarAgentInfo | null;
 
-  // Conversation state
+  // Conversation identity — single source of truth. conversationId/isInitialized
+  // below are derived from this on every transition via applyIdentity, and kept
+  // as plain fields (not getters) so existing selectors don't need to change.
+  identity: ConversationIdentityState;
   conversationId: string | null;
   initialMessages: UIMessage[];
   isInitialized: boolean;
+  /**
+   * True while messages are being fetched for an already-known conversation
+   * (loadConversation), decoupled from identity resolution — loadConversation
+   * adopts its id synchronously, so isInitialized alone no longer covers this
+   * fetch window.
+   */
+  isMessagesLoading: boolean;
   agentIdForConversation: string | null;
 
   // Internal state for race condition protection (not persisted)
@@ -41,10 +58,9 @@ interface SidebarAgentStoreState {
 
   // Actions
   selectAgent: (agent: SidebarAgentInfo | null) => void;
-  setConversationLoading: () => void;
-  setConversationLoaded: (conversationId: string, messages: UIMessage[], agentId: string) => void;
-  setConversationCreated: (conversationId: string, agentId: string) => void;
-  setConversationError: (agentId: string) => void;
+  applyIdentity: (action: Parameters<typeof conversationIdentityReducer>[1]) => ConversationIdentityState;
+  setMessagesLoading: (loading: boolean) => void;
+  setMessagesLoaded: (messages: UIMessage[], agentId: string) => void;
   updateMessages: (messages: UIMessage[]) => void;
   setLoadingAgentId: (agentId: string | null) => void;
   /** Transfer state from dashboard store for seamless navigation */
@@ -53,25 +69,30 @@ interface SidebarAgentStoreState {
 
 export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       // Initial state
       selectedAgent: null,
+      identity: IDLE_IDENTITY,
       conversationId: null,
       initialMessages: [],
       isInitialized: false,
+      isMessagesLoading: false,
       agentIdForConversation: null,
       _loadingAgentId: null,
 
       // Actions
       selectAgent: (agent) => {
         set((state) => {
-          // When selecting a new agent (or null for global), reset conversation state
+          // When selecting a new agent (or null for global), reset conversation
+          // state — identity resets to idle (a genuinely new subject).
           if (agent?.id !== state.selectedAgent?.id) {
             return {
               selectedAgent: agent,
+              identity: IDLE_IDENTITY,
               conversationId: null,
               initialMessages: [],
               isInitialized: false,
+              isMessagesLoading: false,
               agentIdForConversation: null,
             };
           }
@@ -79,33 +100,31 @@ export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
         });
       },
 
-      setConversationLoading: () => {
-        set({ isInitialized: false });
+      /**
+       * Every conversation-identity transition funnels through the shared pure
+       * reducer, so a stale async result can never clobber a newer one — a
+       * RESOLVED/RESOLVE_FAILED that arrives after IDENTITY_SET already moved
+       * state to 'ready' is a guaranteed no-op (see conversation-identity.ts).
+       */
+      applyIdentity: (action) => {
+        const current = get().identity;
+        const next = conversationIdentityReducer(current, action);
+        if (next !== current) {
+          set({
+            identity: next,
+            conversationId: conversationIdFrom(next),
+            isInitialized: !isResolving(next) && next.status !== 'idle',
+          });
+        }
+        return next;
       },
 
-      setConversationLoaded: (conversationId, messages, agentId) => {
-        set({
-          conversationId,
-          initialMessages: messages,
-          isInitialized: true,
-          agentIdForConversation: agentId,
-        });
+      setMessagesLoading: (loading) => {
+        set({ isMessagesLoading: loading });
       },
 
-      setConversationCreated: (conversationId, agentId) => {
-        set({
-          conversationId,
-          initialMessages: [],
-          isInitialized: true,
-          agentIdForConversation: agentId,
-        });
-      },
-
-      setConversationError: (agentId) => {
-        set({
-          isInitialized: true, // Allow UI to recover
-          agentIdForConversation: agentId,
-        });
+      setMessagesLoaded: (messages, agentId) => {
+        set({ initialMessages: messages, agentIdForConversation: agentId, isMessagesLoading: false });
       },
 
       updateMessages: (messages) => {
@@ -124,9 +143,13 @@ export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
       transferFromDashboard: (payload) => {
         set({
           selectedAgent: payload.agent,
+          identity: payload.conversationId
+            ? { status: 'ready', conversationId: payload.conversationId }
+            : IDLE_IDENTITY,
           conversationId: payload.conversationId,
           initialMessages: payload.messages,
           isInitialized: true,
+          isMessagesLoading: false,
           agentIdForConversation: payload.agent.id,
           _loadingAgentId: null,
         });
@@ -180,6 +203,8 @@ export interface UseSidebarAgentStateReturn {
   initialMessages: UIMessage[];
   /** Whether the agent conversation is initialized */
   isInitialized: boolean;
+  /** True while messages for an already-known conversation are being fetched, decoupled from identity resolution */
+  isMessagesLoading: boolean;
   /** Select an agent (or null to return to Global Assistant) */
   selectAgent: (agent: SidebarAgentInfo | null) => void;
   /** Create a new conversation for the current agent */
@@ -201,13 +226,10 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
   const conversationId = useSidebarAgentStore((state) => state.conversationId);
   const initialMessages = useSidebarAgentStore((state) => state.initialMessages);
   const isInitialized = useSidebarAgentStore((state) => state.isInitialized);
-  const agentIdForConversation = useSidebarAgentStore((state) => state.agentIdForConversation);
+  const isMessagesLoading = useSidebarAgentStore((state) => state.isMessagesLoading);
 
   const selectAgent = useSidebarAgentStore((state) => state.selectAgent);
-  const setConversationLoading = useSidebarAgentStore((state) => state.setConversationLoading);
-  const setConversationLoaded = useSidebarAgentStore((state) => state.setConversationLoaded);
-  const setConversationCreated = useSidebarAgentStore((state) => state.setConversationCreated);
-  const setConversationError = useSidebarAgentStore((state) => state.setConversationError);
+  const setMessagesLoaded = useSidebarAgentStore((state) => state.setMessagesLoaded);
   const updateMessages = useSidebarAgentStore((state) => state.updateMessages);
 
   // Ref to track which agent we're currently loading (for race condition protection)
@@ -224,8 +246,9 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
         return;
       }
 
+      const { isInitialized: alreadyInitialized, agentIdForConversation } = useSidebarAgentStore.getState();
       // If already initialized for this agent, skip
-      if (isInitialized && agentIdForConversation === selectedAgent.id) {
+      if (alreadyInitialized && agentIdForConversation === selectedAgent.id) {
         return;
       }
 
@@ -233,7 +256,8 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
       const currentAgentId = selectedAgent.id;
       loadingAgentIdRef.current = currentAgentId;
 
-      setConversationLoading();
+      const { applyIdentity } = useSidebarAgentStore.getState();
+      applyIdentity({ type: 'RESOLVE_STARTED' });
 
       // Try to load most recent conversation
       try {
@@ -248,7 +272,11 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
           // Abort if agent changed during fetch
           if (loadingAgentIdRef.current !== currentAgentId) return;
 
-          setConversationLoaded(mostRecent.id, result.messages, selectedAgent.id);
+          const resolved = useSidebarAgentStore.getState().applyIdentity({ type: 'RESOLVED', conversationId: mostRecent.id });
+          // A newer identity (set via loadConversation/createNewConversation
+          // while this was in flight) wins — don't apply these stale messages.
+          if (conversationIdFrom(resolved) !== mostRecent.id) return;
+          useSidebarAgentStore.getState().setMessagesLoaded(result.messages, selectedAgent.id);
           return;
         }
       } catch (error) {
@@ -260,79 +288,92 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
       // Abort if agent changed before creating new conversation
       if (loadingAgentIdRef.current !== currentAgentId) return;
 
-      // No existing conversation - create new one
+      // No existing conversation - create one. Only fall back to create if
+      // nothing else has resolved identity while the fetches above were in
+      // flight (createNewConversation's IDENTITY_SET always wins, so calling
+      // it unconditionally here could clobber a newer user-triggered switch).
+      if (!isResolving(useSidebarAgentStore.getState().identity)) return;
+
+      const newConversationId = createId();
+      const resolved = useSidebarAgentStore.getState().applyIdentity({ type: 'IDENTITY_SET', conversationId: newConversationId });
+      if (conversationIdFrom(resolved) !== newConversationId) return;
+      useSidebarAgentStore.getState().setMessagesLoaded([], selectedAgent.id);
+
       try {
-        const newConversationId = await createAgentConversation(selectedAgent.id);
-
-        // Abort if agent changed during fetch
-        if (loadingAgentIdRef.current !== currentAgentId) return;
-
-        setConversationCreated(newConversationId, selectedAgent.id);
+        await createAgentConversation(selectedAgent.id, newConversationId);
       } catch (error) {
-        // Abort if agent changed during error handling
         if (loadingAgentIdRef.current !== currentAgentId) return;
         console.error('Failed to create new agent conversation:', error);
         toast.error('Failed to initialize agent conversation');
-        setConversationError(selectedAgent.id);
       }
     };
 
     loadOrCreateConversation();
-  }, [
-    selectedAgent,
-    isInitialized,
-    agentIdForConversation,
-    setConversationLoading,
-    setConversationLoaded,
-    setConversationCreated,
-    setConversationError,
-  ]);
+  }, [selectedAgent]);
 
   // ============================================
   // Action: Create New Conversation
   // ============================================
+  // The id is generated client-side (cuid2) and set synchronously — the
+  // persist POST below is fire-and-forget, not the mechanism used to learn
+  // the id. Closes the race where a send fired right after "New Chat" would
+  // carry a stale conversationId.
   const createNewConversation = useCallback(async (): Promise<string | null> => {
     if (!selectedAgent) return null;
 
+    const newConversationId = createId();
+    useSidebarAgentStore.getState().applyIdentity({ type: 'IDENTITY_SET', conversationId: newConversationId });
+    useSidebarAgentStore.getState().setMessagesLoaded([], selectedAgent.id);
+
     try {
-      const newConversationId = await createAgentConversation(selectedAgent.id);
-      setConversationCreated(newConversationId, selectedAgent.id);
-      return newConversationId;
+      await createAgentConversation(selectedAgent.id, newConversationId);
     } catch (error) {
       console.error('Failed to create new conversation:', error);
       toast.error('Failed to create new conversation');
     }
-    return null;
-  }, [selectedAgent, setConversationCreated]);
+    return newConversationId;
+  }, [selectedAgent]);
 
   // ============================================
   // Action: Refresh Conversation
   // ============================================
   const refreshConversation = useCallback(async (): Promise<void> => {
-    if (!selectedAgent || !conversationId) return;
+    const currentConversationId = useSidebarAgentStore.getState().conversationId;
+    if (!selectedAgent || !currentConversationId) return;
 
     try {
-      const result = await fetchAgentConversationMessages(selectedAgent.id, conversationId, { limit: 50 });
+      const result = await fetchAgentConversationMessages(selectedAgent.id, currentConversationId, { limit: 50 });
       updateMessages(result.messages);
     } catch (error) {
       console.error('Failed to refresh agent conversation:', error);
     }
-  }, [selectedAgent, conversationId, updateMessages]);
+  }, [selectedAgent, updateMessages]);
 
   // ============================================
   // Action: Load Specific Conversation
   // ============================================
-  const loadConversation = useCallback(async (conversationId: string): Promise<void> => {
+  // The id is already known (it came from a history list) — adopt it
+  // synchronously, before the messages fetch even starts, closing the race
+  // where a send fired right after selecting a conversation could land under
+  // the previous one.
+  const loadConversation = useCallback(async (targetConversationId: string): Promise<void> => {
     if (!selectedAgent) return;
 
+    useSidebarAgentStore.getState().applyIdentity({ type: 'IDENTITY_SET', conversationId: targetConversationId });
+    useSidebarAgentStore.getState().setMessagesLoading(true);
+
     try {
-      const result = await fetchAgentConversationMessages(selectedAgent.id, conversationId, { limit: 50 });
-      setConversationLoaded(conversationId, result.messages, selectedAgent.id);
+      const result = await fetchAgentConversationMessages(selectedAgent.id, targetConversationId, { limit: 50 });
+      // Drop a stale result if the user switched to a different conversation
+      // while this fetch was in flight.
+      if (useSidebarAgentStore.getState().conversationId !== targetConversationId) return;
+      setMessagesLoaded(result.messages, selectedAgent.id);
     } catch (error) {
       console.error('Failed to load agent conversation:', error);
       toast.error('Failed to load conversation');
+      useSidebarAgentStore.getState().setMessagesLoading(false);
     }
-  }, [selectedAgent, setConversationLoaded]);
+  }, [selectedAgent, setMessagesLoaded]);
 
   // ============================================
   // Return hook interface
@@ -342,6 +383,7 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
     conversationId,
     initialMessages,
     isInitialized,
+    isMessagesLoading,
     selectAgent,
     createNewConversation,
     refreshConversation,

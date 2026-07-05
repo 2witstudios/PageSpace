@@ -629,6 +629,61 @@ describe('AiChatView initializeChat', () => {
     });
   });
 
+  test('given a conversation is selected from history and onConversationLoad supplies messages, should NOT double-fetch that conversation over the network', async () => {
+    const HISTORY_CONV_ID = 'history-selected-conv';
+    const HISTORY_MESSAGES_URL = `/api/ai/page-agents/${PAGE_ID}/conversations/${HISTORY_CONV_ID}/messages`;
+
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [existingConversation] });
+      }
+      if (url === MESSAGES_URL && !opts?.method) {
+        return makeOkResponse({ messages: [] });
+      }
+      return makeErrorResponse();
+    });
+    mockLoadConversation.mockResolvedValue(undefined);
+
+    render(<AiChatView page={page} />);
+    await waitFor(() => expect(latestMcpConversationId()).toBe(CONV_ID));
+
+    const historyTrigger = await screen.findByRole('tab', { name: /history/i });
+    await userEvent.click(historyTrigger);
+    await waitFor(() => expect(historyTabPropsRef.current?.onSelectConversation).toBeDefined());
+
+    act(() => {
+      historyTabPropsRef.current!.onSelectConversation!(HISTORY_CONV_ID);
+    });
+
+    // Simulates useConversations.loadConversation resolving and invoking its
+    // onConversationLoad callback with pre-fetched messages.
+    act(() => {
+      useConversationsOptionsRef.current?.onConversationLoad?.(HISTORY_CONV_ID, [
+        { id: 'preloaded-msg', role: 'assistant', parts: [] },
+      ]);
+    });
+
+    await waitFor(() => {
+      assert({
+        given: 'history-select fired and onConversationLoad supplied messages directly',
+        should: 'apply the preloaded messages',
+        actual: mockSetMessages.mock.calls.some((args) =>
+          Array.isArray(args[0]) && args[0].some((m: { id: string }) => m.id === 'preloaded-msg')
+        ),
+        expected: true,
+      });
+    });
+
+    assert({
+      given: 'history-select fired and onConversationLoad supplied messages directly',
+      should: 'never independently fetch that conversation\'s messages over the network (no double-fetch)',
+      actual: mockFetchWithAuth.mock.calls.some(([url]) => url === HISTORY_MESSAGES_URL),
+      expected: false,
+    });
+  });
+
   test('given the conversations-list fetch fails during init, should surface a retry state instead of silently falling back to the page-scoped placeholder', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
       if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
@@ -647,6 +702,43 @@ describe('AiChatView initializeChat', () => {
       given: 'the conversations-list fetch threw during init',
       should: 'never adopt the page-scoped default placeholder id',
       actual: latestMcpConversationId(),
+      expected: null,
+    });
+  });
+
+  test('given the conversation IS found but its messages-prefetch fetch throws, should NOT treat this as an identity-resolution failure', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [existingConversation] });
+      }
+      if (url === MESSAGES_URL && !opts?.method) {
+        // The list-fetch succeeded (conversation identity IS known) but the
+        // messages-prefetch throws — a transient blip on a *different*
+        // request than the one that determines identity.
+        throw new Error('network blip on messages prefetch');
+      }
+      return makeErrorResponse();
+    });
+
+    render(<AiChatView page={page} />);
+
+    // The conversation was found — identity should resolve normally, NOT
+    // surface the top-level resolution-failure banner.
+    await waitFor(() => {
+      assert({
+        given: 'the messages-prefetch fetch threw but the conversation was found',
+        should: 'still adopt the known conversation id',
+        actual: latestMcpConversationId(),
+        expected: CONV_ID,
+      });
+    });
+
+    assert({
+      given: 'the messages-prefetch fetch threw but the conversation was found',
+      should: 'NOT show the top-level identity-resolution-failure banner',
+      actual: screen.queryByText(/Failed to load this conversation/i),
       expected: null,
     });
   });
@@ -1006,6 +1098,68 @@ describe('AiChatView late-joiner conversation sync', () => {
       should: 'NOT make any functional setMessages calls (stale page-A append)',
       actual: functionalCallsAfterNav.length,
       expected: 0,
+    });
+  });
+
+  test('given the user switches to a different conversation while the late-joiner sync fetch is in-flight, should NOT snap identity back to the stale synced conversation', async () => {
+    let capturedCallback: ((messageId: string) => void) | undefined;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      capturedCallback = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
+    });
+
+    setupNoConversationsInit();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with no existing conversations',
+        should: 'fetch conversations list',
+        actual: wasGetCalled(`${CONVERSATIONS_URL}?pageSize=1`),
+        expected: true,
+      });
+    });
+
+    (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
+      streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
+    });
+
+    let resolveSyncFetch!: (value: unknown) => void;
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url === `${CONVERSATIONS_URL}?pageSize=1`) {
+        return new Promise((resolve) => { resolveSyncFetch = resolve; });
+      }
+      return Promise.resolve(makeErrorResponse());
+    });
+
+    // Trigger the late-joiner sync (starts the deferred list-fetch).
+    capturedCallback?.(MESSAGE_ID);
+
+    // The History tab must be mounted to capture onSelectConversation.
+    const historyTrigger = await screen.findByRole('tab', { name: /history/i });
+    await userEvent.click(historyTrigger);
+    await waitFor(() => expect(historyTabPropsRef.current?.onSelectConversation).toBeDefined());
+
+    // User explicitly switches to a different, already-known conversation
+    // while the late-joiner's fetch is still pending.
+    act(() => {
+      historyTabPropsRef.current!.onSelectConversation!('user-switched-id');
+    });
+    expect(latestMcpConversationId()).toBe('user-switched-id');
+
+    // The late-joiner's deferred fetch now resolves, matching stream.conversationId —
+    // it must not clobber the identity the user already switched to.
+    await act(async () => {
+      resolveSyncFetch(makeOkResponse({ conversations: [{ id: REAL_CONV_ID }] }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    assert({
+      given: 'the late-joiner sync resolved after the user switched conversations',
+      should: 'NOT snap identity back to the stale synced conversation',
+      actual: latestMcpConversationId(),
+      expected: 'user-switched-id',
     });
   });
 });

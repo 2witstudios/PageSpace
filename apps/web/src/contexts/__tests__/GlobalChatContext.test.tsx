@@ -385,6 +385,35 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
 
     expect(result.current.currentConversationId).toBe('brand-new-conv');
   });
+
+  it('given loadConversation is called, should set isMessagesLoading true until its messages fetch resolves', async () => {
+    let resolveMessages!: (value: unknown) => void;
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url === '/api/ai/global/active') return okResponse({ id: CONV_ID });
+      if (url === `/api/ai/global/conv-2/messages?limit=50`) {
+        return new Promise((resolve) => { resolveMessages = resolve; });
+      }
+      return okResponse({ messages: [] });
+    });
+
+    const { result } = renderProvider();
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+
+    act(() => {
+      void result.current.loadConversation('conv-2');
+    });
+
+    // Identity is already 'conv-2' (ungates sends), but messages are still loading.
+    expect(result.current.currentConversationId).toBe('conv-2');
+    expect(result.current.isMessagesLoading).toBe(true);
+
+    await act(async () => {
+      resolveMessages(okResponse({ messages: [] }));
+      await Promise.resolve();
+    });
+
+    expect(result.current.isMessagesLoading).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

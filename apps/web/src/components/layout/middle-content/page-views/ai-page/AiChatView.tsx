@@ -134,6 +134,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Always reflects the current page.id so async callbacks can detect stale pages
   const pageIdRef = useRef(page.id);
   useEffect(() => { pageIdRef.current = page.id; }, [page.id]);
+  // Always reflects the current identity's conversationId (kept in sync by an
+  // effect further below, once currentConversationId is derived) so async
+  // reconciliation callbacks (e.g. the late-joiner sync) can detect that the
+  // user has since switched away before applying a stale setIdentity call.
+  const currentConversationIdRef = useRef<string | null>(null);
   // Tracks the conversationId of the most recent loadMessagesForConversation call so
   // stale in-flight fetches (from a previous conversation) are silently dropped.
   const loadRequestedIdRef = useRef<string | null>(null);
@@ -260,14 +265,23 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
     if (list && list.length > 0) {
       const conv = list[0];
-      const msgResponse = await fetchWithAuth(
-        `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`
-      );
-      // undefined = fetch failed; loadMessagesForConversation takes the network
-      // path itself and surfaces its own error banner on failure.
-      const loaded = msgResponse.ok
-        ? (((await msgResponse.json()) as ConversationMessagesResponse).messages ?? [])
-        : undefined;
+      // The conversation's identity is already known at this point (conv.id) —
+      // a failure prefetching its messages (thrown exception or a non-ok
+      // response) must not be treated as an identity-resolution failure.
+      // loadMessagesForConversation takes the network path itself and
+      // surfaces its own per-conversation error banner on failure.
+      let loaded: UIMessage[] | undefined;
+      try {
+        const msgResponse = await fetchWithAuth(
+          `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`
+        );
+        loaded = msgResponse.ok
+          ? (((await msgResponse.json()) as ConversationMessagesResponse).messages ?? [])
+          : undefined;
+      } catch (err) {
+        console.warn('Failed to prefetch messages during init, falling back to network load:', err);
+        loaded = undefined;
+      }
       if (loaded !== undefined) {
         preloadedMessagesRef.current = { id: conv.id, messages: loaded };
       }
@@ -288,6 +302,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   } = useConversationIdentity({ resolve: resolveConversation });
 
   const currentConversationId = conversationIdFrom(identityState);
+  currentConversationIdRef.current = currentConversationId;
   const isInitialized = !isResolving(identityState) && identityState.status !== 'idle';
   const conversationResolveError = identityState.status === 'error' ? identityState.message : null;
 
@@ -642,6 +657,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             const data = (await res.json()) as ConversationListResponse;
             const persisted = data.conversations?.[0];
             if (!persisted || persisted.id !== streamConvId) return;
+            // This is a background reconciliation, not a user action — unlike
+            // create/select, it must not clobber an identity the user has
+            // since moved on to (e.g. via New Chat or history-select) while
+            // this fetch was in flight. Only apply if still on the same
+            // placeholder that triggered it.
+            if (!isPlaceholderConversationId(currentConversationIdRef.current, page.id)) return;
             setIdentity(persisted.id);
             setMessages((prev) =>
               prev.some((m) => m.id === messageId)
@@ -705,6 +726,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // ============================================
   // HANDLERS
   // ============================================
+
+  // Adopt the selected id immediately — before the messages fetch even
+  // starts — so a send fired right after clicking a history item can't
+  // race and land under the previous conversation. skipLoadEffectRef must be
+  // set BEFORE setIdentity: setIdentity changes currentConversationId
+  // synchronously, which fires the load-on-select effect on this same render
+  // — if the skip token isn't already in place, that effect fires its own
+  // redundant fetch before loadConversation's onConversationLoad callback
+  // (which runs later, once its fetch resolves) gets a chance to set it.
+  const handleSelectConversation = useCallback((conversationId: string) => {
+    skipLoadEffectRef.current = conversationId;
+    setIdentity(conversationId);
+    void loadConversation(conversationId);
+  }, [setIdentity, loadConversation]);
 
   const buildFreshPageContext = useCallback(() => {
     const treeCacheKey = `/api/drives/${encodeURIComponent(driveId)}/pages`;
@@ -1111,13 +1146,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           <PageAgentHistoryTab
             conversations={conversations}
             currentConversationId={currentConversationId}
-            onSelectConversation={(conversationId) => {
-              // Adopt the selected id immediately — before the messages fetch even
-              // starts — so a send fired right after clicking a history item can't
-              // race and land under the previous conversation.
-              setIdentity(conversationId);
-              void loadConversation(conversationId);
-            }}
+            onSelectConversation={handleSelectConversation}
             onCreateNew={() => createConversation()}
             onDeleteConversation={deleteConversation}
             onToggleShare={toggleConversationShare}

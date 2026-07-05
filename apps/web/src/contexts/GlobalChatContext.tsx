@@ -51,6 +51,15 @@ interface GlobalChatConversationContextValue {
    *  config, which ignores the messages prop after construction). */
   initialMessages: UIMessage[];
   isInitialized: boolean;
+  /**
+   * True while messages are being fetched for an ALREADY-known conversation
+   * (loadConversation), decoupled from identity resolution — loadConversation
+   * adopts its id synchronously (closing the create/select race), so
+   * isInitialized alone no longer covers this fetch window. Without this, a
+   * conversation switch could flash the previous conversation's messages
+   * under the new conversation's identity/header with no loading indicator.
+   */
+  isMessagesLoading: boolean;
   /** Increments when remote events require surfaces to re-fetch messages from DB. */
   refreshSignal: number;
   setCurrentConversationId: (id: string | null) => void;
@@ -110,6 +119,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const isInitialized = !isResolving(identity) && identity.status !== 'idle';
+  const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
@@ -126,6 +136,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const loadConversation = useCallback(async (conversationId: string) => {
     dispatchIdentity({ type: 'IDENTITY_SET', conversationId });
     conversationState.setActiveConversationId(conversationId);
+    setIsMessagesLoading(true);
     try {
       const messagesResponse = await fetchWithAuth(
         `/api/ai/global/${conversationId}/messages?limit=50`
@@ -140,10 +151,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       } else {
         console.error('Failed to load conversation:', conversationId);
       }
+      setIsMessagesLoading(false);
     } catch (error) {
       console.error('Error loading conversation:', error);
       if (conversationIdFrom(identityRef.current) !== conversationId) return;
       setInitialMessages([]);
+      setIsMessagesLoading(false);
     }
   }, []);
 
@@ -337,6 +350,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     currentConversationId,
     initialMessages,
     isInitialized,
+    isMessagesLoading,
     refreshSignal,
     setCurrentConversationId,
     loadConversation,
@@ -347,6 +361,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     currentConversationId,
     initialMessages,
     isInitialized,
+    isMessagesLoading,
     refreshSignal,
     loadConversation,
     createNewConversation,

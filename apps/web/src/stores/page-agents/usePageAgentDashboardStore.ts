@@ -41,6 +41,16 @@ interface AgentState {
   identity: ConversationIdentityState;
   conversationId: string | null;
   isConversationLoading: boolean;
+  /**
+   * True while messages are being fetched for an ALREADY-known conversation
+   * (loadConversation), decoupled from identity resolution — loadConversation
+   * adopts its id synchronously (closing the create/select race), so
+   * isConversationLoading alone no longer covers this fetch window. Without
+   * this, a conversation switch could flash the previous conversation's
+   * messages under the new conversation's identity/header with no loading
+   * indicator.
+   */
+  isConversationMessagesLoading: boolean;
   conversationMessages: UIMessage[];
   conversationAgentId: string | null; // Track which agent the conversation belongs to
   /** Increments every time conversation state is set by loadConversation,
@@ -81,12 +91,18 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
   // RESOLVED/RESOLVE_FAILED that arrives after IDENTITY_SET already moved
   // state to 'ready' is a guaranteed no-op (see conversation-identity.ts).
   const applyIdentity = (action: Parameters<typeof conversationIdentityReducer>[1]) => {
-    const next = conversationIdentityReducer(get().identity, action);
-    set({
-      identity: next,
-      conversationId: conversationIdFrom(next),
-      isConversationLoading: isResolving(next),
-    });
+    const current = get().identity;
+    const next = conversationIdentityReducer(current, action);
+    // The reducer returns the same reference for a guaranteed no-op (e.g. a
+    // stale RESOLVED/RESOLVE_FAILED after a newer IDENTITY_SET already won)
+    // — skip the store write so subscribers aren't notified for nothing.
+    if (next !== current) {
+      set({
+        identity: next,
+        conversationId: conversationIdFrom(next),
+        isConversationLoading: isResolving(next),
+      });
+    }
     return next;
   };
 
@@ -97,6 +113,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
   conversationId: null,
   conversationMessages: [],
   isConversationLoading: false,
+  isConversationMessagesLoading: false,
   conversationAgentId: null,
   conversationLoadSignal: 0,
   isAgentStreaming: false,
@@ -130,6 +147,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
         conversationId: null,
         conversationMessages: [],
         conversationAgentId: null,
+        isConversationMessagesLoading: false,
       });
     } else {
       set({ selectedAgent: agent });
@@ -227,7 +245,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
     if (!agent) return;
 
     applyIdentity({ type: 'IDENTITY_SET', conversationId });
-    set({ conversationAgentId: agent.id });
+    set({ conversationAgentId: agent.id, isConversationMessagesLoading: true });
     setChatParams({ agentId: agent.id, conversationId }, 'push');
 
     try {
@@ -238,10 +256,12 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
       set({
         conversationMessages: result.messages,
         conversationLoadSignal: get().conversationLoadSignal + 1,
+        isConversationMessagesLoading: false,
       });
     } catch (error) {
       console.error('Failed to load conversation:', error);
       toast.error('Failed to load conversation');
+      set({ isConversationMessagesLoading: false });
     }
   },
 
@@ -293,6 +313,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
       conversationId: null,
       conversationMessages: [],
       conversationAgentId: null,
+      isConversationMessagesLoading: false,
     });
   },
 
@@ -351,13 +372,20 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
         return;
       }
 
-      // No existing conversation - create a new one. createNewConversation
-      // dispatches IDENTITY_SET, which unconditionally moves past 'resolving'
-      // — no manual reset needed here.
+      // No existing conversation - create a new one. But only if nothing
+      // else has resolved identity while these fetches were in flight —
+      // createNewConversation's IDENTITY_SET always wins, so calling it
+      // unconditionally here would clobber a newer loadConversation/
+      // createNewConversation the user already triggered.
+      if (!isResolving(get().identity)) return;
       await get().createNewConversation();
     } catch (error) {
       console.error('Failed to load most recent conversation:', error);
-      applyIdentity({ type: 'RESOLVE_FAILED', message: error instanceof Error ? error.message : 'Failed to load conversation' });
+      const resolved = applyIdentity({ type: 'RESOLVE_FAILED', message: error instanceof Error ? error.message : 'Failed to load conversation' });
+      // RESOLVE_FAILED only takes effect if we were still 'resolving' — if a
+      // newer identity already won, resolved.status won't be 'error' and we
+      // must not fall back to creating yet another conversation on top of it.
+      if (resolved.status !== 'error') return;
       // Try to create a new one
       await get().createNewConversation();
     }

@@ -60,6 +60,7 @@ describe('usePageAgentSidebarState', () => {
       conversationId: null,
       initialMessages: [],
       isInitialized: false,
+      isMessagesLoading: false,
       agentIdForConversation: null,
       _loadingAgentId: null,
     });
@@ -279,7 +280,7 @@ describe('usePageAgentSidebarState', () => {
     });
 
     it('should create new conversation if none exists', async () => {
-      // Mock no existing conversations, then successful creation
+      // Mock no existing conversations, then a successful (client-id) persist
       mockFetchWithAuth
         .mockResolvedValueOnce({
           ok: true,
@@ -287,7 +288,7 @@ describe('usePageAgentSidebarState', () => {
         })
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ conversationId: 'conv-new' }),
+          json: async () => ({}),
         });
 
       const { result } = renderHook(() => usePageAgentSidebarState());
@@ -300,11 +301,16 @@ describe('usePageAgentSidebarState', () => {
         expect(result.current.isInitialized).toBe(true);
       });
 
-      expect(result.current.conversationId).toBe('conv-new');
+      // The id is now generated client-side (cuid2), not read from the
+      // server response — just verify one was adopted.
+      expect(result.current.conversationId).not.toBeNull();
       expect(result.current.initialMessages).toEqual([]);
     });
 
-    it('should handle conversation loading errors gracefully', async () => {
+    it('should recover from a transient list-fetch error by falling back to a client-generated new conversation', async () => {
+      // Only the list-fetch fails; the create persist (fire-and-forget) then
+      // hits the default mock and "succeeds" — the id was already generated
+      // client-side, so a network blip here no longer strands the user.
       mockFetchWithAuth.mockRejectedValueOnce(new Error('Network error'));
 
       const { result } = renderHook(() => usePageAgentSidebarState());
@@ -317,9 +323,8 @@ describe('usePageAgentSidebarState', () => {
         expect(result.current.isInitialized).toBe(true);
       });
 
-      // Should be initialized but without conversation (allows UI to recover)
-      // Note: conversationId remains null because no conversation was loaded/created
-      expect(result.current.conversationId).toBeFalsy();
+      expect(result.current.conversationId).not.toBeNull();
+      expect(result.current.initialMessages).toEqual([]);
     });
   });
 
@@ -334,15 +339,15 @@ describe('usePageAgentSidebarState', () => {
           ok: true,
           json: async () => ({ conversations: [] }),
         })
-        // Initial creation
+        // Initial creation persist
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ conversationId: 'conv-initial' }),
+          json: async () => ({}),
         })
-        // New conversation creation
+        // New conversation creation persist
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ conversationId: 'conv-new' }),
+          json: async () => ({}),
         });
 
       const { result } = renderHook(() => usePageAgentSidebarState());
@@ -360,8 +365,8 @@ describe('usePageAgentSidebarState', () => {
         newConvId = await result.current.createNewConversation();
       });
 
-      expect(newConvId).toBe('conv-new');
-      expect(result.current.conversationId).toBe('conv-new');
+      expect(newConvId).not.toBeNull();
+      expect(result.current.conversationId).toBe(newConvId);
       expect(result.current.initialMessages).toEqual([]);
     });
 
@@ -374,6 +379,97 @@ describe('usePageAgentSidebarState', () => {
       });
 
       expect(newConvId).toBeNull();
+    });
+
+    it('given createNewConversation is called, should set conversationId synchronously — before the persist POST resolves', async () => {
+      let resolvePersist!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string, opts?: { method?: string }) => {
+        if (opts?.method === 'POST') {
+          return new Promise((resolve) => { resolvePersist = resolve; });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ conversations: [] }) });
+      });
+
+      const { result } = renderHook(() => usePageAgentSidebarState());
+
+      act(() => {
+        result.current.selectAgent(mockAgent);
+      });
+      await waitFor(() => expect(result.current.isInitialized).toBe(true));
+
+      let createPromise!: Promise<string | null>;
+      act(() => {
+        createPromise = result.current.createNewConversation();
+      });
+
+      // Must be set synchronously, before the persist POST resolves.
+      expect(result.current.conversationId).not.toBeNull();
+      const issuedId = result.current.conversationId;
+
+      resolvePersist({ ok: true, json: async () => ({}) });
+      await act(() => createPromise);
+      expect(result.current.conversationId).toBe(issuedId);
+    });
+  });
+
+  // ============================================
+  // loadConversation Tests
+  // ============================================
+  describe('loadConversation', () => {
+    it('given loadConversation is called, should set conversationId synchronously — before its messages fetch resolves', async () => {
+      mockFetchWithAuth.mockResolvedValueOnce({ ok: true, json: async () => ({ conversations: [] }) });
+
+      const { result } = renderHook(() => usePageAgentSidebarState());
+      act(() => {
+        result.current.selectAgent(mockAgent);
+      });
+      await waitFor(() => expect(result.current.isInitialized).toBe(true));
+
+      let resolveMessages!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation(
+        () => new Promise((resolve) => { resolveMessages = resolve; })
+      );
+
+      let loadPromise!: Promise<void>;
+      act(() => {
+        loadPromise = result.current.loadConversation('picked-from-history');
+      });
+
+      // Must be set synchronously, before the messages fetch resolves.
+      expect(result.current.conversationId).toBe('picked-from-history');
+
+      resolveMessages({ ok: true, json: async () => ({ messages: [] }) });
+      await act(() => loadPromise);
+    });
+
+    it('given loadConversation is called, should set isMessagesLoading true until its messages fetch resolves', async () => {
+      mockFetchWithAuth.mockResolvedValueOnce({ ok: true, json: async () => ({ conversations: [] }) });
+
+      const { result } = renderHook(() => usePageAgentSidebarState());
+      act(() => {
+        result.current.selectAgent(mockAgent);
+      });
+      await waitFor(() => expect(result.current.isInitialized).toBe(true));
+
+      let resolveMessages!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation(
+        () => new Promise((resolve) => { resolveMessages = resolve; })
+      );
+
+      let loadPromise!: Promise<void>;
+      act(() => {
+        loadPromise = result.current.loadConversation('picked-from-history');
+      });
+
+      expect(result.current.conversationId).toBe('picked-from-history');
+      expect(result.current.isMessagesLoading).toBe(true);
+
+      await act(async () => {
+        resolveMessages({ ok: true, json: async () => ({ messages: [] }) });
+        await loadPromise;
+      });
+
+      expect(result.current.isMessagesLoading).toBe(false);
     });
   });
 
