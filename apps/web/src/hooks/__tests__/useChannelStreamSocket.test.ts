@@ -802,7 +802,9 @@ describe('useChannelStreamSocket', () => {
       );
     });
 
-    it('given a bootstrapped stream carries persisted parts, should seed them as addStream initial parts (atomic against co-mounted double-seed)', async () => {
+    it('given a bootstrapped stream carries persisted raw text-delta parts, should fold them into addStream initial parts the same way live appendPart would', async () => {
+      // The persisted snapshot is the raw registry buffer — one entry per
+      // pushed text delta — not a pre-folded array.
       const persistedParts = [{ type: 'text', text: 'partial' }, { type: 'text', text: ' content' }];
       mockFetchWithAuth.mockResolvedValueOnce({
         ok: true,
@@ -822,12 +824,72 @@ describe('useChannelStreamSocket', () => {
 
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
         messageId: 'msg-bootstrap',
-        parts: persistedParts,
+        // Folded to one merged text part, matching what two live appendPart
+        // calls with the same deltas would have produced in the store.
+        parts: [{ type: 'text', text: 'partial content' }],
       }));
-      // Seeding must NOT go through appendPart — addStream no-ops when the
-      // entry already exists, which is what makes a second co-mounted
-      // surface's bootstrap unable to duplicate the snapshot.
+      // Seeding must NOT go through the store's appendPart action — addStream
+      // no-ops when the entry already exists, which is what makes a second
+      // co-mounted surface's bootstrap unable to duplicate the snapshot.
       expect(mockAppendPart).not.toHaveBeenCalled();
+    });
+
+    it('given a bootstrapped stream carries a completed tool call as two raw frames, should fold to a single converged tool part', async () => {
+      const persistedParts = [
+        { type: 'tool-search', toolCallId: 'call-1', toolName: 'search', state: 'input-available', input: { q: 'x' } },
+        { type: 'tool-search', toolCallId: 'call-1', toolName: 'search', state: 'output-available', input: { q: 'x' }, output: { results: [] } },
+      ];
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-tool',
+            conversationId: 'conv-1',
+            parts: persistedParts,
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+          }],
+        }),
+      });
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'msg-tool',
+        // Without folding, both raw frames would render as separate tool
+        // parts sharing one toolCallId — a duplicate "still running" entry
+        // beside the completed one instead of a single converged part.
+        parts: [persistedParts[1]],
+      }));
+    });
+
+    it('given a persisted snapshot contains a malformed frame, should drop it before seeding (same wire-trust gate the live SSE path applies)', async () => {
+      const persistedParts = [
+        { type: 'text', text: 'ok' },
+        { toolCallId: 'call-1' }, // missing `type` — not a valid part frame
+        { type: 'tool-search', toolName: 'search' }, // tool part missing toolCallId
+      ];
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-malformed',
+            conversationId: 'conv-1',
+            parts: persistedParts,
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+          }],
+        }),
+      });
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'msg-malformed',
+        parts: [{ type: 'text', text: 'ok' }],
+      }));
     });
 
     it('given persisted parts were seeded and the live join then fails (originator process died), should keep the restored snapshot in the store', async () => {

@@ -71,6 +71,11 @@ export const createStreamLifecycle = async (
           status: 'streaming',
           startedAt: new Date(),
           completedAt: null,
+          // A re-registered messageId gets a fresh (empty) in-memory buffer
+          // above — the DB snapshot must reset with it, or a bootstrap
+          // between here and the first checkpoint would serve the prior
+          // attempt's stale parts as if they were a prefix of this attempt.
+          parts: [],
         },
       });
   } catch (error) {
@@ -162,6 +167,12 @@ export const createStreamLifecycle = async (
   };
 
   const pushPart = (part: UIMessagePart): void => {
+    // finish() already deleted the registry entry and issued the final
+    // write; a part pushed after that point would still trip the checkpoint
+    // below with an empty getBufferedParts() snapshot, racing the final
+    // write with no ordering guarantee against it.
+    if (finished) return;
+
     try {
       streamMulticastRegistry.push(messageId, part);
     } catch (error) {

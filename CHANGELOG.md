@@ -33,3 +33,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   `@pagespace/cli`). It keeps working exactly as before — same tools, same env vars — and now
   prints a one-line migration notice to stderr. See the
   [migration guide](packages/cli/docs/migrating-from-pagespace-mcp.md).
+
+### Fixed
+
+- **AI streams no longer lose mid-response content when the server process restarts** — an
+  in-progress AI reply's content is now checkpointed to the database as it streams, so reopening
+  the channel (or resuming on mobile) shows the restored partial answer instead of a stalled
+  "streaming" indicator with nothing behind it.

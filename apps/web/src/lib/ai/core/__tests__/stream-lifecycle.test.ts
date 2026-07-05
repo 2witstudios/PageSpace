@@ -134,7 +134,7 @@ describe('createStreamLifecycle', () => {
       });
     });
 
-    it('given a duplicate messageId, should refresh all 8 fields via onConflictDoUpdate', async () => {
+    it('given a duplicate messageId, should refresh all fields via onConflictDoUpdate, including resetting parts to empty', async () => {
       await createStreamLifecycle(params());
 
       expect(mockInsertOnConflict).toHaveBeenCalledTimes(1);
@@ -147,6 +147,11 @@ describe('createStreamLifecycle', () => {
         browserSessionId: 'session-1',
         status: 'streaming',
         completedAt: null,
+        // A re-registered messageId gets a fresh in-memory buffer (registry.register
+        // evicts any prior entry) — the DB snapshot must reset with it, or a bootstrap
+        // racing the re-registration would serve the prior attempt's stale parts as
+        // if they were a prefix of the new attempt's live buffer.
+        parts: [],
       });
       expect(cfg.set.startedAt).toBeInstanceOf(Date);
     });
@@ -205,6 +210,27 @@ describe('createStreamLifecycle', () => {
       lifecycle.pushPart(textPart);
 
       expect(mockRegistryPush).toHaveBeenCalledWith('msg-1', textPart);
+    });
+
+    it('given finish() already ran, should no-op instead of forwarding to the registry', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+      lifecycle.finish(false);
+      mockRegistryPush.mockClear();
+
+      lifecycle.pushPart(textPart);
+
+      expect(mockRegistryPush).not.toHaveBeenCalled();
+    });
+
+    it('given finish() already ran, should not count toward the periodic-persist checkpoint (would otherwise race the final write with an empty snapshot)', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+      lifecycle.finish(false);
+      mockUpdateSet.mockClear();
+
+      for (let i = 0; i < 25; i++) lifecycle.pushPart(textPart);
+      await flushMicrotasks();
+
+      expect(mockUpdateSet).not.toHaveBeenCalled();
     });
 
     it('given the registry throws on push, should not throw out of pushPart', async () => {

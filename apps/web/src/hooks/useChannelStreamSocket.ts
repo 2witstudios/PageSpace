@@ -7,6 +7,8 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isOwnStream } from '@/lib/ai/streams/isOwnStream';
 import { shouldSkipBootstrappedStream } from '@/lib/ai/streams/shouldSkipBootstrappedStream';
 import { claimBootstrapConsumer, releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
+import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
+import { appendPart as appendPartPure } from '@/lib/ai/streams/appendPart';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -243,14 +245,25 @@ export function useChannelStreamSocket(
           // the originator's process has died. Seeding through addStream
           // (a no-op when the entry exists) keeps a co-mounted surface that
           // bootstrapped the same channel from appending the snapshot twice.
-          const persistedParts = stream.parts ?? [];
+          // The persisted snapshot is the raw registry buffer (one entry per
+          // pushed chunk: every text delta, and a separate frame per tool-call
+          // state transition) — the same shape the live SSE replay delivers.
+          // isValidPartFrame applies the same wire-trust gate the live path
+          // applies in consumeStreamJoin, and the count of frames that pass
+          // it is what the replay will actually skip past (see
+          // skipReplayCount below); appendPartPure then folds the raw
+          // sequence the way the store's own appendPart does for every live
+          // chunk, so a restored snapshot renders identically to a live one
+          // (merged text, tool parts converged to their latest state).
+          const persistedParts = (stream.parts ?? []).filter(isValidPartFrame);
+          const foldedParts = persistedParts.reduce(appendPartPure, [] as UIMessagePart[]);
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
             isOwn,
-            parts: persistedParts,
+            parts: foldedParts,
           });
           if (isOwn) {
             ownStreamIds.add(stream.messageId);
