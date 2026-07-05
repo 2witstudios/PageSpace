@@ -233,6 +233,12 @@ export async function createDriveRole(
  * is the classic JSONB read-modify-write race. Locking the row and re-reading
  * it inside the transaction serializes concurrent updates so both merges
  * survive.
+ *
+ * When `isDefault` is being set, the drive-wide "unset other defaults" write
+ * needs locks on every role row in the drive. Locking only the target row
+ * first would let two concurrent default-switches each hold their own target
+ * while waiting for the other's — a deadlock — so that path instead locks all
+ * of the drive's role rows up front in a consistent (id) order.
  */
 export async function updateDriveRole(
   driveId: string,
@@ -248,14 +254,27 @@ export async function updateDriveRole(
   }
 
   return db.transaction(async (tx) => {
-    const [existingRole] = await tx
-      .select()
-      .from(driveRoles)
-      .where(and(
-        eq(driveRoles.id, roleId),
-        eq(driveRoles.driveId, driveId)
-      ))
-      .for('update');
+    let existingRole: typeof driveRoles.$inferSelect | undefined;
+    if (input.isDefault) {
+      // Setting a default updates every role row in the drive, so acquire all
+      // of the drive's role locks in id order (see doc comment above).
+      const lockedRoles = await tx
+        .select()
+        .from(driveRoles)
+        .where(eq(driveRoles.driveId, driveId))
+        .orderBy(asc(driveRoles.id))
+        .for('update');
+      existingRole = lockedRoles.find((role) => role.id === roleId);
+    } else {
+      [existingRole] = await tx
+        .select()
+        .from(driveRoles)
+        .where(and(
+          eq(driveRoles.id, roleId),
+          eq(driveRoles.driveId, driveId)
+        ))
+        .for('update');
+    }
 
     if (!existingRole) {
       throw new Error('Role not found');

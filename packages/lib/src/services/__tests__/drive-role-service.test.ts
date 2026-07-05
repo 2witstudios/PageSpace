@@ -248,13 +248,16 @@ describe('drive-role-service', () => {
   });
 
   describe('updateDriveRole', () => {
-    // Builds a mock `tx` whose `select().from().where().for('update')` resolves
-    // to `existingRoleRows`, and whose `update().set().where()` chain resolves
+    // Builds a mock `tx` whose `select().from().where().for('update')` (single
+    // target-row lock) and `select().from().where().orderBy().for('update')`
+    // (drive-wide ordered lock, used when setting isDefault) both resolve to
+    // `existingRoleRows`, and whose `update().set().where()` chain resolves
     // each successive call to the next entry in `updateResults` (`returning()`
     // resolves; a plain no-`returning()` update — e.g. unsetting other
     // defaults — resolves `where()` itself to `undefined`).
     function makeTx(existingRoleRows: unknown[], updateResults: Array<unknown[] | undefined>) {
       const forMock = vi.fn().mockResolvedValue(existingRoleRows);
+      const orderByMock = vi.fn(() => ({ for: forMock }));
       let updateCall = 0;
       const updateMock = vi.fn(() => ({
         set: vi.fn().mockReturnValue({
@@ -268,11 +271,12 @@ describe('drive-role-service', () => {
       return {
         select: vi.fn(() => ({
           from: vi.fn(() => ({
-            where: vi.fn(() => ({ for: forMock })),
+            where: vi.fn(() => ({ for: forMock, orderBy: orderByMock })),
           })),
         })),
         update: updateMock,
         forMock,
+        orderByMock,
       };
     }
 
@@ -310,6 +314,44 @@ describe('drive-role-service', () => {
 
       const result = await updateDriveRole('drive-1', 'r1', { isDefault: true });
       expect(result.role.isDefault).toBe(true);
+    });
+
+    it('should lock all drive role rows in a consistent order when setting isDefault', async () => {
+      // The drive-wide "unset other defaults" write touches every role row in
+      // the drive; locking only the target row first would let two concurrent
+      // default-switches deadlock on each other's targets. The isDefault path
+      // must take an ordered drive-wide lock instead of a single-row lock.
+      const tx = makeTx(
+        [
+          { id: 'r1', isDefault: true, permissions: {} },
+          { id: 'r2', isDefault: false, permissions: {} },
+        ],
+        [undefined, [{ id: 'r2', isDefault: true }]]
+      );
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      const result = await updateDriveRole('drive-1', 'r2', { isDefault: true });
+      expect(result.role.isDefault).toBe(true);
+      expect(result.wasDefault).toBe(false);
+      expect(tx.orderByMock).toHaveBeenCalledTimes(1);
+      expect(tx.forMock).toHaveBeenCalledWith('update');
+    });
+
+    it('should not take the drive-wide ordered lock when isDefault is not being set', async () => {
+      const tx = makeTx([{ id: 'r1', isDefault: false, permissions: {} }], [[{ id: 'r1', name: 'Updated' }]]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await updateDriveRole('drive-1', 'r1', { name: 'Updated' });
+      expect(tx.orderByMock).not.toHaveBeenCalled();
+      expect(tx.forMock).toHaveBeenCalledWith('update');
+    });
+
+    it('should throw when target role is missing from the drive-wide locked set on the isDefault path', async () => {
+      const tx = makeTx([{ id: 'r-other', isDefault: true, permissions: {} }], []);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await expect(updateDriveRole('drive-1', 'r-x', { isDefault: true }))
+        .rejects.toThrow('Role not found');
     });
 
     it('should throw when driveWidePermissions is malformed', async () => {
