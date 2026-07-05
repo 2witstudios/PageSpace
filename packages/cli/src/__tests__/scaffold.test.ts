@@ -40,8 +40,8 @@ describe('@pagespace/cli package scaffold', () => {
     expect(packageJson.files).toEqual(['dist']);
   });
 
-  it('depends on @pagespace/sdk as a workspace dependency', () => {
-    expect(packageJson.dependencies).toMatchObject({ '@pagespace/sdk': 'workspace:*' });
+  it('depends on @pagespace/sdk pinned to a published version (not workspace:*, so npm installs resolve it)', () => {
+    expect(packageJson.dependencies?.['@pagespace/sdk']).toMatch(/^\^?\d+\.\d+\.\d+$/);
   });
 
   it('declares build, typecheck, and test scripts for turbo/bun --filter', () => {
