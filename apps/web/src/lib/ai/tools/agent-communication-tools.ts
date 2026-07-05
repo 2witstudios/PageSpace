@@ -25,6 +25,7 @@ import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
 // until inner stepCountIs budget is reworked — see PR #713. Raising this without
@@ -388,9 +389,14 @@ export const agentCommunicationTools = {
       agentId: z.string().describe('Unique ID of the AI agent page to consult'),
       question: z.string().describe('Question or request for the target agent. Be specific and provide context.'),
       context: z.string().optional().describe('Additional context about why you\'re asking this question or what you need the response for'),
-      conversationId: z.string().optional().describe('Optional conversation ID to continue a previous conversation. If not provided, a new conversation will be created. Use the conversationId returned in previous responses to continue the same conversation.')
+      conversationId: z.string().optional().describe('Optional conversation ID to continue a previous conversation. If not provided, a new conversation will be created. Use the conversationId returned in previous responses to continue the same conversation.'),
+      imageAttachments: z.array(z.object({
+        url: z.string().describe('Fetchable URL (data: URL or HTTPS) for the image'),
+        mediaType: z.string().describe('Image MIME type, e.g. image/png'),
+        filename: z.string().optional().describe('Original filename, if known'),
+      })).optional().describe('Recent image attachments (e.g. from channel context) to give the target agent visual context. Ignored if the target agent\'s model does not support vision — a text note is added instead.'),
     }),
-    execute: async ({ agentPath, agentId, question, context, conversationId }, { experimental_context }) => {
+    execute: async ({ agentPath, agentId, question, context, conversationId, imageAttachments }, { experimental_context }) => {
       const executionContext = experimental_context as ToolExecutionContext;
       const userId = executionContext?.userId;
       
@@ -479,14 +485,30 @@ export const agentCommunicationTools = {
 
         // 5. Build and save the user's question message
         const userMessageId = createId();
-        const userMessageContent = `${context ? `Context: ${context}\n\n` : ''}${question}`;
+        const targetHasVision = hasVisionCapability(targetAgent.aiModel || DEFAULT_MODEL);
+        const hasImageAttachments = !!imageAttachments && imageAttachments.length > 0;
+        const visionNote = hasImageAttachments && !targetHasVision
+          ? `\n\n[${imageAttachments!.length} image attachment${imageAttachments!.length === 1 ? '' : 's'} were provided but this agent's model does not support vision, so they could not be viewed.]`
+          : '';
+        const userMessageContent = `${context ? `Context: ${context}\n\n` : ''}${question}${visionNote}`;
+        const imageFileParts = hasImageAttachments && targetHasVision
+          ? imageAttachments!.map((attachment) => ({
+              type: 'file' as const,
+              url: attachment.url,
+              mediaType: attachment.mediaType,
+              filename: attachment.filename,
+            }))
+          : [];
         const userMessage: UIMessage = {
           id: userMessageId,
           role: 'user' as const,
-          parts: [{
-            type: 'text',
-            text: userMessageContent
-          }]
+          parts: [
+            {
+              type: 'text',
+              text: userMessageContent
+            },
+            ...imageFileParts,
+          ]
         };
 
         // Determine sourceAgentId - only set if the calling context is an AI_CHAT page
@@ -502,6 +524,7 @@ export const agentCommunicationTools = {
           role: 'user',
           content: userMessageContent,
           sourceAgentId, // Track which AI agent sent this message (for agent-to-agent communication)
+          uiMessage: userMessage, // Preserve image file parts (if any) in structured content
         });
 
         // Add user message to conversation

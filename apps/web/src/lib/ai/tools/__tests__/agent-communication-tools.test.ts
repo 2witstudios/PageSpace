@@ -1058,5 +1058,128 @@ describe('agent-communication-tools', () => {
         expect(toolsArg?.list_drives).toBeDefined();
       });
     });
+
+    describe('imageAttachments', () => {
+      const imageAttachments = [
+        { url: 'https://example.com/signed/screenshot.png', mediaType: 'image/png', filename: 'screenshot.png' },
+      ];
+
+      it('given a vision-capable target agent and imageAttachments, attaches them as file parts and persists them', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+          id: 'agent-1',
+          title: 'Vision Agent',
+          type: 'AI_CHAT',
+          driveId: 'drive-1',
+          systemPrompt: 'I can see images',
+          enabledTools: null,
+          aiProvider: 'anthropic',
+          aiModel: 'claude-sonnet-4.5',
+          isTrashed: false,
+        });
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'What is in this screenshot?',
+            imageAttachments,
+          },
+          context
+        );
+
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          (call) => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
+        expect(savedParts).toContainEqual({
+          type: 'file',
+          url: imageAttachments[0].url,
+          mediaType: imageAttachments[0].mediaType,
+          filename: imageAttachments[0].filename,
+        });
+      });
+
+      it('given a non-vision target agent and imageAttachments, omits file parts and adds a text note instead', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+          id: 'agent-2',
+          title: 'Text Agent',
+          type: 'AI_CHAT',
+          driveId: 'drive-1',
+          systemPrompt: 'I am text-only',
+          enabledTools: null,
+          aiProvider: 'openai',
+          aiModel: 'o1-mini',
+          isTrashed: false,
+        });
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-2',
+            question: 'What is in this screenshot?',
+            imageAttachments,
+          },
+          context
+        );
+
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          (call) => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
+        expect(savedParts.some((part) => part.type === 'file')).toBe(false);
+        const textPart = savedParts.find((part) => part.type === 'text') as { text: string } | undefined;
+        expect(textPart?.text).toMatch(/does not support vision/i);
+      });
+
+      it('given no imageAttachments, behaves exactly as before (no file parts, no vision note)', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+          id: 'agent-1',
+          title: 'Vision Agent',
+          type: 'AI_CHAT',
+          driveId: 'drive-1',
+          systemPrompt: 'I can see images',
+          enabledTools: null,
+          aiProvider: 'anthropic',
+          aiModel: 'claude-sonnet-4.5',
+          isTrashed: false,
+        });
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Plain question',
+          },
+          context
+        );
+
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          (call) => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
+        expect(savedParts).toEqual([{ type: 'text', text: 'Plain question' }]);
+      });
+    });
   });
 });

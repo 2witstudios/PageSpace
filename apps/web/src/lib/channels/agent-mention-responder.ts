@@ -24,6 +24,13 @@ import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import type { AttachmentMeta } from '@pagespace/db/schema/storage';
 import type { ChannelMessageAiMeta } from '@pagespace/db/schema/chat';
+import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
+import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
+import {
+  buildRecentImageFileParts,
+  type ImageFilePart,
+  type RecentImageFileCandidate,
+} from '@/lib/channels/build-recent-image-file-parts';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
 
@@ -240,6 +247,52 @@ export async function fetchRecentChannelMessages(channelId: string): Promise<Rec
   });
 }
 
+/**
+ * Resolve recent channel image attachments into presigned, access-checked
+ * file parts for ask_agent. Skips the S3/DB round-trips entirely when no
+ * eligible agent can view images (nothing would ever consume the result).
+ */
+async function resolveImageAttachmentsForContext(
+  userId: string,
+  driveId: string | null | undefined,
+  contextMessages: RecentChannelMessage[]
+): Promise<ImageFilePart[]> {
+  const imageCandidateMessages = contextMessages.filter(
+    (message): message is RecentChannelMessage & { fileId: string; attachmentMeta: AttachmentMeta } =>
+      !!message.fileId && !!message.attachmentMeta
+  );
+
+  if (imageCandidateMessages.length === 0) {
+    return [];
+  }
+
+  const candidates: RecentImageFileCandidate[] = await Promise.all(
+    imageCandidateMessages.map(async (message) => {
+      const accessible = await canUserAccessFile(userId, message.fileId, driveId ?? null);
+      const url = accessible
+        ? await generatePresignedUrl(
+            message.attachmentMeta.contentHash,
+            'original',
+            getPresignedUrlTtl(message.attachmentMeta.mimeType),
+            undefined,
+            message.attachmentMeta.mimeType
+          )
+        : '';
+
+      return {
+        fileId: message.fileId,
+        url,
+        mimeType: message.attachmentMeta.mimeType,
+        filename: message.attachmentMeta.originalName,
+        sizeBytes: message.attachmentMeta.size,
+        accessible,
+      };
+    })
+  );
+
+  return buildRecentImageFileParts(candidates);
+}
+
 function canAgentSendChannelMessages(enabledTools: string[] | null): boolean {
   return Array.isArray(enabledTools) && enabledTools.includes('send_channel_message');
 }
@@ -421,6 +474,12 @@ export async function triggerMentionedAgentResponses(
     const commandContext = buildCommandPromptSection(commandPlan);
     const commandExecution = commandPlan ? commandExecutionDataFromPlan(commandPlan) : undefined;
 
+    // Only worth resolving presigned URLs/access checks when at least one
+    // eligible agent can actually view images.
+    const imageAttachments = eligibleAgents.some((agent) => agent.hasVision)
+      ? await resolveImageAttachmentsForContext(params.userId, params.driveId, contextMessages)
+      : [];
+
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
@@ -438,6 +497,7 @@ export async function triggerMentionedAgentResponses(
               ...(commandContext ? ['', commandContext] : []),
             ].join('\n'),
             conversationId: mentionConversationId,
+            ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
           },
           {
             toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
