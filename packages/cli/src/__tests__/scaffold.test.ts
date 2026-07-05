@@ -25,7 +25,7 @@ describe('@pagespace/cli package scaffold', () => {
     expect(packageJson.name).toBe('@pagespace/cli');
   });
 
-  it('declares the pagespace bin pointing at dist/bin.js, plus the deprecated pagespace-mcp alias', () => {
+  it('declares the pagespace bin pointing at dist/bin.js, plus the first-class pagespace-mcp alias', () => {
     expect(packageJson.bin).toEqual({
       pagespace: './dist/bin.js',
       'pagespace-mcp': './dist/bin-pagespace-mcp.js',

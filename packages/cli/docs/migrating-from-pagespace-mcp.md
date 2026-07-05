@@ -112,8 +112,8 @@ just under the new variable name:
 
 ## Zero-config bridge, if you're not ready to edit config yet
 
-If you can't touch your MCP config right now, `@pagespace/cli` ships a `pagespace-mcp` bin alias
-that behaves exactly like `pagespace mcp` and honors your existing `PAGESPACE_API_URL` /
+If you can't touch your MCP config right now, `@pagespace/cli` ships a `pagespace-mcp` bin that
+behaves exactly like `pagespace mcp` and honors your existing `PAGESPACE_API_URL` /
 `PAGESPACE_AUTH_TOKEN` env vars unchanged — only the package you install changes:
 
 ```json
@@ -131,9 +131,10 @@ that behaves exactly like `pagespace mcp` and honors your existing `PAGESPACE_AP
 }
 ```
 
-It still prints the deprecation notice to stderr on every start. Migrate to `pagespace login` (or
-`pagespace tokens create` for CI) and the plain `["mcp"]` args form when you get a chance — the
-alias is a bridge, not a destination.
+This `pagespace-mcp` bin is itself a first-class, supported entry point — not a deprecated shim —
+so there's no pressure to move off it. Whenever it's convenient, `pagespace login` (or
+`pagespace tokens create` for CI) plus the plain `["mcp"]` args form is the same server with one
+fewer moving part, but staying on `pagespace-mcp` via `npx` is a perfectly fine destination too.
 
 ## What changed, mechanically
 
