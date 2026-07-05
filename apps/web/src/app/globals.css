@@ -292,10 +292,18 @@ svg.lucide {
 
 @layer components {
   /* Liquid Glass Utilities */
+  /* `transform: translateZ(0)` promotes each surface to its own compositing
+     layer. Mobile WebKit has a long-standing bug where a `backdrop-filter`
+     element (especially combined with `position: sticky`, e.g. the navbar)
+     doesn't repaint its blurred background after an ancestor's `.dark` class
+     toggles — it keeps showing the previous theme's colors until something
+     else forces a repaint. Layer promotion up front makes that repaint
+     reliable; see also GlassRepaintFix in ThemeProvider.tsx for a runtime nudge. */
   .liquid-glass-thin {
     background: var(--material-thin);
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
+    transform: translateZ(0);
   }
 
   /* Light Mode Glossy Gradient */
@@ -310,6 +318,7 @@ svg.lucide {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.6),
       var(--shadow-elevated);
+    transform: translateZ(0);
   }
 
   /* Dark Mode Glossy Gradient */
@@ -324,12 +333,14 @@ svg.lucide {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.03),
       var(--shadow-elevated);
+    transform: translateZ(0);
   }
 
   .liquid-glass-thick {
     background: var(--material-thick);
     backdrop-filter: blur(32px) saturate(190%);
     -webkit-backdrop-filter: blur(32px) saturate(190%);
+    transform: translateZ(0);
   }
 
   /* Reduced transparency support */
