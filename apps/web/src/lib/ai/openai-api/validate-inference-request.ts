@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
+import { mapImageUrlPartToFilePart } from './map-image-url-part';
 
 export interface OpenAIToolDefinition {
   type: 'function';
@@ -36,22 +37,35 @@ export const parseAgentModelUri = (model: string): string | null => {
 
 const VALID_ROLES = new Set(['user', 'assistant', 'system', 'tool']);
 
-const normalizeMessage = (msg: Record<string, unknown>): UIMessage => {
+type NormalizeMessageResult =
+  | { ok: true; message: UIMessage }
+  | { ok: false; error: string };
+
+const normalizeMessage = (msg: Record<string, unknown>): NormalizeMessageResult => {
   const id = typeof msg.id === 'string' ? msg.id : createId();
   if (Array.isArray(msg.parts)) {
-    return { ...msg, id } as unknown as UIMessage;
+    return { ok: true, message: { ...msg, id } as unknown as UIMessage };
   }
   const role = msg.role as UIMessage['role'];
   if (typeof msg.content === 'string') {
-    return { id, role, parts: [{ type: 'text' as const, text: msg.content }] } as unknown as UIMessage;
+    return { ok: true, message: { id, role, parts: [{ type: 'text' as const, text: msg.content }] } as unknown as UIMessage };
   }
   if (Array.isArray(msg.content)) {
-    const parts = (msg.content as Array<Record<string, unknown>>)
-      .filter(c => c.type === 'text' && typeof c.text === 'string')
-      .map(c => ({ type: 'text' as const, text: c.text as string }));
-    return { id, role, parts } as unknown as UIMessage;
+    const parts: Array<Record<string, unknown>> = [];
+    for (const c of msg.content as Array<Record<string, unknown>>) {
+      if (c.type === 'text' && typeof c.text === 'string') {
+        parts.push({ type: 'text', text: c.text });
+      } else if (c.type === 'image_url') {
+        const mapped = mapImageUrlPartToFilePart(c);
+        if (!mapped.ok) {
+          return { ok: false, error: mapped.error };
+        }
+        parts.push(mapped.part);
+      }
+    }
+    return { ok: true, message: { id, role, parts } as unknown as UIMessage };
   }
-  return { id, role, parts: [] } as unknown as UIMessage;
+  return { ok: true, message: { id, role, parts: [] } as unknown as UIMessage };
 };
 
 type NormalizeResult =
@@ -147,7 +161,11 @@ const normalizeMessages = (rawMessages: Record<string, unknown>[]): NormalizeRes
       continue;
     }
 
-    result.push(normalizeMessage(msg));
+    const normalized = normalizeMessage(msg);
+    if (!normalized.ok) {
+      return { ok: false, error: normalized.error };
+    }
+    result.push(normalized.message);
     i++;
   }
 
