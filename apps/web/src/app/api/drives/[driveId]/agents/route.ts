@@ -177,6 +177,7 @@ const postBodySchema = z.object({
   agentPageId: z.string().min(1),
   role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
   customRoleId: z.string().min(1).optional(),
+  includeContext: z.boolean().optional(),
 });
 
 /**
@@ -208,7 +209,7 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { agentPageId, role, customRoleId } = parsed.data;
+    const { agentPageId, role, customRoleId, includeContext } = parsed.data;
 
     // The agent's home drive may differ from this drive. The service authorizes
     // the caller against the agent + drive and caps the granted role at the
@@ -219,6 +220,7 @@ export async function POST(
       driveId,
       requestedRole: role,
       requestedCustomRoleId: customRoleId ?? null,
+      includeContext,
     });
 
     if (!result.ok) {
@@ -230,7 +232,7 @@ export async function POST(
       userId,
       resourceType: 'drive',
       resourceId: driveId,
-      details: { agentPageId, role, customRoleId },
+      details: { agentPageId, role, customRoleId, includeContext },
     });
 
     return NextResponse.json({ success: true, member: result.member }, { status: 201 });

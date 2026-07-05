@@ -10,6 +10,7 @@ import {
   isAllowedImageType,
   extractBase64DataUrl,
 } from '@/lib/validation/image-validation';
+import { parseChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
 
 export const MAX_FILE_PARTS_PER_MESSAGE = 5;
 export const MAX_DATA_URL_LENGTH = 4 * 1024 * 1024; // 4MB per data URL
@@ -87,13 +88,21 @@ export function validateUserMessageFileParts(
 
     // A file part without a string url is malformed input, not a crash: callers (the
     // OpenAI-compat route especially) accept arbitrary client-built parts arrays, so
-    // this must reject cleanly instead of throwing on url.length below.
+    // this must reject cleanly instead of throwing on url.length/parseChatAttachmentStorageKey below.
     if (typeof url !== 'string') {
       return {
         valid: false,
         error: `Image "${filename}" is missing a valid url`,
         filePartCount: fileParts.length,
       };
+    }
+
+    // Already-persisted attachment echoed back by the client (e.g. resend/regenerate
+    // resubmitting history that now carries a presigned chat-attachment GET URL instead
+    // of the original data: URL) — it was validated when first uploaded, so skip the
+    // new-upload checks below rather than rejecting it as an invalid data URL.
+    if (parseChatAttachmentStorageKey(url)) {
+      continue;
     }
 
     // Size check

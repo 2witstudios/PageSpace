@@ -37,6 +37,7 @@ export async function GET(
         role: driveAgentMembers.role,
         addedAt: driveAgentMembers.addedAt,
         customRoleId: driveAgentMembers.customRoleId,
+        includeContext: driveAgentMembers.includeContext,
         title: pages.title,
         customRoleName: driveRoles.name,
         customRoleColor: driveRoles.color,
@@ -52,6 +53,7 @@ export async function GET(
       role: row.role,
       addedAt: row.addedAt,
       title: row.title,
+      includeContext: row.includeContext,
       customRole: row.customRoleId
         ? { id: row.customRoleId, name: row.customRoleName ?? row.customRoleId, color: row.customRoleColor ?? null }
         : null,

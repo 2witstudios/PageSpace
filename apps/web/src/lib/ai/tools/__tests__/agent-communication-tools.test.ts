@@ -35,6 +35,11 @@ vi.mock('../actor-permissions', () => ({
   getActorAccessiblePagesInDrive: vi.fn(),
   getAgentPageId: vi.fn(),
   isMcpScoped: vi.fn(() => false),
+  filterDriveIdsByAppTokenScope: vi.fn((_ctx, ids) => Promise.resolve(ids)),
+  filterDriveIdsByMcpScope: vi.fn((_ctx, ids) => ids),
+}));
+vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
+  getAgentContextDrives: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   getAgentAccessLevel: vi.fn(),
@@ -50,6 +55,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
     },
   },
 
@@ -74,9 +80,21 @@ vi.mock('@paralleldrive/cuid2', () => ({
 vi.mock('../drive-tools', () => ({
   driveTools: { list_drives: { name: 'list_drives' }, create_drive: { name: 'create_drive' } },
 }));
-vi.mock('../page-read-tools', () => ({
-  pageReadTools: { list_pages: { name: 'list_pages' } },
-}));
+vi.mock('../page-read-tools', async () => {
+  const { toModelOutputForReadPage } = await import('../read-page-vision-output');
+  return {
+    pageReadTools: {
+      list_pages: { name: 'list_pages' },
+      // Mirrors the real read_page tool's toModelOutput wiring (page-read-tools.ts)
+      // so the cross-turn vision guard tests exercise the real mapper/guard logic.
+      read_page: {
+        name: 'read_page',
+        toModelOutput: ({ output }: { output: unknown }) => toModelOutputForReadPage(output),
+        execute: async () => ({}),
+      },
+    },
+  };
+});
 vi.mock('../page-write-tools', () => ({
   pageWriteTools: { create_page: { name: 'create_page' } },
 }));
@@ -158,7 +176,8 @@ vi.mock('../../core/ai-providers-config', () => ({
 
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
-import { canActorViewPage, isMcpScoped } from '../actor-permissions';
+import { canActorViewPage, isMcpScoped, filterDriveIdsByMcpScope } from '../actor-permissions';
+import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { createAIProvider } from '../../core/provider-factory';
 import { saveMessageToDatabase } from '../../core/message-utils';
 import type { ToolExecutionContext } from '../../core/types';
@@ -994,6 +1013,89 @@ describe('agent-communication-tools', () => {
       });
     });
 
+    describe('cross-turn vision guard on read_page (PR #1864 follow-up)', () => {
+      const visualDeliveredOutput = {
+        success: true,
+        type: 'visual_content_delivered',
+        pageId: 'page-1',
+        title: 'diagram.png',
+        mimeType: 'image/jpeg',
+        originalMimeType: 'image/png',
+        message: 'Delivered visual content: "diagram.png" (image/jpeg)',
+        imageBase64: 'ZmFrZS1iYXNlNjQ=',
+        sizeBytes: 1234,
+        metadata: { processingStatus: 'visual', originalFileName: 'diagram.png', presetUsed: 'ai-vision' },
+      };
+
+      const mockAgentWithReadPage = (aiModel: string | null) => ({
+        id: 'agent-1',
+        title: 'Test Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: ['read_page'],
+        aiProvider: null,
+        aiModel,
+        isTrashed: false,
+      });
+
+      it("given the target agent's configured model lacks vision, should degrade a stale visual_content_delivered read_page result instead of re-embedding the image", async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgentWithReadPage('gpt-3.5-turbo'));
+        vi.mocked(createAIProvider).mockResolvedValue({
+          model: { modelId: 'gpt-3.5-turbo' },
+          provider: 'openai',
+          modelName: 'gpt-3.5-turbo',
+        } as unknown as Awaited<ReturnType<typeof createAIProvider>>);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What does this image show?' },
+          context
+        );
+
+        const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, { toModelOutput?: (args: { output: unknown }) => unknown }> | undefined;
+        const readPageTool = toolsArg?.read_page;
+        expect(readPageTool?.toModelOutput).toBeDefined();
+
+        const modelOutput = readPageTool!.toModelOutput!({ output: visualDeliveredOutput }) as { type: string; value: Record<string, unknown> };
+        expect(modelOutput.type).toBe('json');
+        expect(modelOutput.value.type).toBe('visual_content_metadata');
+        expect(JSON.stringify(modelOutput)).not.toContain(visualDeliveredOutput.imageBase64);
+      });
+
+      it("given the target agent's configured model has vision, should leave read_page's image delivery unguarded", async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgentWithReadPage('openai/gpt-5.4'));
+        vi.mocked(createAIProvider).mockResolvedValue({
+          model: { modelId: 'openai/gpt-5.4' },
+          provider: 'openai',
+          modelName: 'openai/gpt-5.4',
+        } as unknown as Awaited<ReturnType<typeof createAIProvider>>);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What does this image show?' },
+          context
+        );
+
+        const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, { toModelOutput?: (args: { output: unknown }) => unknown }> | undefined;
+        const readPageTool = toolsArg?.read_page;
+        expect(readPageTool?.toModelOutput).toBeDefined();
+
+        const modelOutput = readPageTool!.toModelOutput!({ output: visualDeliveredOutput }) as { type: string; value: unknown[] };
+        expect(modelOutput.type).toBe('content');
+      });
+    });
+
     describe('MCP scope tool filtering (nested agent)', () => {
       const scopedAgent = {
         id: 'agent-1',
@@ -1241,6 +1343,89 @@ describe('agent-communication-tools', () => {
         expect(userMessageCall).toBeDefined();
         const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
         expect(savedParts).toEqual([{ type: 'text', text: 'Plain question' }]);
+      });
+    });
+
+    describe('member-drive context injection', () => {
+      const memberAgent = {
+        id: 'agent-1',
+        title: 'Budget Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-home',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        isTrashed: false,
+      };
+
+      beforeEach(() => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(memberAgent);
+        vi.mocked(getAgentContextDrives).mockResolvedValue([]);
+        vi.mocked(filterDriveIdsByMcpScope).mockImplementation((_ctx, ids) => ids);
+      });
+
+      it('prepends includeContext=true member-drive drivePrompts to the system prompt', async () => {
+        vi.mocked(getAgentContextDrives).mockResolvedValue([
+          { driveId: 'drive-marketing', driveName: 'Marketing', drivePrompt: 'Keep replies casual.' },
+        ]);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What do you think?' },
+          context
+        );
+
+        expect(getAgentContextDrives).toHaveBeenCalledWith('agent-1');
+        const systemArg = vi.mocked(generateText).mock.calls[0][0].system as string;
+        expect(systemArg).toContain('## DRIVE CONTEXT: Marketing');
+        expect(systemArg).toContain('Keep replies casual.');
+      });
+
+      it('leaves the system prompt unchanged when the agent has no includeContext memberships', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What do you think?' },
+          context
+        );
+
+        const systemArg = vi.mocked(generateText).mock.calls[0][0].system as string;
+        expect(systemArg).not.toContain('DRIVE CONTEXT');
+      });
+
+      it('drops member drives outside the caller\'s MCP drive scope', async () => {
+        vi.mocked(getAgentContextDrives).mockResolvedValue([
+          { driveId: 'drive-marketing', driveName: 'Marketing', drivePrompt: 'Keep replies casual.' },
+        ]);
+        vi.mocked(filterDriveIdsByMcpScope).mockReturnValue([]);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            mcpAllowedDriveIds: ['drive-home'],
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What do you think?' },
+          context
+        );
+
+        expect(filterDriveIdsByMcpScope).toHaveBeenCalledWith(context.experimental_context, ['drive-marketing']);
+        const systemArg = vi.mocked(generateText).mock.calls[0][0].system as string;
+        expect(systemArg).not.toContain('DRIVE CONTEXT');
       });
     });
   });

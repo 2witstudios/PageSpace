@@ -188,6 +188,13 @@ function stableStringify(value: unknown): string {
  * Refresh builtin provider configs from the in-memory definitions.
  * Compares the full config (tools, schemas, rate limits, etc.) via stable
  * JSON serialization. Only touches providers with providerType 'builtin'.
+ *
+ * No longer load-bearing for staleness: every read path that resolves a
+ * builtin provider's config now goes through `resolveProviderConfig`
+ * (`../providers/builtin-providers`), which always prefers the in-memory
+ * definition over this persisted row. This write-back is kept only so the
+ * persisted row (visible to direct DB queries, admin tooling, etc.) doesn't
+ * drift indefinitely — it is a sync convenience, not a correctness dependency.
  */
 export const refreshBuiltinProviders = async (
   database: typeof defaultDb,

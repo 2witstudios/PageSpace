@@ -20,7 +20,7 @@ import {
 import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
-import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 import type { ChannelMessageAiMeta } from '@pagespace/db/schema/chat';
@@ -543,6 +543,7 @@ export async function triggerMentionedAgentResponses(
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
+
         const rawAskResult: unknown = await askAgentExecute(
           {
             agentPath: `/${agent.title}`,

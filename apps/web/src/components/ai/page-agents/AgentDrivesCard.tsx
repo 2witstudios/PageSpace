@@ -4,9 +4,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Loader2, Network, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 
 interface AgentDrive {
   driveId: string;
@@ -15,6 +16,7 @@ interface AgentDrive {
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
   customRoleId: string | null;
   isHome: boolean;
+  includeContext: boolean;
 }
 
 interface DriveOption {
@@ -44,6 +46,7 @@ export function AgentDrivesCard({ agentPageId }: { agentPageId: string }) {
   const [selected, setSelected] = useState<string>('');
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const agentDrives = useMemo(() => data?.drives ?? [], [data]);
   const memberIds = useMemo(() => new Set(agentDrives.map((d) => d.driveId)), [agentDrives]);
@@ -64,6 +67,28 @@ export function AgentDrivesCard({ agentPageId }: { agentPageId: string }) {
       toast.error(e instanceof Error ? e.message : 'Failed to add agent to drive');
     } finally {
       setAdding(false);
+    }
+  };
+
+  const handleToggleIncludeContext = async (driveId: string, includeContext: boolean) => {
+    setTogglingId(driveId);
+    // Optimistic update, reverted on failure via mutate(data, false) restoring the cache.
+    const previous = data;
+    await mutate(
+      (current) =>
+        current && {
+          drives: current.drives.map((d) => (d.driveId === driveId ? { ...d, includeContext } : d)),
+        },
+      false,
+    );
+    try {
+      await patch(`/api/ai/page-agents/${agentPageId}/drives/${driveId}`, { includeContext });
+      await mutate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to update drive context setting');
+      await mutate(previous, false);
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -117,20 +142,31 @@ export function AgentDrivesCard({ agentPageId }: { agentPageId: string }) {
                   )}
                 </div>
                 {!drive.isHome && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleRemove(drive.driveId)}
-                    disabled={removingId === drive.driveId}
-                    aria-label={`Remove access to ${drive.driveName}`}
-                  >
-                    {removingId === drive.driveId ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <X className="h-4 w-4" />
-                    )}
-                  </Button>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={drive.includeContext}
+                        disabled={togglingId === drive.driveId}
+                        onCheckedChange={(checked) => handleToggleIncludeContext(drive.driveId, checked)}
+                        aria-label={`Carry ${drive.driveName}'s workspace instructions into this agent`}
+                      />
+                      <span className="text-xs text-muted-foreground">Carry context</span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemove(drive.driveId)}
+                      disabled={removingId === drive.driveId}
+                      aria-label={`Remove access to ${drive.driveName}`}
+                    >
+                      {removingId === drive.driveId ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <X className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
                 )}
               </li>
             ))}
