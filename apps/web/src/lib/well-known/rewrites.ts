@@ -8,6 +8,11 @@
  * must let the request through unauthenticated, since it runs on the
  * pre-rewrite pathname) import this list, so a new well-known route can't be
  * wired into one and forgotten in the other.
+ *
+ * `source` must stay a literal path, not a Next.js rewrite pattern
+ * (`:param`, `*`, etc.) — middleware.ts matches it with `===`, not
+ * path-to-regexp, since every `/.well-known/*` URL is a fixed, spec-defined
+ * path with no dynamic segments.
  */
 export const WELL_KNOWN_REWRITES = [
   {
