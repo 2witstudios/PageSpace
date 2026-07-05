@@ -10,7 +10,7 @@
  * `ctx.credentialStore`, matching `login.ts` (task 3) — the generic
  * auth-precedence wiring into the command context factory is task 7's scope.
  */
-import { PAGESPACE_CLI_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
+import { PAGESPACE_CLI_CLIENT_ID } from '../auth/client.js';
 import { resolveConfig } from '../config/resolve.js';
 import { createCredentialStore } from '../credentials/store.js';
 import type { CredentialStore } from '../credentials/store.js';

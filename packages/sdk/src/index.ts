@@ -47,6 +47,11 @@ export { StaticTokenProvider } from './auth/static.js';
 export { OAuthTokenProvider } from './auth/oauth.js';
 export type { OAuthTokenProviderOptions, OAuthTokens, RefreshAccessToken } from './auth/oauth.js';
 
+// PKCE (RFC 7636) — client-side math for the authorization-code + PKCE flow.
+// Consumed by `pagespace login` (packages/cli/src/auth/loopback-flow.ts) so
+// the CLI never needs to runtime-import `@pagespace/lib`.
+export { deriveCodeChallenge, generateCodeVerifier } from './auth/pkce.js';
+
 // Operation registry — the source of truth SDK resource methods, CLI verbs,
 // and MCP tool definitions all derive from.
 export { defineOperation } from './registry/define.js';
@@ -111,6 +116,7 @@ export {
   createDrive,
   renameDrive,
   restoreDrive,
+  setHomePage,
   trashDrive,
   updateDriveContext,
 } from './operations/drives.js';

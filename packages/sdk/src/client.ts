@@ -55,7 +55,7 @@ import { deleteChannelMessage, sendChannelMessage } from './operations/channels.
 import { listCollaborators } from './operations/collaborators.js';
 import { createCommand, deleteCommand, listCommands, updateCommand } from './operations/commands.js';
 import { listConversations, readConversation } from './operations/conversations.js';
-import { createDrive, listDrives, renameDrive, restoreDrive, trashDrive, updateDriveContext } from './operations/drives.js';
+import { createDrive, listDrives, renameDrive, restoreDrive, setHomePage, trashDrive, updateDriveContext } from './operations/drives.js';
 import {
   createPage,
   getPageDetails,
@@ -107,6 +107,7 @@ const DEFAULT_OPERATIONS_MAP = {
     create: createDrive,
     rename: renameDrive,
     updateContext: updateDriveContext,
+    setHomePage: setHomePage,
     trash: trashDrive,
     restore: restoreDrive,
   },

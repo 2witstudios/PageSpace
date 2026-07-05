@@ -94,6 +94,23 @@ export const updateDriveContext = defineOperation({
     "Update a drive's AI context prompt. This prompt is loaded into every AI call within the drive, so it directly inflates the token cost of every request there — keep it concise. Requires owner/admin authority.",
 });
 
+export const setHomePage = defineOperation({
+  name: 'drives.setHomePage',
+  method: 'PATCH',
+  path: '/api/drives/:driveId',
+  inputSchema: z.strictObject({
+    driveId: z.string(),
+    // min(1): "" must never reach the route (matches the route's own
+    // patchSchema — see apps/web/src/app/api/drives/[driveId]/route.ts);
+    // null clears the drive's landing page back to the default.
+    homePageId: z.string().min(1).nullable(),
+  }),
+  outputSchema: driveRowSchema,
+  requiredScope: 'drive:admin',
+  description:
+    "Set the page shown as a drive's landing page. Pass null to clear it back to the default. The page must be a non-trashed page belonging to the drive. Requires owner/admin authority.",
+});
+
 export const trashDrive = defineOperation({
   name: 'drives.trash',
   method: 'DELETE',

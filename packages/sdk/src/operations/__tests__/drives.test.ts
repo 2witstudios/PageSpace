@@ -8,6 +8,7 @@ import {
   listDrives,
   renameDrive,
   restoreDrive,
+  setHomePage,
   trashDrive,
   updateDriveContext,
 } from '../drives.js';
@@ -176,6 +177,48 @@ describe('drives.updateContext — response contract', () => {
 describe('drives.updateContext — metadata', () => {
   it('documents the token-cost caveat in its description', () => {
     expect(updateDriveContext.description.toLowerCase()).toContain('token');
+  });
+});
+
+describe('drives.setHomePage — request shape', () => {
+  it('interpolates :driveId and sends only homePageId in the body', () => {
+    const request = buildRequest(setHomePage, { driveId: 'd1abc', homePageId: 'p1xyz' }, config);
+    expect(request.method).toBe('PATCH');
+    expect(request.url).toBe('https://pagespace.ai/api/drives/d1abc');
+    expect(request.body).toBe(JSON.stringify({ homePageId: 'p1xyz' }));
+  });
+
+  it('sends an explicit null to clear the home page', () => {
+    const request = buildRequest(setHomePage, { driveId: 'd1abc', homePageId: null }, config);
+    expect(request.body).toBe(JSON.stringify({ homePageId: null }));
+  });
+
+  it('rejects an empty-string homePageId before any network call (route treats "" as invalid, only a real ID or null)', () => {
+    const result = setHomePage.inputSchema.safeParse({ driveId: 'd1abc', homePageId: '' });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('drives.setHomePage — response contract', () => {
+  it('parses the raw updated drive row', () => {
+    const result = parseResponse(setHomePage, 200, new Headers(), JSON.stringify({ ...driveRowFixture, homePageId: 'p1xyz' }));
+    expect(result).toEqual({ ...driveRowFixture, homePageId: 'p1xyz' });
+  });
+
+  it('classifies a 400 (invalid home page) as a typed ValidationError', () => {
+    const result = parseResponse(setHomePage, 400, new Headers(), JSON.stringify({ error: 'Home page must be a non-trashed page in this drive' }));
+    expect((result as { code: string }).code).toBe('VALIDATION_ERROR');
+  });
+
+  it('classifies a 403 (not owner/admin) as PermissionDeniedError', () => {
+    const result = parseResponse(setHomePage, 403, new Headers(), JSON.stringify({ error: 'Only drive owners and admins can update drive settings' }));
+    expect((result as { code: string }).code).toBe('PERMISSION_DENIED');
+  });
+});
+
+describe('drives.setHomePage — metadata', () => {
+  it('declares drive:admin as the minimum required scope', () => {
+    expect(setHomePage.requiredScope).toBe('drive:admin');
   });
 });
 

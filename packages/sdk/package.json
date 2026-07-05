@@ -1,7 +1,16 @@
 {
   "name": "@pagespace/sdk",
   "version": "0.1.0",
-  "license": "UNLICENSED",
+  "description": "Typed TypeScript/JavaScript client SDK for the PageSpace API — drives, pages, tasks, roles, search, agents, and more.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2witstudios/PageSpace.git",
+    "directory": "packages/sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "sideEffects": false,
   "exports": {

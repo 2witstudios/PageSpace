@@ -1,17 +1,19 @@
 /**
- * Parity map: v5.2.2 `pagespace-mcp` tool name -> current SDK operation name
- * (Phase 6 task 2). This is the one place a rename/reshape/drop is allowed
- * to exist without failing the parity test in `../v5.2.2-parity.test.ts` —
- * every entry here must cite a reason (a `docs/sdk/operations-inventory.md`
- * `D#` row where one exists), never a silent skip.
+ * Parity map: v5.2.7 `pagespace-mcp` tool name -> current SDK operation name
+ * (re-peg of Phase 6 task 2 to the tool's deprecation target). This is the
+ * one place a rename/reshape/drop is allowed to exist without failing the
+ * parity test in `../v5.2.7-parity.test.ts` — every entry here must cite a
+ * reason (a `docs/sdk/operations-inventory.md` `D#` row where one exists, or
+ * an explicit note for a v5.2.2->v5.2.7 delta the frozen Phase 0 inventory
+ * never saw), never a silent skip.
  *
- * Every one of the 67 tools in `fixtures/v5.2.2-tools.json` must appear in
+ * Every one of the 70 tools in `fixtures/v5.2.7-tools.json` must appear in
  * EXACTLY one of `TOOL_NAME_ALIASES` or `DROPPED_TOOLS` — the test asserts
  * this partition is total and disjoint, so an unmapped tool fails loudly
  * naming itself, not silently passing or silently skipping.
  */
 
-/** How a single v5.2.2-required field maps onto the new operation's input schema. */
+/** How a single v5.2.7-required field maps onto the new operation's input schema. */
 export type FieldMapping =
   /** Field name is unchanged. */
   | { readonly kind: 'same' }
@@ -27,14 +29,14 @@ export interface ToolMapping {
   readonly opName: string;
   /**
    * Per-required-field overrides, keyed by the OLD tool's field name. Any
-   * v5.2.2-required field not listed here defaults to `SAME` (name
+   * v5.2.7-required field not listed here defaults to `SAME` (name
    * unchanged). Only list fields that actually need a non-`same` mapping.
    */
   readonly fields?: Readonly<Record<string, FieldMapping>>;
 }
 
 /**
- * The 66 v5.2.2 tools that map onto a live operation in the current SDK
+ * The 69 v5.2.7 tools that map onto a live operation in the current SDK
  * registry (`packages/sdk/src/operations/*.ts`, assembled by
  * `buildOperationRegistry` in `../../serve.ts`).
  */
@@ -44,6 +46,10 @@ export const TOOL_NAME_ALIASES: Readonly<Record<string, ToolMapping>> = {
   create_drive: { opName: 'drives.create' },
   rename_drive: { opName: 'drives.rename' },
   update_drive_context: { opName: 'drives.updateContext' },
+  // Added after v5.2.2 (docs/sdk/operations-inventory.md predates this
+  // tool). Straight 1:1 — old flat args `{driveId, homePageId}` match
+  // `drives.setHomePage`'s input schema verbatim.
+  set_home_page: { opName: 'drives.setHomePage' },
   trash_drive: { opName: 'drives.trash' },
   restore_drive: { opName: 'drives.restore' },
 
@@ -74,6 +80,12 @@ export const TOOL_NAME_ALIASES: Readonly<Record<string, ToolMapping>> = {
     fields: { position: { kind: 'renamed', to: 'newPosition', reason: 'wire body field is newPosition, matching pages/reorder route exactly' } },
   },
   replace_lines: { opName: 'pages.replaceLines' },
+  // Added after v5.2.2 — already covered by an existing SDK operation, 1:1
+  // field names (pageId, startLine, content).
+  insert_lines: { opName: 'pages.insertLines' },
+  // Added after v5.2.2 — already covered by an existing SDK operation, 1:1
+  // field names (pageId, startLine).
+  delete_lines: { opName: 'pages.deleteLines' },
   trash_page: { opName: 'pages.trash' },
   restore_page: { opName: 'pages.restore' },
   edit_sheet_cells: { opName: 'pages.editCells' },
@@ -138,14 +150,37 @@ export const TOOL_NAME_ALIASES: Readonly<Record<string, ToolMapping>> = {
   // roles.ts module doc: fix #1765 replaced the flat single-page
   // {pageId, canView, canEdit, canShare} shape with a server-side
   // read-merge-write `permissionsPatch: Record<pageId, PagePerm>` map, so a
-  // single SDK call can never wipe another page's grant. `pageId` (the only
-  // v5.2.2-*required* field affected — canView/canEdit/canShare were
-  // optional flags there) is absorbed into `permissionsPatch`'s keys.
+  // single SDK call can never wipe another page's grant. All four old flat
+  // fields collapse into that one dynamic-key field: `pageId` becomes the
+  // patch's key, and `canView`/`canEdit`/`canShare` become the per-page
+  // `PagePerm` value stored at that key. `canView`/`canEdit`/`canShare` were
+  // optional at v5.2.2 (not part of the parity contract then) but the v5.2.5
+  // "parity-fixes" wave (pagespace-mcp 8cd1c78..9c3f7b7) promoted them to
+  // required on this tool — the reshape already covered them structurally,
+  // this just documents that v5.2.7 delta explicitly rather than leaving it
+  // an unmapped-field gap.
   set_role_page_permissions: {
     opName: 'roles.setPagePermissions',
-    fields: { pageId: { kind: 'reshaped', into: 'permissionsPatch', reason: 'fix #1765 — per-page read-merge-write patch, pageId becomes a dynamic key' } },
+    fields: {
+      pageId: { kind: 'reshaped', into: 'permissionsPatch', reason: 'fix #1765 — per-page read-merge-write patch, pageId becomes a dynamic key' },
+      canView: { kind: 'reshaped', into: 'permissionsPatch', reason: 'v5.2.7 promoted this to required; already carried inside the permissionsPatch value (fix #1765)' },
+      canEdit: { kind: 'reshaped', into: 'permissionsPatch', reason: 'v5.2.7 promoted this to required; already carried inside the permissionsPatch value (fix #1765)' },
+      canShare: { kind: 'reshaped', into: 'permissionsPatch', reason: 'v5.2.7 promoted this to required; already carried inside the permissionsPatch value (fix #1765)' },
+    },
   },
-  set_role_drive_wide_permissions: { opName: 'roles.setDriveWidePermissions' },
+  // v5.2.7 also promoted canView/canEdit/canShare to required on the
+  // drive-wide variant. `roles.setDriveWidePermissions` already models them
+  // as a single nested `driveWidePermissions` object (a wholesale replace,
+  // never a per-page patch — see roles.ts module doc), so the three flat
+  // fields reshape into that one field.
+  set_role_drive_wide_permissions: {
+    opName: 'roles.setDriveWidePermissions',
+    fields: {
+      canView: { kind: 'reshaped', into: 'driveWidePermissions', reason: 'v5.2.7 promoted this to required; carried inside the driveWidePermissions object' },
+      canEdit: { kind: 'reshaped', into: 'driveWidePermissions', reason: 'v5.2.7 promoted this to required; carried inside the driveWidePermissions object' },
+      canShare: { kind: 'reshaped', into: 'driveWidePermissions', reason: 'v5.2.7 promoted this to required; carried inside the driveWidePermissions object' },
+    },
+  },
   remove_role_page_permissions: {
     opName: 'roles.removePagePermissions',
     fields: { pageId: { kind: 'reshaped', into: 'permissionsPatch', reason: 'fix #1765 — per-page read-merge-write patch, pageId becomes a dynamic key' } },
@@ -185,12 +220,12 @@ export const TOOL_NAME_ALIASES: Readonly<Record<string, ToolMapping>> = {
 };
 
 export interface DroppedToolEntry {
-  /** Why this v5.2.2 tool has no corresponding MCP tool today. Must reference the operations-inventory.md D# row when one exists. */
+  /** Why this v5.2.7 tool has no corresponding MCP tool today. Must reference the operations-inventory.md D# row when one exists. */
   readonly reason: string;
 }
 
 /**
- * v5.2.2 tools with NO corresponding operation in the current registry, by
+ * v5.2.7 tools with NO corresponding operation in the current registry, by
  * deliberate design (not an oversight) — reviewable, greppable, one entry
  * per tool, every entry with a reason.
  */

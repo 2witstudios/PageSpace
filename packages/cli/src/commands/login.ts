@@ -11,7 +11,7 @@
  * consumer either way.
  */
 import { randomBytes } from 'node:crypto';
-import { PAGESPACE_CLI_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
+import { PAGESPACE_CLI_CLIENT_ID } from '../auth/client.js';
 import { resolveConfig } from '../config/resolve.js';
 import { createCredentialStore } from '../credentials/store.js';
 import type { CredentialStore } from '../credentials/store.js';

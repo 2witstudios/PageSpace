@@ -4,6 +4,7 @@ import {
   drivesListHandler,
   drivesRenameHandler,
   drivesRestoreHandler,
+  drivesSetHomePageHandler,
   drivesTrashHandler,
   EXIT_RUNTIME_ERROR,
   EXIT_SUCCESS,
@@ -147,6 +148,89 @@ describe('drivesRenameHandler', () => {
 
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(rename).not.toHaveBeenCalled();
+  });
+});
+
+describe('drivesSetHomePageHandler', () => {
+  it('calls drives.setHomePage with driveId and pageId', async () => {
+    const setHomePage = vi.fn(async () => ({ ...DRIVE, homePageId: 'pg_1' }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ drives: { setHomePage } }) });
+
+    const code = await drivesSetHomePageHandler(ctx, commandIntent(['drv_1', 'pg_1']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(setHomePage).toHaveBeenCalledWith({ driveId: 'drv_1', homePageId: 'pg_1' });
+  });
+
+  it('--clear sends homePageId: null', async () => {
+    const setHomePage = vi.fn(async () => ({ ...DRIVE, homePageId: null }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ drives: { setHomePage } }) });
+
+    const code = await drivesSetHomePageHandler(ctx, commandIntent(['drv_1', '--clear']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(setHomePage).toHaveBeenCalledWith({ driveId: 'drv_1', homePageId: null });
+  });
+
+  it('--json emits exactly the SDK response', async () => {
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk({ drives: { setHomePage: async () => ({ ...DRIVE, homePageId: 'pg_1' }) } }) });
+
+    await drivesSetHomePageHandler(ctx, commandIntent(['drv_1', 'pg_1', '--json']));
+
+    expect(JSON.parse(stdout.lines.join(''))).toEqual({ ...DRIVE, homePageId: 'pg_1' });
+  });
+
+  it('exits 2 with a usage error when pageId/--clear is missing, never calling the SDK', async () => {
+    const setHomePage = vi.fn(async () => DRIVE);
+    const ctx = createFakeContext({ sdk: fakeSdk({ drives: { setHomePage } }) });
+
+    const code = await drivesSetHomePageHandler(ctx, commandIntent(['drv_1']));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(setHomePage).not.toHaveBeenCalled();
+  });
+
+  it('exits 2 with a usage error when driveId is missing', async () => {
+    const setHomePage = vi.fn(async () => DRIVE);
+    const ctx = createFakeContext({ sdk: fakeSdk({ drives: { setHomePage } }) });
+
+    const code = await drivesSetHomePageHandler(ctx, commandIntent([]));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(setHomePage).not.toHaveBeenCalled();
+  });
+
+  it('exits 1 and surfaces the server error on API failure', async () => {
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({
+      stderr,
+      sdk: fakeSdk({
+        drives: {
+          setHomePage: async () => {
+            throw new Error('Home page must be a non-trashed page in this drive');
+          },
+        },
+      }),
+    });
+
+    const code = await drivesSetHomePageHandler(ctx, commandIntent(['drv_1', 'pg_1']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toContain('Home page must be a non-trashed page in this drive');
+  });
+
+  it('--clear and --json combine correctly: sends homePageId: null and emits exactly the SDK response', async () => {
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({
+      stdout,
+      sdk: fakeSdk({ drives: { setHomePage: async () => ({ ...DRIVE, homePageId: null }) } }),
+    });
+
+    const code = await drivesSetHomePageHandler(ctx, commandIntent(['drv_1', '--clear', '--json']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(JSON.parse(stdout.lines.join(''))).toEqual({ ...DRIVE, homePageId: null });
   });
 });
 

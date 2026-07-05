@@ -37,13 +37,20 @@
  * hand-construct the patch object.
  */
 import { z } from 'zod';
-import type { PagePerm } from '@pagespace/lib/permissions/membership-queries';
 import { defineOperation } from '../registry/define.js';
 
 /**
- * Structurally checked against the canonical `PagePerm` lattice
- * (`packages/lib/src/permissions/membership-queries.ts`) via `satisfies` —
- * the SDK must not restate the view/edit/share triple by hand and drift.
+ * Inlined rather than imported from `@pagespace/lib/permissions/membership-queries`:
+ * the published SDK must never runtime- or type-import `@pagespace/lib` (a
+ * `.d.ts` referencing an unpublished internal package would break a
+ * consumer's `tsc`). Structural equality with the lib's canonical
+ * `PagePerm` is enforced by a dedicated drift-guard test
+ * (`__tests__/roles-pageperm-drift-guard.test.ts`), not by `satisfies`
+ * against an import, since there is no import to check against anymore.
+ */
+export type PagePerm = { canView: boolean; canEdit: boolean; canShare: boolean };
+
+/**
  * All three flags are always required (never optional): the route treats an
  * omitted flag on write as an explicit `false`, so a partial triple would
  * silently grant less than the caller intended — fail closed instead.
