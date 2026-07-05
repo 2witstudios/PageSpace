@@ -20,6 +20,10 @@ import {
 import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
+import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import type { AttachmentMeta } from '@pagespace/db/schema/storage';
+import type { ChannelMessageAiMeta } from '@pagespace/db/schema/chat';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
 
@@ -27,10 +31,21 @@ const CONTEXT_MESSAGE_LIMIT = 12;
 const MESSAGE_SNIPPET_LIMIT = 320;
 const TRANSCRIPT_CHAR_LIMIT = 5000;
 
-interface MentionedAgent {
+export interface MentionedAgent {
   id: string;
   title: string;
   enabledTools: string[] | null;
+  /** Whether this agent's configured model (falling back to DEFAULT_MODEL) supports vision. */
+  hasVision: boolean;
+}
+
+export interface RecentChannelMessage {
+  content: string;
+  createdAt: Date;
+  user: { name: string | null } | null;
+  aiMeta: ChannelMessageAiMeta | null;
+  fileId: string | null;
+  attachmentMeta: AttachmentMeta | null;
 }
 
 export interface TriggerMentionedAgentResponsesParams {
@@ -146,7 +161,7 @@ function buildLocationContext(params: TriggerMentionedAgentResponsesParams): Too
   };
 }
 
-async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]> {
+export async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]> {
   const processed = processMentionsInMessage(content);
   if (processed.mentions.length === 0) {
     return [];
@@ -175,6 +190,8 @@ async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]
       id: true,
       title: true,
       enabledTools: true,
+      aiProvider: true,
+      aiModel: true,
     },
   });
 
@@ -194,10 +211,33 @@ async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]
       id: page.id,
       title: page.title || 'Agent',
       enabledTools: Array.isArray(page.enabledTools) ? page.enabledTools : null,
+      hasVision: hasVisionCapability(page.aiModel || DEFAULT_MODEL),
     });
   }
 
   return orderedAgents;
+}
+
+export async function fetchRecentChannelMessages(channelId: string): Promise<RecentChannelMessage[]> {
+  return db.query.channelMessages.findMany({
+    where: and(eq(channelMessages.pageId, channelId), eq(channelMessages.isActive, true)),
+    columns: {
+      content: true,
+      createdAt: true,
+      aiMeta: true,
+      fileId: true,
+      attachmentMeta: true,
+    },
+    with: {
+      user: {
+        columns: {
+          name: true,
+        },
+      },
+    },
+    orderBy: [desc(channelMessages.createdAt)],
+    limit: CONTEXT_MESSAGE_LIMIT,
+  });
 }
 
 function canAgentSendChannelMessages(enabledTools: string[] | null): boolean {
@@ -361,26 +401,7 @@ export async function triggerMentionedAgentResponses(
       return;
     }
 
-    const recentMessages = await db.query.channelMessages.findMany({
-      where: and(
-        eq(channelMessages.pageId, params.channelId),
-        eq(channelMessages.isActive, true)
-      ),
-      columns: {
-        content: true,
-        createdAt: true,
-        aiMeta: true,
-      },
-      with: {
-        user: {
-          columns: {
-            name: true,
-          },
-        },
-      },
-      orderBy: [desc(channelMessages.createdAt)],
-      limit: CONTEXT_MESSAGE_LIMIT,
-    });
+    const recentMessages = await fetchRecentChannelMessages(params.channelId);
 
     const contextMessages = [...recentMessages].reverse();
     const transcript = buildChannelTranscript(contextMessages);
