@@ -8,6 +8,7 @@
 import { db as defaultDb } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { integrationConnections, type IntegrationConnection, type NewIntegrationConnection } from '@pagespace/db/schema/integrations';
+import { withResolvedConfig } from '../providers/builtin-providers';
 
 // Type for the database instance (allows dependency injection for testing)
 export type ConnectionRepository = {
@@ -26,6 +27,16 @@ type ConnectionWithProvider = IntegrationConnection & {
     providerType: string;
   } | null;
 };
+
+/**
+ * Overlay the authoritative builtin config onto a connection's provider before
+ * it leaves the repository, so every caller reads canonical config uniformly.
+ */
+function withResolvedProviderConfig<T extends ConnectionWithProvider>(connection: T): T {
+  if (!connection.provider) return connection;
+  const provider = withResolvedConfig(connection.provider);
+  return provider === connection.provider ? connection : { ...connection, provider };
+}
 
 /**
  * Create a new integration connection.
@@ -70,7 +81,7 @@ export const getConnectionWithProvider = async (
     },
   });
 
-  return connection ?? null;
+  return connection ? withResolvedProviderConfig(connection) : null;
 };
 
 /**
@@ -160,7 +171,7 @@ export const listUserConnections = async (
     },
   });
 
-  return connections;
+  return connections.map(withResolvedProviderConfig);
 };
 
 /**
@@ -177,7 +188,7 @@ export const listDriveConnections = async (
     },
   });
 
-  return connections;
+  return connections.map(withResolvedProviderConfig);
 };
 
 /**

@@ -100,6 +100,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 }));
 
 import { GET } from '../route';
+import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 // Test fixtures
 const BASE_URL = 'http://localhost:3000';
@@ -319,6 +320,30 @@ describe('GET /api/user/integrations/callback', () => {
       await GET(request);
 
       expect(mockExchangeOAuthCode).toHaveBeenCalled();
+    });
+
+    it('exchanges the code using the canonical builtin token endpoint, not a stale persisted copy', async () => {
+      mockGetProviderById.mockResolvedValueOnce({
+        id: 'provider-1',
+        slug: 'github',
+        providerType: 'builtin',
+        config: {
+          authMethod: {
+            type: 'oauth2',
+            // Persisted tokenUrl has drifted from what's shipped in code.
+            config: { authUrl: 'https://stale.example.com/authorize', tokenUrl: 'https://stale.example.com/token', scopes: [] },
+          },
+        },
+      });
+
+      const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
+      await GET(request);
+
+      const canonicalAuthMethod = builtinProviders.github.authMethod;
+      expect(mockExchangeOAuthCode).toHaveBeenCalledWith(
+        canonicalAuthMethod.type === 'oauth2' ? canonicalAuthMethod.config : undefined,
+        expect.anything()
+      );
     });
   });
 
