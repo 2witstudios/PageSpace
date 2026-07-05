@@ -1,5 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+
+// NextResponse.rewrite() only exists in the edge runtime; the node/vitest env
+// doesn't provide it. Polyfill it (before middleware is imported) so we can
+// assert the middleware rewrites the discovery URL. In production the real
+// edge-runtime rewrite records the target in the x-middleware-rewrite header.
+if (typeof (NextResponse as { rewrite?: unknown }).rewrite !== 'function') {
+  (NextResponse as unknown as { rewrite: (url: URL | string) => Response }).rewrite = (url) =>
+    new Response(null, { status: 200, headers: { 'x-middleware-rewrite': String(url) } });
+}
 
 // Mock all runtime dependencies so middleware() can run without a real DB/session.
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -28,19 +37,21 @@ vi.mock('@/lib/auth/cookie-config', () => ({ getSessionFromCookies: vi.fn(() => 
 const { middleware } = await import('../../../middleware');
 
 describe('middleware — RFC 8414 discovery URL', () => {
-  it('lets /.well-known/oauth-authorization-server through with no session cookie, as an API route', async () => {
+  it('rewrites /.well-known/oauth-authorization-server to the routable API handler with no session cookie', async () => {
     createSecureResponse.mockClear();
     const req = new NextRequest('https://pagespace.ai/.well-known/oauth-authorization-server');
 
-    await middleware(req);
+    const response = await middleware(req);
 
-    // The redirect-to-signin path (the bug) is never reached: createSecureResponse
-    // is called directly, and with isAPIRoute so JSON CSP applies, not page CSP.
-    expect(createSecureResponse).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ isAPIRoute: true }),
+    // Middleware REWRITES (not passes through) to the routable API handler —
+    // this is what beats Next's prerendered/cached 404 for the .well-known
+    // namespace, since next.config rewrites() run too late. NextResponse.rewrite
+    // records the destination in x-middleware-rewrite.
+    expect(response.headers.get('x-middleware-rewrite')).toContain(
+      '/api/well-known/oauth-authorization-server',
     );
+    // Public, pre-auth: the redirect-to-signin path (the original bug) is never reached.
+    expect(response.status).not.toBe(307);
   });
 
   it('still redirects other unauthenticated non-API routes to sign-in (control case)', async () => {
