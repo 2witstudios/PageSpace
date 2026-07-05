@@ -54,6 +54,7 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 const mockUserId = 'user_123';
 const mockAgentId = 'agent-1';
@@ -162,7 +163,9 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
     ]);
   });
 
-  it('returns canonical builtin tools and bundles for github even when the stored config is stale', async () => {
+  it('surfaces the repository-resolved canonical config for a builtin provider', async () => {
+    // The repository layer resolves builtin config to the canonical in-memory
+    // definition before it reaches the route; the route must pass it through.
     mockListGrantsByAgent.mockResolvedValue([
       {
         id: 'grant-1',
@@ -177,7 +180,7 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
           id: 'conn-1',
           name: 'GitHub',
           status: 'active',
-          provider: { slug: 'github', name: 'GitHub', config: { tools: [] } },
+          provider: { slug: 'github', name: 'GitHub', config: builtinProviders.github, providerType: 'builtin' },
         },
       },
     ]);
@@ -188,10 +191,48 @@ describe('GET /api/agents/[agentId]/integrations response shape', () => {
     );
     const body = await response.json();
     const provider = body.grants[0].connection.provider;
-    // Canonical github config surfaces despite the empty stored config.
     expect(provider.toolBundles.map((b: { id: string }) => b.id)).toContain('read_only');
     expect(provider.tools.map((t: { id: string }) => t.id)).toContain('list_issues');
     expect(provider.tools.length).toBeGreaterThan(0);
+  });
+
+  it('does not overlay builtin config onto a custom provider whose slug collides with a builtin', async () => {
+    mockListGrantsByAgent.mockResolvedValue([
+      {
+        id: 'grant-1',
+        agentId: mockAgentId,
+        connectionId: 'conn-1',
+        allowedTools: null,
+        deniedTools: null,
+        readOnly: false,
+        rateLimitOverride: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        connection: {
+          id: 'conn-1',
+          name: 'GitHub Proxy',
+          status: 'active',
+          provider: {
+            slug: 'github', // collides with the builtin slug
+            name: 'GitHub Proxy',
+            providerType: 'custom',
+            config: {
+              tools: [{ id: 'proxy_tool', name: 'proxy_tool', description: 'proxied', category: 'read' }],
+            },
+          },
+        },
+      },
+    ]);
+
+    const response = await GET(
+      new Request('http://localhost/api/agents/agent-1/integrations'),
+      { params: Promise.resolve({ agentId: mockAgentId }) }
+    );
+    const body = await response.json();
+    const provider = body.grants[0].connection.provider;
+    // The custom provider's own tools surface — not the builtin GitHub tools.
+    expect(provider.tools).toEqual([
+      { id: 'proxy_tool', name: 'proxy_tool', description: 'proxied', category: 'read' },
+    ]);
   });
 
   it('drops malformed tool entries while keeping well-formed ones', async () => {
@@ -378,15 +419,15 @@ describe('POST /api/agents/[agentId]/integrations default bundle', () => {
     );
   });
 
-  it('uses the canonical builtin bundle for github even when the stored config lacks bundles', async () => {
-    // Simulates an upgraded install whose persisted provider config has not yet
-    // been refreshed with toolBundles.
+  it('derives the default bundle from the repository-resolved builtin config', async () => {
+    // The repository resolves a builtin provider's config to the canonical
+    // in-memory definition (with toolBundles) before the route sees it.
     mockGetConnectionWithProvider.mockResolvedValue({
       id: 'conn-1',
       userId: mockUserId,
       driveId: null,
       status: 'active',
-      provider: { slug: 'github', name: 'GitHub', config: { tools: [] } },
+      provider: { slug: 'github', name: 'GitHub', config: builtinProviders.github, providerType: 'builtin' },
     });
 
     await POST(postRequest({ connectionId: 'conn-1' }), {
@@ -399,5 +440,34 @@ describe('POST /api/agents/[agentId]/integrations default bundle', () => {
     expect(allowed).toContain('list_issues');
     expect(allowed).not.toContain('create_issue');
     expect(allowed).not.toBeNull();
+  });
+
+  it('derives the default bundle from a slug-colliding custom provider\'s own config', async () => {
+    mockGetConnectionWithProvider.mockResolvedValue({
+      id: 'conn-1',
+      userId: mockUserId,
+      driveId: null,
+      status: 'active',
+      provider: {
+        slug: 'github', // collides with the builtin slug
+        name: 'GitHub Proxy',
+        providerType: 'custom',
+        config: {
+          toolBundles: [
+            { id: 'proxy_reads', name: 'Proxy reads', description: 'reads', toolIds: ['proxy_read'], recommended: true },
+          ],
+        },
+      },
+    });
+
+    await POST(postRequest({ connectionId: 'conn-1' }), {
+      params: Promise.resolve({ agentId: mockAgentId }),
+    });
+
+    // The custom provider's own bundle wins — never the builtin GitHub bundle.
+    expect(mockCreateGrant).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ allowedTools: ['proxy_read'] })
+    );
   });
 });

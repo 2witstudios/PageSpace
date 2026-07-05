@@ -107,11 +107,15 @@ vi.mock('@/lib/logging/mask', () => ({
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: vi.fn(),
 }));
+vi.mock('../../core/image-preset-fetch', () => ({
+  fetchCachedImagePreset: vi.fn(),
+}));
 
 import { pageReadTools } from '../page-read-tools';
 import { db } from '@pagespace/db/db';
 import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { fetchCachedImagePreset } from '../../core/image-preset-fetch';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
@@ -119,6 +123,7 @@ const mockGetUserAccessLevel = vi.mocked(getUserAccessLevel);
 const mockGetUserAccessiblePagesInDrive = vi.mocked(getUserAccessiblePagesInDriveWithDetails);
 const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
 const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
+const mockFetchCachedImagePreset = vi.mocked(fetchCachedImagePreset);
 
 const createMockPage = (content: string, type = 'DOCUMENT') => ({
   id: 'page-1',
@@ -862,6 +867,94 @@ describe('page-read-tools', () => {
         should: 'include structured channelMessages array',
         actual: Array.isArray((result as { channelMessages: unknown[] }).channelMessages),
         expected: true,
+      });
+    });
+
+    describe('visual FILE pages', () => {
+      const createMockVisualFilePage = () => ({
+        id: 'page-1',
+        title: 'diagram.png',
+        type: 'FILE',
+        isTrashed: false,
+        driveId: 'drive-1',
+        processingStatus: 'visual',
+        mimeType: 'image/png',
+        contentHash: 'hash-abc',
+        fileSize: 5000,
+        originalFileName: 'diagram.png',
+      });
+
+      const createVisionAuthContext = (userId = 'user-123') => ({
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId,
+          modelCapabilities: { hasVision: true, hasTools: true, model: 'gpt-5.4', provider: 'openai' },
+        } as ToolExecutionContext,
+      });
+
+      beforeEach(() => {
+        mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+        mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      });
+
+      it('returns delivered image content for a visual FILE page on a vision-capable model', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockVisualFilePage());
+        mockFetchCachedImagePreset.mockResolvedValue({
+          base64: 'ZmFrZS1pbWFnZS1ieXRlcw==',
+          mediaType: 'image/jpeg',
+          preset: 'ai-vision',
+        });
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'diagram.png', pageId: 'page-1' },
+          createVisionAuthContext()
+        ) as { type: string; imageBase64: string; mimeType: string; originalMimeType: string; success: boolean };
+
+        assert({
+          given: 'a visual FILE page and a vision-capable model',
+          should: 'return a visual_content_delivered result',
+          actual: result.type,
+          expected: 'visual_content_delivered',
+        });
+
+        assert({
+          given: 'a visual FILE page and a vision-capable model',
+          should: 'deliver the base64 bytes from fetchCachedImagePreset',
+          actual: result.imageBase64,
+          expected: 'ZmFrZS1pbWFnZS1ieXRlcw==',
+        });
+
+        assert({
+          given: 'a visual FILE page and a vision-capable model',
+          should: "deliver the fetched preset's mediaType rather than the page's declared mimeType",
+          actual: result.mimeType,
+          expected: 'image/jpeg',
+        });
+
+        assert({
+          given: "a visual FILE page whose delivered preset was re-encoded to a different format (png page, jpeg preset)",
+          should: "still carry the page's true mimeType as originalMimeType, for correct reporting if this result later degrades to metadata-only",
+          actual: result.originalMimeType,
+          expected: 'image/png',
+        });
+      });
+
+      it('falls back to metadata-only when no cached preset is available', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockVisualFilePage());
+        mockFetchCachedImagePreset.mockResolvedValue(null);
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'diagram.png', pageId: 'page-1' },
+          createVisionAuthContext()
+        ) as { type: string };
+
+        assert({
+          given: 'a visual FILE page with no usable cached preset',
+          should: 'fall back to the existing visual_content_metadata result',
+          actual: result.type,
+          expected: 'visual_content_metadata',
+        });
       });
     });
 

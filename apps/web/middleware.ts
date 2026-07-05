@@ -105,13 +105,18 @@ export async function middleware(req: NextRequest) {
     }
 
     // Well-known discovery routes (e.g. RFC 8414 OAuth metadata) must be
-    // reachable with no session — for OAuth discovery it's the first request
-    // the CLI login flow makes. Middleware sees the pre-rewrite pathname
-    // (next.config's rewrites() runs after middleware), so this must match
-    // against WELL_KNOWN_REWRITES' `source` values, not their destinations.
-    if (WELL_KNOWN_REWRITES.some((rewrite) => rewrite.source === pathname)) {
-      const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
-      return response;
+    // reachable with no session — it's the first request the CLI login flow
+    // makes. The App Router can't route `.`-prefixed folders, and next.config
+    // rewrites() run AFTER the filesystem/prerender check: because
+    // public/.well-known/ exists, Next serves that namespace a prerendered +
+    // cached 404 before any rewrite phase can fire (observed in prod:
+    // x-nextjs-prerender=1, x-nextjs-cache=HIT). Middleware runs BEFORE routing
+    // and is never cached, so the rewrite to the routable API handler must
+    // happen HERE. Match the pre-rewrite source pathname; this is also public
+    // (no session), which is why it sits above the auth checks below.
+    const wellKnown = WELL_KNOWN_REWRITES.find((rewrite) => rewrite.source === pathname);
+    if (wellKnown) {
+      return NextResponse.rewrite(new URL(wellKnown.destination, req.url));
     }
 
     // Public routes that don't require authentication

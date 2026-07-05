@@ -86,6 +86,18 @@ export interface ValidateAttachmentForDmInput {
   senderId: string;
 }
 
+/**
+ * Standalone pre-check used only by the thread-reply path — `insertDmThreadReply`
+ * has its own parent-locking transaction, so attachment validation stays outside
+ * it here. The top-level send path uses `insertDmMessageWithAttachment` instead,
+ * which validates and inserts inside a single transaction.
+ *
+ * This pre-check takes no lock on `files`/`fileConversations`, so unlike the
+ * top-level path it is NOT race-safe against a concurrent `purgeInactiveMessages`
+ * cleanup — the reply (or its `alsoSendToParent` mirror) can still commit
+ * referencing a link that purge drops in the gap between this check and the
+ * reply's insert. Accepted, tracked gap: see issue #1865.
+ */
 async function validateAttachmentForDm(
   input: ValidateAttachmentForDmInput
 ): Promise<AttachmentValidation> {
@@ -130,19 +142,76 @@ export interface InsertDmMessageInput {
 
 export type DmMessageRow = InferSelectModel<typeof directMessages>;
 
-async function insertDmMessage(input: InsertDmMessageInput): Promise<DmMessageRow> {
-  const [row] = await db
-    .insert(directMessages)
-    .values({
-      conversationId: input.conversationId,
-      senderId: input.senderId,
-      content: input.content,
-      fileId: input.fileId,
-      attachmentMeta: input.attachmentMeta,
-      quotedMessageId: input.quotedMessageId ?? null,
-    })
-    .returning();
-  return row;
+export type InsertDmMessageResult =
+  | { kind: 'ok'; message: DmMessageRow }
+  | { kind: 'not_found' }
+  | { kind: 'wrong_owner' }
+  | { kind: 'not_linked' };
+
+/**
+ * Validates the attachment (if any) and inserts the top-level DM in one
+ * transaction. Without this, a validate-then-insert-later split lets a
+ * concurrent `purgeInactiveMessages` orphan-link cleanup delete the
+ * `fileConversations` row between our validation read and the INSERT.
+ *
+ * The SELECT ... FOR UPDATE locks below are one half of a two-sided
+ * protocol with `purgeInactiveMessages`: purge locks the same link rows
+ * (FOR UPDATE) before its orphan-check DELETE, so whichever side wins the
+ * lock, the loser observes the winner's committed state — a send that
+ * loses sees the link already gone and rejects with `not_linked`; a purge
+ * that loses re-checks with a fresh snapshot and sees the message we
+ * committed, keeping the link. The lock alone would NOT be enough: a
+ * single blocked DELETE keeps its pre-block snapshot, which is why purge
+ * re-checks in a separate statement.
+ */
+async function insertDmMessageWithAttachment(
+  input: InsertDmMessageInput
+): Promise<InsertDmMessageResult> {
+  return db.transaction(async (tx) => {
+    if (input.fileId) {
+      const [file] = await tx
+        .select({ id: files.id, createdBy: files.createdBy })
+        .from(files)
+        .where(eq(files.id, input.fileId))
+        .for('update');
+
+      if (!file) {
+        return { kind: 'not_found' };
+      }
+      if (file.createdBy !== input.senderId) {
+        return { kind: 'wrong_owner' };
+      }
+
+      const [link] = await tx
+        .select({ fileId: fileConversations.fileId })
+        .from(fileConversations)
+        .where(
+          and(
+            eq(fileConversations.fileId, input.fileId),
+            eq(fileConversations.conversationId, input.conversationId)
+          )
+        )
+        .for('update');
+
+      if (!link) {
+        return { kind: 'not_linked' };
+      }
+    }
+
+    const [row] = await tx
+      .insert(directMessages)
+      .values({
+        conversationId: input.conversationId,
+        senderId: input.senderId,
+        content: input.content,
+        fileId: input.fileId,
+        attachmentMeta: input.attachmentMeta,
+        quotedMessageId: input.quotedMessageId ?? null,
+      })
+      .returning();
+
+    return { kind: 'ok', message: row };
+  });
 }
 
 export interface UpdateConversationLastMessageInput {
@@ -313,12 +382,33 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
     );
 
     if (purgedAttachmentPairs.length > 0) {
+      const pairValues = () =>
+        sql.join(
+          purgedAttachmentPairs.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
+          sql`, `
+        );
+
+      // Lock the candidate link rows BEFORE the orphan-check DELETE. A
+      // concurrent top-level send (insertDmMessageWithAttachment) holds
+      // FOR UPDATE on its link row while inserting the message, so this
+      // SELECT blocks until that send commits. The DELETE below then runs
+      // as a separate statement with a fresh READ COMMITTED snapshot, so
+      // its NOT EXISTS sees the just-committed message and keeps the link.
+      // Folding the lock into the DELETE would not work: a DELETE keeps
+      // the snapshot it took before blocking, so its NOT EXISTS could miss
+      // a message that committed while it waited and still drop the link.
+      await tx.execute(sql`
+        SELECT 1
+        FROM file_conversations fc
+        JOIN (VALUES ${pairValues()}) AS pp("fileId", "conversationId")
+          ON fc."fileId" = pp."fileId"
+         AND fc."conversationId" = pp."conversationId"
+        FOR UPDATE OF fc
+      `);
+
       await tx.execute(sql`
         WITH purged_pairs("fileId", "conversationId") AS (
-          VALUES ${sql.join(
-            purgedAttachmentPairs.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
-            sql`, `
-          )}
+          VALUES ${pairValues()}
         )
         DELETE FROM file_conversations fc
         USING purged_pairs pp
@@ -680,7 +770,7 @@ async function removeDmReaction(input: DmReactionInput): Promise<number> {
 export const dmMessageRepository = {
   findConversationForParticipant,
   validateAttachmentForDm,
-  insertDmMessage,
+  insertDmMessageWithAttachment,
   updateConversationLastMessage,
   findActiveMessage,
   findMessageInConversation,

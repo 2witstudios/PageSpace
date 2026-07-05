@@ -27,7 +27,7 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
 // --- DM repository seam (the boundary the route must delegate to) --------------
 const mockFindConversationForParticipant = vi.fn();
 const mockValidateAttachmentForDm = vi.fn();
-const mockInsertDmMessage = vi.fn();
+const mockInsertDmMessageWithAttachment = vi.fn();
 const mockUpdateConversationLastMessage = vi.fn();
 const mockListActiveMessages = vi.fn();
 const mockMarkActiveMessagesRead = vi.fn();
@@ -42,7 +42,8 @@ vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
       mockFindConversationForParticipant(...args),
     validateAttachmentForDm: (...args: unknown[]) =>
       mockValidateAttachmentForDm(...args),
-    insertDmMessage: (...args: unknown[]) => mockInsertDmMessage(...args),
+    insertDmMessageWithAttachment: (...args: unknown[]) =>
+      mockInsertDmMessageWithAttachment(...args),
     updateConversationLastMessage: (...args: unknown[]) =>
       mockUpdateConversationLastMessage(...args),
     listActiveMessages: (...args: unknown[]) => mockListActiveMessages(...args),
@@ -181,7 +182,10 @@ function setupHappyPath() {
   vi.mocked(isEmailVerified).mockResolvedValue(true);
   mockFindConversationForParticipant.mockResolvedValue(mockConversation());
   mockValidateAttachmentForDm.mockResolvedValue({ kind: 'ok' });
-  mockInsertDmMessage.mockImplementation(async (input) => mockInsertedRow(input));
+  mockInsertDmMessageWithAttachment.mockImplementation(async (input) => ({
+    kind: 'ok',
+    message: mockInsertedRow(input),
+  }));
   mockUpdateConversationLastMessage.mockResolvedValue(undefined);
   mockCreateOrUpdateMessageNotification.mockResolvedValue(undefined);
   mockBroadcastInboxEvent.mockResolvedValue(undefined);
@@ -231,7 +235,7 @@ describe('POST /api/messages/[conversationId]', () => {
       const res = await callRoute({ content: 'hello world' });
 
       expect(res.status).toBe(200);
-      expect(mockInsertDmMessage).toHaveBeenCalledWith(
+      expect(mockInsertDmMessageWithAttachment).toHaveBeenCalledWith(
         expect.objectContaining({
           conversationId: CONVERSATION_ID,
           senderId: SENDER_ID,
@@ -252,7 +256,7 @@ describe('POST /api/messages/[conversationId]', () => {
       const res = await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
 
       expect(res.status).toBe(200);
-      expect(mockInsertDmMessage).toHaveBeenCalledWith(
+      expect(mockInsertDmMessageWithAttachment).toHaveBeenCalledWith(
         expect.objectContaining({
           content: '',
           fileId: FILE_ID,
@@ -274,7 +278,7 @@ describe('POST /api/messages/[conversationId]', () => {
       });
 
       expect(res.status).toBe(200);
-      expect(mockInsertDmMessage).toHaveBeenCalledWith(
+      expect(mockInsertDmMessageWithAttachment).toHaveBeenCalledWith(
         expect.objectContaining({
           content: 'see attached',
           fileId: FILE_ID,
@@ -294,7 +298,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(400);
       const body = await res.json();
       expect(body.error).toMatch(/content or file is required/i);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     });
 
     it('returns 400 when fileId is provided without attachmentMeta', async () => {
@@ -303,7 +307,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(400);
       const body = await res.json();
       expect(body.error).toMatch(/attachmentmeta required when fileid/i);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     });
 
     it('returns 400 when attachmentMeta has the wrong shape', async () => {
@@ -313,7 +317,7 @@ describe('POST /api/messages/[conversationId]', () => {
       });
 
       expect(res.status).toBe(400);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -329,21 +333,21 @@ describe('POST /api/messages/[conversationId]', () => {
       const res = await callRoute({ fileId: FILE_ID, attachmentMeta: meta });
 
       expect(res.status).toBe(400);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     });
   });
 
   // ===== 2. Ownership + linkage =====
   describe('ownership and conversation linkage', () => {
-    it('returns 403 + authz.access.denied audit and does not insert when file is not owned by sender', async () => {
-      mockValidateAttachmentForDm.mockResolvedValue({ kind: 'wrong_owner' });
+    it('returns 403 + authz.access.denied audit and does not persist when file is not owned by sender', async () => {
+      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'wrong_owner' });
 
       const res = await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
 
       expect(res.status).toBe(403);
       const body = await res.json();
       expect(body.error).toMatch(/do not own this file/i);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
       expect(mockAuditRequest).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -356,14 +360,14 @@ describe('POST /api/messages/[conversationId]', () => {
     });
 
     it('returns 403 + authz.access.denied audit when file is not linked to this conversation (anti-smuggling)', async () => {
-      mockValidateAttachmentForDm.mockResolvedValue({ kind: 'not_linked' });
+      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'not_linked' });
 
       const res = await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
 
       expect(res.status).toBe(403);
       const body = await res.json();
       expect(body.error).toMatch(/not linked to this conversation/i);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
       expect(mockAuditRequest).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -376,14 +380,14 @@ describe('POST /api/messages/[conversationId]', () => {
     });
 
     it('returns 404 when fileId does not exist', async () => {
-      mockValidateAttachmentForDm.mockResolvedValue({ kind: 'not_found' });
+      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'not_found' });
 
       const res = await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
 
       expect(res.status).toBe(404);
       const body = await res.json();
       expect(body.error).toMatch(/file not found/i);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -394,7 +398,7 @@ describe('POST /api/messages/[conversationId]', () => {
         fileId: FILE_ID,
         attachmentMeta: imageMeta,
       });
-      mockInsertDmMessage.mockResolvedValue(inserted);
+      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted });
 
       const res = await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
 
@@ -464,7 +468,10 @@ describe('POST /api/messages/[conversationId]', () => {
     });
 
     it('normalizes whitespace-only caption to empty string before persistence and broadcast', async () => {
-      mockInsertDmMessage.mockImplementation(async (input) => mockInsertedRow(input));
+      mockInsertDmMessageWithAttachment.mockImplementation(async (input) => ({
+        kind: 'ok',
+        message: mockInsertedRow(input),
+      }));
 
       await callRoute({
         content: '   \t\n  ',
@@ -472,7 +479,7 @@ describe('POST /api/messages/[conversationId]', () => {
         attachmentMeta: imageMeta,
       });
 
-      expect(mockInsertDmMessage).toHaveBeenCalledWith(
+      expect(mockInsertDmMessageWithAttachment).toHaveBeenCalledWith(
         expect.objectContaining({ content: '' })
       );
       const broadcasts = captureRealtimeBroadcasts(fetchMock);
@@ -507,7 +514,7 @@ describe('POST /api/messages/[conversationId]', () => {
   describe('realtime fanout', () => {
     it('broadcasts new_dm_message with fileId and attachmentMeta in the payload', async () => {
       const inserted = mockInsertedRow({ fileId: FILE_ID, attachmentMeta: pdfMeta });
-      mockInsertDmMessage.mockResolvedValue(inserted);
+      mockInsertDmMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: inserted });
 
       await callRoute({ fileId: FILE_ID, attachmentMeta: pdfMeta });
 
@@ -545,7 +552,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(403);
       const body = await res.json();
       expect(body.requiresEmailVerification).toBe(true);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     });
 
     it('returns 404 when caller is not a participant', async () => {
@@ -554,7 +561,7 @@ describe('POST /api/messages/[conversationId]', () => {
       const res = await callRoute({ content: 'hi' });
 
       expect(res.status).toBe(404);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     });
 
     it('returns 401 when unauthenticated', async () => {
@@ -563,7 +570,7 @@ describe('POST /api/messages/[conversationId]', () => {
       const res = await callRoute({ content: 'hi' });
 
       expect(res.status).toBe(401);
-      expect(mockInsertDmMessage).not.toHaveBeenCalled();
+      expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     });
   });
 });
@@ -845,7 +852,7 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
         alsoSendToParent: false,
       })
     );
-    expect(mockInsertDmMessage).not.toHaveBeenCalled();
+    expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     // No mirror → conversation preview should not bump for the thread-only reply.
     expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
     expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();

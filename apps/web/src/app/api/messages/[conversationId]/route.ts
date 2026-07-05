@@ -15,6 +15,37 @@ import type { AttachmentMeta } from '@pagespace/lib/types';
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+/**
+ * Shared error mapping for the two attachment-validation call sites (the
+ * thread-reply pre-check and the top-level insert's discriminated result) —
+ * both surface the same three rejection kinds against the same fileId/
+ * conversationId pair, just from different call shapes.
+ */
+function attachmentValidationErrorResponse(
+  request: Request,
+  kind: 'not_found' | 'wrong_owner' | 'not_linked',
+  ctx: { userId: string; fileId: string | null; conversationId: string }
+): NextResponse {
+  if (kind === 'not_found') {
+    return NextResponse.json({ error: 'File not found' }, { status: 404 });
+  }
+  const isOwnerMismatch = kind === 'wrong_owner';
+  auditRequest(request, {
+    eventType: 'authz.access.denied',
+    userId: ctx.userId,
+    resourceType: 'dm_message',
+    resourceId: ctx.fileId ?? undefined,
+    details: {
+      reason: isOwnerMismatch ? 'file_owner_mismatch' : 'file_not_linked_to_conversation',
+      conversationId: ctx.conversationId,
+    },
+  });
+  return NextResponse.json(
+    { error: isOwnerMismatch ? 'You do not own this file' : 'File is not linked to this conversation' },
+    { status: 403 }
+  );
+}
+
 // GET /api/messages/[conversationId] - Get messages in a conversation
 export async function GET(
   request: Request,
@@ -275,44 +306,6 @@ export async function POST(
       );
     }
 
-    if (fileId) {
-      const validation = await dmMessageRepository.validateAttachmentForDm({
-        fileId,
-        conversationId,
-        senderId: userId,
-      });
-
-      if (validation.kind === 'not_found') {
-        return NextResponse.json({ error: 'File not found' }, { status: 404 });
-      }
-      if (validation.kind === 'wrong_owner') {
-        auditRequest(request, {
-          eventType: 'authz.access.denied',
-          userId,
-          resourceType: 'dm_message',
-          resourceId: fileId,
-          details: { reason: 'file_owner_mismatch', conversationId },
-        });
-        return NextResponse.json(
-          { error: 'You do not own this file' },
-          { status: 403 }
-        );
-      }
-      if (validation.kind === 'not_linked') {
-        auditRequest(request, {
-          eventType: 'authz.access.denied',
-          userId,
-          resourceType: 'dm_message',
-          resourceId: fileId,
-          details: { reason: 'file_not_linked_to_conversation', conversationId },
-        });
-        return NextResponse.json(
-          { error: 'File is not linked to this conversation' },
-          { status: 403 }
-        );
-      }
-    }
-
     // Quote-reply validation. Quotes are top-level only — the quoted DM must
     // (a) belong to this conversation, (b) be active, and (c) itself be a
     // top-level message (parentId IS NULL). Same-conversation gating is the
@@ -344,6 +337,22 @@ export async function POST(
     // transactional helper that bumps replyCount + lastReplyAt and upserts
     // followers. Mirror copy (alsoSendToParent) writes a second top-level row.
     if (parentId) {
+      if (fileId) {
+        const validation = await dmMessageRepository.validateAttachmentForDm({
+          fileId,
+          conversationId,
+          senderId: userId,
+        });
+
+        if (validation.kind !== 'ok') {
+          return attachmentValidationErrorResponse(request, validation.kind, {
+            userId,
+            fileId,
+            conversationId,
+          });
+        }
+      }
+
       const result = await dmMessageRepository.insertDmThreadReply({
         parentId,
         conversationId,
@@ -519,7 +528,10 @@ export async function POST(
       return NextResponse.json({ message: result.reply });
     }
 
-    const baseMessage = await dmMessageRepository.insertDmMessage({
+    // Validates the attachment (if any) and inserts the message atomically —
+    // see insertDmMessageWithAttachment's doc comment for why the split
+    // validate-then-insert this replaces was unsafe.
+    const insertResult = await dmMessageRepository.insertDmMessageWithAttachment({
       conversationId,
       senderId: userId,
       content,
@@ -527,6 +539,16 @@ export async function POST(
       attachmentMeta,
       quotedMessageId,
     });
+
+    if (insertResult.kind !== 'ok') {
+      return attachmentValidationErrorResponse(request, insertResult.kind, {
+        userId,
+        fileId,
+        conversationId,
+      });
+    }
+
+    const baseMessage = insertResult.message;
     // Enrich with the quote snapshot so the realtime payload and the JSON
     // response carry the same denormalized shape the GET list returns.
     const [newMessage] = await attachQuotedMessages([baseMessage], 'dm');

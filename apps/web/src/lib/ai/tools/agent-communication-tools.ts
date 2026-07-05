@@ -1,15 +1,15 @@
 import { tool, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
-import { generateText, UIMessage, type ToolSet } from 'ai';
+import { generateText, UIMessage, type ToolSet, type Tool } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
-import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
+import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
+import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
@@ -21,6 +21,8 @@ import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { createId } from '@paralleldrive/cuid2';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
+import { guardReadPageToolForVision } from './read-page-vision-output';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { pageWriteTools } from './page-write-tools';
 import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
@@ -481,7 +483,7 @@ export const agentCommunicationTools = {
             ))
             .orderBy(chatMessages.createdAt);
 
-          messages = dbMessages.map(convertDbMessageToUIMessage);
+          messages = await Promise.all(dbMessages.map(convertDbMessageToUIMessage));
 
           loggers.ai.debug('Loaded conversation history for ask_agent:', {
             conversationId,
@@ -525,6 +527,26 @@ export const agentCommunicationTools = {
         
         // 7. Build system prompt with agent configuration
         let systemPrompt = targetAgent.systemPrompt || '';
+
+        // Prepend context from any other drives this agent is a member of with
+        // includeContext enabled. Lives here (rather than in each caller) so
+        // every ask_agent path — direct tool calls and the channel-mention
+        // responder, which invokes this same execute — gets the same drive
+        // context uniformly. Scope-filtered so a scoped MCP caller can't pull
+        // a member drive's prompt outside its own token scope.
+        try {
+          const allContextDrives = await getAgentContextDrives(agentId);
+          const allowedIds = new Set(filterDriveIdsByMcpScope(executionContext, allContextDrives.map((d) => d.driveId)));
+          const contextDrives = allContextDrives.filter((d) => allowedIds.has(d.driveId));
+          if (contextDrives.length > 0) {
+            const memberDriveContextPrefix = contextDrives
+              .map((d) => `## DRIVE CONTEXT: ${d.driveName}\n\n${d.drivePrompt}\n\n---\n\n`)
+              .join('');
+            systemPrompt = memberDriveContextPrefix + systemPrompt;
+          }
+        } catch (error) {
+          loggers.ai.error('ask_agent: Failed to fetch member-drive context', error as Error);
+        }
 
         // Add timestamp context (using user's timezone from execution context)
         systemPrompt += '\n\n' + buildTimestampSystemPrompt(executionContext?.timezone);
@@ -584,6 +606,17 @@ export const agentCommunicationTools = {
         // sorted keys — so the serialized tool bytes are prefix-cache-stable without
         // re-sorting here (same guarantee as the chat/global route merges).
         const allAgentTools = { ...agentTools, ...integrationTools };
+
+        // Guard against a stale read_page tool-result (image bytes delivered on an
+        // earlier turn when the target agent had a vision-capable model) being
+        // re-embedded as an image when history is re-converted for a model that no
+        // longer has vision (e.g. the agent's configured model changed since).
+        if (allAgentTools.read_page) {
+          allAgentTools.read_page = guardReadPageToolForVision(
+            allAgentTools.read_page as Tool,
+            hasVisionCapability(resolvedModelName),
+          );
+        }
 
         // 10. Create enhanced execution context for nested calls
         // Preserve locationContext so nested agents know which drive/page they're operating in

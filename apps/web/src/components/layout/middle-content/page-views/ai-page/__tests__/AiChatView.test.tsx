@@ -1147,6 +1147,11 @@ describe('AiChatView late-joiner conversation sync', () => {
     });
     expect(latestMcpConversationId()).toBe('user-switched-id');
 
+    // The late-joiner's list-fetch is deferred, so under load it may not have
+    // started yet — wait until the mock has captured its resolver before
+    // resolving, or this dereferences undefined and flakes.
+    await waitFor(() => expect(resolveSyncFetch).toBeDefined());
+
     // The late-joiner's deferred fetch now resolves, matching stream.conversationId —
     // it must not clobber the identity the user already switched to.
     await act(async () => {

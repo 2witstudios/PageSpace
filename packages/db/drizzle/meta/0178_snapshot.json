@@ -1,5 +1,5 @@
 {
-  "id": "91f34cf9-0b98-45d6-8fcc-e39a2135f516",
+  "id": "f65de496-3432-42ef-8e54-cba92b1d6319",
   "prevId": "c1cf102c-fb01-46d5-abf7-a9a974474d30",
   "version": "7",
   "dialect": "postgresql",
@@ -2193,13 +2193,6 @@
           "notNull": true,
           "default": "'upfront'"
         },
-        "userScopedAccess": {
-          "name": "userScopedAccess",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "fileSize": {
           "name": "fileSize",
           "type": "real",
@@ -2897,6 +2890,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "includeContext": {
+          "name": "includeContext",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "addedBy": {
           "name": "addedBy",
