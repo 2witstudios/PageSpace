@@ -211,6 +211,21 @@ describe('git_diff', () => {
     expect(calls[0].args).toEqual(['diff']);
     expect(calls[0].args).not.toContain('...');
   });
+
+  it('rejects head without base', () => {
+    const { git_diff } = createSandboxGitTools(makeDeps());
+    const ok = (v: unknown) => (git_diff.inputSchema as unknown as { safeParse: (v: unknown) => { success: boolean } }).safeParse(v).success;
+    expect(ok({ head: 'feature-x' })).toBe(false);
+    expect(ok({ base: 'origin/master', head: 'feature-x' })).toBe(true);
+  });
+
+  it('rejects staged combined with base', () => {
+    const { git_diff } = createSandboxGitTools(makeDeps());
+    const ok = (v: unknown) => (git_diff.inputSchema as unknown as { safeParse: (v: unknown) => { success: boolean } }).safeParse(v).success;
+    expect(ok({ staged: true, base: 'origin/master' })).toBe(false);
+    expect(ok({ staged: true })).toBe(true);
+    expect(ok({ base: 'origin/master' })).toBe(true);
+  });
 });
 
 // ── git_reset ──────────────────────────────────────────────────────────────

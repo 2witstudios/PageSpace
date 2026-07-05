@@ -95,7 +95,7 @@ const SANDBOX_INSTRUCTIONS = `CODE SANDBOX:
 • bash has NO GitHub credentials. For anything touching GitHub (clone/fetch/pull/push, PRs, issues) use the dedicated git_*/gh_* tools — they carry your connected GitHub auth.
 • Use editFile for targeted string edits; writeFile rewrites the whole file.
 • Work on a new branch unless told to work on main/master. Check for AGENTS.md/CLAUDE.md in the repo root and follow it. Install dependencies before running tests or a typecheck — pass bash's timeoutMs (up to 200000ms) if a command needs more than the 120s default.
-• Key tools (call via execute_tool; no need to tool_search these): bash, readFile, writeFile, editFile, git_clone, git_checkout, git_add, git_commit, git_push, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_diff, gh_pr_checks, gh_run_list, gh_run_view, gh_pr_review, gh_pr_close.`;
+• Key tools (call via execute_tool; no need to tool_search these): bash, readFile, writeFile, editFile, git_clone, git_checkout, git_add, git_commit, git_push, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_diff, gh_pr_checks, gh_run_list, gh_run_view, gh_pr_review, gh_pr_close, gh_pr_reopen, gh_pr_ready.`;
 
 /**
  * Build personalization prompt section from user preferences

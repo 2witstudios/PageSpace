@@ -245,7 +245,13 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
           .describe('Head ref to diff to (defaults to HEAD when base is given)'),
         cwd: cwdField,
       })
-      .strict(),
+      .strict()
+      .refine((d) => !d.head || d.base, {
+        message: 'head requires base — diffing to a head ref without a base has no meaning',
+      })
+      .refine((d) => !d.staged || !d.base, {
+        message: 'staged and base are mutually exclusive — use staged for --cached or base for ref diff',
+      }),
     execute: async ({ staged, path, base, head, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
