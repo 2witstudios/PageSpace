@@ -103,10 +103,108 @@ export type LoopbackLoginResult =
 
 export const CALLBACK_PATH = '/callback';
 
-const SUCCESS_HTML =
-  "<!doctype html><html><head><title>PageSpace</title></head><body><p>You're logged in — return to your terminal.</p></body></html>";
-const ERROR_HTML =
-  '<!doctype html><html><head><title>PageSpace</title></head><body><p>Login failed — return to your terminal.</p></body></html>';
+const CALLBACK_PAGE_STYLE = `
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: Geist, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+      background: #fcfdfe;
+      color: #1f2226;
+    }
+    .card {
+      max-width: 360px;
+      width: calc(100% - 48px);
+      padding: 32px;
+      border-radius: 16px;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.06);
+      text-align: center;
+    }
+    .badge {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 20px;
+      border-radius: 9999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .badge svg { width: 28px; height: 28px; }
+    .badge--success { background: rgba(34, 160, 107, 0.12); color: #22a06b; }
+    .badge--error { background: rgba(220, 68, 68, 0.12); color: #dc4444; }
+    .wordmark { font-size: 13px; font-weight: 600; letter-spacing: 0.02em; color: #1a6fb8; margin: 0 0 16px; }
+    h1 { font-size: 20px; font-weight: 700; margin: 0 0 8px; }
+    p { font-size: 14px; line-height: 1.5; color: #5a6270; margin: 0; }
+    button {
+      margin-top: 24px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      border: 1px solid #d8dde3;
+      background: transparent;
+      color: #1f2226;
+      font: inherit;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { background: #f2f4f7; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #1a1a1a; color: #eeeeee; }
+      .card { background: #262626; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35); }
+      .badge--success { background: rgba(79, 185, 138, 0.16); color: #4fb98a; }
+      .badge--error { background: rgba(226, 87, 74, 0.16); color: #e2574a; }
+      .wordmark { color: #4a90c9; }
+      p { color: #a8adb5; }
+      button { border-color: #3a3a3a; color: #eeeeee; }
+      button:hover { background: #2f2f2f; }
+    }
+`;
+
+const SUCCESS_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PageSpace</title>
+<style>${CALLBACK_PAGE_STYLE}</style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge badge--success">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>
+    </div>
+    <p class="wordmark">PageSpace</p>
+    <h1>You're logged in</h1>
+    <p>You can close this tab and return to your terminal.</p>
+    <button onclick="window.close()">Close this tab</button>
+  </div>
+</body>
+</html>`;
+
+const ERROR_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PageSpace</title>
+<style>${CALLBACK_PAGE_STYLE}</style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge badge--error">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </div>
+    <p class="wordmark">PageSpace</p>
+    <h1>Login failed</h1>
+    <p>Return to your terminal and try again.</p>
+  </div>
+</body>
+</html>`;
 
 function toBase64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64url');
