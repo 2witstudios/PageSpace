@@ -277,6 +277,7 @@ export default function MCPSettingsView() {
   const [copied, setCopied] = useState(false);
   const [selectedToken, setSelectedToken] = useState('');
   const [tokenMap, setTokenMap] = useState<Map<string, string>>(new Map());
+  const [setupStyle, setSetupStyle] = useState<'global' | 'npx'>('global');
 
   useEffect(() => {
     loadTokens();
@@ -508,13 +509,15 @@ export default function MCPSettingsView() {
 
 
 
-  const generateConfig = () => {
+  const generateConfig = (style: 'global' | 'npx' = setupStyle) => {
     const token = selectedToken || '<YOUR_PAGESPACE_MCP_TOKEN_HERE>';
+    const launch = style === 'npx'
+      ? { command: "npx", args: ["-y", "@pagespace/cli", "pagespace-mcp"] }
+      : { command: "pagespace", args: ["mcp"] };
     const config = {
       mcpServers: {
         "pagespace": {
-          command: "pagespace",
-          args: ["mcp"],
+          ...launch,
           env: {
             PAGESPACE_API_URL: "https://pagespace.ai",
             PAGESPACE_TOKEN: token
@@ -526,9 +529,9 @@ export default function MCPSettingsView() {
     return JSON.stringify(config, null, 2);
   };
 
-  const copyConfig = async () => {
+  const copyConfig = async (style: 'global' | 'npx') => {
     try {
-      await navigator.clipboard.writeText(generateConfig());
+      await navigator.clipboard.writeText(generateConfig(style));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast.success("Configuration copied to clipboard");
@@ -536,6 +539,85 @@ export default function MCPSettingsView() {
       console.error('Failed to copy:', err);
     }
   };
+
+  const renderTokenSelectStep = (stepNumber: number) => (
+    <div className="space-y-2">
+      <p className="text-sm font-medium">{stepNumber}. Configure Claude with your MCP token</p>
+      <div className="flex items-center gap-2">
+        <Label htmlFor="token-select" className="text-sm">Select token:</Label>
+        <select
+          id="token-select"
+          className="flex h-9 w-64 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors"
+          value={selectedToken}
+          onChange={(e) => setSelectedToken(e.target.value)}
+        >
+          <option value="">Choose a token...</option>
+          {tokens.map((token) => {
+            const actualToken = tokenMap.get(token.id);
+            return (
+              <option
+                key={token.id}
+                value={actualToken || ''}
+                disabled={!actualToken}
+              >
+                {token.name} {!actualToken && '(token value not available)'}
+              </option>
+            );
+          })}
+        </select>
+      </div>
+      {selectedToken && (
+        <p className="text-xs text-muted-foreground">
+          ✓ Token selected and will be inserted into the configuration below
+        </p>
+      )}
+      {!selectedToken && tokens.length > 0 && (
+        <Alert className="mt-2">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            <strong>Note:</strong> For security reasons, existing token values cannot be retrieved.
+            Only newly created tokens in this session can be selected. To use an existing token,
+            you&apos;ll need to create a new one.
+          </AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+
+  const renderConfigStep = (style: 'global' | 'npx', stepNumber: number) => (
+    <>
+      <Label className="text-sm">{stepNumber}. Copy this configuration to your Claude settings:</Label>
+      <div className="relative">
+        <pre className="rounded-lg bg-muted p-4 overflow-x-auto text-xs">
+          <code className="font-mono">{generateConfig(style)}</code>
+        </pre>
+        <div className="absolute top-2 right-2 flex gap-1">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => copyConfig(style)}
+          >
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const blob = new Blob([generateConfig(style)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'mcp-config.json';
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            <Download className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+    </>
+  );
 
   if (loading) {
     return (
@@ -915,111 +997,61 @@ export default function MCPSettingsView() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="space-y-2">
-            <p className="text-sm font-medium">1. Install the pagespace CLI</p>
-            <div className="relative">
-              <pre className="rounded-lg bg-muted p-3 overflow-x-auto">
-                <code className="font-mono text-sm">npm install -g @pagespace/cli</code>
-              </pre>
-              <Button
-                size="sm"
-                variant="outline"
-                className="absolute top-2 right-2"
-                onClick={() => {
-                  navigator.clipboard.writeText("npm install -g @pagespace/cli");
-                  toast.success("Command copied to clipboard");
-                }}
-              >
-                <Copy className="h-3 w-3" />
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              This installs <code className="rounded bg-muted px-1">pagespace mcp</code>, which the
-              config below points at.
-            </p>
-          </div>
+          <Tabs value={setupStyle} onValueChange={(value) => setSetupStyle(value as 'global' | 'npx')}>
+            <TabsList>
+              <TabsTrigger value="global">Global install</TabsTrigger>
+              <TabsTrigger value="npx">No install (npx)</TabsTrigger>
+            </TabsList>
 
-          <div className="space-y-2">
-            <p className="text-sm font-medium">2. Configure Claude with your MCP token</p>
-            
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="token-select" className="text-sm">Select token:</Label>
-                <select 
-                  id="token-select"
-                  className="flex h-9 w-64 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors"
-                  value={selectedToken}
-                  onChange={(e) => setSelectedToken(e.target.value)}
-                >
-                  <option value="">Choose a token...</option>
-                  {tokens.map((token) => {
-                    const actualToken = tokenMap.get(token.id);
-                    return (
-                      <option 
-                        key={token.id} 
-                        value={actualToken || ''} 
-                        disabled={!actualToken}
-                      >
-                        {token.name} {!actualToken && '(token value not available)'}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-              {selectedToken && (
+            <TabsContent value="global" className="space-y-6 pt-4">
+              <div className="space-y-2">
+                <p className="text-sm font-medium">1. Install the pagespace CLI</p>
+                <div className="relative">
+                  <pre className="rounded-lg bg-muted p-3 overflow-x-auto">
+                    <code className="font-mono text-sm">npm install -g @pagespace/cli</code>
+                  </pre>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="absolute top-2 right-2"
+                    onClick={() => {
+                      navigator.clipboard.writeText("npm install -g @pagespace/cli");
+                      toast.success("Command copied to clipboard");
+                    }}
+                  >
+                    <Copy className="h-3 w-3" />
+                  </Button>
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  ✓ Token selected and will be inserted into the configuration below
+                  This installs <code className="rounded bg-muted px-1">pagespace mcp</code>, which the
+                  config below points at. Run <code className="rounded bg-muted px-1">pagespace login</code>{' '}
+                  once to authenticate in your browser — afterward you can remove{' '}
+                  <code className="rounded bg-muted px-1">PAGESPACE_TOKEN</code> from the config below and
+                  the MCP will reuse your stored credential.
                 </p>
-              )}
-              {!selectedToken && tokens.length > 0 && (
-                <Alert className="mt-2">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertDescription>
-                    <strong>Note:</strong> For security reasons, existing token values cannot be retrieved. 
-                    Only newly created tokens in this session can be selected. To use an existing token, 
-                    you&apos;ll need to create a new one.
-                  </AlertDescription>
-                </Alert>
-              )}
-            </div>
-            
-            
-            {/* Configuration display */}
-            <div className="space-y-2">
-              <Label className="text-sm">3. Copy this configuration to your Claude settings:</Label>
-            </div>
-            
-            <div className="relative">
-              <pre className="rounded-lg bg-muted p-4 overflow-x-auto text-xs">
-                <code className="font-mono">{generateConfig()}</code>
-              </pre>
-              <div className="absolute top-2 right-2 flex gap-1">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={copyConfig}
-                >
-                  {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    const blob = new Blob([generateConfig()], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'mcp-config.json';
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  }}
-                >
-                  <Download className="h-3 w-3" />
-                </Button>
               </div>
-            </div>
-          </div>
 
+              {renderTokenSelectStep(2)}
+
+              <div className="space-y-2">
+                {renderConfigStep('global', 3)}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="npx" className="space-y-6 pt-4">
+              <p className="text-xs text-muted-foreground">
+                No install step — <code className="rounded bg-muted px-1">npx</code> fetches{' '}
+                <code className="rounded bg-muted px-1">@pagespace/cli</code> on demand each time the MCP
+                client launches it.
+              </p>
+
+              {renderTokenSelectStep(1)}
+
+              <div className="space-y-2">
+                {renderConfigStep('npx', 2)}
+              </div>
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
 
