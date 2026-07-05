@@ -49,8 +49,13 @@ export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boo
  * both cases the helpers fall through to the invoking user's own access.
  * Invoker-scoped by design: a user-scoped agent acts with the CURRENT
  * chatter's reach, never its owner's.
+ *
+ * Exported for tools that branch on the same "is this a membership-scoped
+ * agent, or should it fall through to the user's own reach" question outside
+ * these chokepoints (e.g. drive discovery/creation) — reuse this instead of
+ * re-deriving `getAgentPageId(context) && !hasAgentUserScopedAccess(...)` inline.
  */
-async function resolveActingAgentId(context: ToolExecutionContext): Promise<string | undefined> {
+export async function resolveActingAgentId(context: ToolExecutionContext): Promise<string | undefined> {
   const agentPageId = getAgentPageId(context);
   if (!agentPageId) return undefined;
   return (await hasAgentUserScopedAccess(agentPageId)) ? undefined : agentPageId;

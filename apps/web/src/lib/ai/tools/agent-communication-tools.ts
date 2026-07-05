@@ -8,7 +8,7 @@ import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, isMcpScoped, getAgentPageId, hasAgentUserScopedAccess } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
@@ -252,10 +252,10 @@ export const agentCommunicationTools = {
       try {
         // Page-agents are scoped to their explicit drive memberships (matching
         // list_drives), unless they've opted into user-scoped reach.
-        const agentPageId = getAgentPageId(executionContext);
+        const agentPageId = await resolveActingAgentId(executionContext);
         let userDrives: { id: string; name: string; slug: string }[];
 
-        if (agentPageId && !(await hasAgentUserScopedAccess(agentPageId))) {
+        if (agentPageId) {
           const allAgentDrives = await listAgentDrives(agentPageId);
           const scopedIds = new Set(
             await filterDriveIdsByAppTokenScope(executionContext, allAgentDrives.map((d) => d.driveId)),

@@ -33,10 +33,9 @@ vi.mock('../actor-permissions', () => ({
   canActorDeletePage: vi.fn(),
   canActorAccessDrive: vi.fn(),
   getActorAccessiblePagesInDrive: vi.fn(),
-  getAgentPageId: vi.fn(),
+  resolveActingAgentId: vi.fn().mockResolvedValue(undefined),
   isMcpScoped: vi.fn(() => false),
   filterDriveIdsByAppTokenScope: vi.fn(async (_ctx: unknown, ids: string[]) => ids),
-  hasAgentUserScopedAccess: vi.fn(),
 }));
 vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
   listAgentDrives: vi.fn(),
@@ -166,7 +165,7 @@ vi.mock('../../core/ai-providers-config', () => ({
 
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
-import { canActorViewPage, isMcpScoped, getAgentPageId, hasAgentUserScopedAccess, filterDriveIdsByAppTokenScope } from '../actor-permissions';
+import { canActorViewPage, isMcpScoped, resolveActingAgentId, filterDriveIdsByAppTokenScope } from '../actor-permissions';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { createAIProvider } from '../../core/provider-factory';
@@ -252,8 +251,7 @@ describe('agent-communication-tools', () => {
     });
 
     it('scopes to the agent\'s drive memberships when called by a page-agent', async () => {
-      vi.mocked(getAgentPageId).mockReturnValue('agent_1');
-      vi.mocked(hasAgentUserScopedAccess).mockResolvedValue(false);
+      vi.mocked(resolveActingAgentId).mockResolvedValueOnce('agent_1');
       vi.mocked(listAgentDrives).mockResolvedValue([]);
 
       const context = {
@@ -278,8 +276,9 @@ describe('agent-communication-tools', () => {
     });
 
     it('falls back to the full user-scoped drive set (owned + member + permission) when the agent has user-scoped access enabled', async () => {
-      vi.mocked(getAgentPageId).mockReturnValue('agent_1');
-      vi.mocked(hasAgentUserScopedAccess).mockResolvedValue(true);
+      // resolveActingAgentId resolves to undefined once the agent has opted
+      // into user-scoped reach, so the tool falls through to the user path.
+      vi.mocked(resolveActingAgentId).mockResolvedValueOnce(undefined);
       vi.mocked(listAccessibleDrives).mockResolvedValueOnce([
         { id: 'd1', name: 'Owned', slug: 'owned' } as never,
         { id: 'd2', name: 'Member-of', slug: 'member-of' } as never,
@@ -312,7 +311,8 @@ describe('agent-communication-tools', () => {
     });
 
     it('does not consult agent scoping for a plain user (non-agent) call', async () => {
-      vi.mocked(getAgentPageId).mockReturnValue(undefined);
+      // No chatSource on the context — resolveActingAgentId resolves to
+      // undefined (default mock), matching a plain user / global assistant call.
       vi.mocked(listAccessibleDrives).mockResolvedValueOnce([]);
       (mockDb as unknown as MockDb).where.mockResolvedValue([]);
 
@@ -327,7 +327,6 @@ describe('agent-communication-tools', () => {
         context
       );
 
-      expect(hasAgentUserScopedAccess).not.toHaveBeenCalled();
       expect(listAgentDrives).not.toHaveBeenCalled();
       expect(listAccessibleDrives).toHaveBeenCalledWith('user_1');
     });

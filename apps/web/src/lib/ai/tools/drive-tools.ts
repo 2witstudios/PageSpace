@@ -11,7 +11,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
-import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive, hasAgentUserScopedAccess } from './actor-permissions';
+import { resolveActingAgentId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 
 // Helper: Extract AI attribution context with actor info for activity logging
@@ -53,8 +53,8 @@ export const driveTools = {
       // they've opted into user-scoped reach, which falls through to the
       // user-scoped enumeration below (matching multi_drive_list_agents). The
       // user / global assistant path (no agentPageId) stays user-scoped below.
-      const agentPageId = getAgentPageId(context as ToolExecutionContext);
-      if (agentPageId && !(await hasAgentUserScopedAccess(agentPageId))) {
+      const agentPageId = await resolveActingAgentId(context as ToolExecutionContext);
+      if (agentPageId) {
         try {
           const allAgentDrives = await listAgentDrives(agentPageId);
           // Ceiling a scoped MCP token to its allowed drives + its own role's
@@ -154,8 +154,7 @@ export const driveTools = {
       // memberships, so creating one is gated behind the same user-scoped-access
       // opt-in that lets an agent reach beyond its explicit memberships
       // (mirrors the list_drives / multi_drive_list_agents agent branch).
-      const agentPageId = getAgentPageId(context as ToolExecutionContext);
-      if (agentPageId && !(await hasAgentUserScopedAccess(agentPageId))) {
+      if (await resolveActingAgentId(context as ToolExecutionContext)) {
         throw new Error('This agent is scoped to its own drive memberships and cannot create new drives. Enable user-scoped access in the agent settings to allow this.');
       }
 
