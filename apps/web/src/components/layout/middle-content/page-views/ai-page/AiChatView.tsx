@@ -361,12 +361,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // active conversation's share state and let the owner toggle it in place.
     enabled: activeTab === 'history' || activeTab === 'chat',
     onConversationLoad: (conversationId, messages) => {
-      // Identity was already set synchronously by the onSelectConversation
-      // wrapper below, before this fetch even started — this callback only
-      // hydrates messages. Use the pre-fetched messages directly (no re-fetch)
-      // and suppress the load-on-select effect so we don't double-request.
-      skipLoadEffectRef.current = conversationId;
-      setActiveTab('chat');
+      // Only reached via the undo-triggered reload path (onUndoApplied below)
+      // — history-select goes straight through setIdentity, letting the
+      // load-on-select effect below do the (one, authoritative) fetch. Doesn't
+      // touch activeTab/skipLoadEffectRef: an undo can land while the user is
+      // on a different tab, and currentConversationId isn't changing here so
+      // the load-on-select effect won't double-fire regardless.
       void loadMessagesForConversation(conversationId, messages);
     },
     onConversationLoadError: (_conversationId, error) => {
@@ -539,8 +539,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Load-on-select guarantee: whenever currentConversationId changes to a real
   // (non-placeholder) id, reload the latest messages from the DB — unless
   // resolveConversation already prefetched them for this exact id (init path)
-  // or the caller opted out via skipLoadEffectRef (history-select path, which
-  // hydrates through its own onConversationLoad callback instead).
+  // or the caller opted out via skipLoadEffectRef (new-conversation path,
+  // which has no messages to fetch yet). History-select also funnels through
+  // here now — one authoritative fetch path for every conversation switch.
   useEffect(() => {
     if (!currentConversationId) return;
     if (isPlaceholderConversationId(currentConversationId, page.id)) return;
@@ -736,19 +737,16 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // HANDLERS
   // ============================================
 
-  // Adopt the selected id immediately — before the messages fetch even
-  // starts — so a send fired right after clicking a history item can't
-  // race and land under the previous conversation. skipLoadEffectRef must be
-  // set BEFORE setIdentity: setIdentity changes currentConversationId
-  // synchronously, which fires the load-on-select effect on this same render
-  // — if the skip token isn't already in place, that effect fires its own
-  // redundant fetch before loadConversation's onConversationLoad callback
-  // (which runs later, once its fetch resolves) gets a chance to set it.
+  // Adopt the selected id immediately — before any fetch even starts — so a
+  // send fired right after clicking a history item can't race and land under
+  // the previous conversation. The load-on-select effect (keyed on
+  // currentConversationId) does the actual fetch once identity updates —
+  // the same single, stale-guarded path used on init, so there's no separate
+  // loadConversation/onConversationLoad indirection to race against it.
   const handleSelectConversation = useCallback((conversationId: string) => {
-    skipLoadEffectRef.current = conversationId;
     setIdentity(conversationId);
-    void loadConversation(conversationId);
-  }, [setIdentity, loadConversation]);
+    setActiveTab('chat');
+  }, [setIdentity]);
 
   const buildFreshPageContext = useCallback(() => {
     const treeCacheKey = `/api/drives/${encodeURIComponent(driveId)}/pages`;

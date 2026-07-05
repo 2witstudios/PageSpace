@@ -629,7 +629,7 @@ describe('AiChatView initializeChat', () => {
     });
   });
 
-  test('given a conversation is selected from history and onConversationLoad supplies messages, should NOT double-fetch that conversation over the network', async () => {
+  test('given a conversation is selected from history, should fetch its messages directly via the load-on-select effect (not via useConversations.loadConversation)', async () => {
     const HISTORY_CONV_ID = 'history-selected-conv';
     const HISTORY_MESSAGES_URL = `/api/ai/page-agents/${PAGE_ID}/conversations/${HISTORY_CONV_ID}/messages`;
 
@@ -642,9 +642,11 @@ describe('AiChatView initializeChat', () => {
       if (url === MESSAGES_URL && !opts?.method) {
         return makeOkResponse({ messages: [] });
       }
+      if (url === HISTORY_MESSAGES_URL && !opts?.method) {
+        return makeOkResponse({ messages: [{ id: 'history-conv-msg', role: 'assistant', parts: [] }] });
+      }
       return makeErrorResponse();
     });
-    mockLoadConversation.mockResolvedValue(undefined);
 
     render(<AiChatView page={page} />);
     await waitFor(() => expect(latestMcpConversationId()).toBe(CONV_ID));
@@ -657,29 +659,101 @@ describe('AiChatView initializeChat', () => {
       historyTabPropsRef.current!.onSelectConversation!(HISTORY_CONV_ID);
     });
 
-    // Simulates useConversations.loadConversation resolving and invoking its
-    // onConversationLoad callback with pre-fetched messages.
-    act(() => {
-      useConversationsOptionsRef.current?.onConversationLoad?.(HISTORY_CONV_ID, [
-        { id: 'preloaded-msg', role: 'assistant', parts: [] },
-      ]);
+    await waitFor(() => {
+      assert({
+        given: 'a conversation was selected from history',
+        should: 'fetch that conversation\'s messages directly over the network',
+        actual: mockFetchWithAuth.mock.calls.some(([url]) => url === HISTORY_MESSAGES_URL),
+        expected: true,
+      });
     });
 
     await waitFor(() => {
       assert({
-        given: 'history-select fired and onConversationLoad supplied messages directly',
-        should: 'apply the preloaded messages',
+        given: 'a conversation was selected from history',
+        should: 'apply the fetched messages',
         actual: mockSetMessages.mock.calls.some((args) =>
-          Array.isArray(args[0]) && args[0].some((m: { id: string }) => m.id === 'preloaded-msg')
+          Array.isArray(args[0]) && args[0].some((m: { id: string }) => m.id === 'history-conv-msg')
         ),
         expected: true,
       });
     });
 
     assert({
-      given: 'history-select fired and onConversationLoad supplied messages directly',
-      should: 'never independently fetch that conversation\'s messages over the network (no double-fetch)',
-      actual: mockFetchWithAuth.mock.calls.some(([url]) => url === HISTORY_MESSAGES_URL),
+      given: 'a conversation was selected from history',
+      should: 'never call useConversations.loadConversation (history-select no longer routes through it)',
+      actual: mockLoadConversation.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  test('given the user switches to a second history conversation before the first one\'s messages fetch resolves, should apply the second (latest) selection\'s messages even if the first one\'s fetch resolves last', async () => {
+    const CONV_Y = 'history-conv-y';
+    const CONV_Z = 'history-conv-z';
+    const MESSAGES_URL_Y = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_Y}/messages`;
+    const MESSAGES_URL_Z = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_Z}/messages`;
+
+    let resolveY!: (value: unknown) => void;
+    const pendingY = new Promise((resolve) => { resolveY = resolve; });
+
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [existingConversation] });
+      }
+      if (url === MESSAGES_URL && !opts?.method) {
+        return makeOkResponse({ messages: [] });
+      }
+      // Y's fetch hangs until resolveY() is called explicitly below — simulates
+      // Y's response arriving on the wire AFTER Z's, even though Y was clicked first.
+      if (url === MESSAGES_URL_Y && !opts?.method) return pendingY;
+      if (url === MESSAGES_URL_Z && !opts?.method) {
+        return makeOkResponse({ messages: [{ id: 'z-msg', role: 'assistant', parts: [] }] });
+      }
+      return makeErrorResponse();
+    });
+
+    render(<AiChatView page={page} />);
+    await waitFor(() => expect(latestMcpConversationId()).toBe(CONV_ID));
+
+    const historyTrigger = await screen.findByRole('tab', { name: /history/i });
+    await userEvent.click(historyTrigger);
+    await waitFor(() => expect(historyTabPropsRef.current?.onSelectConversation).toBeDefined());
+
+    // Click Y, then immediately click Z (Z is the user's true final selection).
+    act(() => {
+      historyTabPropsRef.current!.onSelectConversation!(CONV_Y);
+    });
+    act(() => {
+      historyTabPropsRef.current!.onSelectConversation!(CONV_Z);
+    });
+
+    // Z resolves quickly (mocked as immediate above); wait for its messages to land.
+    await waitFor(() => {
+      assert({
+        given: 'Y was clicked then Z was clicked before Y\'s fetch resolved',
+        should: 'apply Z\'s messages once its fetch resolves',
+        actual: mockSetMessages.mock.calls.some((args) =>
+          Array.isArray(args[0]) && args[0].some((m: { id: string }) => m.id === 'z-msg')
+        ),
+        expected: true,
+      });
+    });
+
+    // Now let Y's stale, slow fetch finally resolve.
+    await act(async () => {
+      resolveY(makeOkResponse({ messages: [{ id: 'y-msg-stale', role: 'assistant', parts: [] }] }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    assert({
+      given: 'Y\'s fetch resolves last, after Z\'s messages were already applied',
+      should: 'NOT clobber the display with Y\'s stale messages — the user is on Z',
+      actual: mockSetMessages.mock.calls.some((args) =>
+        Array.isArray(args[0]) && args[0].some((m: { id: string }) => m.id === 'y-msg-stale')
+      ),
       expected: false,
     });
   });
