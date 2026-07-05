@@ -186,6 +186,7 @@ const SidebarChatTab: React.FC = () => {
   const {
     currentConversationId: globalConversationId,
     isInitialized: globalIsInitialized,
+    isMessagesLoading: globalIsMessagesLoading,
     initialMessages: globalInitialMessages,
     createNewConversation: createGlobalConversation,
     refreshSignal,
@@ -209,6 +210,7 @@ const SidebarChatTab: React.FC = () => {
     conversationId: agentConversationId,
     initialMessages: agentInitialMessages,
     isInitialized: agentIsInitialized,
+    isMessagesLoading: agentIsMessagesLoading,
     selectAgent,
     createNewConversation: createAgentConversation,
     refreshConversation: refreshAgentConversation,
@@ -266,6 +268,11 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
+  // Identity can be 'ready' (isInitialized true) while messages for the
+  // conversation just switched to are still in flight — decoupled from
+  // identity resolution so a switch doesn't flash the previous conversation's
+  // messages under the new one with no loading indicator.
+  const isMessagesLoading = selectedAgent ? agentIsMessagesLoading : globalIsMessagesLoading;
   const assistantName = selectedAgent ? selectedAgent.title : 'Global Assistant';
   const displayIsStreaming = selectedAgent
     ? (isStreaming || dashboardIsStreaming)
@@ -1025,7 +1032,7 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Render
   // ============================================
-  if (!isInitialized) {
+  if (!isInitialized || isMessagesLoading) {
     return (
       <div className="flex flex-col h-full p-4">
         <div className="flex-grow flex items-center justify-center">

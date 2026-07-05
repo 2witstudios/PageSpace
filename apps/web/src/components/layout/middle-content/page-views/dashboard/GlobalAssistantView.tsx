@@ -105,7 +105,7 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   const { chatConfig: globalChatConfig, setIsStreaming: setGlobalIsStreaming, setStopStreaming: setGlobalStopStreaming } = useGlobalChatConfig();
   const { isStreaming: contextIsStreaming, stopStreaming: contextStopStreaming } = useGlobalChatStream();
-  const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, initialMessages: globalInitialMessages, createNewConversation, refreshSignal, rejoinGlobalStream } = useGlobalChatConversation();
+  const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, isMessagesLoading: globalIsMessagesLoading, initialMessages: globalInitialMessages, createNewConversation, refreshSignal, rejoinGlobalStream } = useGlobalChatConversation();
 
   // ============================================
   // AGENT STORE - for agent selection and conversation management
@@ -116,6 +116,7 @@ const GlobalAssistantView: React.FC = () => {
   const agentConversationId = usePageAgentDashboardStore((state) => state.conversationId);
   const agentInitialMessages = usePageAgentDashboardStore((state) => state.conversationMessages);
   const agentIsLoading = usePageAgentDashboardStore((state) => state.isConversationLoading);
+  const agentIsMessagesLoading = usePageAgentDashboardStore((state) => state.isConversationMessagesLoading);
   const agentConversationLoadSignal = usePageAgentDashboardStore((state) => state.conversationLoadSignal);
   const setAgentStoreMessages = usePageAgentDashboardStore((state) => state.setConversationMessages);
   const createAgentConversation = usePageAgentDashboardStore((state) => state.createNewConversation);
@@ -390,7 +391,12 @@ const GlobalAssistantView: React.FC = () => {
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
-  const isLoading = !isInitialized;
+  // Identity can be 'ready' (isInitialized true) while messages for the
+  // conversation just switched to are still in flight — decoupled from
+  // identity resolution so a switch doesn't flash the previous conversation's
+  // messages under the new one with no loading indicator.
+  const isMessagesLoading = selectedAgent ? agentIsMessagesLoading : globalIsMessagesLoading;
+  const isLoading = !isInitialized || isMessagesLoading;
 
   // ============================================
   // MESSAGE ACTIONS (shared hook)
@@ -1007,7 +1013,7 @@ const GlobalAssistantView: React.FC = () => {
         onStop={effectiveStop}
         isStreaming={effectiveIsStreaming}
         isLoading={isLoading}
-        disabled={!isAnyProviderConfigured}
+        disabled={!isAnyProviderConfigured || !isInitialized}
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
         driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id}
         crossDrive={!selectedAgent}

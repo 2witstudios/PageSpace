@@ -1,11 +1,20 @@
 'use client';
 
-import React, { createContext, useContext, ReactNode, useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { createContext, useContext, ReactNode, useState, useReducer, useCallback, useEffect, useMemo, useRef } from 'react';
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setConversationId } from '@/lib/url-state';
-import { useChatTransport, useStreamingRegistration, buildChatConfig, GLOBAL_CHAT_ID } from '@/lib/ai/shared';
+import {
+  useChatTransport,
+  useStreamingRegistration,
+  buildChatConfig,
+  GLOBAL_CHAT_ID,
+  conversationIdentityReducer,
+  conversationIdFrom,
+  isResolving,
+  type ConversationIdentityState,
+} from '@/lib/ai/shared';
 import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
@@ -42,6 +51,15 @@ interface GlobalChatConversationContextValue {
    *  config, which ignores the messages prop after construction). */
   initialMessages: UIMessage[];
   isInitialized: boolean;
+  /**
+   * True while messages are being fetched for an ALREADY-known conversation
+   * (loadConversation), decoupled from identity resolution — loadConversation
+   * adopts its id synchronously (closing the create/select race), so
+   * isInitialized alone no longer covers this fetch window. Without this, a
+   * conversation switch could flash the previous conversation's messages
+   * under the new conversation's identity/header with no loading indicator.
+   */
+  isMessagesLoading: boolean;
   /** Increments when remote events require surfaces to re-fetch messages from DB. */
   refreshSignal: number;
   setCurrentConversationId: (id: string | null) => void;
@@ -81,9 +99,27 @@ const GlobalChatConfigContext = createContext<GlobalChatConfigContextValue | und
 // ============================================
 
 export function GlobalChatProvider({ children }: { children: ReactNode }) {
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  // Single source of truth for conversation identity — every transition goes
+  // through the shared pure reducer, so a stale in-flight load can never
+  // clobber a newer loadConversation/createNewConversation call (the reducer
+  // ignores RESOLVED/RESOLVE_FAILED once identity has moved past 'resolving',
+  // and IDENTITY_SET always wins regardless of current state).
+  //
+  // identityRef is updated synchronously by dispatchIdentity itself (not via
+  // a render-time effect) so async callbacks checking "is this result still
+  // current" right after a dispatch always see the latest value, even before
+  // React has committed the corresponding re-render.
+  const [identity, setIdentityState] = useReducer(conversationIdentityReducer, { status: 'idle' as const });
+  const identityRef = useRef<ConversationIdentityState>(identity);
+  const dispatchIdentity = useCallback((action: Parameters<typeof conversationIdentityReducer>[1]) => {
+    identityRef.current = conversationIdentityReducer(identityRef.current, action);
+    setIdentityState(action);
+  }, []);
+  const currentConversationId = conversationIdFrom(identity);
+
   const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
-  const [isInitialized, setIsInitialized] = useState<boolean>(false);
+  const isInitialized = !isResolving(identity) && identity.status !== 'idle';
+  const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [stopStreaming, setStopStreaming] = useState<(() => void) | null>(null);
@@ -95,27 +131,33 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     componentName: 'GlobalChatProvider',
   });
 
+  // The id is already known — adopt it synchronously, before the messages
+  // fetch even starts, so a send fired right after switching can't race.
   const loadConversation = useCallback(async (conversationId: string) => {
+    dispatchIdentity({ type: 'IDENTITY_SET', conversationId });
+    conversationState.setActiveConversationId(conversationId);
+    setIsMessagesLoading(true);
     try {
-      setIsInitialized(false);
       const messagesResponse = await fetchWithAuth(
         `/api/ai/global/${conversationId}/messages?limit=50`
       );
+      // Drop a stale result if the user switched to a different conversation
+      // while this fetch was in flight.
+      if (conversationIdFrom(identityRef.current) !== conversationId) return;
       if (messagesResponse.ok) {
         const messageData = await messagesResponse.json();
         const loadedMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
         setInitialMessages(loadedMessages);
-        setCurrentConversationId(conversationId);
-        conversationState.setActiveConversationId(conversationId);
-        setIsInitialized(true);
       } else {
         console.error('Failed to load conversation:', conversationId);
-        setIsInitialized(true);
+        setInitialMessages([]);
       }
+      setIsMessagesLoading(false);
     } catch (error) {
       console.error('Error loading conversation:', error);
+      if (conversationIdFrom(identityRef.current) !== conversationId) return;
       setInitialMessages([]);
-      setIsInitialized(true);
+      setIsMessagesLoading(false);
     }
   }, []);
 
@@ -125,13 +167,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         type: 'global',
       });
       if (newConversation && newConversation.id) {
-        setCurrentConversationId(newConversation.id);
+        dispatchIdentity({ type: 'IDENTITY_SET', conversationId: newConversation.id });
         setInitialMessages([]);
         conversationState.setActiveConversationId(newConversation.id);
         if (!getAgentId()) {
           setConversationId(newConversation.id, 'push');
         }
-        setIsInitialized(true);
       }
     } catch (error) {
       console.error('Failed to create new conversation:', error);
@@ -140,6 +181,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const initializeGlobalChat = async () => {
+      dispatchIdentity({ type: 'RESOLVE_STARTED' });
       try {
         const urlConversationId = getConversationId();
         const urlAgentId = getAgentId();
@@ -170,7 +212,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         await createNewConversation();
       } catch (error) {
         console.error('Failed to initialize global chat:', error);
-        setIsInitialized(true);
+        // Only takes effect if nothing above ever reached IDENTITY_SET —
+        // otherwise this is a no-op per the reducer's own guards.
+        dispatchIdentity({
+          type: 'RESOLVE_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to initialize global chat',
+        });
       }
     };
 
@@ -290,6 +337,12 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     });
   }, [currentConversationId, transport]);
 
+  // Kept for API compatibility (no current callers) — routes through the
+  // same synchronous IDENTITY_SET path as loadConversation/createNewConversation.
+  const setCurrentConversationId = useCallback((id: string | null) => {
+    if (id) dispatchIdentity({ type: 'IDENTITY_SET', conversationId: id });
+  }, []);
+
   // ============================================
   // Context Values
   // ============================================
@@ -298,6 +351,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     currentConversationId,
     initialMessages,
     isInitialized,
+    isMessagesLoading,
     refreshSignal,
     setCurrentConversationId,
     loadConversation,
@@ -308,6 +362,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     currentConversationId,
     initialMessages,
     isInitialized,
+    isMessagesLoading,
     refreshSignal,
     loadConversation,
     createNewConversation,

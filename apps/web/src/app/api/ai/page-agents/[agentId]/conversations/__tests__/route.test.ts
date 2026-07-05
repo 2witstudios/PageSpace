@@ -74,8 +74,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-// Mock ID generation
-vi.mock('@paralleldrive/cuid2', () => ({
+// Mock ID generation — createId is mocked to a fixed value; isCuid is left as
+// the real implementation so client-supplied-id validation tests exercise
+// genuine CUID2 shape checking, not a stubbed answer.
+vi.mock('@paralleldrive/cuid2', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@paralleldrive/cuid2')>()),
   createId: vi.fn(() => 'generated_conv_id'),
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
@@ -443,6 +446,34 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it('given a valid client-supplied CUID2 conversationId, should use it instead of generating one', async () => {
+      const { createId: createIdImport } = await import('@paralleldrive/cuid2');
+      const { init } = await vi.importActual<typeof import('@paralleldrive/cuid2')>('@paralleldrive/cuid2');
+      const generateValidCuid = init({ length: 24 });
+      const validClientId = generateValidCuid();
+
+      const request = createRequest(mockAgentId, 'POST', { conversationId: validClientId });
+      const context = createContext(mockAgentId);
+
+      const response = await POST(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversationId).toBe(validClientId);
+      expect(vi.mocked(createIdImport)).not.toHaveBeenCalled();
+    });
+
+    it('given a malformed client-supplied conversationId, should ignore it and generate a server-side id instead', async () => {
+      const request = createRequest(mockAgentId, 'POST', { conversationId: 'not-a-valid-cuid!!' });
+      const context = createContext(mockAgentId);
+
+      const response = await POST(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversationId).toBe('generated_conv_id');
     });
 
     it('should use custom title if provided', async () => {

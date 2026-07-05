@@ -1,10 +1,15 @@
 import { create } from 'zustand';
 import { UIMessage } from 'ai';
+import { createId } from '@paralleldrive/cuid2';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
   createAgentConversation,
   fetchAgentConversationMessages,
   fetchMostRecentAgentConversation,
+  conversationIdentityReducer,
+  conversationIdFrom,
+  isResolving,
+  type ConversationIdentityState,
 } from '@/lib/ai/shared';
 import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setChatParams } from '@/lib/url-state';
@@ -24,10 +29,29 @@ interface AgentState {
   // Initialization state
   isInitialized: boolean;
 
-  // Conversation management (for agent mode - centralized for sidebar + GlobalAssistantView)
+  /**
+   * Single source of truth for conversation identity — every transition goes
+   * through conversationIdentityReducer, so a stale loadMostRecentConversation
+   * resolution can never clobber a newer createNewConversation/loadConversation
+   * (the reducer ignores RESOLVED/RESOLVE_FAILED once state has moved past
+   * 'resolving'). conversationId/isConversationLoading below are derived from
+   * this on every transition and kept as plain fields (not getters) so
+   * existing Zustand selectors don't need to change.
+   */
+  identity: ConversationIdentityState;
   conversationId: string | null;
-  conversationMessages: UIMessage[];
   isConversationLoading: boolean;
+  /**
+   * True while messages are being fetched for an ALREADY-known conversation
+   * (loadConversation), decoupled from identity resolution — loadConversation
+   * adopts its id synchronously (closing the create/select race), so
+   * isConversationLoading alone no longer covers this fetch window. Without
+   * this, a conversation switch could flash the previous conversation's
+   * messages under the new conversation's identity/header with no loading
+   * indicator.
+   */
+  isConversationMessagesLoading: boolean;
+  conversationMessages: UIMessage[];
   conversationAgentId: string | null; // Track which agent the conversation belongs to
   /** Increments every time conversation state is set by loadConversation,
    *  createNewConversation, or loadMostRecentConversation.
@@ -59,12 +83,37 @@ interface AgentState {
   setAgentStopStreaming: (stop: (() => void) | null) => void;
 }
 
-export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
+const IDLE_IDENTITY: ConversationIdentityState = { status: 'idle' };
+
+export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
+  // Every conversation-identity transition funnels through the shared pure
+  // reducer, so a stale async result can never clobber a newer one — a
+  // RESOLVED/RESOLVE_FAILED that arrives after IDENTITY_SET already moved
+  // state to 'ready' is a guaranteed no-op (see conversation-identity.ts).
+  const applyIdentity = (action: Parameters<typeof conversationIdentityReducer>[1]) => {
+    const current = get().identity;
+    const next = conversationIdentityReducer(current, action);
+    // The reducer returns the same reference for a guaranteed no-op (e.g. a
+    // stale RESOLVED/RESOLVE_FAILED after a newer IDENTITY_SET already won)
+    // — skip the store write so subscribers aren't notified for nothing.
+    if (next !== current) {
+      set({
+        identity: next,
+        conversationId: conversationIdFrom(next),
+        isConversationLoading: isResolving(next),
+      });
+    }
+    return next;
+  };
+
+  return {
   selectedAgent: null,
   isInitialized: false,
+  identity: IDLE_IDENTITY,
   conversationId: null,
   conversationMessages: [],
   isConversationLoading: false,
+  isConversationMessagesLoading: false,
   conversationAgentId: null,
   conversationLoadSignal: 0,
   isAgentStreaming: false,
@@ -87,13 +136,18 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
     const currentAgent = get().selectedAgent;
     const isSwitchingAgent = agent?.id !== currentAgent?.id;
 
-    // Clear conversation state when switching agents
+    // Clear conversation state when switching agents — identity resets to
+    // idle (a genuinely new subject, same as AiChatView remounting via key;
+    // Zustand stores have no React key equivalent, so an explicit reset here
+    // is the idiomatic move, not a workaround).
     if (isSwitchingAgent) {
       set({
         selectedAgent: agent,
+        identity: IDLE_IDENTITY,
         conversationId: null,
         conversationMessages: [],
         conversationAgentId: null,
+        isConversationMessagesLoading: false,
       });
     } else {
       set({ selectedAgent: agent });
@@ -181,63 +235,67 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
   },
 
   /**
-   * Load a specific conversation by ID
+   * Load a specific conversation by ID. The id is already known (it came from
+   * a history list), so identity adopts it synchronously — before the
+   * messages fetch even starts — closing the race where a send fired right
+   * after selecting a conversation could land under the previous one.
    */
   loadConversation: async (conversationId: string) => {
     const agent = get().selectedAgent;
     if (!agent) return;
 
-    set({ isConversationLoading: true });
+    applyIdentity({ type: 'IDENTITY_SET', conversationId });
+    set({ conversationAgentId: agent.id, isConversationMessagesLoading: true });
+    setChatParams({ agentId: agent.id, conversationId }, 'push');
 
     try {
       const result = await fetchAgentConversationMessages(agent.id, conversationId, { limit: 50 });
+      // Drop a stale result if the user switched to a different conversation
+      // while this fetch was in flight.
+      if (conversationIdFrom(get().identity) !== conversationId) return;
       set({
-        conversationId,
         conversationMessages: result.messages,
-        conversationAgentId: agent.id,
-        isConversationLoading: false,
         conversationLoadSignal: get().conversationLoadSignal + 1,
+        isConversationMessagesLoading: false,
       });
-
-      // Update URL for bookmarkability
-      setChatParams({ agentId: agent.id, conversationId }, 'push');
     } catch (error) {
       console.error('Failed to load conversation:', error);
       toast.error('Failed to load conversation');
-      set({ isConversationLoading: false });
+      set({ isConversationMessagesLoading: false });
     }
   },
 
   /**
-   * Create a new conversation for the current agent
+   * Create a new conversation for the current agent. The id is generated
+   * client-side (cuid2) and set synchronously — the create POST below is a
+   * fire-and-forget, idempotent persist, not the mechanism used to learn the
+   * id. This closes the race where a send fired before the old server-round-trip
+   * resolved would carry a stale conversationId.
    */
   createNewConversation: async () => {
     const agent = get().selectedAgent;
     if (!agent) return null;
 
-    set({ isConversationLoading: true });
+    const conversationId = createId();
+    applyIdentity({ type: 'IDENTITY_SET', conversationId });
+    set({
+      conversationMessages: [],
+      conversationAgentId: agent.id,
+      conversationLoadSignal: get().conversationLoadSignal + 1,
+      isConversationMessagesLoading: false,
+    });
+
+    // Update URL for bookmarkability
+    setChatParams({ agentId: agent.id, conversationId }, 'push');
 
     try {
-      const newConversationId = await createAgentConversation(agent.id);
-
-      set({
-        conversationId: newConversationId,
-        conversationMessages: [],
-        conversationAgentId: agent.id,
-        isConversationLoading: false,
-        conversationLoadSignal: get().conversationLoadSignal + 1,
-      });
-
-      // Update URL for bookmarkability
-      setChatParams({ agentId: agent.id, conversationId: newConversationId }, 'push');
-
-      return newConversationId;
+      await createAgentConversation(agent.id, conversationId);
     } catch (error) {
       console.error('Failed to create new conversation:', error);
       toast.error('Failed to create new conversation');
-      set({ isConversationLoading: false });
-      return null;
     }
+
+    return conversationId;
   },
 
   /**
@@ -252,14 +310,20 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
    */
   clearConversation: () => {
     set({
+      identity: IDLE_IDENTITY,
       conversationId: null,
       conversationMessages: [],
       conversationAgentId: null,
+      isConversationMessagesLoading: false,
     });
   },
 
   /**
-   * Load the most recent conversation for the current agent
+   * Load the most recent conversation for the current agent. This is the one
+   * genuinely async unknown ("which conversation does this agent already
+   * have") — routed through RESOLVE_STARTED/RESOLVED/RESOLVE_FAILED so a
+   * stale result here can never clobber an identity the user has since set
+   * more recently via loadConversation/createNewConversation.
    */
   loadMostRecentConversation: async () => {
     const agent = get().selectedAgent;
@@ -270,7 +334,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
       return;
     }
 
-    set({ isConversationLoading: true });
+    applyIdentity({ type: 'RESOLVE_STARTED' });
 
     try {
       // Check URL for existing conversation ID first
@@ -280,11 +344,13 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
       // If URL has conversation for THIS agent, load it
       if (conversationIdFromUrl && agentIdFromUrl === agent.id) {
         const result = await fetchAgentConversationMessages(agent.id, conversationIdFromUrl, { limit: 50 });
+        const resolved = applyIdentity({ type: 'RESOLVED', conversationId: conversationIdFromUrl });
+        // A newer identity (set via loadConversation/createNewConversation
+        // while this was in flight) wins — don't apply these stale messages.
+        if (conversationIdFrom(resolved) !== conversationIdFromUrl) return;
         set({
-          conversationId: conversationIdFromUrl,
           conversationMessages: result.messages,
           conversationAgentId: agent.id,
-          isConversationLoading: false,
           conversationLoadSignal: get().conversationLoadSignal + 1,
         });
         return;
@@ -294,11 +360,11 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
       const mostRecent = await fetchMostRecentAgentConversation(agent.id);
       if (mostRecent) {
         const result = await fetchAgentConversationMessages(agent.id, mostRecent.id, { limit: 50 });
+        const resolved = applyIdentity({ type: 'RESOLVED', conversationId: mostRecent.id });
+        if (conversationIdFrom(resolved) !== mostRecent.id) return;
         set({
-          conversationId: mostRecent.id,
           conversationMessages: result.messages,
           conversationAgentId: agent.id,
-          isConversationLoading: false,
           conversationLoadSignal: get().conversationLoadSignal + 1,
         });
 
@@ -307,11 +373,20 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
         return;
       }
 
-      // No existing conversation - create a new one
+      // No existing conversation - create a new one. But only if nothing
+      // else has resolved identity while these fetches were in flight —
+      // createNewConversation's IDENTITY_SET always wins, so calling it
+      // unconditionally here would clobber a newer loadConversation/
+      // createNewConversation the user already triggered.
+      if (!isResolving(get().identity)) return;
       await get().createNewConversation();
     } catch (error) {
       console.error('Failed to load most recent conversation:', error);
-      set({ isConversationLoading: false });
+      const resolved = applyIdentity({ type: 'RESOLVE_FAILED', message: error instanceof Error ? error.message : 'Failed to load conversation' });
+      // RESOLVE_FAILED only takes effect if we were still 'resolving' — if a
+      // newer identity already won, resolved.status won't be 'error' and we
+      // must not fall back to creating yet another conversation on top of it.
+      if (resolved.status !== 'error') return;
       // Try to create a new one
       await get().createNewConversation();
     }
@@ -330,4 +405,5 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => ({
   setAgentStopStreaming: (stop: (() => void) | null) => {
     set({ agentStopStreaming: stop });
   },
-}));
+  };
+});

@@ -103,22 +103,34 @@ export async function fetchMostRecentAgentConversation(
   return data.conversations?.[0] ?? null;
 }
 
-export async function createAgentConversation(agentId: string): Promise<string> {
+/**
+ * Persist a new agent conversation. Pass `conversationId` (client-generated
+ * cuid2) so the caller's identity is known synchronously — this call becomes
+ * a fire-and-forget, idempotent persist rather than the source of the id.
+ */
+export async function createAgentConversation(
+  agentId: string,
+  conversationId?: string
+): Promise<string> {
   const response = await fetchWithAuth(`/api/ai/page-agents/${agentId}/conversations`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Browser-Session-Id': getBrowserSessionId(),
     },
-    body: JSON.stringify({}),
+    body: JSON.stringify(conversationId ? { conversationId } : {}),
   });
   if (!response.ok) {
     throw new Error(`Failed to create conversation for agent ${agentId}`);
   }
+  // Caller already knows the id it asked the server to persist — no need to
+  // parse the body to learn it.
+  if (conversationId) return conversationId;
+
   const data = (await response.json()) as AgentConversationCreateResponse;
-  const conversationId = data.conversationId || data.id;
-  if (!conversationId) {
+  const resolvedId = data.conversationId || data.id;
+  if (!resolvedId) {
     throw new Error('Conversation id missing in response');
   }
-  return conversationId;
+  return resolvedId;
 }
