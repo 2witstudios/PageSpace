@@ -185,7 +185,7 @@ export type {
 export { createLoopbackServer, LOOPBACK_HOST, PortBindError } from './auth/create-loopback-server.js';
 export { createDiscoverMetadata, DiscoveryError } from './auth/discover.js';
 export { createExchangeCode, TokenExchangeError } from './auth/exchange-code.js';
-export { confirmIdentity, whoamiOperation } from './auth/confirm-identity.js';
+export { CONFIRM_IDENTITY_TIMEOUT_MS, confirmIdentity, whoamiOperation } from './auth/confirm-identity.js';
 export { openBrowser } from './auth/open-browser.js';
 
 // Token revocation (RFC 7009) — Phase 4 task 5, reused by `pagespace logout`.

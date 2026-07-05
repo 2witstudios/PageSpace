@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PageSpaceClient, StaticTokenProvider } from '@pagespace/sdk';
-import { whoamiOperation } from '@pagespace/cli';
+import { CONFIRM_IDENTITY_TIMEOUT_MS, confirmIdentity, whoamiOperation } from '@pagespace/cli';
 
 describe('whoamiOperation', () => {
   it('is a GET against /api/auth/me carrying the access token as a Bearer header', async () => {
@@ -28,4 +28,32 @@ describe('whoamiOperation', () => {
     expect(capturedAuth).toBe('Bearer ps_at_test-token');
     expect(result).toEqual({ name: 'Ada Lovelace', email: 'ada@example.com' });
   });
+});
+
+describe('confirmIdentity', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('bounds its wait to ~3s with zero retries against a server that never responds', async () => {
+    let callCount = 0;
+    const neverRespondingFetch = (async (_url: string, init?: RequestInit) => {
+      callCount += 1;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('This operation was aborted', 'AbortError'));
+        });
+      });
+    }) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', neverRespondingFetch);
+
+    const start = Date.now();
+    await expect(confirmIdentity({ host: 'https://pagespace.ai', accessToken: 'ps_at_test-token' })).rejects.toThrow();
+    const elapsedMs = Date.now() - start;
+
+    // Zero retries: exactly one attempt, not up to 3 (the SDK default).
+    expect(callCount).toBe(1);
+    expect(elapsedMs).toBeGreaterThanOrEqual(CONFIRM_IDENTITY_TIMEOUT_MS - 100);
+    expect(elapsedMs).toBeLessThan(CONFIRM_IDENTITY_TIMEOUT_MS + 2_000);
+  }, 8_000);
 });

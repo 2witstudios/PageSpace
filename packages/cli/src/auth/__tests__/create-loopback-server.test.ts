@@ -1,3 +1,4 @@
+import { connect } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { createLoopbackServer, LOOPBACK_HOST } from '@pagespace/cli';
 
@@ -96,6 +97,48 @@ describe('createLoopbackServer', () => {
       await b.close();
     }
   });
+
+  it('sends Connection: close on both the 200 callback response and the 404 fallback response', async () => {
+    const server = await createLoopbackServer();
+    try {
+      const pending = server.nextCallback();
+      const callbackResponsePromise = fetch(`http://127.0.0.1:${server.port}/callback?code=abc&state=xyz`);
+      await pending;
+      await server.finish('ok');
+      const callbackResponse = await callbackResponsePromise;
+      expect(callbackResponse.headers.get('connection')).toBe('close');
+
+      const notFoundResponse = await fetch(`http://127.0.0.1:${server.port}/other`);
+      expect(notFoundResponse.headers.get('connection')).toBe('close');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it(
+    'close() resolves quickly even with an idle socket open that never sent a request',
+    async () => {
+      const server = await createLoopbackServer();
+      const socket = connect(server.port, LOOPBACK_HOST);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          socket.once('connect', () => resolve());
+          socket.once('error', reject);
+        });
+
+        const timeout = new Promise<'timeout'>((resolve) => {
+          setTimeout(() => resolve('timeout'), 1500);
+        });
+        const closed = server.close().then(() => 'closed' as const);
+
+        const winner = await Promise.race([closed, timeout]);
+        expect(winner).toBe('closed');
+      } finally {
+        socket.destroy();
+      }
+    },
+    3000,
+  );
 
   it(
     'a request to a non-/callback path (e.g. a favicon prefetch) does not consume the single-use callback',
