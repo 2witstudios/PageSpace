@@ -36,6 +36,17 @@ describe('mapImageUrlPartToFilePart', () => {
     });
   });
 
+  test('bare-string image_url (non-object) is rejected', () => {
+    const part = { type: 'image_url', image_url: 'data:image/png;base64,aGVsbG8=' };
+    const result = mapImageUrlPartToFilePart(part);
+    assert({
+      given: 'an image_url value that is a bare string instead of the OpenAI {url} object',
+      should: 'return ok:false with the missing-url error (spec requires an object)',
+      actual: result,
+      expected: { ok: false, error: 'image_url part must have image_url.url (string)' },
+    });
+  });
+
   test('data: URL with no explicit mediaType', () => {
     const part = { type: 'image_url', image_url: { url: 'data:,plaintext' } };
     const result = mapImageUrlPartToFilePart(part);

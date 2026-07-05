@@ -120,29 +120,23 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
-  // 5b. Image security + vision-capability gate — mirrors the in-app chat route
+  // 5b. Image security gate — mirrors the in-app chat route
   // (apps/web/src/app/api/ai/chat/route.ts). Runs after the permission checks so an
-  // unauthorized caller gets the 403 and never learns the agent's configured model from
-  // the vision error, and before the credit hold (6b) so a rejected image never reserves
-  // a hold or an in-flight slot. Every user message in the request body is validated —
-  // not just the newest one — because non-threaded and client_manages_history callers
-  // resend full history, and validateInferenceRequest maps image_url parts to file
-  // parts on all of them.
-  const userMessagesWithImages = messages.filter(m => m.role === 'user' && hasFileParts(m));
-  if (userMessagesWithImages.length > 0) {
-    for (const messageWithImages of userMessagesWithImages) {
-      const imageValidation = validateUserMessageFileParts(messageWithImages);
-      if (!imageValidation.valid) {
-        return NextResponse.json({ error: imageValidation.error }, { status: 400 });
-      }
-    }
-    if (page.aiModel && !hasVisionCapability(page.aiModel)) {
-      return NextResponse.json(
-        { error: `The selected model "${page.aiModel}" does not support image attachments. Please choose a vision-capable model.` },
-        { status: 400 },
-      );
+  // unauthorized caller gets the 403 and never learns anything page-specific from image
+  // errors, and before the credit hold (6b) so a rejected image never reserves a hold or
+  // an in-flight slot. EVERY message in the request body is validated — not just the
+  // newest one (non-threaded and client_manages_history callers resend full history) and
+  // not just user-role ones: normalizeMessage passes pre-built `parts` arrays through
+  // as-is and the AI SDK forwards assistant file parts to the provider exactly like user
+  // ones, so an assistant-role message must not bypass the data:-URL/size/magic-byte rules.
+  const messagesWithFileParts = messages.filter(m => hasFileParts(m));
+  for (const messageWithFileParts of messagesWithFileParts) {
+    const imageValidation = validateUserMessageFileParts(messageWithFileParts);
+    if (!imageValidation.valid) {
+      return NextResponse.json({ error: imageValidation.error }, { status: 400 });
     }
   }
+  const requestHasImageParts = messagesWithFileParts.length > 0;
 
   // 5c. Conversation ownership check — if a conversation_id is provided the caller
   // must own the conversations row. This prevents one user from appending messages
@@ -201,6 +195,18 @@ export async function POST(request: Request): Promise<Response> {
   // agent configured with `glm` + an invalid model resolves to the metered default,
   // so both the admin gate and the credit gate below key off this, not the raw config.
   const effectiveProvider = providerResult.provider;
+
+  // 6a. Vision-capability gate — judged against the RESOLVED model (post
+  // catalog-substitution), not the raw page config: a null or invalid configured model
+  // resolves to a real default, and that resolved model is what the images will actually
+  // reach. Still before the credit hold (6b) so a rejected image never reserves a hold
+  // or an in-flight slot.
+  if (requestHasImageParts && !hasVisionCapability(providerResult.modelName)) {
+    return NextResponse.json(
+      { error: `The selected model "${providerResult.modelName}" does not support image attachments. Please choose a vision-capable model.` },
+      { status: 400 },
+    );
+  }
 
   // 6b. Prepaid credit gate: block out-of-credits users before any model invocation.
   // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.

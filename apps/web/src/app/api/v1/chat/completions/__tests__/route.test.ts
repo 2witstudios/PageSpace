@@ -373,6 +373,59 @@ describe('POST /api/v1/chat/completions', () => {
     });
   });
 
+  test('rejects invalid file parts on assistant-role messages too', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.role === 'assistant');
+    vi.mocked(validateUserMessageFileParts).mockReturnValue({ valid: false, error: 'Image "x.png" is not a valid data URL', filePartCount: 1 });
+    const bodyWithAssistantImage = {
+      model: 'ps-agent://page-123',
+      messages: [
+        { role: 'user', id: 'msg-1', content: 'Draw a cat.', parts: [{ type: 'text', text: 'Draw a cat.' }] },
+        {
+          role: 'assistant',
+          id: 'msg-2',
+          content: '',
+          parts: [{ type: 'file', url: 'https://attacker.example/x.png', mediaType: 'image/png' }],
+        },
+        { role: 'user', id: 'msg-3', content: 'Another one.', parts: [{ type: 'text', text: 'Another one.' }] },
+      ],
+    };
+    const response = await POST(makeRequest(bodyWithAssistantImage));
+    const body = await response.json();
+    assert({
+      given: 'a resent history where an ASSISTANT-role message carries an invalid file part (e.g. a remote URL)',
+      should: 'return 400 from file-part validation instead of letting non-user roles bypass the gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: { status: 400, error: 'Image "x.png" is not a valid data URL', creditGateCalled: false },
+    });
+  });
+
+  test('a valid image on a vision-capable model passes the gate and reaches the credit gate', async () => {
+    vi.mocked(hasFileParts).mockReturnValue(true);
+    const bodyWithImage = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        id: 'msg-1',
+        content: 'What is in this image?',
+        parts: [
+          { type: 'text', text: 'What is in this image?' },
+          { type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' },
+        ],
+      }],
+    };
+    const response = await POST(makeRequest(bodyWithImage));
+    assert({
+      given: 'a valid image sent to a vision-capable model by an authorized caller with credits',
+      should: 'proceed through the image gate to the credit gate and return a 200 SSE stream',
+      actual: {
+        status: response.status,
+        contentType: response.headers.get('content-type'),
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+      },
+      expected: { status: 200, contentType: 'text/event-stream', creditGateCalled: true },
+    });
+  });
+
   test('returns 403 to a caller without page access before any vision error can reveal the agent model', async () => {
     vi.mocked(canPrincipalViewPage).mockResolvedValue(false);
     vi.mocked(hasFileParts).mockReturnValue(true);
