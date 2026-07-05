@@ -52,7 +52,10 @@ export function hasFileParts(message: UIMessage): boolean {
 }
 
 /**
- * Validate all file parts in a user message.
+ * Validate all file parts in a message. Named for its original call site (validating the
+ * caller's own user message before inference); the checks below are structural and apply
+ * to a message's file parts regardless of role, so callers may also use it on assistant
+ * messages that carry file parts (e.g. resent history) to close the same bypass.
  * Checks:
  * 1. File part count limit
  * 2. Per-image data URL size limit
@@ -81,6 +84,17 @@ export function validateUserMessageFileParts(
     const part = fileParts[i];
     const url = part.url;
     const filename = part.filename || `image-${i + 1}`;
+
+    // A file part without a string url is malformed input, not a crash: callers (the
+    // OpenAI-compat route especially) accept arbitrary client-built parts arrays, so
+    // this must reject cleanly instead of throwing on url.length below.
+    if (typeof url !== 'string') {
+      return {
+        valid: false,
+        error: `Image "${filename}" is missing a valid url`,
+        filePartCount: fileParts.length,
+      };
+    }
 
     // Size check
     if (url.length > MAX_DATA_URL_LENGTH) {
