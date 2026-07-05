@@ -25,6 +25,7 @@ export interface AgentRecord {
   includeDrivePrompt: boolean;
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive' | null;
+  userScopedAccess: boolean;
   revision: number;
   stateHash?: string | null;
 }
@@ -39,6 +40,7 @@ export interface AgentConfigUpdate {
   includeDrivePrompt?: boolean;
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
+  userScopedAccess?: boolean;
   updatedAt?: Date;
 }
 
@@ -62,6 +64,7 @@ export const agentRepository = {
         includeDrivePrompt: pages.includeDrivePrompt,
         includePageTree: pages.includePageTree,
         pageTreeScope: pages.pageTreeScope,
+        userScopedAccess: pages.userScopedAccess,
         revision: pages.revision,
         stateHash: pages.stateHash,
       })
@@ -83,6 +86,7 @@ export const agentRepository = {
       visibleToGlobalAssistant: agent.visibleToGlobalAssistant ?? true,
       includeDrivePrompt: agent.includeDrivePrompt ?? false,
       includePageTree: agent.includePageTree ?? false,
+      userScopedAccess: agent.userScopedAccess ?? false,
     };
   },
 

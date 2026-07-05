@@ -125,6 +125,15 @@ vi.mock('@/services/api/task-sync-service', () => ({
   ensureTaskListForPage: vi.fn().mockResolvedValue({ id: 'tasklist-1' }),
 }));
 
+// resolveActingAgentId (internal to actor-permissions.ts) queries pages.userScopedAccess
+// directly via db — mock that query boundary rather than the actor-permissions exports,
+// since same-module internal calls aren't interceptable by mocking the module's exports.
+vi.mock('@pagespace/db/db', () => ({
+  db: { select: () => ({ from: () => ({ where: () => Promise.resolve([{ userScopedAccess: false }]) }) }) },
+}));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id', driveId: 'driveId' } }));
+
 import { pageWriteTools } from '../page-write-tools';
 import { ensureTaskListForPage } from '@/services/api/task-sync-service';
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';

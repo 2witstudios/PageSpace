@@ -128,6 +128,7 @@ export async function applyPageMutation({
     includePageTree: currentPage.includePageTree,
     pageTreeScope: currentPage.pageTreeScope,
     toolExposureMode: currentPage.toolExposureMode,
+    userScopedAccess: currentPage.userScopedAccess,
   });
 
   const nextPageState = {
@@ -161,6 +162,9 @@ export async function applyPageMutation({
     toolExposureMode: updates.toolExposureMode !== undefined
       ? (updates.toolExposureMode === null ? null : String(updates.toolExposureMode))
       : currentPage.toolExposureMode,
+    userScopedAccess: updates.userScopedAccess !== undefined
+      ? Boolean(updates.userScopedAccess)
+      : currentPage.userScopedAccess,
   };
 
   const stateHashAfter = computePageStateHash(nextPageState);

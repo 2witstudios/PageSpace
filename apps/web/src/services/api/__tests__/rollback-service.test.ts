@@ -481,6 +481,58 @@ describe('rollback-service', () => {
       expect(result.canExecute).toBe(false);
       expect(result.reason).toBe('Resource no longer exists');
     });
+
+    it('does not flag a false conflict on userScopedAccess when nothing else changed (agent resourceType)', async () => {
+      // Regression: the 'agent' preview branch's currentAgent select used to omit
+      // includePageTree/pageTreeScope/toolExposureMode/userScopedAccess, so
+      // currentValues[field] was always undefined for them — getConflictFields
+      // compared activity.newValues.userScopedAccess (a real boolean) against
+      // that undefined and always flagged a conflict, even when the DB value
+      // matched exactly and nothing had changed since the activity.
+      const mockActivity = createMockActivity({
+        operation: 'agent_config_update',
+        resourceType: 'agent',
+        pageId: mockPageId,
+        previousValues: { userScopedAccess: false },
+        newValues: { userScopedAccess: true },
+        updatedFields: ['userScopedAccess'],
+      });
+      const mockCurrentAgent = {
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        includeDrivePrompt: false,
+        agentDefinition: null,
+        visibleToGlobalAssistant: true,
+        includePageTree: false,
+        pageTreeScope: 'children',
+        toolExposureMode: 'upfront',
+        userScopedAccess: true, // matches activity.newValues — no actual conflict
+      };
+
+      let callCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockImplementation(() => {
+              callCount++;
+              if (callCount === 1) return Promise.resolve([mockActivity]);
+              return Promise.resolve([mockCurrentAgent]);
+            }),
+          }),
+        }),
+      }));
+
+      mockIsRollbackableOperation.mockReturnValue(true);
+      mockCanUserRollback.mockResolvedValue({ canRollback: true });
+
+      const result = await previewRollback(mockActivityId, mockUserId, 'page');
+
+      expect(result.hasConflict).toBe(false);
+      expect(result.conflictFields).toEqual([]);
+      expect(result.canExecute).toBe(true);
+    });
   });
 
   // ============================================

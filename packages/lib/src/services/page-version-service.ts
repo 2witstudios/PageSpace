@@ -42,6 +42,7 @@ export interface PageStateInput {
   includePageTree?: boolean | null;
   pageTreeScope?: string | null;
   toolExposureMode?: string | null;
+  userScopedAccess?: boolean | null;
 }
 
 export interface CreatePageVersionInput {
