@@ -102,9 +102,20 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
   extractToolResults: vi.fn().mockReturnValue([]),
 }));
-vi.mock('@/lib/ai/core/ai-tools', () => ({
-  pageSpaceTools: {},
-}));
+vi.mock('@/lib/ai/core/ai-tools', async () => {
+  const { toModelOutputForReadPage } = await import('@/lib/ai/tools/read-page-vision-output');
+  return {
+    pageSpaceTools: {
+      // Mirrors the real read_page tool's toModelOutput wiring (page-read-tools.ts)
+      // so the cross-turn vision guard test below exercises the real mapper/guard.
+      read_page: {
+        name: 'read_page',
+        toModelOutput: ({ output }: { output: unknown }) => toModelOutputForReadPage(output),
+        execute: async () => ({}),
+      },
+    },
+  };
+});
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
   filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
@@ -1042,6 +1053,45 @@ describe('POST /api/v1/chat/completions', () => {
         hasToolResults: Array.isArray(assistantSave?.[0]?.toolResults) && (assistantSave![0].toolResults as unknown[]).length > 0,
       },
       expected: { hasToolCalls: true, hasToolResults: true },
+    });
+  });
+
+  test('cross-turn vision guard: read_page degrades a stale visual_content_delivered result when the requested model lacks vision', async () => {
+    vi.mocked(hasVisionCapability).mockReturnValueOnce(false);
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 10 }),
+      steps: Promise.resolve([]),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        yield { type: 'finish' };
+      },
+    })) as unknown as typeof streamText);
+
+    await POST(makeRequest(validBody));
+
+    const toolsArg = vi.mocked(streamText).mock.calls[0]?.[0]?.tools as
+      | Record<string, { toModelOutput?: (args: { output: unknown }) => unknown }>
+      | undefined;
+    const readPageTool = toolsArg?.read_page;
+    const visualDeliveredOutput = {
+      success: true,
+      type: 'visual_content_delivered',
+      pageId: 'page-1',
+      title: 'diagram.png',
+      mimeType: 'image/jpeg',
+      originalMimeType: 'image/png',
+      message: 'Delivered visual content: "diagram.png" (image/jpeg)',
+      imageBase64: 'ZmFrZS1iYXNlNjQ=',
+      sizeBytes: 1234,
+      metadata: { processingStatus: 'visual', originalFileName: 'diagram.png', presetUsed: 'ai-vision' },
+    };
+
+    const modelOutput = readPageTool!.toModelOutput!({ output: visualDeliveredOutput }) as { type: string; value: Record<string, unknown> };
+    assert({
+      given: 'a request whose resolved model lacks vision and a stale visual_content_delivered read_page result',
+      should: 'degrade to visual_content_metadata rather than re-embedding the image bytes',
+      actual: { type: modelOutput.type, innerType: modelOutput.value.type, containsBase64: JSON.stringify(modelOutput).includes(visualDeliveredOutput.imageBase64) },
+      expected: { type: 'json', innerType: 'visual_content_metadata', containsBase64: false },
     });
   });
 

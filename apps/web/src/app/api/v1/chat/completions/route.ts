@@ -27,6 +27,7 @@ import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-c
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
+import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
@@ -303,6 +304,16 @@ export async function POST(request: Request): Promise<Response> {
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
       finalTools = { ...filteredTools, ...clientToolSet } as ToolSet;
+    }
+
+    // Guard against a stale read_page tool-result (image bytes delivered on an
+    // earlier turn/request when the model had vision) being re-embedded as an
+    // image when history is re-converted for a model that no longer has vision.
+    if (finalTools.read_page) {
+      finalTools = {
+        ...finalTools,
+        read_page: guardReadPageToolForVision(finalTools.read_page, hasVisionCapability(providerResult.modelName)),
+      };
     }
 
     // Load the caller's timezone so time-aware tools (calendar, task triggers)

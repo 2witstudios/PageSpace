@@ -55,6 +55,7 @@ import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
+import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
@@ -796,6 +797,17 @@ export async function POST(request: Request) {
 
     // Always inject the finish tool so the model can signal task completion
     filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
+
+    // Guard against a stale read_page tool-result (image bytes delivered on an
+    // earlier turn when the model had vision) being re-embedded as an image when
+    // convertToModelMessages re-converts history for a model that no longer has
+    // vision. Must run before prepareHistoryForModel/finishModelRequest below.
+    if (filteredTools.read_page) {
+      filteredTools = {
+        ...filteredTools,
+        read_page: guardReadPageToolForVision(filteredTools.read_page, hasVisionCapability(resolvedModelName ?? currentModel)),
+      };
+    }
 
     // Build system prompt BEFORE history loading so its token estimate is
     // available for prepareConversationContext's context-window budget math.
