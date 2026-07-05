@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import CopyPlugin from "copy-webpack-plugin";
 import { withSentryConfig } from "@sentry/nextjs";
+import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
 
 // Guard: only externalize workspace packages when running in production AND
 // their dist directories exist. The production check prevents stale dist/
@@ -14,7 +15,9 @@ const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/
 const workspaceDistReady =
   process.env.NODE_ENV === "production" && dbDistExists && libDistExists;
 
-const nextConfig: NextConfig = {
+// Named export so tests can assert on rewrites()/redirects() without going
+// through withSentryConfig's wrapping.
+export const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
   transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
@@ -97,6 +100,9 @@ const nextConfig: NextConfig = {
       { source: '/dashboard/inbox', destination: '/dashboard/dms', permanent: false },
       { source: '/dashboard/:driveId/inbox', destination: '/dashboard/:driveId/channels', permanent: false },
     ];
+  },
+  async rewrites() {
+    return [...WELL_KNOWN_REWRITES];
   },
 };
 

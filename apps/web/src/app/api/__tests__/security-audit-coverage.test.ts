@@ -92,6 +92,9 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
 
+  // --- OAuth discovery (RFC 8414, public by spec) ---
+  ['well-known/oauth-authorization-server', 'RFC 8414 authorization server metadata — public by spec, unauthenticated, no user data or resource access; destination of the /.well-known/oauth-authorization-server rewrite'],
+
   // --- Share link management routes ---
   // TODO: Add audit coverage in follow-up PR
   ['drives/[driveId]/share-links', 'Share link CRUD — invite link management, follow-up'],
