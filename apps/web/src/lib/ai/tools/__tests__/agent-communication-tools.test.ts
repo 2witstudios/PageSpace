@@ -50,6 +50,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
     },
   },
 
@@ -74,9 +75,21 @@ vi.mock('@paralleldrive/cuid2', () => ({
 vi.mock('../drive-tools', () => ({
   driveTools: { list_drives: { name: 'list_drives' }, create_drive: { name: 'create_drive' } },
 }));
-vi.mock('../page-read-tools', () => ({
-  pageReadTools: { list_pages: { name: 'list_pages' } },
-}));
+vi.mock('../page-read-tools', async () => {
+  const { toModelOutputForReadPage } = await import('../read-page-vision-output');
+  return {
+    pageReadTools: {
+      list_pages: { name: 'list_pages' },
+      // Mirrors the real read_page tool's toModelOutput wiring (page-read-tools.ts)
+      // so the cross-turn vision guard tests exercise the real mapper/guard logic.
+      read_page: {
+        name: 'read_page',
+        toModelOutput: ({ output }: { output: unknown }) => toModelOutputForReadPage(output),
+        execute: async () => ({}),
+      },
+    },
+  };
+});
 vi.mock('../page-write-tools', () => ({
   pageWriteTools: { create_page: { name: 'create_page' } },
 }));
@@ -990,6 +1003,89 @@ describe('agent-communication-tools', () => {
         const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown> | undefined;
         // When built-in tool set is empty, generateText is called with no tools at all
         expect(toolsArg?.github_list_repos).toBeUndefined();
+      });
+    });
+
+    describe('cross-turn vision guard on read_page (PR #1864 follow-up)', () => {
+      const visualDeliveredOutput = {
+        success: true,
+        type: 'visual_content_delivered',
+        pageId: 'page-1',
+        title: 'diagram.png',
+        mimeType: 'image/jpeg',
+        originalMimeType: 'image/png',
+        message: 'Delivered visual content: "diagram.png" (image/jpeg)',
+        imageBase64: 'ZmFrZS1iYXNlNjQ=',
+        sizeBytes: 1234,
+        metadata: { processingStatus: 'visual', originalFileName: 'diagram.png', presetUsed: 'ai-vision' },
+      };
+
+      const mockAgentWithReadPage = (aiModel: string | null) => ({
+        id: 'agent-1',
+        title: 'Test Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: ['read_page'],
+        aiProvider: null,
+        aiModel,
+        isTrashed: false,
+      });
+
+      it("given the target agent's configured model lacks vision, should degrade a stale visual_content_delivered read_page result instead of re-embedding the image", async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgentWithReadPage('gpt-3.5-turbo'));
+        vi.mocked(createAIProvider).mockResolvedValue({
+          model: { modelId: 'gpt-3.5-turbo' },
+          provider: 'openai',
+          modelName: 'gpt-3.5-turbo',
+        } as unknown as Awaited<ReturnType<typeof createAIProvider>>);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What does this image show?' },
+          context
+        );
+
+        const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, { toModelOutput?: (args: { output: unknown }) => unknown }> | undefined;
+        const readPageTool = toolsArg?.read_page;
+        expect(readPageTool?.toModelOutput).toBeDefined();
+
+        const modelOutput = readPageTool!.toModelOutput!({ output: visualDeliveredOutput }) as { type: string; value: Record<string, unknown> };
+        expect(modelOutput.type).toBe('json');
+        expect(modelOutput.value.type).toBe('visual_content_metadata');
+        expect(JSON.stringify(modelOutput)).not.toContain(visualDeliveredOutput.imageBase64);
+      });
+
+      it("given the target agent's configured model has vision, should leave read_page's image delivery unguarded", async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(mockAgentWithReadPage('openai/gpt-5.4'));
+        vi.mocked(createAIProvider).mockResolvedValue({
+          model: { modelId: 'openai/gpt-5.4' },
+          provider: 'openai',
+          modelName: 'openai/gpt-5.4',
+        } as unknown as Awaited<ReturnType<typeof createAIProvider>>);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What does this image show?' },
+          context
+        );
+
+        const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, { toModelOutput?: (args: { output: unknown }) => unknown }> | undefined;
+        const readPageTool = toolsArg?.read_page;
+        expect(readPageTool?.toModelOutput).toBeDefined();
+
+        const modelOutput = readPageTool!.toModelOutput!({ output: visualDeliveredOutput }) as { type: string; value: unknown[] };
+        expect(modelOutput.type).toBe('content');
       });
     });
 

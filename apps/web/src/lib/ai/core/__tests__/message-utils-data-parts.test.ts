@@ -19,9 +19,9 @@ const commandPart = {
 const textPart = { type: 'text' as const, text: 'On it.' };
 
 describe('extractStructuredContentFromParts — data parts', () => {
-  it('captures data-* part payloads and records them in partsOrder', () => {
+  it('captures data-* part payloads and records them in partsOrder', async () => {
     const structured = JSON.parse(
-      extractStructuredContentFromParts([commandPart, textPart], 'On it.')
+      await extractStructuredContentFromParts([commandPart, textPart], 'On it.')
     );
 
     expect(structured.partsOrder).toEqual([
@@ -37,16 +37,16 @@ describe('extractStructuredContentFromParts — data parts', () => {
     ]);
   });
 
-  it('omits the dataParts field when there are none', () => {
-    const structured = JSON.parse(extractStructuredContentFromParts([textPart], 'On it.'));
+  it('omits the dataParts field when there are none', async () => {
+    const structured = JSON.parse(await extractStructuredContentFromParts([textPart], 'On it.'));
     expect(structured.dataParts).toBeUndefined();
   });
 });
 
 describe('convertDbMessageToUIMessage — data parts', () => {
-  it('reconstructs persisted data-* parts in their original position', () => {
-    const content = extractStructuredContentFromParts([commandPart, textPart], 'On it.');
-    const reconstructed = convertDbMessageToUIMessage({
+  it('reconstructs persisted data-* parts in their original position', async () => {
+    const content = await extractStructuredContentFromParts([commandPart, textPart], 'On it.');
+    const reconstructed = await convertDbMessageToUIMessage({
       id: 'm1',
       pageId: 'p1',
       userId: null,
@@ -68,8 +68,8 @@ describe('convertDbMessageToUIMessage — data parts', () => {
     ]);
   });
 
-  it('still reconstructs legacy structured content without dataParts', () => {
-    const reconstructed = convertDbMessageToUIMessage({
+  it('still reconstructs legacy structured content without dataParts', async () => {
+    const reconstructed = await convertDbMessageToUIMessage({
       id: 'm1',
       pageId: 'p1',
       userId: null,

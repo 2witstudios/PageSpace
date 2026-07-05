@@ -224,21 +224,30 @@ describe('channelMessageRepository.fileExists', () => {
   });
 });
 
-describe('channelMessageRepository.insertChannelMessage', () => {
+describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
+  const baseInput = {
+    pageId: 'page-1',
+    userId: 'user-1',
+    content: 'hello',
+    fileId: null as string | null,
+    attachmentMeta: null,
+  };
+
   it('writes pageId, userId, content, fileId, and attachmentMeta verbatim', async () => {
-    await channelMessageRepository.insertChannelMessage({
-      pageId: 'page-1',
-      userId: 'user-1',
-      content: 'hello',
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
       fileId: 'file-1',
       attachmentMeta: { kind: 'image' } as never,
     });
 
     const inserted = testDbState.rows('channelMessages')[0];
     assert({
-      given: 'an insert request with all fields populated',
+      given: 'an insert request with all fields populated and a valid fileId',
       should: 'persist each field unchanged — the repository does not normalize input',
       actual: {
+        kind: result.kind,
         pageId: inserted.pageId,
         userId: inserted.userId,
         content: inserted.content,
@@ -246,6 +255,7 @@ describe('channelMessageRepository.insertChannelMessage', () => {
         attachmentMeta: inserted.attachmentMeta,
       },
       expected: {
+        kind: 'ok',
         pageId: 'page-1',
         userId: 'user-1',
         content: 'hello',
@@ -255,31 +265,27 @@ describe('channelMessageRepository.insertChannelMessage', () => {
     });
   });
 
-  it('persists null fileId and null attachmentMeta when there is no attachment', async () => {
-    await channelMessageRepository.insertChannelMessage({
-      pageId: 'page-1',
-      userId: 'user-1',
-      content: 'plain text',
-      fileId: null,
-      attachmentMeta: null,
-    });
+  it('persists null fileId and null attachmentMeta, and never locks files, when there is no attachment', async () => {
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment(baseInput);
 
     const inserted = testDbState.rows('channelMessages')[0];
     assert({
       given: 'a text-only message',
-      should: 'insert NULL into fileId and attachmentMeta rather than dropping the columns',
-      actual: { fileId: inserted.fileId, attachmentMeta: inserted.attachmentMeta },
-      expected: { fileId: null, attachmentMeta: null },
+      should: 'insert NULL into fileId and attachmentMeta rather than dropping the columns, and skip the file lock entirely',
+      actual: {
+        kind: result.kind,
+        fileId: inserted.fileId,
+        attachmentMeta: inserted.attachmentMeta,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+      },
+      expected: { kind: 'ok', fileId: null, attachmentMeta: null, fileLocks: 0 },
     });
   });
 
   it('persists an explicit quotedMessageId on the row when provided', async () => {
-    await channelMessageRepository.insertChannelMessage({
-      pageId: 'page-1',
-      userId: 'user-1',
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
       content: 'inline quote reply',
-      fileId: null,
-      attachmentMeta: null,
       quotedMessageId: 'quoted-msg-1',
     });
 
@@ -293,12 +299,9 @@ describe('channelMessageRepository.insertChannelMessage', () => {
   });
 
   it('persists null quotedMessageId when the caller omits the field', async () => {
-    await channelMessageRepository.insertChannelMessage({
-      pageId: 'page-1',
-      userId: 'user-1',
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
       content: 'plain top-level message',
-      fileId: null,
-      attachmentMeta: null,
     });
 
     const inserted = testDbState.rows('channelMessages')[0];
@@ -307,6 +310,39 @@ describe('channelMessageRepository.insertChannelMessage', () => {
       should: 'still write the column as null rather than dropping it from the payload',
       actual: inserted.quotedMessageId,
       expected: null,
+    });
+  });
+
+  it('locks the file row for the duration of the tx (SELECT ... FOR UPDATE) so a concurrent delete cannot race the insert', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      fileId: 'file-1',
+    });
+
+    assert({
+      given: 'a channel message insert with a valid fileId',
+      should: 'invoke .for("update") against files exactly once before inserting, all inside a single db.transaction',
+      actual: {
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: { fileLocks: 1, transactionCalls: 1 },
+    });
+  });
+
+  it('rejects with not_found and inserts nothing when the file does not exist', async () => {
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      fileId: 'missing-file',
+    });
+
+    assert({
+      given: 'a fileId with no matching file row',
+      should: 'return not_found without inserting a message',
+      actual: { kind: result.kind, rowCount: testDbState.count('channelMessages') },
+      expected: { kind: 'not_found', rowCount: 0 },
     });
   });
 });
@@ -1029,7 +1065,7 @@ describe('channelMessageRepository surface', () => {
         'addChannelThreadFollower',
         'fileExists',
         'findChannelMessageInPage',
-        'insertChannelMessage',
+        'insertChannelMessageWithAttachment',
         'insertChannelThreadReply',
         'listChannelMessages',
         'listChannelThreadFollowers',

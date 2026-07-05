@@ -171,7 +171,7 @@ export async function GET(
     const orderedMessages = messagesToReturn.reverse();
 
     // Convert to UIMessage format
-    const messages = orderedMessages.map(convertDbMessageToUIMessage);
+    const messages = await Promise.all(orderedMessages.map(convertDbMessageToUIMessage));
 
     // Determine cursors for pagination
     const nextCursor = hasMore && orderedMessages.length > 0

@@ -1,7 +1,7 @@
 import { tool, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
-import { generateText, UIMessage, type ToolSet } from 'ai';
+import { generateText, UIMessage, type ToolSet, type Tool } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
@@ -19,6 +19,8 @@ import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { createId } from '@paralleldrive/cuid2';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
+import { guardReadPageToolForVision } from './read-page-vision-output';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { pageWriteTools } from './page-write-tools';
 import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
@@ -468,7 +470,7 @@ export const agentCommunicationTools = {
             ))
             .orderBy(chatMessages.createdAt);
 
-          messages = dbMessages.map(convertDbMessageToUIMessage);
+          messages = await Promise.all(dbMessages.map(convertDbMessageToUIMessage));
 
           loggers.ai.debug('Loaded conversation history for ask_agent:', {
             conversationId,
@@ -571,6 +573,17 @@ export const agentCommunicationTools = {
         // sorted keys — so the serialized tool bytes are prefix-cache-stable without
         // re-sorting here (same guarantee as the chat/global route merges).
         const allAgentTools = { ...agentTools, ...integrationTools };
+
+        // Guard against a stale read_page tool-result (image bytes delivered on an
+        // earlier turn when the target agent had a vision-capable model) being
+        // re-embedded as an image when history is re-converted for a model that no
+        // longer has vision (e.g. the agent's configured model changed since).
+        if (allAgentTools.read_page) {
+          allAgentTools.read_page = guardReadPageToolForVision(
+            allAgentTools.read_page as Tool,
+            hasVisionCapability(resolvedModelName),
+          );
+        }
 
         // 10. Create enhanced execution context for nested calls
         // Preserve locationContext so nested agents know which drive/page they're operating in

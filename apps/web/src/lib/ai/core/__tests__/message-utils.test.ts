@@ -105,7 +105,7 @@ describe('extractToolResults', () => {
 });
 
 describe('convertDbMessageToUIMessage — output-error round-trip', () => {
-  it('given a persisted message whose toolResults state is output-error, should reconstruct a tool part with state=output-error and the original errorText', () => {
+  it('given a persisted message whose toolResults state is output-error, should reconstruct a tool part with state=output-error and the original errorText', async () => {
     const partsOrder = [{ index: 0, type: 'tool-list_pages', toolCallId: 'tc1' }];
     const dbMessage = {
       id: 'msg-err',
@@ -138,7 +138,7 @@ describe('convertDbMessageToUIMessage — output-error round-trip', () => {
       isActive: true,
     };
 
-    const reconstructed = convertDbMessageToUIMessage(dbMessage);
+    const reconstructed = await convertDbMessageToUIMessage(dbMessage);
 
     expect(reconstructed.parts).toEqual([
       {
@@ -152,7 +152,7 @@ describe('convertDbMessageToUIMessage — output-error round-trip', () => {
     ]);
   });
 
-  it('given a persisted message whose toolResults state is output-available, should reconstruct a tool part with state=output-available (no regression)', () => {
+  it('given a persisted message whose toolResults state is output-available, should reconstruct a tool part with state=output-available (no regression)', async () => {
     const partsOrder = [{ index: 0, type: 'tool-list_pages', toolCallId: 'tc1' }];
     const dbMessage = {
       id: 'msg-ok',
@@ -170,7 +170,7 @@ describe('convertDbMessageToUIMessage — output-error round-trip', () => {
       isActive: true,
     };
 
-    const reconstructed = convertDbMessageToUIMessage(dbMessage);
+    const reconstructed = await convertDbMessageToUIMessage(dbMessage);
 
     expect(reconstructed.parts).toEqual([
       {
