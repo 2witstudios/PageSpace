@@ -35,6 +35,11 @@ vi.mock('../actor-permissions', () => ({
   getActorAccessiblePagesInDrive: vi.fn(),
   getAgentPageId: vi.fn(),
   isMcpScoped: vi.fn(() => false),
+  filterDriveIdsByAppTokenScope: vi.fn((_ctx, ids) => Promise.resolve(ids)),
+  filterDriveIdsByMcpScope: vi.fn((_ctx, ids) => ids),
+}));
+vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
+  getAgentContextDrives: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   getAgentAccessLevel: vi.fn(),
@@ -158,7 +163,8 @@ vi.mock('../../core/ai-providers-config', () => ({
 
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
-import { canActorViewPage, isMcpScoped } from '../actor-permissions';
+import { canActorViewPage, isMcpScoped, filterDriveIdsByMcpScope } from '../actor-permissions';
+import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { createAIProvider } from '../../core/provider-factory';
 import { saveMessageToDatabase } from '../../core/message-utils';
 import type { ToolExecutionContext } from '../../core/types';
@@ -1056,6 +1062,89 @@ describe('agent-communication-tools', () => {
         const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown> | undefined;
         expect(toolsArg?.create_drive).toBeDefined();
         expect(toolsArg?.list_drives).toBeDefined();
+      });
+    });
+
+    describe('member-drive context injection', () => {
+      const memberAgent = {
+        id: 'agent-1',
+        title: 'Budget Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-home',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        isTrashed: false,
+      };
+
+      beforeEach(() => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(memberAgent);
+        vi.mocked(getAgentContextDrives).mockResolvedValue([]);
+        vi.mocked(filterDriveIdsByMcpScope).mockImplementation((_ctx, ids) => ids);
+      });
+
+      it('prepends includeContext=true member-drive drivePrompts to the system prompt', async () => {
+        vi.mocked(getAgentContextDrives).mockResolvedValue([
+          { driveId: 'drive-marketing', driveName: 'Marketing', drivePrompt: 'Keep replies casual.' },
+        ]);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What do you think?' },
+          context
+        );
+
+        expect(getAgentContextDrives).toHaveBeenCalledWith('agent-1');
+        const systemArg = vi.mocked(generateText).mock.calls[0][0].system as string;
+        expect(systemArg).toContain('## DRIVE CONTEXT: Marketing');
+        expect(systemArg).toContain('Keep replies casual.');
+      });
+
+      it('leaves the system prompt unchanged when the agent has no includeContext memberships', async () => {
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What do you think?' },
+          context
+        );
+
+        const systemArg = vi.mocked(generateText).mock.calls[0][0].system as string;
+        expect(systemArg).not.toContain('DRIVE CONTEXT');
+      });
+
+      it('drops member drives outside the caller\'s MCP drive scope', async () => {
+        vi.mocked(getAgentContextDrives).mockResolvedValue([
+          { driveId: 'drive-marketing', driveName: 'Marketing', drivePrompt: 'Keep replies casual.' },
+        ]);
+        vi.mocked(filterDriveIdsByMcpScope).mockReturnValue([]);
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            mcpAllowedDriveIds: ['drive-home'],
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What do you think?' },
+          context
+        );
+
+        expect(filterDriveIdsByMcpScope).toHaveBeenCalledWith(context.experimental_context, ['drive-marketing']);
+        const systemArg = vi.mocked(generateText).mock.calls[0][0].system as string;
+        expect(systemArg).not.toContain('DRIVE CONTEXT');
       });
     });
   });

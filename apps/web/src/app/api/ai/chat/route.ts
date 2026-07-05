@@ -341,9 +341,17 @@ export async function POST(request: Request) {
 
     // Fetch context from any other drives this agent is a member of with
     // includeContext enabled (excludes the home drive, covered above).
+    // Filtered to the caller's MCP drive scope so a token scoped to only the
+    // agent's home drive can't pull another member drive's prompt through
+    // this path (the tool layer enforces the same ceiling for actor-driven
+    // reads; this is the equivalent for a value the route reads directly).
     let memberDriveContextPrefix = '';
     try {
-      const contextDrives = await getAgentContextDrives(chatId);
+      const allowedDriveIds = getAllowedDriveIds(authResult);
+      const allContextDrives = await getAgentContextDrives(chatId);
+      const contextDrives = allowedDriveIds.length > 0
+        ? allContextDrives.filter((d) => allowedDriveIds.includes(d.driveId))
+        : allContextDrives;
       if (contextDrives.length > 0) {
         memberDriveContextPrefix = contextDrives
           .map((d) => `## DRIVE CONTEXT: ${d.driveName}\n\n${d.drivePrompt}\n\n---\n\n`)

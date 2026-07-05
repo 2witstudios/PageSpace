@@ -8,7 +8,8 @@ import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, isMcpScoped } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped } from './actor-permissions';
+import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
@@ -512,6 +513,26 @@ export const agentCommunicationTools = {
         
         // 7. Build system prompt with agent configuration
         let systemPrompt = targetAgent.systemPrompt || '';
+
+        // Prepend context from any other drives this agent is a member of with
+        // includeContext enabled. Lives here (rather than in each caller) so
+        // every ask_agent path — direct tool calls and the channel-mention
+        // responder, which invokes this same execute — gets the same drive
+        // context uniformly. Scope-filtered so a scoped MCP caller can't pull
+        // a member drive's prompt outside its own token scope.
+        try {
+          const allContextDrives = await getAgentContextDrives(agentId);
+          const allowedIds = new Set(filterDriveIdsByMcpScope(executionContext, allContextDrives.map((d) => d.driveId)));
+          const contextDrives = allContextDrives.filter((d) => allowedIds.has(d.driveId));
+          if (contextDrives.length > 0) {
+            const memberDriveContextPrefix = contextDrives
+              .map((d) => `## DRIVE CONTEXT: ${d.driveName}\n\n${d.drivePrompt}\n\n---\n\n`)
+              .join('');
+            systemPrompt = memberDriveContextPrefix + systemPrompt;
+          }
+        } catch (error) {
+          loggers.ai.error('ask_agent: Failed to fetch member-drive context', error as Error);
+        }
 
         // Add timestamp context (using user's timezone from execution context)
         systemPrompt += '\n\n' + buildTimestampSystemPrompt(executionContext?.timezone);
