@@ -20,10 +20,13 @@ import type {
   ChatGlobalConversationAddedPayload,
 } from '@/lib/websocket/socket-utils';
 import type { UIMessage } from 'ai';
+import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
 
 interface ActiveStreamRow {
   messageId: string;
   conversationId: string;
+  /** Last debounced snapshot persisted server-side — a prefix of the live multicast buffer, if still alive. */
+  parts: UIMessagePart[];
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
@@ -160,12 +163,23 @@ export function useChannelStreamSocket(
       onOwnStreamFinalizeRef.current?.({ messageId });
     };
 
-    const startConsume = (messageId: string, conversationId?: string) => {
+    const startConsume = (messageId: string, conversationId?: string, skipReplayCount = 0) => {
       if (!claimBootstrapConsumer(messageId)) return;
       const controller = new AbortController();
       controllers.set(messageId, controller);
 
+      // The multicast registry replays its FULL buffer to every new subscriber
+      // (see stream-multicast-registry.subscribe). When we've already seeded the
+      // store with a persisted-parts snapshot, that snapshot is a prefix of the
+      // live buffer, so the first `skipReplayCount` replayed chunks are the same
+      // ones we already applied — skip them to avoid duplicating content.
+      let chunksToSkip = skipReplayCount;
+
       consumeStreamJoin(messageId, controller.signal, (part) => {
+        if (chunksToSkip > 0) {
+          chunksToSkip -= 1;
+          return;
+        }
         appendPart(messageId, part);
       })
         .then(() => {
@@ -221,11 +235,18 @@ export function useChannelStreamSocket(
             triggeredBy: stream.triggeredBy,
             isOwn,
           });
+          // Render the persisted snapshot immediately — restoring mid-stream
+          // content doesn't need to wait on (or depend on) the live multicast,
+          // which is unavailable if the originator's process has died.
+          const persistedParts = stream.parts ?? [];
+          for (const part of persistedParts) {
+            appendPart(stream.messageId, part);
+          }
           if (isOwn) {
             ownStreamIds.add(stream.messageId);
             onOwnStreamBootstrapRef.current?.({ messageId: stream.messageId });
           }
-          startConsume(stream.messageId, stream.conversationId);
+          startConsume(stream.messageId, stream.conversationId, persistedParts.length);
         }
       } catch (err) {
         if (cancelled) return;

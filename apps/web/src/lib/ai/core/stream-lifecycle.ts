@@ -23,6 +23,11 @@ export interface StreamLifecycleHandle {
   getBufferedParts: () => UIMessagePart[];
 }
 
+// Batch DB writes rather than persisting on every token — a checkpoint every
+// N parts is enough to bound the unrecoverable window on process death while
+// keeping write amplification low.
+const PERSIST_EVERY_N_PARTS = 20;
+
 export const createStreamLifecycle = async (
   params: StreamLifecycleParams,
 ): Promise<StreamLifecycleHandle> => {
@@ -83,10 +88,40 @@ export const createStreamLifecycle = async (
   }).catch(() => {});
 
   let finished = false;
+  let partsSincePersist = 0;
+  // Tracks the in-flight periodic write so finish() can await it before issuing
+  // its own final write — otherwise a slow periodic write could resolve AFTER
+  // finish()'s write and clobber the final parts with a stale snapshot.
+  let persistInFlight: Promise<void> | null = null;
+
+  const persistBufferedParts = (parts: UIMessagePart[]): Promise<void> => {
+    const attempt = (async () => {
+      try {
+        await db
+          .update(aiStreamSessions)
+          .set({ parts })
+          .where(eq(aiStreamSessions.messageId, messageId));
+      } catch (error) {
+        loggers.ai.warn('stream-lifecycle: aiStreamSessions parts persist failed', {
+          messageId,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      }
+    })();
+    persistInFlight = attempt;
+    void attempt.finally(() => {
+      if (persistInFlight === attempt) persistInFlight = null;
+    });
+    return attempt;
+  };
 
   const finish = (aborted: boolean): void => {
     if (finished) return;
     finished = true;
+
+    // Snapshot before registry.finish() deletes the entry (and its buffer).
+    const finalParts = streamMulticastRegistry.getBufferedParts(messageId);
+    const priorPersist = persistInFlight;
 
     try {
       streamMulticastRegistry.finish(messageId, aborted);
@@ -98,12 +133,15 @@ export const createStreamLifecycle = async (
     }
 
     void (async () => {
+      // Wait out any in-flight periodic persist so this final write always lands last.
+      if (priorPersist) await priorPersist;
       try {
         await db
           .update(aiStreamSessions)
           .set({
             status: aborted ? 'aborted' : 'complete',
             completedAt: new Date(),
+            parts: finalParts,
           })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
@@ -132,6 +170,12 @@ export const createStreamLifecycle = async (
         messageId,
         error: error instanceof Error ? error.message : 'unknown',
       });
+    }
+
+    partsSincePersist += 1;
+    if (partsSincePersist >= PERSIST_EVERY_N_PARTS && !persistInFlight) {
+      partsSincePersist = 0;
+      persistBufferedParts(streamMulticastRegistry.getBufferedParts(messageId));
     }
   };
 

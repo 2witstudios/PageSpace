@@ -801,6 +801,93 @@ describe('useChannelStreamSocket', () => {
       );
     });
 
+    it('given a bootstrapped stream carries persisted parts, should appendPart each one before joining live', async () => {
+      const persistedParts = [{ type: 'text', text: 'partial' }, { type: 'text', text: ' content' }];
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-bootstrap',
+            conversationId: 'conv-1',
+            parts: persistedParts,
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+          }],
+        }),
+      });
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockAppendPart).toHaveBeenNthCalledWith(1, 'msg-bootstrap', persistedParts[0]);
+      expect(mockAppendPart).toHaveBeenNthCalledWith(2, 'msg-bootstrap', persistedParts[1]);
+    });
+
+    it('given persisted parts were seeded and the live join replays the same prefix, should skip the duplicate replayed chunks', async () => {
+      const persistedParts = [{ type: 'text', text: 'partial' }];
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-bootstrap',
+            conversationId: 'conv-1',
+            parts: persistedParts,
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+          }],
+        }),
+      });
+      let capturedOnChunk!: (part: unknown) => void;
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
+          capturedOnChunk = onChunk;
+          return new Promise(() => {});
+        },
+      );
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); });
+
+      mockAppendPart.mockClear();
+
+      // Live join replays its full buffer, starting with the same part we
+      // already seeded from the persisted snapshot, followed by genuinely new content.
+      const newPart = { type: 'text', text: ' — and more' };
+      capturedOnChunk(persistedParts[0]);
+      capturedOnChunk(newPart);
+
+      expect(mockAppendPart).toHaveBeenCalledTimes(1);
+      expect(mockAppendPart).toHaveBeenCalledWith('msg-bootstrap', newPart);
+    });
+
+    it('given no persisted parts, should not skip any live-joined chunks', async () => {
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-bootstrap',
+            conversationId: 'conv-1',
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+          }],
+        }),
+      });
+      let capturedOnChunk!: (part: unknown) => void;
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
+          capturedOnChunk = onChunk;
+          return new Promise(() => {});
+        },
+      );
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); });
+
+      mockAppendPart.mockClear();
+      const firstLivePart = { type: 'text', text: 'hello' };
+      capturedOnChunk(firstLivePart);
+
+      expect(mockAppendPart).toHaveBeenCalledWith('msg-bootstrap', firstLivePart);
+    });
+
     it('given a stream from the current tab is active in the DB, should addStream with isOwn=true', async () => {
       mockFetchWithAuth.mockResolvedValueOnce({
         ok: true,

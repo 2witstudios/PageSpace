@@ -225,6 +225,80 @@ describe('createStreamLifecycle', () => {
     });
   });
 
+  describe('pushPart — periodic parts persistence', () => {
+    const textPart = { type: 'text' as const, text: 'hello' };
+
+    it('given fewer than 20 pushes, should not persist parts to the DB', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      for (let i = 0; i < 19; i++) lifecycle.pushPart(textPart);
+      await flushMicrotasks();
+
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+    });
+
+    it('given exactly 20 pushes, should persist the buffered parts snapshot once', async () => {
+      const fakeParts = [textPart, textPart];
+      // Once: only the 20th push triggers the threshold's getBufferedParts read.
+      mockRegistryGetBufferedParts.mockReturnValueOnce(fakeParts);
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
+      await flushMicrotasks();
+
+      expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+      expect(mockUpdateSet).toHaveBeenCalledWith({ parts: fakeParts });
+    });
+
+    it('given 40 pushes across two batches, should persist once per batch', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
+      // Let the first (resolved) write settle before the next batch arrives —
+      // otherwise the in-flight guard correctly folds both batches into one
+      // write (see "should skip scheduling another until it settles" below).
+      await flushMicrotasks();
+      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
+      await flushMicrotasks();
+
+      expect(mockUpdateSet).toHaveBeenCalledTimes(2);
+    });
+
+    it('given the periodic persist rejects, should warn and not throw', async () => {
+      mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
+      const lifecycle = await createStreamLifecycle(params());
+      mockLoggerWarn.mockClear();
+
+      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
+      await flushMicrotasks();
+
+      expect(mockLoggerWarn).toHaveBeenCalled();
+    });
+
+    it('given a persist is still in flight, should skip scheduling another until it settles', async () => {
+      let resolveFirst!: () => void;
+      mockUpdateWhere.mockImplementationOnce(
+        () => new Promise<void>((res) => { resolveFirst = res; }),
+      );
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
+      await flushMicrotasks();
+      // Second batch arrives while the first write is still in flight.
+      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
+      await flushMicrotasks();
+
+      expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+
+      resolveFirst();
+      await flushMicrotasks();
+    });
+  });
+
   describe('finish — completion path', () => {
     it('given finish(false), should call registry.finish, UPDATE the row to status=complete, and broadcast complete', async () => {
       const lifecycle = await createStreamLifecycle(params());
@@ -236,6 +310,7 @@ describe('createStreamLifecycle', () => {
       expect(mockUpdateSet).toHaveBeenCalledWith({
         status: 'complete',
         completedAt: expect.any(Date),
+        parts: [],
       });
       expect(mockBroadcastComplete).toHaveBeenCalledWith({
         messageId: 'msg-1',
@@ -254,6 +329,7 @@ describe('createStreamLifecycle', () => {
       expect(mockUpdateSet).toHaveBeenCalledWith({
         status: 'aborted',
         completedAt: expect.any(Date),
+        parts: [],
       });
       expect(mockBroadcastComplete).toHaveBeenCalledWith({
         messageId: 'msg-1',
@@ -324,6 +400,56 @@ describe('createStreamLifecycle', () => {
 
       expect(finishOrder).toBeLessThan(updateOrder);
       expect(updateOrder).toBeLessThan(broadcastOrder);
+    });
+  });
+
+  describe('finish — parts snapshot', () => {
+    it('given finish(), should read getBufferedParts before registry.finish deletes the entry', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+
+      mockRegistryGetBufferedParts.mockClear();
+      mockRegistryFinish.mockClear();
+
+      lifecycle.finish(false);
+      await flushMicrotasks();
+
+      const getBufferedOrder = mockRegistryGetBufferedParts.mock.invocationCallOrder[0];
+      const finishOrder = mockRegistryFinish.mock.invocationCallOrder[0];
+      expect(getBufferedOrder).toBeLessThan(finishOrder);
+    });
+
+    it('given a periodic persist is in flight when finish() is called, should await it before writing the final snapshot', async () => {
+      let resolvePeriodic!: () => void;
+      mockUpdateWhere.mockImplementationOnce(
+        () => new Promise<void>((res) => { resolvePeriodic = res; }),
+      );
+      const textPart = { type: 'text' as const, text: 'hello' };
+      mockRegistryGetBufferedParts.mockReturnValue([textPart]);
+      const lifecycle = await createStreamLifecycle(params());
+
+      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
+      await flushMicrotasks();
+
+      const finalParts = [textPart, textPart, textPart];
+      mockRegistryGetBufferedParts.mockReturnValue(finalParts);
+      mockUpdateSet.mockClear();
+      lifecycle.finish(false);
+      await flushMicrotasks();
+
+      // The final write must not have landed yet — it's waiting on the
+      // in-flight periodic persist to settle first.
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+
+      resolvePeriodic();
+      await flushMicrotasks();
+
+      expect(mockUpdateSet).toHaveBeenCalledWith({
+        status: 'complete',
+        completedAt: expect.any(Date),
+        parts: finalParts,
+      });
+
+      mockRegistryGetBufferedParts.mockReturnValue([]);
     });
   });
 
