@@ -28,12 +28,16 @@ export const isBuiltinProvider = (id: string): boolean => id in builtinProviders
  * row is only a cache seeded at install time and refreshed lazily — it can lag
  * behind the in-memory definition until something happens to trigger a refresh.
  * Rather than trust that cache, always prefer the current in-memory definition
- * for a slug that matches a builtin; only custom/openapi/mcp/webhook providers,
- * which have no in-memory definition, fall back to their persisted config.
+ * for a `providerType: 'builtin'` row; custom/openapi/webhook providers keep
+ * their persisted config, even if their slug happens to collide with a builtin
+ * (rows created before slug reservation existed), so a custom provider is never
+ * silently handed a builtin's tools or OAuth metadata.
  */
 export const resolveProviderConfig = (
-  provider: { slug: string; config: unknown } | null | undefined
-): IntegrationProviderConfig | null =>
-  provider
-    ? getBuiltinProvider(provider.slug) ?? (provider.config as IntegrationProviderConfig | null)
-    : null;
+  provider: { slug: string; providerType: string; config: unknown } | null | undefined
+): IntegrationProviderConfig | null => {
+  if (!provider) return null;
+  const persisted = provider.config as IntegrationProviderConfig | null;
+  if (provider.providerType !== 'builtin') return persisted;
+  return getBuiltinProvider(provider.slug) ?? persisted;
+};

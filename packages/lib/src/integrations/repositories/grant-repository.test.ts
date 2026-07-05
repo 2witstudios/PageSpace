@@ -26,7 +26,7 @@ interface MockConnection {
   id: string;
   name: string;
   status: string;
-  provider?: { slug: string; name: string; config: unknown };
+  provider?: { slug: string; name: string; config: unknown; providerType: string };
 }
 
 interface MockAgent {
@@ -285,7 +285,7 @@ describe('listGrantsByAgent', () => {
           id: 'conn-1',
           name: 'GitHub',
           status: 'active',
-          provider: { slug: 'github', name: 'GitHub', config: {} },
+          provider: { slug: 'github', name: 'GitHub', config: {}, providerType: 'builtin' },
         },
       },
       {
@@ -299,7 +299,7 @@ describe('listGrantsByAgent', () => {
           id: 'conn-2',
           name: 'Slack',
           status: 'active',
-          provider: { slug: 'slack', name: 'Slack', config: {} },
+          provider: { slug: 'slack', name: 'Slack', config: {}, providerType: 'builtin' },
         },
       },
     ];
@@ -327,7 +327,7 @@ describe('listGrantsByAgent', () => {
           name: 'GitHub',
           status: 'active',
           // Stale persisted config — no tools/bundles, as if seeded before a rename.
-          provider: { slug: 'github', name: 'GitHub', config: { tools: [] } },
+          provider: { slug: 'github', name: 'GitHub', config: { tools: [] }, providerType: 'builtin' },
         },
       },
     ];
@@ -339,6 +339,33 @@ describe('listGrantsByAgent', () => {
     const config = result[0].connection?.provider?.config as { tools: unknown[] };
     expect(config).not.toEqual({ tools: [] });
     expect(config.tools.length).toBeGreaterThan(0);
+  });
+
+  it('given a custom provider whose slug collides with a builtin, should keep its own persisted config', async () => {
+    const customConfig = { tools: [{ id: 'proxy_tool' }] };
+    const grants: MockGrant[] = [
+      {
+        id: 'grant-1',
+        agentId: 'agent-1',
+        connectionId: 'conn-1',
+        allowedTools: null,
+        deniedTools: null,
+        readOnly: false,
+        connection: {
+          id: 'conn-1',
+          name: 'GitHub Proxy',
+          status: 'active',
+          // Slug collides with the builtin, but this is a custom provider.
+          provider: { slug: 'github', name: 'GitHub Proxy', config: customConfig, providerType: 'custom' },
+        },
+      },
+    ];
+
+    mockDb.query.integrationToolGrants.findMany.mockResolvedValue(grants);
+
+    const result = await listGrantsByAgent(mockDb, 'agent-1');
+
+    expect(result[0].connection?.provider?.config).toBe(customConfig);
   });
 
   it('given agent with no grants, should return empty array', async () => {

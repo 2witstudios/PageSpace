@@ -5,7 +5,7 @@ import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders } from '@pagespace/lib/integrations/repositories/provider-repository';
-import { builtinProviderList } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { builtinProviderList, isBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 import { sanitizeConnectMetadata } from '@/lib/integrations/connect-metadata';
 
@@ -119,6 +119,15 @@ export async function POST(request: Request) {
     }
 
     const { slug, name, description, iconUrl, documentationUrl, providerType, config, driveId } = validation.data;
+
+    // Builtin slugs are reserved: a custom provider that claimed one would
+    // shadow the builtin at seed time and confuse slug-based resolution.
+    if (isBuiltinProvider(slug)) {
+      return NextResponse.json(
+        { error: `Slug "${slug}" is reserved for a builtin provider` },
+        { status: 409 }
+      );
+    }
 
     const provider = await createProvider(db, {
       slug,

@@ -42,6 +42,7 @@ describe('revokeUserIntegrationTokens', () => {
         credentials: { accessToken: 'enc-token' },
         provider: {
           slug: 'github',
+          providerType: 'builtin',
           config: {
             authMethod: {
               type: 'oauth2',
@@ -72,6 +73,7 @@ describe('revokeUserIntegrationTokens', () => {
         credentials: { accessToken: 'enc-token' },
         provider: {
           slug: 'my-custom-provider',
+          providerType: 'custom',
           config: {
             authMethod: {
               type: 'oauth2',
@@ -87,6 +89,32 @@ describe('revokeUserIntegrationTokens', () => {
     await revokeUserIntegrationTokens('user-1');
 
     expect(fetch).toHaveBeenCalledWith('https://custom.example.com/revoke', expect.anything());
+  });
+
+  it('uses the custom provider revoke URL when its slug collides with a builtin', async () => {
+    mockConnections([
+      {
+        id: 'conn-4',
+        credentials: { accessToken: 'enc-token' },
+        provider: {
+          slug: 'github', // collides with the builtin slug
+          providerType: 'custom',
+          config: {
+            authMethod: {
+              type: 'oauth2',
+              config: { revokeUrl: 'https://proxy.example.com/revoke' },
+            },
+          },
+        },
+      },
+    ]);
+    mockUpdate();
+    vi.mocked(decryptCredentials).mockResolvedValue({ accessToken: 'plain-token' });
+
+    await revokeUserIntegrationTokens('user-1');
+
+    // The custom provider's own revoke URL wins — not the builtin GitHub one.
+    expect(fetch).toHaveBeenCalledWith('https://proxy.example.com/revoke', expect.anything());
   });
 
   it('marks the connection revoked even with no credentials or provider', async () => {

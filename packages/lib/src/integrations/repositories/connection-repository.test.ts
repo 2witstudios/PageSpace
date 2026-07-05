@@ -30,6 +30,7 @@ interface MockConnection {
     slug: string;
     name: string;
     config: unknown;
+    providerType: string;
   };
 }
 
@@ -273,6 +274,7 @@ describe('getConnectionWithProvider', () => {
         slug: 'my-custom-provider',
         name: 'Custom',
         config: { baseUrl: 'https://api.example.com' },
+        providerType: 'custom',
       },
     };
 
@@ -297,6 +299,7 @@ describe('getConnectionWithProvider', () => {
         name: 'GitHub',
         // Stale persisted config — e.g. seeded before a tool rename/bundle addition.
         config: { baseUrl: 'https://api.github.com', tools: [] },
+        providerType: 'builtin',
       },
     };
 
@@ -306,6 +309,29 @@ describe('getConnectionWithProvider', () => {
 
     expect(result?.provider?.config).not.toEqual({ baseUrl: 'https://api.github.com', tools: [] });
     expect((result?.provider?.config as { tools: unknown[] }).tools.length).toBeGreaterThan(0);
+  });
+
+  it('given a custom provider whose slug collides with a builtin, should keep its own persisted config', async () => {
+    const customConfig = { baseUrl: 'https://proxy.example.com', tools: [] };
+    const connectionWithShadowingProvider: MockConnection = {
+      id: 'conn-123',
+      providerId: 'provider-1',
+      name: 'My GitHub Proxy',
+      status: 'active',
+      provider: {
+        id: 'provider-1',
+        slug: 'github', // collides with the builtin slug, but is a custom provider
+        name: 'GitHub Proxy',
+        config: customConfig,
+        providerType: 'custom',
+      },
+    };
+
+    mockDb.query.integrationConnections.findFirst.mockResolvedValue(connectionWithShadowingProvider);
+
+    const result = await getConnectionWithProvider(mockDb, 'conn-123');
+
+    expect(result?.provider?.config).toBe(customConfig);
   });
 
   it('given non-existent connection ID, should return null', async () => {
@@ -474,8 +500,8 @@ describe('listUserConnections', () => {
 
   it('given user ID, should return all user connections with provider info', async () => {
     const userConnections: MockConnection[] = [
-      { id: 'conn-1', providerId: 'p1', name: 'GitHub', status: 'active', provider: { id: 'p1', slug: 'github', name: 'GitHub', config: {} } },
-      { id: 'conn-2', providerId: 'p2', name: 'Slack', status: 'active', provider: { id: 'p2', slug: 'slack', name: 'Slack', config: {} } },
+      { id: 'conn-1', providerId: 'p1', name: 'GitHub', status: 'active', provider: { id: 'p1', slug: 'github', name: 'GitHub', config: {}, providerType: 'builtin' } },
+      { id: 'conn-2', providerId: 'p2', name: 'Slack', status: 'active', provider: { id: 'p2', slug: 'slack', name: 'Slack', config: {}, providerType: 'builtin' } },
     ];
 
     mockDb.query.integrationConnections.findMany.mockResolvedValue(userConnections);
@@ -507,7 +533,7 @@ describe('listDriveConnections', () => {
 
   it('given drive ID, should return all drive connections with provider info', async () => {
     const driveConnections: MockConnection[] = [
-      { id: 'conn-1', providerId: 'p1', name: 'Team Notion', status: 'active', provider: { id: 'p1', slug: 'notion', name: 'Notion', config: {} } },
+      { id: 'conn-1', providerId: 'p1', name: 'Team Notion', status: 'active', provider: { id: 'p1', slug: 'notion', name: 'Notion', config: {}, providerType: 'builtin' } },
     ];
 
     mockDb.query.integrationConnections.findMany.mockResolvedValue(driveConnections);
