@@ -51,6 +51,7 @@ import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
@@ -337,6 +338,32 @@ export async function POST(request: Request) {
         loggers.ai.error('AI Page Chat API: Failed to fetch drive prompt', error as Error);
         // Continue without drive prompt on error
       }
+    }
+
+    // Fetch context from any other drives this agent is a member of with
+    // includeContext enabled (excludes the home drive, covered above).
+    // Filtered to the caller's MCP drive scope so a token scoped to only the
+    // agent's home drive can't pull another member drive's prompt through
+    // this path (the tool layer enforces the same ceiling for actor-driven
+    // reads; this is the equivalent for a value the route reads directly).
+    let memberDriveContextPrefix = '';
+    try {
+      const allowedDriveIds = getAllowedDriveIds(authResult);
+      const allContextDrives = await getAgentContextDrives(chatId);
+      const contextDrives = allowedDriveIds.length > 0
+        ? allContextDrives.filter((d) => allowedDriveIds.includes(d.driveId))
+        : allContextDrives;
+      if (contextDrives.length > 0) {
+        memberDriveContextPrefix = contextDrives
+          .map((d) => `## DRIVE CONTEXT: ${d.driveName}\n\n${d.drivePrompt}\n\n---\n\n`)
+          .join('');
+        loggers.ai.debug('AI Page Chat API: Including member-drive context', {
+          driveCount: contextDrives.length,
+        });
+      }
+    } catch (error) {
+      loggers.ai.error('AI Page Chat API: Failed to fetch member-drive context', error as Error);
+      // Continue without member-drive context on error
     }
 
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
@@ -871,6 +898,11 @@ export async function POST(request: Request) {
         allowedToolNames
       );
     }
+
+    // Cross-drive membership context applies uniformly regardless of whether
+    // a custom system prompt is set (unlike drivePromptPrefix above, which is
+    // only prepended in the customSystemPrompt branch).
+    systemPrompt = memberDriveContextPrefix + systemPrompt;
 
     // Build timestamp system prompt for temporal awareness
     const userTimezone = user?.timezone ?? undefined;
