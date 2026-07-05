@@ -56,7 +56,9 @@ export async function authenticateService(req: Request, res: Response, next: Nex
   const tokenPrefix = token.substring(0, 12); // Log prefix only for debugging
 
   try {
-    const claims = await sessionService.validateSession(token);
+    // Processor is service-to-service only — reject non-service session types
+    // via the shared type-scoping mechanism rather than a manual post-check.
+    const claims = await sessionService.validateSession(token, { expectedType: 'service' });
 
     if (!claims) {
       loggers.security.warn('Processor auth: invalid or expired token', {
@@ -64,18 +66,6 @@ export async function authenticateService(req: Request, res: Response, next: Nex
         tokenPrefix,
       });
       respondUnauthorized(res, 'Invalid or expired token');
-      return;
-    }
-
-    // Reject non-service session types - processor is for service-to-service only
-    if (claims.type !== 'service') {
-      loggers.security.warn('Processor auth: non-service token rejected', {
-        ...requestContext,
-        tokenPrefix,
-        tokenType: claims.type,
-        userId: claims.userId,
-      });
-      respondForbidden(res, 'Service token required');
       return;
     }
 

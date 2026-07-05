@@ -32,7 +32,7 @@ export default async function ActivatePage({ searchParams }: ActivatePageProps) 
     redirect(`/auth/signin?next=${encodeURIComponent(nextTarget)}`);
   }
 
-  const session = await sessionService.validateSession(sessionToken);
+  const session = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
   if (!session) {
     redirect(`/auth/signin?next=${encodeURIComponent(nextTarget)}`);
   }

@@ -89,8 +89,8 @@ export async function validateCSRF(request: Request): Promise<NextResponse | nul
     );
   }
 
-  // Validate session with server
-  const sessionClaims = await sessionService.validateSession(sessionToken);
+  // Validate session with server — only browser sessions carry CSRF tokens
+  const sessionClaims = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
   if (!sessionClaims) {
     loggers.auth.warn('CSRF validation failed: invalid session', {
       method,

@@ -27,8 +27,8 @@ export default async function PageRedirect({ params }: PageProps) {
     redirect(`/auth/signin?callbackUrl=/p/${pageId}`);
   }
 
-  // Validate the session token
-  const session = await sessionService.validateSession(sessionToken);
+  // Validate the session token — only a browser session may drive this redirect.
+  const session = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
   if (!session) {
     redirect(`/auth/signin?callbackUrl=/p/${pageId}`);
   }

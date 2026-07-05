@@ -580,7 +580,7 @@ io.use(async (socket: AuthSocket, next) => {
     try {
       const sessionClaims = await sessionService.validateSession(token, { expectedType: 'socket' });
       if (!sessionClaims) {
-        loggers.realtime.warn('Socket.IO: Socket token validation failed');
+        loggers.realtime.warn('Socket.IO: Socket token validation failed', { tokenPrefix: token.substring(0, 12) });
         return next(new Error('Authentication error: Invalid or expired socket token.'));
       }
 
