@@ -42,6 +42,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   role's permissions, merged in JS, and wrote the whole map back with no lock in between. Updates
   now merge under a row lock inside a transaction, and setting a role as default no longer risks a
   database deadlock or two roles ending up marked default at once.
+- **AI streams no longer lose mid-response content when the server process restarts** — an
+  in-progress AI reply's content is now checkpointed to the database as it streams, so reopening
+  the channel (or resuming on mobile) shows the restored partial answer instead of a stalled
+  "streaming" indicator with nothing behind it.
 - Builtin integrations (GitHub, Slack, Notion, generic webhook) now always use the current tool
   definitions after a deploy. Previously a stale cached copy of the provider config could keep
   agents on renamed tools or missing bundles until something happened to refresh it.

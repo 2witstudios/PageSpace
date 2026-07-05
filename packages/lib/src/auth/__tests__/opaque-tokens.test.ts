@@ -39,6 +39,7 @@ describe('Opaque Token Generation', () => {
     expect(isValidTokenFormat('ps_dev_' + 'd'.repeat(43))).toBe(true);
     expect(isValidTokenFormat('ps_at_' + 'e'.repeat(43))).toBe(true);
     expect(isValidTokenFormat('ps_rt_' + 'f'.repeat(43))).toBe(true);
+    expect(isValidTokenFormat('ps_sock_' + 'g'.repeat(43))).toBe(true);
   });
 
   it('rejects invalid token formats', () => {
@@ -56,7 +57,16 @@ describe('Opaque Token Generation', () => {
     expect(getTokenType('ps_dev_abc123')).toBe('dev');
     expect(getTokenType('ps_at_abc123')).toBe('at');
     expect(getTokenType('ps_rt_abc123')).toBe('rt');
+    expect(getTokenType('ps_sock_abc123')).toBe('sock');
     expect(getTokenType('invalid_token')).toBe(null);
+  });
+
+  it('generates socket token with correct format', () => {
+    const { token, tokenHash, tokenPrefix } = generateOpaqueToken('sock');
+
+    expect(token).toMatch(/^ps_sock_[A-Za-z0-9_-]{43}$/);
+    expect(tokenHash).toHaveLength(64);
+    expect(tokenPrefix).toBe(token.substring(0, 12));
   });
 
   it('token has sufficient entropy (256 bits)', () => {

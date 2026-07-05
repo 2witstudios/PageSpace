@@ -15,7 +15,12 @@ export interface PendingStream {
 
 interface PendingStreamsState {
   streams: Map<string, PendingStream>;
-  addStream: (stream: Omit<PendingStream, 'parts'>) => void;
+  /**
+   * No-op when the messageId already exists — so initial `parts` (a restored
+   * server snapshot) seed at most once even when co-mounted surfaces
+   * bootstrap the same channel concurrently.
+   */
+  addStream: (stream: Omit<PendingStream, 'parts'> & { parts?: UIMessagePart[] }) => void;
   appendPart: (messageId: string, part: UIMessagePart) => void;
   removeStream: (messageId: string) => void;
   clearPageStreams: (pageId: string) => void;
@@ -30,7 +35,7 @@ export const usePendingStreamsStore = create<PendingStreamsState>((set, get) => 
     set((state) => {
       if (state.streams.has(stream.messageId)) return state;
       const next = new Map(state.streams);
-      next.set(stream.messageId, { ...stream, parts: [] });
+      next.set(stream.messageId, { ...stream, parts: stream.parts ?? [] });
       return { streams: next };
     });
   },

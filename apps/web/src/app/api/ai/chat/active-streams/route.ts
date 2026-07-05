@@ -68,6 +68,7 @@ export async function GET(request: Request) {
         userId: aiStreamSessions.userId,
         displayName: aiStreamSessions.displayName,
         browserSessionId: aiStreamSessions.browserSessionId,
+        parts: aiStreamSessions.parts,
       })
       .from(aiStreamSessions)
       .where(
@@ -83,6 +84,10 @@ export async function GET(request: Request) {
       streams: streams.map((s) => ({
         messageId: s.messageId,
         conversationId: s.conversationId,
+        // Last debounced snapshot of the stream's accumulated parts — lets the
+        // client render mid-stream content immediately, without waiting on
+        // (or depending on) the originator process's live multicast.
+        parts: s.parts ?? [],
         triggeredBy: {
           userId: s.userId,
           displayName: s.displayName,
