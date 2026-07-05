@@ -63,6 +63,44 @@ function buildRedirectWithParams(redirectUri: string, params: Record<string, str
   return url.toString();
 }
 
+function firstForwardedValue(value: string | null): string | undefined {
+  return value?.split(',')[0]?.trim() || undefined;
+}
+
+function configuredAppOrigin(): string | null {
+  const configuredUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
+  if (!configuredUrl) return null;
+
+  try {
+    const url = new URL(configuredUrl);
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return url.origin;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function forwardedAppOrigin(req: NextRequest): string | null {
+  const host = firstForwardedValue(req.headers.get('x-forwarded-host')) ?? req.headers.get('host');
+  const proto =
+    firstForwardedValue(req.headers.get('x-forwarded-proto')) ??
+    (new URL(req.url).protocol === 'https:' ? 'https' : 'http');
+  if (!host || (proto !== 'http' && proto !== 'https')) return null;
+
+  try {
+    return new URL(`${proto}://${host}`).origin;
+  } catch {
+    return null;
+  }
+}
+
+function appOrigin(req: NextRequest): string {
+  return configuredAppOrigin() ?? forwardedAppOrigin(req) ?? new URL(req.url).origin;
+}
+
 export async function GET(req: NextRequest) {
   // Per-IP only: GET is the unauthenticated entry point (no session yet) and
   // is the open-redirect reconnaissance surface (probing client_id /
@@ -96,12 +134,12 @@ export async function GET(req: NextRequest) {
 
   if (isAuthError(auth)) {
     return NextResponse.redirect(
-      new URL(`/auth/signin?next=${encodeURIComponent(consentTarget)}`, req.url),
+      new URL(`/auth/signin?next=${encodeURIComponent(consentTarget)}`, appOrigin(req)),
       302,
     );
   }
 
-  return NextResponse.redirect(new URL(consentTarget, req.url), 302);
+  return NextResponse.redirect(new URL(consentTarget, appOrigin(req)), 302);
 }
 
 const approvalSchema = z.object({
