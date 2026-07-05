@@ -1367,6 +1367,10 @@ async function previewActivityAction(
         includeDrivePrompt: pages.includeDrivePrompt,
         agentDefinition: pages.agentDefinition,
         visibleToGlobalAssistant: pages.visibleToGlobalAssistant,
+        includePageTree: pages.includePageTree,
+        pageTreeScope: pages.pageTreeScope,
+        toolExposureMode: pages.toolExposureMode,
+        userScopedAccess: pages.userScopedAccess,
       })
       .from(pages)
       .where(eq(pages.id, activity.pageId))
@@ -1386,6 +1390,10 @@ async function previewActivityAction(
       includeDrivePrompt: currentAgent[0].includeDrivePrompt,
       agentDefinition: currentAgent[0].agentDefinition,
       visibleToGlobalAssistant: currentAgent[0].visibleToGlobalAssistant,
+      includePageTree: currentAgent[0].includePageTree,
+      pageTreeScope: currentAgent[0].pageTreeScope,
+      toolExposureMode: currentAgent[0].toolExposureMode,
+      userScopedAccess: currentAgent[0].userScopedAccess,
     };
 
     // Check for conflicts and distinguish internal vs external
@@ -2146,6 +2154,23 @@ async function rollbackPermissionChange(
   }
 }
 
+// Every field update_agent_config (apps/web/src/lib/ai/tools/agent-tools.ts) can
+// write to the pages table for an AI_CHAT agent — kept in sync with that tool's
+// AgentUpdateData so a config change is always undo/redo-able via rollback.
+const AGENT_CONFIG_ROLLBACK_FIELDS = [
+  'systemPrompt',
+  'enabledTools',
+  'aiProvider',
+  'aiModel',
+  'includeDrivePrompt',
+  'agentDefinition',
+  'visibleToGlobalAssistant',
+  'includePageTree',
+  'pageTreeScope',
+  'toolExposureMode',
+  'userScopedAccess',
+] as const;
+
 /**
  * Rollback an agent config change
  */
@@ -2163,18 +2188,7 @@ async function rollbackAgentConfigChange(
   const previousValues = activity.previousValues || {};
   const updateData: Record<string, unknown> = {};
 
-  // Agent config fields that can be rolled back
-  const agentFields = [
-    'systemPrompt',
-    'enabledTools',
-    'aiProvider',
-    'aiModel',
-    'includeDrivePrompt',
-    'agentDefinition',
-    'visibleToGlobalAssistant',
-  ];
-
-  for (const field of agentFields) {
+  for (const field of AGENT_CONFIG_ROLLBACK_FIELDS) {
     if (field in previousValues) {
       updateData[field] = previousValues[field];
     }
@@ -2964,9 +2978,8 @@ async function redoAgentConfigChange(
   }
 
   const updateData: Record<string, unknown> = {};
-  const fields = ['systemPrompt', 'enabledTools', 'aiProvider', 'aiModel', 'includeDrivePrompt', 'agentDefinition', 'visibleToGlobalAssistant'];
 
-  for (const field of fields) {
+  for (const field of AGENT_CONFIG_ROLLBACK_FIELDS) {
     if (field in targetValues) {
       updateData[field] = targetValues[field];
     }
