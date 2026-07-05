@@ -170,7 +170,7 @@ export async function GET(
     const orderedMessages = messagesToReturn.reverse();
 
     // Convert to UIMessage format with proper tool call reconstruction
-    const uiMessages = orderedMessages.map(msg =>
+    const uiMessages = await Promise.all(orderedMessages.map(msg =>
       convertGlobalAssistantMessageToUIMessage({
         id: msg.id,
         conversationId: msg.conversationId,
@@ -183,7 +183,7 @@ export async function GET(
         isActive: msg.isActive,
         editedAt: msg.editedAt,
       })
-    );
+    ));
 
     // Determine cursors for pagination
     const nextCursor = hasMore && orderedMessages.length > 0
@@ -517,7 +517,7 @@ export async function POST(
       .orderBy(messages.createdAt);
 
     // Convert database messages to UI format
-    const conversationHistory = dbMessages.map(msg =>
+    const conversationHistory = await Promise.all(dbMessages.map(msg =>
       convertGlobalAssistantMessageToUIMessage({
         id: msg.id,
         conversationId: msg.conversationId,
@@ -530,7 +530,7 @@ export async function POST(
         isActive: msg.isActive,
         editedAt: msg.editedAt,
       })
-    );
+    ));
 
     loggers.api.debug('Global Assistant Chat API: Loaded conversation history from database', {
       messageCount: conversationHistory.length,
