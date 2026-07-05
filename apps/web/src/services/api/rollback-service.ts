@@ -335,6 +335,7 @@ async function applyPageUpdateWithRevision(
     visibleToGlobalAssistant: currentPage.visibleToGlobalAssistant,
     includePageTree: currentPage.includePageTree,
     pageTreeScope: currentPage.pageTreeScope,
+    userScopedAccess: currentPage.userScopedAccess,
   });
 
   const nextState = {
@@ -365,6 +366,9 @@ async function applyPageUpdateWithRevision(
     pageTreeScope: updateData.pageTreeScope !== undefined
       ? (updateData.pageTreeScope === null ? null : String(updateData.pageTreeScope))
       : currentPage.pageTreeScope,
+    userScopedAccess: updateData.userScopedAccess !== undefined
+      ? Boolean(updateData.userScopedAccess)
+      : currentPage.userScopedAccess,
   };
 
   const stateHashAfter = computePageStateHash(nextState);

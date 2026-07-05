@@ -10,6 +10,7 @@ import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/contex
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, isMcpScoped, getAgentPageId, hasAgentUserScopedAccess } from './actor-permissions';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
+import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
@@ -263,21 +264,17 @@ export const agentCommunicationTools = {
             .filter((d) => scopedIds.has(d.driveId))
             .map((d) => ({ id: d.driveId, name: d.driveName, slug: d.driveSlug }));
         } else {
-          // Get all drives the user has access to
-          const allUserDrives = await db
-            .select({
-              id: drives.id,
-              name: drives.name,
-              slug: drives.slug,
-            })
-            .from(drives)
-            .where(eq(drives.ownerId, userId)); // Simplified - you might want more complex permission logic
+          // Full user-scoped reach: owned + member + page-permission drives
+          // (matches list_drives' user path), not just owned drives.
+          const allUserDrives = await listAccessibleDrives(userId);
 
           // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
           const allowedIds = new Set(
             await filterDriveIdsByAppTokenScope(executionContext, allUserDrives.map((d) => d.id)),
           );
-          userDrives = allUserDrives.filter((d) => allowedIds.has(d.id));
+          userDrives = allUserDrives
+            .filter((d) => allowedIds.has(d.id))
+            .map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
         }
 
         let totalAgentCount = 0;
