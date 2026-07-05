@@ -123,7 +123,8 @@ describe('guardReadPageToolForVision', () => {
 
   const makeReadPageTool = () => ({
     description: 'Read the content of any page',
-    toModelOutput: ({ output }: { output: unknown }) => toModelOutputForReadPage(output),
+    toModelOutput: ({ output }: { toolCallId: string; input: unknown; output: unknown }) =>
+      toModelOutputForReadPage(output),
     execute: async () => ({}),
   });
 

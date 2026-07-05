@@ -2,11 +2,14 @@
  * Maps read_page's tool output to the AI SDK's tool-result content shape, and
  * degrades an image-bearing result back to metadata-only when needed.
  *
- * The `ToolResultOutput` shape below is written structurally (not imported from
- * `@ai-sdk/provider-utils`, which isn't a direct dependency of this package) so
- * TypeScript checks it against `tool()`'s inferred generic at the `toModelOutput`
- * call site in page-read-tools.ts.
+ * `ToolResultOutput`/`ToolModelOutputFn` are derived from `ai`'s own public `Tool`
+ * type (already a direct dependency) rather than imported by name from
+ * `@ai-sdk/provider-utils`, which only reaches this package transitively.
  */
+import type { Tool } from 'ai';
+
+type ToolModelOutputFn = NonNullable<Tool['toModelOutput']>;
+type ToolResultOutput = Awaited<ReturnType<ToolModelOutputFn>>;
 
 export interface VisualContentDeliveredOutput {
   success: true;
@@ -19,17 +22,6 @@ export interface VisualContentDeliveredOutput {
   sizeBytes: number;
   metadata: Record<string, unknown>;
 }
-
-type ToolResultOutput =
-  | { type: 'text'; value: string }
-  | { type: 'json'; value: unknown }
-  | {
-      type: 'content';
-      value: Array<
-        | { type: 'text'; text: string }
-        | { type: 'image-data'; data: string; mediaType: string }
-      >;
-    };
 
 function isVisualContentDelivered(output: unknown): output is VisualContentDeliveredOutput {
   return (
@@ -53,9 +45,12 @@ export function toModelOutputForReadPage(output: unknown): ToolResultOutput {
         { type: 'text', text: output.message },
         { type: 'image-data', data: output.imageBase64, mediaType: output.mimeType },
       ],
-    };
+    } as unknown as ToolResultOutput;
   }
-  return { type: 'json', value: output };
+  // output is an arbitrary, already-JSON-serializable tool result at runtime;
+  // ToolResultOutput's json variant requires a JSONValue, which can't be proven
+  // statically from `unknown` here.
+  return { type: 'json', value: output } as unknown as ToolResultOutput;
 }
 
 /**
@@ -88,7 +83,7 @@ export function degradeVisualContentToMetadata(output: unknown): unknown {
 }
 
 interface ToolWithModelOutput {
-  toModelOutput?: (options: { toolCallId: string; input: unknown; output: unknown }) => ToolResultOutput | PromiseLike<ToolResultOutput>;
+  toModelOutput?: ToolModelOutputFn;
 }
 
 /**
@@ -99,8 +94,7 @@ interface ToolWithModelOutput {
  */
 export function guardReadPageToolForVision<T extends ToolWithModelOutput>(tool: T, hasVision: boolean): T {
   if (hasVision) return tool;
-  return {
-    ...tool,
-    toModelOutput: ({ output }) => toModelOutputForReadPage(degradeVisualContentToMetadata(output)),
-  };
+  const toModelOutput: ToolModelOutputFn = ({ output }) =>
+    toModelOutputForReadPage(degradeVisualContentToMetadata(output));
+  return { ...tool, toModelOutput } as T;
 }

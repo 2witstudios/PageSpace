@@ -54,7 +54,7 @@ import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
-import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
