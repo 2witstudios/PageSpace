@@ -24,7 +24,9 @@ async function authenticateSession(request: Request): Promise<VerifiedAdminUser 
   const sessionToken = getSessionFromCookies(cookieHeader);
   if (!sessionToken) return null;
 
-  const claims = await sessionService.validateSession(sessionToken);
+  // Admin session cookie is a browser session only — never accept a socket,
+  // service, mcp, or device token that leaked/replayed into this cookie.
+  const claims = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
   if (!claims) return null;
 
   return {

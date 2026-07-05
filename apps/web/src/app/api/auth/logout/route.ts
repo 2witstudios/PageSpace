@@ -32,7 +32,10 @@ export async function POST(req: Request) {
   let sessionId: string | undefined;
   let sessionRevokeSucceeded = false;
   if (sessionToken) {
-    const sessionClaims = await sessionService.validateSession(sessionToken);
+    // Only a real browser session may trigger logout's userId-scoped device
+    // revocation — a leaked non-user token in the session cookie must not be
+    // able to revoke another user's device tokens.
+    const sessionClaims = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
     userId = sessionClaims?.userId;
     sessionId = sessionClaims?.sessionId;
     try {

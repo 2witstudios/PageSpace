@@ -65,8 +65,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
   },
 }));
 
-// DB mock – need query.socketTokens.findFirst and chained select().from().where().limit()
-const mockDbFindFirst = vi.fn();
+// DB mock – need chained select().from().where().limit() for the DM/profile lookups
 const mockDbSelect = vi.fn();
 const mockDbFrom = vi.fn();
 const mockDbWhere = vi.fn();
@@ -79,22 +78,15 @@ mockDbLimit.mockResolvedValue([]);
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
-    query: {
-      socketTokens: {
-        findFirst: mockDbFindFirst,
-      },
-    },
     select: mockDbSelect,
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ eq: [a, b] })),
-  gt: vi.fn((a, b) => ({ gt: [a, b] })),
   and: vi.fn((...args) => ({ and: args })),
   or: vi.fn((...args) => ({ or: args })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
-  socketTokens: { tokenHash: 'tokenHash', expiresAt: 'expiresAt' },
   users: { id: 'id', name: 'name', image: 'image' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
@@ -656,8 +648,14 @@ describe('Socket.IO middleware - auth', () => {
     }));
   });
 
-  it('given valid ps_sock_* token, should authenticate and call next()', async () => {
-    mockDbFindFirst.mockResolvedValue({ userId: 'user-from-sock-token' });
+  it('given valid ps_sock_* token, should authenticate via sessionService and call next()', async () => {
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: 'user-from-sock-token',
+      sessionId: 'sock-1',
+      expiresAt: new Date(),
+    } as Parameters<typeof sessionService.validateSession>[0] extends string
+      ? Awaited<ReturnType<typeof sessionService.validateSession>>
+      : never);
     mockDbLimit.mockResolvedValueOnce([{ name: 'Test User', image: null }])
                .mockResolvedValueOnce([]);
 
@@ -672,12 +670,13 @@ describe('Socket.IO middleware - auth', () => {
 
     await capturedIoUseCallback!(socket, next);
 
+    expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sock_validtoken123', { expectedType: 'socket' });
     expect(next).toHaveBeenCalledWith(/* no error */);
     expect(next.mock.calls[0]).toHaveLength(0);
   });
 
-  it('given ps_sock_* token not found in DB, should reject with error', async () => {
-    mockDbFindFirst.mockResolvedValue(null);
+  it('given ps_sock_* token that fails validation, should reject with error', async () => {
+    vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
     const socket = createMockSocket({
       handshake: {
@@ -695,8 +694,8 @@ describe('Socket.IO middleware - auth', () => {
     }));
   });
 
-  it('given ps_sock_* token DB error, should reject with error', async () => {
-    mockDbFindFirst.mockRejectedValue(new Error('DB connection failed'));
+  it('given ps_sock_* token validation throws, should reject with server error', async () => {
+    vi.mocked(sessionService.validateSession).mockRejectedValue(new Error('Session service error'));
 
     const socket = createMockSocket({
       handshake: {
@@ -710,7 +709,7 @@ describe('Socket.IO middleware - auth', () => {
     await capturedIoUseCallback!(socket, next);
 
     expect(next).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Invalid or expired socket token'),
+      message: expect.stringContaining('Server failed'),
     }));
   });
 

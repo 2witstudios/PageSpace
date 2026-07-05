@@ -320,7 +320,7 @@ describe('activity-tracker', () => {
       });
       const userId = await getUserIdFromRequest(req);
       expect(userId).toBe('user-123');
-      expect(mockValidateSession).toHaveBeenCalledWith('valid-token-here');
+      expect(mockValidateSession).toHaveBeenCalledWith('valid-token-here', { expectedType: 'user' });
     });
 
     it('should return undefined when validateSession returns null', async () => {
@@ -348,7 +348,7 @@ describe('activity-tracker', () => {
       });
       const userId = await getUserIdFromRequest(req);
       expect(userId).toBe('user-456');
-      expect(mockValidateSession).toHaveBeenCalledWith('my-session-token');
+      expect(mockValidateSession).toHaveBeenCalledWith('my-session-token', { expectedType: 'user' });
     });
   });
 });

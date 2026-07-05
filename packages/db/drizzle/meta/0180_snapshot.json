@@ -1,6 +1,6 @@
 {
-  "id": "3b822724-1efb-4e6f-8770-e110ce28a743",
-  "prevId": "f65de496-3432-42ef-8e54-cba92b1d6319",
+  "id": "8b0ee447-5602-45d5-8d45-f4d40a831ac4",
+  "prevId": "3b822724-1efb-4e6f-8770-e110ce28a743",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2192,6 +2192,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'upfront'"
+        },
+        "userScopedAccess": {
+          "name": "userScopedAccess",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "fileSize": {
           "name": "fileSize",
