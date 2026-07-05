@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { beforeEach, describe, it, vi, type Mock } from 'vitest';
 import { assert } from '@/lib/ai/core/__tests__/riteway';
 
 vi.mock('@pagespace/db/db', () => ({
