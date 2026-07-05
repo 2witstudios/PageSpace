@@ -28,7 +28,7 @@ interface ActiveStreamRow {
   messageId: string;
   conversationId: string;
   /** Last debounced snapshot persisted server-side — a prefix of the live multicast buffer, if still alive. */
-  parts: UIMessagePart[];
+  parts?: UIMessagePart[];
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 

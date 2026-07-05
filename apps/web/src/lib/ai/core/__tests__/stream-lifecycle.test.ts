@@ -429,22 +429,29 @@ describe('createStreamLifecycle', () => {
     });
   });
 
-  describe('finish — parts snapshot', () => {
-    it('given finish(), should read getBufferedParts before registry.finish deletes the entry', async () => {
+  describe('finish — parts cleared on completion', () => {
+    it('given a stream with buffered parts, should clear parts to empty in the final write rather than persist the full content', async () => {
+      const textPart = { type: 'text' as const, text: 'hello' };
+      mockRegistryGetBufferedParts.mockReturnValue([textPart, textPart, textPart]);
       const lifecycle = await createStreamLifecycle(params());
-
-      mockRegistryGetBufferedParts.mockClear();
-      mockRegistryFinish.mockClear();
 
       lifecycle.finish(false);
       await flushMicrotasks();
 
-      const getBufferedOrder = mockRegistryGetBufferedParts.mock.invocationCallOrder[0];
-      const finishOrder = mockRegistryFinish.mock.invocationCallOrder[0];
-      expect(getBufferedOrder).toBeLessThan(finishOrder);
+      // The only reader of this column filters status='streaming', so a
+      // terminal row has nothing to gain from keeping the full content
+      // around — and every AI reply is already durably saved via the normal
+      // message-persistence path regardless of this table.
+      expect(mockUpdateSet).toHaveBeenCalledWith({
+        status: 'complete',
+        completedAt: expect.any(Date),
+        parts: [],
+      });
+
+      mockRegistryGetBufferedParts.mockReturnValue([]);
     });
 
-    it('given a periodic persist is in flight when finish() is called, should await it before writing the final snapshot', async () => {
+    it('given a periodic persist is in flight when finish() is called, should await it before writing the final (cleared) snapshot', async () => {
       let resolvePeriodic!: () => void;
       mockUpdateWhere.mockImplementationOnce(
         () => new Promise<void>((res) => { resolvePeriodic = res; }),
@@ -456,8 +463,6 @@ describe('createStreamLifecycle', () => {
       for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
       await flushMicrotasks();
 
-      const finalParts = [textPart, textPart, textPart];
-      mockRegistryGetBufferedParts.mockReturnValue(finalParts);
       mockUpdateSet.mockClear();
       lifecycle.finish(false);
       await flushMicrotasks();
@@ -472,7 +477,7 @@ describe('createStreamLifecycle', () => {
       expect(mockUpdateSet).toHaveBeenCalledWith({
         status: 'complete',
         completedAt: expect.any(Date),
-        parts: finalParts,
+        parts: [],
       });
 
       mockRegistryGetBufferedParts.mockReturnValue([]);

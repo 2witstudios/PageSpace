@@ -124,8 +124,6 @@ export const createStreamLifecycle = async (
     if (finished) return;
     finished = true;
 
-    // Snapshot before registry.finish() deletes the entry (and its buffer).
-    const finalParts = streamMulticastRegistry.getBufferedParts(messageId);
     const priorPersist = persistInFlight;
 
     try {
@@ -146,7 +144,13 @@ export const createStreamLifecycle = async (
           .set({
             status: aborted ? 'aborted' : 'complete',
             completedAt: new Date(),
-            parts: finalParts,
+            // The only reader of this column (GET /api/ai/chat/active-streams)
+            // filters status='streaming' — once the row leaves that status no
+            // code ever reads its parts again, and the full message content is
+            // already durably saved via the normal message-persistence path.
+            // Clearing it here avoids keeping an unbounded, unpruned copy of
+            // every AI reply's content sitting in this table indefinitely.
+            parts: [],
           })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
