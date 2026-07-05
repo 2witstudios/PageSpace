@@ -142,19 +142,35 @@ export async function isFileOrphaned(database: DB, fileId: string): Promise<bool
  * protocol (dm-message-repository.ts). A single locking DELETE would keep
  * its pre-block snapshot and could still drop a row a just-committed insert
  * now depends on.
+ *
+ * This closes the race for the two insert paths above, which are the only
+ * writers that take FOR UPDATE on `files` before referencing it. The
+ * content-addressed-storage dedup path (a `pages` row pointing at an
+ * existing upload's storagePath, apps/web's upload-complete route) does not
+ * take that lock, so it isn't covered by this protocol — a pre-existing,
+ * separate gap, not introduced or fixed here.
  */
 export async function deleteFileRecords(database: DB, fileIds: string[]): Promise<string[]> {
   if (fileIds.length === 0) return [];
 
   return database.transaction(async (tx) => {
+    // ORDER BY id gives every concurrent deleteFileRecords call (e.g. the
+    // weekly cron sweep racing a user-facing trash purge) the same lock
+    // acquisition order for overlapping id sets, avoiding a deadlock that
+    // an unordered multi-row FOR UPDATE could otherwise hit.
     await tx.execute(sql`
-      SELECT 1 FROM files WHERE id = ANY(${fileIds}::text[]) FOR UPDATE
+      SELECT 1 FROM files WHERE id = ANY(${fileIds}::text[]) ORDER BY id FOR UPDATE
     `);
 
+    // The subquery re-aliases `files` as `f` (matching REFERENCE_JOINS/
+    // IS_UNREFERENCED/NO_LIVE_SIBLING_SHARES_BLOB, which are all written
+    // against that alias) in its own independent scope — it is a semi-join,
+    // not correlated to the outer DELETE target, so the outer row is
+    // aliased `target` to avoid reading as a self-reference.
     const result = await tx.execute(sql`
-      DELETE FROM files f
-      WHERE f.id = ANY(${fileIds}::text[])
-        AND f.id IN (
+      DELETE FROM files target
+      WHERE target.id = ANY(${fileIds}::text[])
+        AND target.id IN (
           SELECT f.id
           FROM files f
           ${REFERENCE_JOINS}
@@ -162,7 +178,7 @@ export async function deleteFileRecords(database: DB, fileIds: string[]): Promis
             AND ${IS_UNREFERENCED}
             AND ${NO_LIVE_SIBLING_SHARES_BLOB}
         )
-      RETURNING f.id
+      RETURNING target.id
     `);
 
     return (result.rows as Array<{ id: string }>).map(row => row.id);

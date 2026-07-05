@@ -253,12 +253,24 @@ describe('isFileOrphaned', () => {
 });
 
 describe('deleteFileRecords', () => {
-  function fakeTransactionalDb(executeImpl: (call: number, node: unknown) => { rows: unknown[] }) {
+  // Dispatches each tx.execute call by inspecting the SQL text itself (does
+  // this statement contain DELETE?) rather than by call position/count, so
+  // the fake stays correct even if deleteFileRecords's statement order or
+  // count changes — a position-keyed fake would silently start matching the
+  // wrong statement instead of failing loudly.
+  function fakeTransactionalDb(opts: {
+    deleteResult?: { rows: unknown[] };
+    rejectLock?: Error;
+    rejectDelete?: Error;
+  } = {}) {
     const executed: unknown[] = [];
     const tx = {
       execute: vi.fn((node: unknown) => {
         executed.push(node);
-        return Promise.resolve(executeImpl(executed.length, node));
+        const isDelete = /DELETE/i.test(sqlText(node));
+        if (isDelete && opts.rejectDelete) return Promise.reject(opts.rejectDelete);
+        if (!isDelete && opts.rejectLock) return Promise.reject(opts.rejectLock);
+        return Promise.resolve(isDelete ? (opts.deleteResult ?? { rows: [] }) : { rows: [] });
       }),
     };
     const db = {
@@ -268,9 +280,9 @@ describe('deleteFileRecords', () => {
   }
 
   it('given_fileIds_locksCandidateRowsThenRechecksAndDeletesInASeparateStatement', async () => {
-    const { db, executed } = fakeTransactionalDb((call) =>
-      call === 2 ? { rows: [{ id: 'f1' }, { id: 'f2' }] } : { rows: [] },
-    );
+    const { db, executed } = fakeTransactionalDb({
+      deleteResult: { rows: [{ id: 'f1' }, { id: 'f2' }] },
+    });
 
     const result = await deleteFileRecords(db as never, ['f1', 'f2']);
 
@@ -308,9 +320,7 @@ describe('deleteFileRecords', () => {
     // referencing it committed before the recheck statement ran, so the
     // guarded DELETE's WHERE clause (re-evaluated fresh after the lock)
     // excludes it — only f1 comes back as actually deleted.
-    const { db } = fakeTransactionalDb((call) =>
-      call === 2 ? { rows: [{ id: 'f1' }] } : { rows: [] },
-    );
+    const { db } = fakeTransactionalDb({ deleteResult: { rows: [{ id: 'f1' }] } });
 
     const result = await deleteFileRecords(db as never, ['f1', 'f2']);
 
@@ -318,14 +328,19 @@ describe('deleteFileRecords', () => {
   });
 
   it('given_databaseErrorDuringLock_propagatesAndNeverAttemptsDelete', async () => {
-    const tx = {
-      execute: vi.fn().mockRejectedValueOnce(new Error('disk full')),
-    };
-    const db = {
-      transaction: vi.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
-    };
+    const { db, tx } = fakeTransactionalDb({ rejectLock: new Error('disk full') });
 
     await expect(deleteFileRecords(db as never, ['f1'])).rejects.toThrow('disk full');
     expect(tx.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('given_databaseErrorDuringRecheckDelete_propagatesAfterLockSucceeds', async () => {
+    // The old single-statement delete's error path was covered directly;
+    // the two-statement split needs its own case for the SECOND statement
+    // (the guarded DELETE) failing after the lock already succeeded.
+    const { db, tx } = fakeTransactionalDb({ rejectDelete: new Error('constraint violation') });
+
+    await expect(deleteFileRecords(db as never, ['f1'])).rejects.toThrow('constraint violation');
+    expect(tx.execute).toHaveBeenCalledTimes(2);
   });
 });
