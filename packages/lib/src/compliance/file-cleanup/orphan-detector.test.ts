@@ -1,22 +1,11 @@
 /**
- * @scaffold — orphan-detector accepts `db` as a parameter but the mock
- * reproduces the ORM delete().where().returning() chain shape.
- * findOrphanedFileRecords and isFileOrphaned use raw SQL (db.execute),
- * which is a clean boundary mock.
- *
- * REVIEW: wrap deleteFileRecords in a repository seam to eliminate
- * the ORM chain mock for that function.
+ * @scaffold — findOrphanedFileRecords, isFileOrphaned, and deleteFileRecords
+ * all use raw SQL (db.execute / tx.execute), which is a clean boundary mock.
  */
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('drizzle-orm', () => ({
-  eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values }),
-  inArray: (col: unknown, vals: unknown[]) => ({ _op: 'inArray', col, vals }),
-}));
-
-vi.mock('@pagespace/db/schema/storage', () => ({
-  files: { id: 'files.id' },
 }));
 
 import {
@@ -24,7 +13,24 @@ import {
   isFileOrphaned,
   deleteFileRecords,
 } from './orphan-detector';
-import { files } from '@pagespace/db/schema/storage';
+
+type SqlNode = { strings: TemplateStringsArray; values: unknown[] };
+
+// Recursively flattens the mocked sql`` tag's nested fragments (e.g. the
+// shared REFERENCE_JOINS/IS_UNREFERENCED/NO_LIVE_SIBLING_SHARES_BLOB
+// fragments interpolated into a parent query) into one full SQL string, so
+// substring/regex assertions below can see the composed query, not just the
+// outermost template's literal segments.
+function sqlText(node: unknown): string {
+  if (node && typeof node === 'object' && 'strings' in node) {
+    const { strings, values } = node as SqlNode;
+    return strings.reduce<string>(
+      (acc, str, i) => acc + str + (i < values.length ? sqlText(values[i]) : ''),
+      '',
+    );
+  }
+  return '';
+}
 
 describe('findOrphanedFileRecords', () => {
   it('given_orphanedFilesExist_returnsAllWithParsedSizeBytes', async () => {
@@ -99,10 +105,7 @@ describe('findOrphanedFileRecords', () => {
       { id: 'f1', storagePath: '/p', driveId: 'd1', sizeBytes: 1024, createdBy: 'u1' },
     ]);
     // The restriction fragment must be interpolated into the executed SQL.
-    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray; values: unknown[] };
-    const fullSql = sqlArg.values
-      .map(v => (v && typeof v === 'object' && 'strings' in v ? (v as { strings: TemplateStringsArray }).strings.join('') : ''))
-      .join('');
+    const fullSql = sqlText(db.execute.mock.calls[0][0]);
     expect(fullSql).toContain('= ANY(');
   });
 
@@ -115,9 +118,9 @@ describe('findOrphanedFileRecords', () => {
 
     await findOrphanedFileRecords(db as never);
 
-    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
-    const fullSql = sqlArg.strings.join('');
+    const fullSql = sqlText(db.execute.mock.calls[0][0]);
     expect(fullSql).toContain('storagePath');
+    expect(fullSql).toContain('other_f');
   });
 
   it('given_dmLinkageTablesExist_queryReferencesFileConversationsAndDirectMessages', async () => {
@@ -130,8 +133,7 @@ describe('findOrphanedFileRecords', () => {
 
     await findOrphanedFileRecords(db as never);
 
-    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
-    const fullSql = sqlArg.strings.join('');
+    const fullSql = sqlText(db.execute.mock.calls[0][0]);
     expect(fullSql).toContain('file_conversations');
     expect(fullSql).toContain('direct_messages');
   });
@@ -146,8 +148,7 @@ describe('findOrphanedFileRecords', () => {
 
     await findOrphanedFileRecords(db as never);
 
-    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
-    const fullSql = sqlArg.strings.join('');
+    const fullSql = sqlText(db.execute.mock.calls[0][0]);
     // Both the LEFT JOIN predicate (top-level) and the sibling-blob EXISTS subquery
     // need the isActive filter, otherwise sibling files referenced by soft-deleted
     // DMs would protect a shared blob that nothing live points at.
@@ -220,8 +221,7 @@ describe('isFileOrphaned', () => {
 
     await isFileOrphaned(db as never, 'file-1');
 
-    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
-    const fullSql = sqlArg.strings.join('');
+    const fullSql = sqlText(db.execute.mock.calls[0][0]);
     expect(fullSql).toContain('file_conversations');
     expect(fullSql).toContain('direct_messages');
   });
@@ -233,52 +233,99 @@ describe('isFileOrphaned', () => {
 
     await isFileOrphaned(db as never, 'file-1');
 
-    const sqlArg = db.execute.mock.calls[0][0] as { strings: TemplateStringsArray };
-    const fullSql = sqlArg.strings.join('');
+    const fullSql = sqlText(db.execute.mock.calls[0][0]);
     expect(fullSql).toMatch(/dm\."?isActive"?\s*=\s*true/i);
+  });
+
+  it('given_sharedStoragePathDedupRequired_queryIncludesStoragePathGuard', async () => {
+    // isFileOrphaned previously lacked the sibling-blob guard
+    // findOrphanedFileRecords already had — both must now share it via the
+    // same predicate fragment so a live sibling record protects its blob here too.
+    const db = {
+      execute: vi.fn().mockResolvedValue({ rows: [] }),
+    };
+
+    await isFileOrphaned(db as never, 'file-1');
+
+    const fullSql = sqlText(db.execute.mock.calls[0][0]);
+    expect(fullSql).toContain('other_f');
   });
 });
 
 describe('deleteFileRecords', () => {
-  it('given_fileIds_deletesFromFilesTableAndReturnsDeletedIds', async () => {
-    const mockDeleteFn = vi.fn();
-    const db = {
-      delete: (table: unknown) => {
-        mockDeleteFn(table);
-        return {
-          where: vi.fn(() => ({
-            returning: vi.fn().mockResolvedValue([{ id: 'f1' }, { id: 'f2' }]),
-          })),
-        };
-      },
+  function fakeTransactionalDb(executeImpl: (call: number, node: unknown) => { rows: unknown[] }) {
+    const executed: unknown[] = [];
+    const tx = {
+      execute: vi.fn((node: unknown) => {
+        executed.push(node);
+        return Promise.resolve(executeImpl(executed.length, node));
+      }),
     };
+    const db = {
+      transaction: vi.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
+    };
+    return { db, tx, executed };
+  }
+
+  it('given_fileIds_locksCandidateRowsThenRechecksAndDeletesInASeparateStatement', async () => {
+    const { db, executed } = fakeTransactionalDb((call) =>
+      call === 2 ? { rows: [{ id: 'f1' }, { id: 'f2' }] } : { rows: [] },
+    );
 
     const result = await deleteFileRecords(db as never, ['f1', 'f2']);
 
     expect(result).toEqual(['f1', 'f2']);
-    expect(mockDeleteFn).toHaveBeenCalledWith(files);
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(executed).toHaveLength(2);
+
+    // Statement 1: lock only, no delete — mirrors purgeInactiveMessages's
+    // reasoning that folding the lock into the DELETE would keep a stale
+    // pre-block snapshot and could miss a reference that committed while
+    // this statement waited on the row lock.
+    const lockSql = sqlText(executed[0]);
+    expect(lockSql).toMatch(/FOR UPDATE/i);
+    expect(lockSql).not.toMatch(/DELETE/i);
+
+    // Statement 2: separate statement, fresh snapshot, re-verifies
+    // referencedness as part of the DELETE's WHERE clause.
+    const deleteSql = sqlText(executed[1]);
+    expect(deleteSql).toMatch(/DELETE\s+FROM\s+files/i);
+    expect(deleteSql).toMatch(/file_conversations/);
+    expect(deleteSql).toMatch(/direct_messages/);
   });
 
-  it('given_emptyArray_returnsEmptyWithoutCallingDB', async () => {
-    const db = {
-      delete: vi.fn(),
-    };
+  it('given_emptyArray_returnsEmptyWithoutStartingATransaction', async () => {
+    const db = { transaction: vi.fn() };
 
     const result = await deleteFileRecords(db as never, []);
 
     expect(result).toEqual([]);
-    expect(db.delete).not.toHaveBeenCalled();
+    expect(db.transaction).not.toHaveBeenCalled();
   });
 
-  it('given_databaseError_propagates', async () => {
+  it('given_rowBecameReferencedBeforeRecheck_deleteSkipsItAndReturnsOnlyStillOrphanedIds', async () => {
+    // Simulates the #1867 race: f2 was orphaned at scan time but a message
+    // referencing it committed before the recheck statement ran, so the
+    // guarded DELETE's WHERE clause (re-evaluated fresh after the lock)
+    // excludes it — only f1 comes back as actually deleted.
+    const { db } = fakeTransactionalDb((call) =>
+      call === 2 ? { rows: [{ id: 'f1' }] } : { rows: [] },
+    );
+
+    const result = await deleteFileRecords(db as never, ['f1', 'f2']);
+
+    expect(result).toEqual(['f1']);
+  });
+
+  it('given_databaseErrorDuringLock_propagatesAndNeverAttemptsDelete', async () => {
+    const tx = {
+      execute: vi.fn().mockRejectedValueOnce(new Error('disk full')),
+    };
     const db = {
-      delete: () => ({
-        where: () => ({
-          returning: vi.fn().mockRejectedValue(new Error('disk full')),
-        }),
-      }),
+      transaction: vi.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
     };
 
     await expect(deleteFileRecords(db as never, ['f1'])).rejects.toThrow('disk full');
+    expect(tx.execute).toHaveBeenCalledTimes(1);
   });
 });
