@@ -906,7 +906,7 @@ export async function POST(request: Request) {
       ))
       .orderBy(chatMessages.createdAt);
 
-    const conversationHistory: UIMessage[] = dbMessages.map(msg =>
+    const conversationHistory: UIMessage[] = await Promise.all(dbMessages.map(msg =>
       convertDbMessageToUIMessage({
         id: msg.id,
         pageId: msg.pageId,
@@ -920,7 +920,7 @@ export async function POST(request: Request) {
         editedAt: msg.editedAt,
         messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
       })
-    );
+    ));
 
     loggers.ai.debug('AI Chat API: Loaded conversation from database', {
       messageCount: conversationHistory.length,
