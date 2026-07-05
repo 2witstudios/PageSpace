@@ -111,6 +111,12 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
 }));
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
+  hasVisionCapability: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock('@/lib/ai/core/validate-image-parts', () => ({
+  hasFileParts: vi.fn().mockReturnValue(false),
+  validateUserMessageFileParts: vi.fn().mockReturnValue({ valid: true, filePartCount: 0 }),
 }));
 
 vi.mock('@/lib/ai/tools/tool-exposure', () => ({
@@ -182,6 +188,8 @@ import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -230,6 +238,9 @@ describe('POST /api/v1/chat/completions', () => {
     } as unknown as ReturnType<typeof db.select>);
     vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
+    vi.mocked(hasFileParts).mockReturnValue(false);
+    vi.mocked(hasVisionCapability).mockReturnValue(true);
+    vi.mocked(validateUserMessageFileParts).mockReturnValue({ valid: true, filePartCount: 0 });
   });
 
   test('returns 402 when the prepaid credit gate denies the request', async () => {
@@ -252,6 +263,57 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'return a 200 SSE stream',
       actual: { status: response.status, contentType: response.headers.get('content-type') },
       expected: { status: 200, contentType: 'text/event-stream' },
+    });
+  });
+
+  test('returns 400 and never touches the credit gate when an image is sent to a non-vision model', async () => {
+    vi.mocked(hasFileParts).mockReturnValue(true);
+    vi.mocked(hasVisionCapability).mockReturnValue(false);
+    const bodyWithImage = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        id: 'msg-1',
+        content: 'What is in this image?',
+        parts: [
+          { type: 'text', text: 'What is in this image?' },
+          { type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' },
+        ],
+      }],
+    };
+    const response = await POST(makeRequest(bodyWithImage));
+    const body = await response.json();
+    assert({
+      given: 'a user message with a file part sent to an agent configured with a non-vision model',
+      should: 'return 400 with a descriptive error and never call the prepaid credit gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: {
+        status: 400,
+        error: `The selected model "${agentPage.aiModel}" does not support image attachments. Please choose a vision-capable model.`,
+        creditGateCalled: false,
+      },
+    });
+  });
+
+  test('returns 400 when file-part validation fails, before the credit gate', async () => {
+    vi.mocked(hasFileParts).mockReturnValue(true);
+    vi.mocked(validateUserMessageFileParts).mockReturnValue({ valid: false, error: 'Image "cat.png" exceeds the 4MB size limit', filePartCount: 1 });
+    const bodyWithImage = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        id: 'msg-1',
+        content: 'What is in this image?',
+        parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+      }],
+    };
+    const response = await POST(makeRequest(bodyWithImage));
+    const body = await response.json();
+    assert({
+      given: 'a user message with a file part that fails size/format validation',
+      should: 'return 400 with the validation error and never call the prepaid credit gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: { status: 400, error: 'Image "cat.png" exceeds the 4MB size limit', creditGateCalled: false },
     });
   });
 

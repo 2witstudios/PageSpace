@@ -23,7 +23,8 @@ import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
-import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
+import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
@@ -102,6 +103,24 @@ export async function POST(request: Request): Promise<Response> {
   const [page] = await db.select().from(pages).where(eq(pages.id, pageId));
   if (!page || page.type !== PageType.AI_CHAT) {
     return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+  }
+
+  // 4b. Image security + vision-capability gate — mirrors the in-app chat route
+  // (apps/web/src/app/api/ai/chat/route.ts) and runs before the credit hold (6b) so a
+  // rejected image never reserves a hold or an in-flight slot.
+  const userMessageForValidation = messages[messages.length - 1];
+  const messageHasImages = userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation);
+  if (messageHasImages) {
+    const imageValidation = validateUserMessageFileParts(userMessageForValidation);
+    if (!imageValidation.valid) {
+      return NextResponse.json({ error: imageValidation.error }, { status: 400 });
+    }
+    if (page.aiModel && !hasVisionCapability(page.aiModel)) {
+      return NextResponse.json(
+        { error: `The selected model "${page.aiModel}" does not support image attachments. Please choose a vision-capable model.` },
+        { status: 400 },
+      );
+    }
   }
 
   // 5. Permission check. View is necessary but not sufficient: this endpoint runs
