@@ -120,6 +120,17 @@ export interface KickResult {
   error?: string;
 }
 
+/** Client-received shape of the `access_revoked` socket event (see apps/realtime/src/kick-handler.ts's executeKick). */
+export interface AccessRevokedPayload {
+  room: string;
+  reason: KickReason;
+  metadata?: {
+    driveId?: string;
+    pageId?: string;
+    driveName?: string;
+  };
+}
+
 export interface InboxEventPayload {
   operation: InboxOperation;
   type: 'dm' | 'channel';

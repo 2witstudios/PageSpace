@@ -20,6 +20,7 @@ import type {
   ChatConversationRenamedPayload,
   ChatConversationDeletedPayload,
   ChatGlobalConversationAddedPayload,
+  AccessRevokedPayload,
 } from '@/lib/websocket/socket-utils';
 import type { UIMessage } from 'ai';
 import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
@@ -30,10 +31,6 @@ interface ActiveStreamRow {
   /** Last debounced snapshot persisted server-side — a prefix of the live multicast buffer, if still alive. */
   parts?: UIMessagePart[];
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
-}
-
-interface AccessRevokedPayload {
-  room: string;
 }
 
 export interface UseChannelStreamSocketOptions {
@@ -370,8 +367,14 @@ export function useChannelStreamSocket(
     // the page/channel room id directly (socket.join(pageId)), so `room` is the channelId.
     const handleAccessRevoked = (payload: AccessRevokedPayload) => {
       if (payload.room !== channelId) return;
-      for (const controller of controllers.values()) {
+      // Set cancelled first, exactly like unmount: consumeStreamJoin resolves (not
+      // rejects) on abort, so without this the pending .then()/.catch() would run
+      // the "clean finalize" path (onStreamComplete, onOwnStreamFinalize) for a
+      // stream that was actually killed by a permission revocation, not completion.
+      cancelled = true;
+      for (const [msgId, controller] of controllers.entries()) {
         controller.abort();
+        releaseBootstrapConsumer(msgId);
       }
       clearPageStreams(channelId);
     };
