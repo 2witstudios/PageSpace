@@ -94,6 +94,7 @@ vi.mock('@/lib/ai/streams/bootstrapConsumerGuard', () => ({
 }));
 
 import { useChannelStreamSocket } from '../useChannelStreamSocket';
+import { releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -763,6 +764,38 @@ describe('useChannelStreamSocket', () => {
 
       expect(capturedSignal.aborted).toBe(false);
       expect(mockClearPageStreams).not.toHaveBeenCalledWith('page-a');
+    });
+
+    it('given access_revoked fires and the aborted consumeStreamJoin promise later resolves, should NOT call onStreamComplete or onOwnStreamFinalize (revocation is not a clean finish)', async () => {
+      let resolveJoin!: (v: { aborted: boolean }) => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = res; }),
+      );
+      const onStreamComplete = vi.fn();
+      const onOwnStreamFinalize = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete, onOwnStreamFinalize }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      act(() => { mockSocket._trigger('access_revoked', { room: 'page-a', reason: 'permission_revoked' }); });
+
+      // The abort propagates through consumeStreamJoin as a resolved (not rejected) promise.
+      await act(async () => { resolveJoin({ aborted: true }); });
+
+      expect(onStreamComplete).not.toHaveBeenCalled();
+      expect(onOwnStreamFinalize).not.toHaveBeenCalled();
+    });
+
+    it('given access_revoked for the current channel, should release the bootstrap consumer guard for each aborted controller', () => {
+      mockConsumeStreamJoin.mockReturnValue(new Promise(() => {})); // never resolves
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      vi.mocked(releaseBootstrapConsumer).mockClear();
+
+      act(() => { mockSocket._trigger('access_revoked', { room: 'page-a', reason: 'permission_revoked' }); });
+
+      expect(releaseBootstrapConsumer).toHaveBeenCalledWith('msg-1');
     });
 
     it('given the hook unmounts, should remove the access_revoked listener', () => {
