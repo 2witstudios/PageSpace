@@ -33,24 +33,33 @@ const GLASS_SELECTOR =
 // users have reported this on) can keep painting the previous theme's
 // background after `.dark` toggles on <html>, since the compositor doesn't
 // always know to recomposite a blurred layer when only the color underneath
-// changed. Nudge a reflow on those elements whenever the resolved theme
+// changed. Nudge a reflow on those elements whenever <html>'s theme class
 // actually changes, so Safari is forced to repaint them.
+//
+// A MutationObserver (rather than a React effect on `resolvedTheme`) is
+// deliberate: React flushes this child's effects *before* next-themes'
+// provider effect mutates <html class>, so an effect here would force the
+// reflow while the old class was still applied and fix nothing. Observing
+// the DOM fires strictly after the class change, and also covers switches
+// React never initiates (OS theme change, `storage` events from other tabs).
 function GlassRepaintFix() {
-  const { resolvedTheme } = useTheme();
-  const hasMounted = React.useRef(false);
-
   React.useEffect(() => {
-    if (!hasMounted.current) {
-      hasMounted.current = true;
-      return;
-    }
-    document.querySelectorAll<HTMLElement>(GLASS_SELECTOR).forEach((el) => {
-      const prevTransform = el.style.transform;
-      el.style.transform = "translateZ(0.01px)";
-      void el.offsetHeight;
-      el.style.transform = prevTransform;
+    const html = document.documentElement;
+    let wasDark = html.classList.contains("dark");
+    const observer = new MutationObserver(() => {
+      const isDark = html.classList.contains("dark");
+      if (isDark === wasDark) return;
+      wasDark = isDark;
+      document.querySelectorAll<HTMLElement>(GLASS_SELECTOR).forEach((el) => {
+        const prevTransform = el.style.transform;
+        el.style.transform = "translateZ(0.01px)";
+        void el.offsetHeight;
+        el.style.transform = prevTransform;
+      });
     });
-  }, [resolvedTheme]);
+    observer.observe(html, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
 
   return null;
 }
@@ -64,14 +73,20 @@ function ThemeMismatchGuard() {
 
   React.useEffect(() => {
     if (!resolvedTheme) return;
-    const hasDarkClass = document.documentElement.classList.contains("dark");
-    const expectedDark = resolvedTheme === "dark";
-    if (hasDarkClass !== expectedDark) {
-      console.warn(
-        "[theme] <html> class is out of sync with resolvedTheme — UI may look stuck in the wrong theme until the next toggle.",
-        { resolvedTheme, hasDarkClass }
-      );
-    }
+    // Defer the check one frame: this child effect runs before next-themes'
+    // provider effect has applied the new class to <html>, so a synchronous
+    // read would report a "mismatch" on every legitimate toggle.
+    const frame = requestAnimationFrame(() => {
+      const hasDarkClass = document.documentElement.classList.contains("dark");
+      const expectedDark = resolvedTheme === "dark";
+      if (hasDarkClass !== expectedDark) {
+        console.warn(
+          "[theme] <html> class is out of sync with resolvedTheme — UI may look stuck in the wrong theme until the next toggle.",
+          { resolvedTheme, hasDarkClass }
+        );
+      }
+    });
+    return () => cancelAnimationFrame(frame);
   }, [resolvedTheme]);
 
   return null;
