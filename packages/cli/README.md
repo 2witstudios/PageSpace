@@ -15,8 +15,9 @@ npm install -g @pagespace/cli
 `pagespace-mcp`), neither of which matches the unscoped package name `cli` that bare `npx` looks
 for. Use `-p @pagespace/cli <bin>` to name the bin explicitly, as above.
 
-This installs two commands: `pagespace` and `pagespace-mcp` (a bridge alias — see
-[Migrating from `pagespace-mcp`](docs/migrating-from-pagespace-mcp.md)).
+This installs two commands: `pagespace` and `pagespace-mcp` — a first-class alias that runs the
+same stdio MCP server as `pagespace mcp`, meant for `npx -y -p @pagespace/cli pagespace-mcp` in an
+MCP client config with zero local install. See [`pagespace mcp`](#pagespace-mcp) below.
 
 ## Quickstart
 
@@ -93,6 +94,31 @@ entire tool surface derives from one source, so it can't drift from `pagespace`'
 Auth resolves through the same precedence as every other command; there's no separate MCP auth
 path.
 
+**Zero-install, via `npx`** (the primary way to wire this into an MCP client — e.g. Claude Code's
+`.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "pagespace": {
+      "command": "npx",
+      "args": ["-y", "-p", "@pagespace/cli", "pagespace-mcp"],
+      "env": {
+        "PAGESPACE_TOKEN": "mcp_..."
+      }
+    }
+  }
+}
+```
+
+Mint the token with `pagespace tokens create --name "Claude Code" --drive <driveId>` (see
+[Auth](#auth)) — the token method and the Settings → MCP web token page are both fully supported,
+not deprecated. If you've already run `pagespace login` on this machine, the `env` block is
+optional: `pagespace-mcp` picks up the stored credential the same way every other `pagespace`
+command does.
+
+**After a global install**, use the `pagespace` bin directly instead:
+
 ```json
 {
   "mcpServers": {
@@ -104,9 +130,12 @@ path.
 }
 ```
 
-Coming from the standalone `pagespace-mcp` npm package? See
-[Migrating from `pagespace-mcp`](docs/migrating-from-pagespace-mcp.md) — nothing breaks today,
-and the bin alias bridges old configs with zero changes beyond a deprecation notice on stderr.
+Both forms run the identical server — `pagespace-mcp` is simply the argv-forwarding alias that
+lets `npx` invoke it without a prior `npm install -g`.
+
+Coming from the standalone `pagespace-mcp` npm package (the old, separate ~5.2k-line repo)? See
+[Migrating from `pagespace-mcp`](docs/migrating-from-pagespace-mcp.md) — that package is
+deprecated in favor of this one; `@pagespace/cli`'s own `pagespace-mcp` bin is not.
 
 ## Environment variables
 
