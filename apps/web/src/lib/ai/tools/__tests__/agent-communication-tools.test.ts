@@ -1064,7 +1064,7 @@ describe('agent-communication-tools', () => {
         { url: 'https://example.com/signed/screenshot.png', mediaType: 'image/png', filename: 'screenshot.png' },
       ];
 
-      it('given a vision-capable target agent and imageAttachments, attaches them as file parts and persists them', async () => {
+      it('given a vision-capable target agent and imageAttachments, sends file parts to the model but persists only durable text parts', async () => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
           id: 'agent-1',
           title: 'Vision Agent',
@@ -1093,17 +1093,30 @@ describe('agent-communication-tools', () => {
           context
         );
 
-        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
-          (call) => call[0].role === 'user'
-        );
-        expect(userMessageCall).toBeDefined();
-        const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
-        expect(savedParts).toContainEqual({
+        // The model request (via prepareHistoryForModel) sees the image file parts...
+        const historyArg = vi.mocked(prepareHistoryForModel).mock.calls[0][0].history as Array<{
+          role: string;
+          parts: Array<{ type: string; url?: string; mediaType?: string; filename?: string }>;
+        }>;
+        const modelUserMessage = historyArg[historyArg.length - 1];
+        expect(modelUserMessage.role).toBe('user');
+        expect(modelUserMessage.parts).toContainEqual({
           type: 'file',
           url: imageAttachments[0].url,
           mediaType: imageAttachments[0].mediaType,
           filename: imageAttachments[0].filename,
         });
+
+        // ...but the persisted message must not: the presigned URLs expire,
+        // and replaying them from history would send dead links to the model.
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          (call) => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
+        expect(savedParts.some((part) => part.type === 'file')).toBe(false);
+        const textPart = savedParts.find((part) => part.type === 'text') as { text: string } | undefined;
+        expect(textPart?.text).toMatch(/1 image attachment from recent channel context is attached/i);
       });
 
       it('given a non-vision target agent and imageAttachments, omits file parts and adds a text note instead', async () => {

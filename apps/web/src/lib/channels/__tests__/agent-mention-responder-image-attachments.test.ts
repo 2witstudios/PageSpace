@@ -5,6 +5,7 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       pages: { findMany: vi.fn() },
       channelMessages: { findMany: vi.fn() },
+      files: { findMany: vi.fn() },
     },
   },
 }));
@@ -19,6 +20,9 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/chat', () => ({
   channelMessages: { pageId: 'pageId', isActive: 'isActive', createdAt: 'createdAt' },
+}));
+vi.mock('@pagespace/db/schema/storage', () => ({
+  files: { id: 'id' },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -76,6 +80,17 @@ import { triggerMentionedAgentResponses, type TriggerMentionedAgentResponsesPara
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
+const mockFilesFindMany = db.query.files.findMany as unknown as Mock;
+
+const STORED_CONTENT_HASH = 'a'.repeat(64);
+
+const fileRow = {
+  id: 'file-1',
+  driveId: 'file-drive-1',
+  sizeBytes: 2048,
+  mimeType: 'image/png',
+  storagePath: `files/${STORED_CONTENT_HASH}/original`,
+};
 
 const baseParams: TriggerMentionedAgentResponsesParams = {
   userId: 'user-1',
@@ -95,11 +110,14 @@ const imageMessage = {
   aiMeta: null,
   user: { name: 'Alice' },
   fileId: 'file-1',
+  // Client-supplied at message-POST time. contentHash/mimeType/size here are
+  // deliberately WRONG relative to the files row — the resolver must never
+  // trust them for signing (only originalName, as a display label).
   attachmentMeta: {
     originalName: 'screenshot.png',
-    size: 2048,
+    size: 999999999,
     mimeType: 'image/png',
-    contentHash: 'hash-abc',
+    contentHash: 'forged-hash',
   },
 };
 
@@ -107,6 +125,7 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockChannelMessagesFindMany.mockResolvedValue([imageMessage]);
+    mockFilesFindMany.mockResolvedValue([fileRow]);
     mockAskAgentExecute.mockResolvedValue({ success: true, response: 'Reply' });
     mockSendChannelExecute.mockResolvedValue({ success: true });
     mockCanUserAccessFile.mockResolvedValue(true);
@@ -123,12 +142,89 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
       content: '@[Vision Agent](agent-1:page) look at this',
     });
 
-    expect(mockCanUserAccessFile).toHaveBeenCalledWith('user-1', 'file-1', 'drive-1');
+    // Access-checked against the file row's own drive, not the channel's.
+    expect(mockCanUserAccessFile).toHaveBeenCalledWith('user-1', 'file-1', 'file-drive-1');
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     const askArgs = mockAskAgentExecute.mock.calls[0][0];
     expect(askArgs.imageAttachments).toEqual([
       { type: 'file', url: 'https://example.com/signed/screenshot.png', mediaType: 'image/png', filename: 'screenshot.png' },
     ]);
+  });
+
+  it('signs the stored files row, never the client-supplied attachmentMeta contentHash', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    expect(mockGeneratePresignedUrl).toHaveBeenCalledTimes(1);
+    expect(mockGeneratePresignedUrl).toHaveBeenCalledWith(
+      STORED_CONTENT_HASH,
+      'original',
+      3600,
+      undefined,
+      'image/png'
+    );
+    expect(mockGeneratePresignedUrl).not.toHaveBeenCalledWith(
+      'forged-hash',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('given a fileId with no matching files row, skips it without access checks or signing', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+    mockFilesFindMany.mockResolvedValue([]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    expect(mockCanUserAccessFile).not.toHaveBeenCalled();
+    expect(mockGeneratePresignedUrl).not.toHaveBeenCalled();
+    const askArgs = mockAskAgentExecute.mock.calls[0][0];
+    expect(askArgs.imageAttachments).toBeUndefined();
+  });
+
+  it('given a stored file whose real mime type is not an image, skips it even if attachmentMeta claims image/png', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+    mockFilesFindMany.mockResolvedValue([{ ...fileRow, mimeType: 'application/pdf' }]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    expect(mockCanUserAccessFile).not.toHaveBeenCalled();
+    expect(mockGeneratePresignedUrl).not.toHaveBeenCalled();
+    const askArgs = mockAskAgentExecute.mock.calls[0][0];
+    expect(askArgs.imageAttachments).toBeUndefined();
+  });
+
+  it('given a stored file over the size cap, resolves but filters it out', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+    mockFilesFindMany.mockResolvedValue([{ ...fileRow, sizeBytes: 5 * 1024 * 1024 }]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    const askArgs = mockAskAgentExecute.mock.calls[0][0];
+    expect(askArgs.imageAttachments).toBeUndefined();
   });
 
   it('given only non-vision eligible agents, skips resolving image attachments entirely', async () => {

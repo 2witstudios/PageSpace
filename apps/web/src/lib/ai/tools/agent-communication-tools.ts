@@ -487,8 +487,10 @@ export const agentCommunicationTools = {
         const userMessageId = createId();
         const targetHasVision = hasVisionCapability(targetAgent.aiModel || DEFAULT_MODEL);
         const hasImageAttachments = !!imageAttachments && imageAttachments.length > 0;
-        const visionNote = hasImageAttachments && !targetHasVision
-          ? `\n\n[${imageAttachments!.length} image attachment${imageAttachments!.length === 1 ? '' : 's'} were provided but this agent's model does not support vision, so they could not be viewed.]`
+        const visionNote = hasImageAttachments
+          ? targetHasVision
+            ? `\n\n[${imageAttachments!.length} image attachment${imageAttachments!.length === 1 ? '' : 's'} from recent channel context ${imageAttachments!.length === 1 ? 'is' : 'are'} attached to this message.]`
+            : `\n\n[${imageAttachments!.length} image attachment${imageAttachments!.length === 1 ? '' : 's'} were provided but this agent's model does not support vision, so they could not be viewed.]`
           : '';
         const userMessageContent = `${context ? `Context: ${context}\n\n` : ''}${question}${visionNote}`;
         const imageFileParts = hasImageAttachments && targetHasVision
@@ -499,6 +501,11 @@ export const agentCommunicationTools = {
               filename: attachment.filename,
             }))
           : [];
+        // The image file parts carry presigned URLs that expire within the
+        // hour, so they ride only on the in-memory message for THIS model
+        // request. Persisting them would replay dead URLs into every later
+        // request on this conversation once the TTL lapses; the durable
+        // visionNote in the text keeps the history coherent instead.
         const userMessage: UIMessage = {
           id: userMessageId,
           role: 'user' as const,
@@ -507,9 +514,11 @@ export const agentCommunicationTools = {
               type: 'text',
               text: userMessageContent
             },
-            ...imageFileParts,
           ]
         };
+        const modelUserMessage: UIMessage = imageFileParts.length > 0
+          ? { ...userMessage, parts: [...userMessage.parts, ...imageFileParts] }
+          : userMessage;
 
         // Determine sourceAgentId - only set if the calling context is an AI_CHAT page
         const callingPage = executionContext?.locationContext?.currentPage;
@@ -524,11 +533,11 @@ export const agentCommunicationTools = {
           role: 'user',
           content: userMessageContent,
           sourceAgentId, // Track which AI agent sent this message (for agent-to-agent communication)
-          uiMessage: userMessage, // Preserve image file parts (if any) in structured content
+          uiMessage: userMessage, // Durable parts only — transient presigned image parts are deliberately excluded
         });
 
         // Add user message to conversation
-        messages.push(userMessage);
+        messages.push(modelUserMessage);
 
         // 6. Sanitize messages for AI model
         const sanitizedMessages = sanitizeMessagesForModel(messages);

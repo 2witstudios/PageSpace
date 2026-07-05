@@ -22,10 +22,11 @@ import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
-import type { AttachmentMeta } from '@pagespace/db/schema/storage';
+import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 import type { ChannelMessageAiMeta } from '@pagespace/db/schema/chat';
 import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
+import { isAllowedImageType } from '@/lib/validation/image-validation';
 import {
   buildRecentImageFileParts,
   type ImageFilePart,
@@ -247,44 +248,78 @@ export async function fetchRecentChannelMessages(channelId: string): Promise<Rec
   });
 }
 
+/** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
+function toContentHash(storagePath: string): string {
+  const m = storagePath.match(/^files\/([a-f0-9]{64})\/original$/i);
+  return m ? m[1].toLowerCase() : storagePath;
+}
+
 /**
  * Resolve recent channel image attachments into presigned, access-checked
  * file parts for ask_agent. Skips the S3/DB round-trips entirely when no
  * eligible agent can view images (nothing would ever consume the result).
+ *
+ * Everything security-relevant — storage key, mime type, size, and the drive
+ * used for the access check — comes from the `files` row, never from the
+ * message's `attachmentMeta` (client-supplied at message-POST time, so a
+ * crafted message could otherwise pair an accessible fileId with a forged
+ * contentHash and mint a presigned URL for an arbitrary object).
+ * `attachmentMeta` is used only for the display filename.
  */
 async function resolveImageAttachmentsForContext(
   userId: string,
-  driveId: string | null | undefined,
   contextMessages: RecentChannelMessage[]
 ): Promise<ImageFilePart[]> {
   const imageCandidateMessages = contextMessages.filter(
-    (message): message is RecentChannelMessage & { fileId: string; attachmentMeta: AttachmentMeta } =>
-      !!message.fileId && !!message.attachmentMeta
+    (message): message is RecentChannelMessage & { fileId: string } => !!message.fileId
   );
 
   if (imageCandidateMessages.length === 0) {
     return [];
   }
 
+  const fileRows = await db.query.files.findMany({
+    where: inArray(files.id, [...new Set(imageCandidateMessages.map((message) => message.fileId))]),
+    columns: { id: true, driveId: true, sizeBytes: true, mimeType: true, storagePath: true },
+  });
+  const filesById = new Map(fileRows.map((file) => [file.id, file]));
+
   const candidates: RecentImageFileCandidate[] = await Promise.all(
     imageCandidateMessages.map(async (message) => {
-      const accessible = await canUserAccessFile(userId, message.fileId, driveId ?? null);
+      const file = filesById.get(message.fileId);
+      const filename = message.attachmentMeta?.originalName || 'attachment';
+
+      // Missing row or a non-image mime type can never become a file part
+      // (buildRecentImageFileParts would drop it), so skip the per-file
+      // access-check/signing work up front.
+      if (!file || !file.mimeType || !isAllowedImageType(file.mimeType)) {
+        return {
+          fileId: message.fileId,
+          url: '',
+          mimeType: file?.mimeType ?? null,
+          filename,
+          sizeBytes: file?.sizeBytes ?? 0,
+          accessible: false,
+        };
+      }
+
+      const accessible = await canUserAccessFile(userId, file.id, file.driveId);
       const url = accessible
         ? await generatePresignedUrl(
-            message.attachmentMeta.contentHash,
+            toContentHash(file.storagePath || file.id),
             'original',
-            getPresignedUrlTtl(message.attachmentMeta.mimeType),
+            getPresignedUrlTtl(file.mimeType),
             undefined,
-            message.attachmentMeta.mimeType
+            file.mimeType
           )
         : '';
 
       return {
-        fileId: message.fileId,
+        fileId: file.id,
         url,
-        mimeType: message.attachmentMeta.mimeType,
-        filename: message.attachmentMeta.originalName,
-        sizeBytes: message.attachmentMeta.size,
+        mimeType: file.mimeType,
+        filename,
+        sizeBytes: file.sizeBytes,
         accessible,
       };
     })
@@ -477,7 +512,7 @@ export async function triggerMentionedAgentResponses(
     // Only worth resolving presigned URLs/access checks when at least one
     // eligible agent can actually view images.
     const imageAttachments = eligibleAgents.some((agent) => agent.hasVision)
-      ? await resolveImageAttachmentsForContext(params.userId, params.driveId, contextMessages)
+      ? await resolveImageAttachmentsForContext(params.userId, contextMessages)
       : [];
 
     for (const agent of eligibleAgents) {
