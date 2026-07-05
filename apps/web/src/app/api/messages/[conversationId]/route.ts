@@ -15,6 +15,37 @@ import type { AttachmentMeta } from '@pagespace/lib/types';
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+/**
+ * Shared error mapping for the two attachment-validation call sites (the
+ * thread-reply pre-check and the top-level insert's discriminated result) —
+ * both surface the same three rejection kinds against the same fileId/
+ * conversationId pair, just from different call shapes.
+ */
+function attachmentValidationErrorResponse(
+  request: Request,
+  kind: 'not_found' | 'wrong_owner' | 'not_linked',
+  ctx: { userId: string; fileId: string | null; conversationId: string }
+): NextResponse {
+  if (kind === 'not_found') {
+    return NextResponse.json({ error: 'File not found' }, { status: 404 });
+  }
+  const isOwnerMismatch = kind === 'wrong_owner';
+  auditRequest(request, {
+    eventType: 'authz.access.denied',
+    userId: ctx.userId,
+    resourceType: 'dm_message',
+    resourceId: ctx.fileId ?? undefined,
+    details: {
+      reason: isOwnerMismatch ? 'file_owner_mismatch' : 'file_not_linked_to_conversation',
+      conversationId: ctx.conversationId,
+    },
+  });
+  return NextResponse.json(
+    { error: isOwnerMismatch ? 'You do not own this file' : 'File is not linked to this conversation' },
+    { status: 403 }
+  );
+}
+
 // GET /api/messages/[conversationId] - Get messages in a conversation
 export async function GET(
   request: Request,
@@ -313,34 +344,12 @@ export async function POST(
           senderId: userId,
         });
 
-        if (validation.kind === 'not_found') {
-          return NextResponse.json({ error: 'File not found' }, { status: 404 });
-        }
-        if (validation.kind === 'wrong_owner') {
-          auditRequest(request, {
-            eventType: 'authz.access.denied',
+        if (validation.kind !== 'ok') {
+          return attachmentValidationErrorResponse(request, validation.kind, {
             userId,
-            resourceType: 'dm_message',
-            resourceId: fileId,
-            details: { reason: 'file_owner_mismatch', conversationId },
+            fileId,
+            conversationId,
           });
-          return NextResponse.json(
-            { error: 'You do not own this file' },
-            { status: 403 }
-          );
-        }
-        if (validation.kind === 'not_linked') {
-          auditRequest(request, {
-            eventType: 'authz.access.denied',
-            userId,
-            resourceType: 'dm_message',
-            resourceId: fileId,
-            details: { reason: 'file_not_linked_to_conversation', conversationId },
-          });
-          return NextResponse.json(
-            { error: 'File is not linked to this conversation' },
-            { status: 403 }
-          );
         }
       }
 
@@ -531,34 +540,12 @@ export async function POST(
       quotedMessageId,
     });
 
-    if (insertResult.kind === 'not_found') {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-    if (insertResult.kind === 'wrong_owner') {
-      auditRequest(request, {
-        eventType: 'authz.access.denied',
+    if (insertResult.kind !== 'ok') {
+      return attachmentValidationErrorResponse(request, insertResult.kind, {
         userId,
-        resourceType: 'dm_message',
-        resourceId: fileId ?? undefined,
-        details: { reason: 'file_owner_mismatch', conversationId },
+        fileId,
+        conversationId,
       });
-      return NextResponse.json(
-        { error: 'You do not own this file' },
-        { status: 403 }
-      );
-    }
-    if (insertResult.kind === 'not_linked') {
-      auditRequest(request, {
-        eventType: 'authz.access.denied',
-        userId,
-        resourceType: 'dm_message',
-        resourceId: fileId ?? undefined,
-        details: { reason: 'file_not_linked_to_conversation', conversationId },
-      });
-      return NextResponse.json(
-        { error: 'File is not linked to this conversation' },
-        { status: 403 }
-      );
     }
 
     const baseMessage = insertResult.message;

@@ -679,6 +679,16 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     expect(res.status).toBe(401);
     expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
   });
+
+  it('returns 400 when insertChannelMessageWithAttachment rejects with not_found (fileId vanished inside the tx)', async () => {
+    mockInsertChannelMessageWithAttachment.mockResolvedValueOnce({ kind: 'not_found' });
+
+    const res = await callPost({ content: 'hi', fileId: 'file-1' });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'File not found' });
+    expect(mockUpsertChannelReadStatus).not.toHaveBeenCalled();
+  });
 });
 
 // --- Top-level POST: mention notifications ------------------------------------
