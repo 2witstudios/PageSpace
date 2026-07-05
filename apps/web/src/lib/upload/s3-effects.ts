@@ -17,6 +17,10 @@ export async function checkObjectExists(key: string): Promise<boolean> {
   }
 }
 
+export async function putObject(key: string, body: Buffer, contentType: string): Promise<void> {
+  await getS3Client().send(new PutObjectCommand({ Bucket: getS3Bucket(), Key: key, Body: body, ContentType: contentType }));
+}
+
 export async function issuePresignedPutUrl(
   key: string,
   contentType: string,

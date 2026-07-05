@@ -65,6 +65,7 @@ import {
 import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 import {
   buildVolatileTurnContext,
@@ -170,7 +171,7 @@ export async function GET(
     const orderedMessages = messagesToReturn.reverse();
 
     // Convert to UIMessage format with proper tool call reconstruction
-    const uiMessages = orderedMessages.map(msg =>
+    const uiMessages = await Promise.all(orderedMessages.map(msg =>
       convertGlobalAssistantMessageToUIMessage({
         id: msg.id,
         conversationId: msg.conversationId,
@@ -183,7 +184,7 @@ export async function GET(
         isActive: msg.isActive,
         editedAt: msg.editedAt,
       })
-    );
+    ));
 
     // Determine cursors for pagination
     const nextCursor = hasMore && orderedMessages.length > 0
@@ -530,7 +531,7 @@ export async function POST(
       .orderBy(messages.createdAt);
 
     // Convert database messages to UI format
-    const conversationHistory = dbMessages.map(msg =>
+    const conversationHistory = await Promise.all(dbMessages.map(msg =>
       convertGlobalAssistantMessageToUIMessage({
         id: msg.id,
         conversationId: msg.conversationId,
@@ -543,7 +544,7 @@ export async function POST(
         isActive: msg.isActive,
         editedAt: msg.editedAt,
       })
-    );
+    ));
 
     loggers.api.debug('Global Assistant Chat API: Loaded conversation history from database', {
       messageCount: conversationHistory.length,
@@ -779,6 +780,16 @@ MENTION PROCESSING:
       tool_search: createToolSearchTool(filteredAllTools),
       execute_tool: createExecuteTool(nonCoreTools),
     };
+
+    // Guard against a stale read_page tool-result (image bytes delivered on an
+    // earlier turn when the model had vision) being re-embedded as an image when
+    // history is re-converted for a model that no longer has vision.
+    if (finalTools.read_page) {
+      finalTools = {
+        ...finalTools,
+        read_page: guardReadPageToolForVision(finalTools.read_page, hasVisionCapability(currentModel)),
+      };
+    }
 
     loggers.api.debug('Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,

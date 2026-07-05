@@ -15,7 +15,9 @@ export const sessions = pgTable('sessions', {
   deviceId: text('device_id'),
 
   // Session metadata
-  type: text('type', { enum: ['user', 'service', 'mcp', 'device'] }).notNull(),
+  // 'socket' = short-lived (5 min) Socket.IO handshake bridge token, minted from
+  // an already-authenticated web session to bypass sameSite: 'strict' cookies.
+  type: text('type', { enum: ['user', 'service', 'mcp', 'device', 'socket'] }).notNull(),
   scopes: text('scopes').array().notNull().default(sql`ARRAY[]::text[]`),
 
   // Resource binding

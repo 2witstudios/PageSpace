@@ -469,7 +469,12 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
       });
     });
 
-    it('merges a single-page patch into the existing map instead of replacing it — page_1 survives a page_2-only PATCH', async () => {
+    it('forwards permissionsPatch to updateDriveRole untouched so the merge happens under the service\'s row lock, not against this unlocked read', async () => {
+      // updateDriveRole now merges permissionsPatch against the role row it
+      // locks inside its own transaction; the route must not pre-merge
+      // against `existingRole` (an unlocked read) and pass a full `permissions`
+      // replace, which would reintroduce the read-modify-write race permissionsPatch
+      // exists to prevent (#1425).
       vi.mocked(getRoleById).mockResolvedValue(
         createRoleFixture({
           id: mockRoleId,
@@ -493,14 +498,15 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
 
       expect(response.status).toBe(200);
       expect(updateDriveRole).toHaveBeenCalledWith(mockDriveId, mockRoleId, expect.objectContaining({
-        permissions: {
-          page_1: { canView: true, canEdit: true, canShare: false },
+        permissionsPatch: {
           page_2: { canView: true, canEdit: false, canShare: false },
         },
       }));
+      const call = vi.mocked(updateDriveRole).mock.calls[0][2];
+      expect(call.permissions).toBeUndefined();
     });
 
-    it('a null patch entry prunes the page key (falls back to drive-wide) instead of writing an all-false entry', async () => {
+    it('forwards a null patch entry (prune) to updateDriveRole untouched', async () => {
       vi.mocked(getRoleById).mockResolvedValue(
         createRoleFixture({
           id: mockRoleId,
@@ -523,9 +529,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
 
       expect(response.status).toBe(200);
       expect(updateDriveRole).toHaveBeenCalledWith(mockDriveId, mockRoleId, expect.objectContaining({
-        permissions: {
-          page_2: { canView: true, canEdit: false, canShare: false },
-        },
+        permissionsPatch: { page_1: null },
       }));
     });
 

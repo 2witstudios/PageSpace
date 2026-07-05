@@ -130,6 +130,17 @@ describe('validate-image-parts', () => {
       expect(result.error).toContain('not a valid data URL');
     });
 
+    it('given a re-sent presigned chat-attachment URL (e.g. from regenerate), should return valid', () => {
+      const hash = 'c'.repeat(64);
+      const msg = makeUserMessage([
+        makeFilePart({
+          url: `https://bucket.example.com/chat-attachments/${hash}/original?X-Amz-Signature=abc`,
+        }),
+      ]);
+      const result = validateUserMessageFileParts(msg);
+      expect(result.valid).toBe(true);
+    });
+
     it('given an invalid data URL format, should return invalid', () => {
       const msg = makeUserMessage([
         makeFilePart({ url: 'data:broken' }),

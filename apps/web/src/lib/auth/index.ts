@@ -242,7 +242,11 @@ export async function validateSessionToken(token: string): Promise<SessionClaims
     if (!token) {
       return null;
     }
-    return await sessionService.validateSession(token);
+    // Only browser/user sessions may authenticate generic web requests. Other
+    // session types (service, mcp, device, socket) have their own dedicated
+    // validation surfaces and must not be replayable as a session cookie or
+    // bearer session token.
+    return await sessionService.validateSession(token, { expectedType: 'user' });
   } catch (error) {
     console.error('validateSessionToken error', error);
     return null;

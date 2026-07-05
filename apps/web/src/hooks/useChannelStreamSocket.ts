@@ -7,6 +7,8 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isOwnStream } from '@/lib/ai/streams/isOwnStream';
 import { shouldSkipBootstrappedStream } from '@/lib/ai/streams/shouldSkipBootstrappedStream';
 import { claimBootstrapConsumer, releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
+import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
+import { appendPart as appendPartPure } from '@/lib/ai/streams/appendPart';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -20,10 +22,13 @@ import type {
   ChatGlobalConversationAddedPayload,
 } from '@/lib/websocket/socket-utils';
 import type { UIMessage } from 'ai';
+import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
 
 interface ActiveStreamRow {
   messageId: string;
   conversationId: string;
+  /** Last debounced snapshot persisted server-side — a prefix of the live multicast buffer, if still alive. */
+  parts?: UIMessagePart[];
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
@@ -164,12 +169,23 @@ export function useChannelStreamSocket(
       onOwnStreamFinalizeRef.current?.({ messageId });
     };
 
-    const startConsume = (messageId: string, conversationId?: string) => {
+    const startConsume = (messageId: string, conversationId?: string, skipReplayCount = 0) => {
       if (!claimBootstrapConsumer(messageId)) return;
       const controller = new AbortController();
       controllers.set(messageId, controller);
 
+      // The multicast registry replays its FULL buffer to every new subscriber
+      // (see stream-multicast-registry.subscribe). When we've already seeded the
+      // store with a persisted-parts snapshot, that snapshot is a prefix of the
+      // live buffer, so the first `skipReplayCount` replayed chunks are the same
+      // ones we already applied — skip them to avoid duplicating content.
+      let chunksToSkip = skipReplayCount;
+
       consumeStreamJoin(messageId, controller.signal, (part) => {
+        if (chunksToSkip > 0) {
+          chunksToSkip -= 1;
+          return;
+        }
         appendPart(messageId, part);
       })
         .then(() => {
@@ -193,7 +209,16 @@ export function useChannelStreamSocket(
           // the same messageId is a no-op for onStreamComplete: the catch
           // path already finalized this stream locally.
           processed.add(messageId);
-          removeStream(messageId);
+          // When the store was seeded from a persisted snapshot
+          // (skipReplayCount > 0), a failed join usually means the
+          // originator's process died — its in-memory registry is gone and
+          // the join 404s. That snapshot is the only surviving copy of the
+          // partial content, so keep it rendered; removing it here would
+          // undo the restore that just happened. Streams with no seeded
+          // snapshot have nothing to preserve and are removed as before.
+          if (skipReplayCount === 0) {
+            removeStream(messageId);
+          }
           fireOwnFinalize(messageId);
           if (!controller.signal.aborted) {
             console.error('[useChannelStreamSocket] SSE join error:', err);
@@ -218,18 +243,37 @@ export function useChannelStreamSocket(
         for (const stream of data.streams ?? []) {
           if (shouldSkipBootstrappedStream(stream.messageId, processed, controllers)) continue;
           const isOwn = isOwnStream(stream.triggeredBy, localBrowserSessionId);
+          // Seed the persisted snapshot as the stream's initial parts so the
+          // restored mid-stream content renders immediately — without waiting
+          // on (or depending on) the live multicast, which is unavailable if
+          // the originator's process has died. Seeding through addStream
+          // (a no-op when the entry exists) keeps a co-mounted surface that
+          // bootstrapped the same channel from appending the snapshot twice.
+          // The persisted snapshot is the raw registry buffer (one entry per
+          // pushed chunk: every text delta, and a separate frame per tool-call
+          // state transition) — the same shape the live SSE replay delivers.
+          // isValidPartFrame applies the same wire-trust gate the live path
+          // applies in consumeStreamJoin, and the count of frames that pass
+          // it is what the replay will actually skip past (see
+          // skipReplayCount below); appendPartPure then folds the raw
+          // sequence the way the store's own appendPart does for every live
+          // chunk, so a restored snapshot renders identically to a live one
+          // (merged text, tool parts converged to their latest state).
+          const persistedParts = (stream.parts ?? []).filter(isValidPartFrame);
+          const foldedParts = persistedParts.reduce(appendPartPure, [] as UIMessagePart[]);
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
             isOwn,
+            parts: foldedParts,
           });
           if (isOwn) {
             ownStreamIds.add(stream.messageId);
             onOwnStreamBootstrapRef.current?.({ messageId: stream.messageId });
           }
-          startConsume(stream.messageId, stream.conversationId);
+          startConsume(stream.messageId, stream.conversationId, persistedParts.length);
         }
       } catch (err) {
         if (cancelled) return;

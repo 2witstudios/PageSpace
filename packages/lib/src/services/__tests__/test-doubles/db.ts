@@ -218,6 +218,7 @@ export class DbState {
   private hooks = new Map<string, Hook[]>();
   private executeCalls: SqlMarker[] = [];
   private forCalls: ForCall[] = [];
+  private transactionCallCount = 0;
 
   seed(table: string, rows: Row[]): void {
     const cur = this.tables.get(table) ?? [];
@@ -240,6 +241,22 @@ export class DbState {
 
   executes(): readonly SqlMarker[] {
     return [...this.executeCalls];
+  }
+
+  recordTransaction(): void {
+    this.transactionCallCount += 1;
+  }
+
+  /**
+   * How many times `db.transaction(cb)` was entered. Tests use this to pin
+   * that a multi-step validate+insert genuinely goes through `db.transaction`
+   * — inlining the same select/insert calls directly against `db` without the
+   * wrapper would pass every other assertion here (locks, row shape, rejection
+   * kinds) since those don't require real atomicity, but would silently drop
+   * the guarantee that a mid-sequence failure rolls back prior writes.
+   */
+  transactionCalls(): number {
+    return this.transactionCallCount;
   }
 
   recordExecute(marker: SqlMarker): void {
@@ -315,6 +332,7 @@ export class DbState {
     this.hooks.clear();
     this.executeCalls.length = 0;
     this.forCalls.length = 0;
+    this.transactionCallCount = 0;
   }
 }
 
@@ -516,6 +534,7 @@ export function makeDb(state: DbState): TestDb {
       QUERY_TABLES.map((t) => [t, makeQueryApi(state, t)])
     ) as Record<string, QueryApi>,
     transaction: async <T>(cb: (tx: TestDb) => Promise<T>): Promise<T> => {
+      state.recordTransaction();
       const snap = state.snapshot();
       try {
         return await cb(db);
@@ -557,6 +576,12 @@ const isSqlJoin = (v: unknown): v is SqlJoinMarker =>
  * this branch, dropping the entire `tx.execute` call from the impl would
  * leave attachment-link rows stranded and tests would still pass. So we
  * recognize this specific pattern and apply the delete to in-memory state.
+ *
+ * The impl also issues a standalone `SELECT ... FOR UPDATE OF fc` lock
+ * statement immediately before that DELETE (lock-then-recheck, so the
+ * DELETE's NOT EXISTS runs on a fresh snapshot). Locks have no in-memory
+ * effect, so that statement is intentionally record-only — tests assert
+ * its presence and ordering via `executes()`.
  *
  * Any other `execute` shape is left as record-only (caller knows). If a
  * future impl introduces another raw SQL effect, add a branch here.

@@ -8,8 +8,9 @@ import { verifySignedState } from '@pagespace/lib/integrations/oauth/oauth-state
 import { exchangeOAuthCode } from '@pagespace/lib/integrations/oauth/oauth-handler';
 import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials';
 import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository';
+import { resolveProviderConfig } from '@pagespace/lib/integrations/providers/builtin-providers';
 import { createConnection, findUserConnection, findDriveConnection, updateConnectionCredentials, updateConnectionStatus } from '@pagespace/lib/integrations/repositories/connection-repository';
-import type { IntegrationProviderConfig, OAuth2Config } from '@pagespace/lib/integrations/types';
+import type { OAuth2Config } from '@pagespace/lib/integrations/types';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { isSafeReturnUrl } from '@/lib/auth';
 
@@ -83,8 +84,11 @@ export async function GET(request: Request) {
       return NextResponse.redirect(new URL(`${defaultReturn}?error=provider_not_found`, baseUrl));
     }
 
-    const config = provider.config as IntegrationProviderConfig;
-    if (config.authMethod.type !== 'oauth2') {
+    // Builtin providers may have changed shape (new token endpoint, renamed
+    // auth params) since this row was persisted — resolve to the canonical
+    // in-memory definition rather than trusting the possibly-stale DB copy.
+    const config = resolveProviderConfig(provider);
+    if (!config || config.authMethod.type !== 'oauth2') {
       return NextResponse.redirect(new URL(`${defaultReturn}?error=not_oauth`, baseUrl));
     }
 

@@ -17,10 +17,10 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', type: 'type', driveId: 'driveId' },
-  drives: { id: 'id', name: 'name', slug: 'slug', ownerId: 'ownerId' },
+  drives: { id: 'id', name: 'name', slug: 'slug', ownerId: 'ownerId', drivePrompt: 'drivePrompt' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveAgentMembers: { id: 'id', driveId: 'driveId', agentPageId: 'agentPageId', role: 'role', customRoleId: 'customRoleId', addedBy: 'addedBy' },
+  driveAgentMembers: { id: 'id', driveId: 'driveId', agentPageId: 'agentPageId', role: 'role', customRoleId: 'customRoleId', includeContext: 'includeContext', addedBy: 'addedBy' },
   driveMembers: { driveId: 'driveId', userId: 'userId', role: 'role', customRoleId: 'customRoleId', acceptedAt: 'acceptedAt' },
 }));
 vi.mock('../../permissions/permissions', () => ({
@@ -42,12 +42,15 @@ import {
   addAgentToDrive,
   revokeAgentMembershipsGrantedBy,
   recapAgentMembershipsGrantedBy,
+  listAgentDrives,
+  getAgentContextDrives,
+  setAgentDriveIncludeContext,
 } from '../drive-agent-service';
 import { db } from '@pagespace/db/db';
 import { eq, ne } from '@pagespace/db/operators';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
-import { canUserEditPage, getUserDriveAccess } from '../../permissions/permissions';
+import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../../permissions/permissions';
 import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../../permissions/membership-queries';
 
 const USER = 'user_aaaaaaaaaaaaaaaaaaaaaa';
@@ -149,6 +152,32 @@ describe('addAgentToDrive', () => {
     const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
     expect(res.ok).toBe(true);
     expect(captured[0]).toMatchObject({ role: 'ADMIN', driveId: DRIVE, agentPageId: AGENT, addedBy: USER });
+  });
+
+  it('defaults includeContext to false when not provided', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))
+      .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    const captured: Record<string, unknown>[] = [];
+    stubInsert(captured);
+
+    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    expect(res.ok).toBe(true);
+    expect(captured[0]).toMatchObject({ includeContext: false });
+  });
+
+  it('persists includeContext=true when explicitly requested', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))
+      .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    const captured: Record<string, unknown>[] = [];
+    stubInsert(captured);
+
+    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    expect(res.ok).toBe(true);
+    expect(captured[0]).toMatchObject({ includeContext: true });
   });
 
   it('caps a viewer (page-level access only) at MEMBER', async () => {
@@ -502,5 +531,128 @@ describe('recapAgentMembershipsGrantedBy', () => {
     expect(result).toEqual([]);
     expect(db.update).not.toHaveBeenCalled();
     expect(db.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('listAgentDrives', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns includeContext for an existing membership row (including the home drive)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE }])) // agent lookup: home drive is DRIVE
+      .mockReturnValueOnce(stubJoinSelect([
+        { driveId: DRIVE, role: 'ADMIN', customRoleId: null, includeContext: true, driveName: 'Home', driveSlug: 'home' },
+      ]));
+
+    const result = await listAgentDrives(AGENT);
+
+    expect(result).toEqual([
+      { driveId: DRIVE, driveName: 'Home', driveSlug: 'home', role: 'ADMIN', customRoleId: null, isHome: true, includeContext: true },
+    ]);
+  });
+
+  it('synthesizes a home-drive entry with includeContext=false when no membership row exists for it', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE }])) // agent lookup
+      .mockReturnValueOnce(stubJoinSelect([])) // no membership rows
+      .mockReturnValueOnce(stubSelect([{ id: DRIVE, name: 'Home', slug: 'home' }])); // home drive lookup
+
+    const result = await listAgentDrives(AGENT);
+
+    expect(result).toEqual([
+      { driveId: DRIVE, driveName: 'Home', driveSlug: 'home', role: 'ADMIN', customRoleId: null, isHome: true, includeContext: false },
+    ]);
+  });
+});
+
+describe('getAgentContextDrives', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns [] when the agent page does not exist', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([]));
+    const result = await getAgentContextDrives(AGENT);
+    expect(result).toEqual([]);
+  });
+
+  it('returns non-home, includeContext=true drives with a non-empty drivePrompt', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: 'home_drive' }])) // agent lookup
+      .mockReturnValueOnce(stubJoinSelect([
+        { driveId: DRIVE, driveName: 'Marketing', drivePrompt: 'Be casual.' },
+      ]));
+
+    const result = await getAgentContextDrives(AGENT);
+
+    expect(result).toEqual([{ driveId: DRIVE, driveName: 'Marketing', drivePrompt: 'Be casual.' }]);
+    expect(eq).toHaveBeenCalledWith(driveAgentMembers.agentPageId, AGENT);
+    expect(eq).toHaveBeenCalledWith(driveAgentMembers.includeContext, true);
+    expect(ne).toHaveBeenCalledWith(driveAgentMembers.driveId, 'home_drive');
+  });
+
+  it('drops rows with an empty or whitespace-only drivePrompt', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: 'home_drive' }]))
+      .mockReturnValueOnce(stubJoinSelect([
+        { driveId: DRIVE, driveName: 'Marketing', drivePrompt: '   ' },
+        { driveId: 'drive2', driveName: 'Empty', drivePrompt: null },
+      ]));
+
+    const result = await getAgentContextDrives(AGENT);
+
+    expect(result).toEqual([]);
+  });
+});
+
+describe('setAgentDriveIncludeContext', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('404 when the agent page does not exist', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([]));
+    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    expect(res).toMatchObject({ ok: false, status: 404 });
+  });
+
+  it("400 when the target drive is the agent's home drive", async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: DRIVE }]));
+    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    expect(res).toMatchObject({ ok: false, status: 400 });
+  });
+
+  it('403 when the user cannot manage the agent nor the drive', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]));
+    vi.mocked(canUserEditPage).mockResolvedValue(false);
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
+    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    expect(res).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it('updates includeContext and returns the updated member', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]));
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    const captured: Record<string, unknown>[] = [];
+    const where = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'member_1', includeContext: true }]) });
+    vi.mocked(db.update).mockReturnValue({
+      set: vi.fn((v: Record<string, unknown>) => {
+        captured.push(v);
+        return { where };
+      }),
+    } as unknown as ReturnType<typeof db.update>);
+
+    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+
+    expect(res).toMatchObject({ ok: true, member: { id: 'member_1', includeContext: true } });
+    expect(captured[0]).toEqual({ includeContext: true });
+  });
+
+  it('404 when the membership row does not exist', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]));
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    const where = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([]) });
+    vi.mocked(db.update).mockReturnValue({
+      set: vi.fn(() => ({ where })),
+    } as unknown as ReturnType<typeof db.update>);
+
+    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    expect(res).toMatchObject({ ok: false, status: 404 });
   });
 });

@@ -11,7 +11,6 @@ import {
   updateDriveRole,
   deleteDriveRole,
   type DriveRoleAccessInfo,
-  type RolePermissions,
 } from '@pagespace/lib/services/drive-role-service';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -48,15 +47,6 @@ async function requireDriveAdmin(
 
   return { ok: true, access: { ...access, drive: access.drive } };
 }
-
-const mergePagePermission = (
-  permissions: RolePermissions,
-  pageId: string,
-  perm: { canView: boolean; canEdit: boolean; canShare: boolean }
-): RolePermissions => ({ ...permissions, [pageId]: perm });
-
-const prunePagePermission = (permissions: RolePermissions, pageId: string): RolePermissions =>
-  Object.fromEntries(Object.entries(permissions).filter(([key]) => key !== pageId));
 
 async function logAndBroadcastRoleChange(
   context: ToolExecutionContext,
@@ -322,15 +312,20 @@ export const roleManagementTools = {
         });
         if (!page) return { success: false, error: `Page "${pageId}" not found in this drive` };
 
-        const merged = mergePagePermission(role.permissions, pageId, { canView, canEdit, canShare });
-        await updateDriveRole(driveId, roleId, { permissions: merged });
+        // permissionsPatch merges this single page atomically against whatever
+        // permissions map is current at write time — a full `permissions`
+        // replace computed from the `role` read above would race a concurrent
+        // grant/revoke on a different page and silently drop it.
+        const { role: updatedRole } = await updateDriveRole(driveId, roleId, {
+          permissionsPatch: { [pageId]: { canView, canEdit, canShare } },
+        });
 
         await logAndBroadcastRoleChange(context as ToolExecutionContext, driveId, gate.access.drive.name, 'update', role.name);
 
         return {
           success: true,
           summary: `Set ${role.name}'s permissions on page ${pageId}: view=${canView}, edit=${canEdit}, share=${canShare}`,
-          stats: { driveName: gate.access.drive.name, pagePermissionCount: Object.keys(merged).length },
+          stats: { driveName: gate.access.drive.name, pagePermissionCount: Object.keys(updatedRole.permissions).length },
           nextSteps: ['Use get_drive_role to see the full permission map'],
         };
       } catch (error) {
@@ -405,15 +400,19 @@ export const roleManagementTools = {
           };
         }
 
-        const pruned = prunePagePermission(role.permissions, pageId);
-        await updateDriveRole(driveId, roleId, { permissions: pruned });
+        // permissionsPatch with a `null` entry prunes just this page atomically
+        // — see set_role_page_permissions above for why a full `permissions`
+        // replace computed from the `role` read would race a concurrent mutation.
+        const { role: updatedRole } = await updateDriveRole(driveId, roleId, {
+          permissionsPatch: { [pageId]: null },
+        });
 
         await logAndBroadcastRoleChange(context as ToolExecutionContext, driveId, gate.access.drive.name, 'update', role.name);
 
         return {
           success: true,
           summary: `Removed ${role.name}'s permission entry for page ${pageId}`,
-          stats: { driveName: gate.access.drive.name, pagePermissionCount: Object.keys(pruned).length },
+          stats: { driveName: gate.access.drive.name, pagePermissionCount: Object.keys(updatedRole.permissions).length },
           nextSteps: ['Use get_drive_role to see the remaining permission map'],
         };
       } catch (error) {

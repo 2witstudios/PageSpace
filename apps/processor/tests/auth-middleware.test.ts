@@ -116,13 +116,12 @@ describe('authenticateService middleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('returns 403 when token is not a service token', async () => {
-    vi.mocked(sessionService.validateSession).mockResolvedValue({
-      userId: 'user-123',
-      userRole: 'user',
-      type: 'session', // Not a service token
-      scopes: ['files:read'],
-    } as any);
+  it('returns 401 when token is not a service token (type-scoping rejects it before middleware sees claims)', async () => {
+    // sessionService.validateSession(token, { expectedType: 'service' }) rejects
+    // a non-service session by returning null — the middleware no longer does
+    // its own post-hoc claims.type check, so this is now indistinguishable
+    // from "invalid or expired token" from the middleware's point of view.
+    vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
     const req = createMockRequest({
       headers: { authorization: 'Bearer user-token' },
@@ -132,8 +131,9 @@ describe('authenticateService middleware', () => {
 
     await authenticateService(req, res, next);
 
-    expect(res.statusCode).toBe(403);
-    expect(res.jsonData).toEqual({ error: 'Service token required' });
+    expect(sessionService.validateSession).toHaveBeenCalledWith('user-token', { expectedType: 'service' });
+    expect(res.statusCode).toBe(401);
+    expect(res.jsonData).toEqual({ error: 'Invalid or expired token' });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -153,6 +153,7 @@ describe('authenticateService middleware', () => {
 
     await authenticateService(req, res, next);
 
+    expect(sessionService.validateSession).toHaveBeenCalledWith('valid-service-token', { expectedType: 'service' });
     expect(next).toHaveBeenCalledTimes(1);
     expect(req.auth).toBeDefined();
     expect(req.auth?.userId).toBe('user-123');
