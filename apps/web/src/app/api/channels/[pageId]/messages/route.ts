@@ -262,14 +262,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   loggers.realtime.debug('API received content type:', { type: typeof content });
   loggers.realtime.debug('API received content:', { content, fileId });
 
-  // If fileId is provided, verify it exists
-  if (fileId) {
-    const exists = await channelMessageRepository.fileExists(fileId);
-    if (!exists) {
-      return NextResponse.json({ error: 'File not found' }, { status: 400 });
-    }
-  }
-
   // Quote-reply validation. Quotes are top-level only — the quoted message
   // must (a) belong to this channel, (b) be active, and (c) itself be a
   // top-level message (parentId IS NULL), mirroring the parent_not_top_level
@@ -303,6 +295,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // followers in one shot. Mirror copy (alsoSendToParent) writes a second
   // top-level row so the parent stream sees it too.
   if (parentId.length > 0) {
+    // If fileId is provided, verify it exists. insertChannelThreadReply has
+    // its own parent-locking transaction, so this pre-check stays outside it.
+    if (fileId) {
+      const exists = await channelMessageRepository.fileExists(fileId);
+      if (!exists) {
+        return NextResponse.json({ error: 'File not found' }, { status: 400 });
+      }
+    }
+
     const result = await channelMessageRepository.insertChannelThreadReply({
       parentId,
       pageId,
@@ -549,7 +550,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     return NextResponse.json(replyWithRelations, { status: 201 });
   }
 
-  const createdMessage = await channelMessageRepository.insertChannelMessage({
+  // Validates the attachment (if any) and inserts the message atomically —
+  // see insertChannelMessageWithAttachment's doc comment for why the split
+  // validate-then-insert this replaces was unsafe.
+  const insertResult = await channelMessageRepository.insertChannelMessageWithAttachment({
     pageId,
     userId,
     content: messageContent,
@@ -557,6 +561,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     attachmentMeta: attachmentMeta || null,
     quotedMessageId: quotedMessageId.length > 0 ? quotedMessageId : null,
   });
+
+  if (insertResult.kind === 'not_found') {
+    return NextResponse.json({ error: 'File not found' }, { status: 400 });
+  }
+  const createdMessage = insertResult.message;
 
   // Update sender's read status - sending a message means they've read the channel
   await channelMessageRepository.upsertChannelReadStatus({
