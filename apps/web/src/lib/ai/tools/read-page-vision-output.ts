@@ -86,3 +86,21 @@ export function degradeVisualContentToMetadata(output: unknown): unknown {
     metadata: { ...metadata, requiresVisionModel: true, imageOmitted: true },
   };
 }
+
+interface ToolWithModelOutput {
+  toModelOutput?: (options: { toolCallId: string; input: unknown; output: unknown }) => ToolResultOutput | PromiseLike<ToolResultOutput>;
+}
+
+/**
+ * Wraps a tool so its toModelOutput never re-embeds image bytes when the current
+ * request's model lacks vision — guards against a STALE visual_content_delivered
+ * tool-result (persisted from an earlier turn where the model did have vision) being
+ * re-sent as an image when convertToModelMessages re-converts history for this turn.
+ */
+export function guardReadPageToolForVision<T extends ToolWithModelOutput>(tool: T, hasVision: boolean): T {
+  if (hasVision) return tool;
+  return {
+    ...tool,
+    toModelOutput: ({ output }) => toModelOutputForReadPage(degradeVisualContentToMetadata(output)),
+  };
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toModelOutputForReadPage, degradeVisualContentToMetadata } from '../read-page-vision-output';
+import { toModelOutputForReadPage, degradeVisualContentToMetadata, guardReadPageToolForVision } from '../read-page-vision-output';
 
 describe('toModelOutputForReadPage', () => {
   it('given a visual_content_delivered output, should map it to a content ToolResultOutput with a text part and an image-data part', () => {
@@ -105,5 +105,52 @@ describe('degradeVisualContentToMetadata', () => {
     const result = degradeVisualContentToMetadata(output);
 
     expect(result).toEqual(output);
+  });
+});
+
+describe('guardReadPageToolForVision', () => {
+  const staleVisualOutput = {
+    success: true,
+    type: 'visual_content_delivered',
+    pageId: 'page-1',
+    title: 'diagram.png',
+    mimeType: 'image/jpeg',
+    message: 'Delivered visual content: "diagram.png" (image/jpeg)',
+    imageBase64: 'ZmFrZS1iYXNlNjQ=',
+    sizeBytes: 1234,
+    metadata: { processingStatus: 'visual', originalFileName: 'diagram.png', presetUsed: 'ai-vision' },
+  };
+
+  const makeReadPageTool = () => ({
+    description: 'Read the content of any page',
+    toModelOutput: ({ output }: { output: unknown }) => toModelOutputForReadPage(output),
+    execute: async () => ({}),
+  });
+
+  it('given hasVision: true, should leave the tool behavior unchanged for a stale image tool result', () => {
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), true);
+
+    const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: staleVisualOutput });
+
+    expect(result).toEqual({
+      type: 'content',
+      value: [
+        { type: 'text', text: staleVisualOutput.message },
+        { type: 'image-data', data: staleVisualOutput.imageBase64, mediaType: staleVisualOutput.mimeType },
+      ],
+    });
+  });
+
+  it('given hasVision: false, should degrade a stale image tool result to metadata-only instead of an image content part', () => {
+    const guarded = guardReadPageToolForVision(makeReadPageTool(), false);
+
+    const result = guarded.toModelOutput!({ toolCallId: '1', input: {}, output: staleVisualOutput }) as {
+      type: string;
+      value: Record<string, unknown>;
+    };
+
+    expect(result.type).toBe('json');
+    expect(result.value.type).toBe('visual_content_metadata');
+    expect(JSON.stringify(result)).not.toContain(staleVisualOutput.imageBase64);
   });
 });
