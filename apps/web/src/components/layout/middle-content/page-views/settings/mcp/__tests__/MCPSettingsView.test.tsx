@@ -340,3 +340,67 @@ describe('MCPSettingsView — edit token drive scopes', () => {
     expect(within(dialog).getByLabelText('Drive Two')).toBeChecked();
   });
 });
+
+describe('MCPSettingsView — Quick MCP Setup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const getConfigJson = () => {
+    const pre = screen.getByText(/mcpServers/).closest('pre') as HTMLElement;
+    return JSON.parse(pre.textContent || '{}');
+  };
+
+  it('defaults to the Global install tab with the install step and a "pagespace mcp" config', async () => {
+    await renderView();
+
+    expect(screen.getByRole('tab', { name: /global install/i })).toHaveAttribute('data-state', 'active');
+    expect(screen.getByText('1. Install the pagespace CLI')).toBeInTheDocument();
+    expect(screen.getByText('npm install -g @pagespace/cli')).toBeInTheDocument();
+
+    const config = getConfigJson();
+    expect(config.mcpServers.pagespace.command).toBe('pagespace');
+    expect(config.mcpServers.pagespace.args).toEqual(['mcp']);
+    expect(config.mcpServers.pagespace.env).toEqual({
+      PAGESPACE_API_URL: 'https://pagespace.ai',
+      PAGESPACE_TOKEN: '<YOUR_PAGESPACE_MCP_TOKEN_HERE>',
+    });
+  });
+
+  it('mentions `pagespace login` and that PAGESPACE_TOKEN can be omitted afterward, on the Global install tab', async () => {
+    await renderView();
+
+    const setupCard = screen.getByText('Quick MCP Setup').closest('[data-slot="card"]') as HTMLElement;
+    expect(within(setupCard).getByText(/pagespace login/)).toBeInTheDocument();
+    expect(within(setupCard).getByText('PAGESPACE_TOKEN', { selector: 'code' })).toBeInTheDocument();
+    expect(within(setupCard).getByText(/reuse your stored credential/i)).toBeInTheDocument();
+  });
+
+  it('switching to the No install (npx) tab hides the install step and emits an npx config', async () => {
+    await renderView();
+
+    await userEvent.click(screen.getByRole('tab', { name: /no install \(npx\)/i }));
+
+    expect(screen.queryByText('1. Install the pagespace CLI')).not.toBeInTheDocument();
+    expect(screen.queryByText('npm install -g @pagespace/cli')).not.toBeInTheDocument();
+
+    const config = getConfigJson();
+    expect(config.mcpServers.pagespace.command).toBe('npx');
+    expect(config.mcpServers.pagespace.args).toEqual(['-y', '@pagespace/cli', 'pagespace-mcp']);
+    expect(config.mcpServers.pagespace.env).toEqual({
+      PAGESPACE_API_URL: 'https://pagespace.ai',
+      PAGESPACE_TOKEN: '<YOUR_PAGESPACE_MCP_TOKEN_HERE>',
+    });
+  });
+
+  it('keeps the token selector and copy/download controls available on both tabs', async () => {
+    await renderView();
+
+    expect(screen.getByLabelText(/select token/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /no install \(npx\)/i }));
+
+    expect(screen.getByLabelText(/select token/i)).toBeInTheDocument();
+    expect(screen.getByText(/2\. Copy this configuration/)).toBeInTheDocument();
+  });
+});
