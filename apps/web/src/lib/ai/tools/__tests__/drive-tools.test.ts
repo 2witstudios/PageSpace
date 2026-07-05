@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock database - only mock what's actually used in tests
 vi.mock('@pagespace/db/db', () => ({
@@ -55,6 +55,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   isValidDriveHomePage: vi.fn(),
   updateDrive: vi.fn(),
   allocatePublishSubdomain: vi.fn().mockResolvedValue('test-drive'),
+  listAccessibleDrives: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
@@ -82,7 +83,7 @@ vi.mock('@/lib/canvas/publish-page', () => ({
 import { driveTools } from '../drive-tools';
 import { db } from '@pagespace/db/db';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
-import { getDriveById, isValidDriveHomePage, updateDrive } from '@pagespace/lib/services/drive-service';
+import { getDriveById, isValidDriveHomePage, updateDrive, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { hasAgentUserScopedAccess } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
@@ -136,20 +137,9 @@ describe('drive-tools', () => {
 
     it('falls back to the user-scoped drive list for an agent with userScopedAccess', async () => {
       vi.mocked(hasAgentUserScopedAccess).mockResolvedValueOnce(true);
-      // User path: owned drives via db.select, member/permission drives via db.selectDistinct.
-      (db.select as unknown as Mock).mockReturnValue({
-        from: () => ({
-          where: () => Promise.resolve([
-            { id: 'du1', name: 'User Drive', slug: 'user-drive', createdAt: new Date(), ownerId: 'user_1' },
-          ]),
-        }),
-      });
-      interface DistinctChain { leftJoin: () => DistinctChain; where: () => Promise<never[]> }
-      const distinctChain: DistinctChain = {
-        leftJoin: () => distinctChain,
-        where: () => Promise.resolve([]),
-      };
-      (db.selectDistinct as unknown as Mock).mockReturnValue({ from: () => distinctChain });
+      vi.mocked(listAccessibleDrives).mockResolvedValueOnce([
+        { id: 'du1', name: 'User Drive', slug: 'user-drive' } as never,
+      ]);
 
       const context = {
         toolCallId: '1',
@@ -165,6 +155,7 @@ describe('drive-tools', () => {
       };
 
       expect(hasAgentUserScopedAccess).toHaveBeenCalledWith('agent_1');
+      expect(listAccessibleDrives).toHaveBeenCalledWith('user_1');
       // The membership-scoped agent path must not be used.
       expect(listAgentDrives).not.toHaveBeenCalled();
       expect(result.drives.map((d) => d.id)).toEqual(['du1']);

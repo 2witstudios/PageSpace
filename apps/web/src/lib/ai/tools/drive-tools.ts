@@ -1,13 +1,12 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, ne, isNotNull } from '@pagespace/db/operators'
-import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { eq, and } from '@pagespace/db/operators'
+import { drives } from '@pagespace/db/schema/core'
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
+import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -90,63 +89,19 @@ export const driveTools = {
       }
 
       try {
-        // 1. Get user's own drives
-        const ownedDrives = await db
-          .select({
-            id: drives.id,
-            name: drives.name,
-            slug: drives.slug,
-            createdAt: drives.createdAt,
-            ownerId: drives.ownerId,
-          })
-          .from(drives)
-          .where(eq(drives.ownerId, userId));
+        // Full user-scoped reach: owned + member + page-permission drives,
+        // excluding trashed ones (same source multi_drive_list_agents uses).
+        const accessibleDrives = await listAccessibleDrives(userId);
 
-        // 2. Get drives where user is a member
-        const memberDrives = await db.selectDistinct({ 
-          id: drives.id,
-          name: drives.name,
-          slug: drives.slug,
-          createdAt: drives.createdAt,
-          ownerId: drives.ownerId,
-        })
-          .from(driveMembers)
-          .leftJoin(drives, eq(driveMembers.driveId, drives.id))
-          .where(and(
-            eq(driveMembers.userId, userId),
-            isNotNull(driveMembers.acceptedAt),
-            ne(drives.ownerId, userId) // Exclude owned drives
-          ));
-
-        // 3. Get drives where user has page permissions
-        const permissionDrives = await db.selectDistinct({
-          id: drives.id,
-          name: drives.name,
-          slug: drives.slug,
-          createdAt: drives.createdAt,
-          ownerId: drives.ownerId,
-        })
-          .from(pagePermissions)
-          .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-          .leftJoin(drives, eq(pages.driveId, drives.id))
-          .where(and(
-            eq(pagePermissions.userId, userId),
-            eq(pagePermissions.canView, true),
-            ne(drives.ownerId, userId) // Exclude owned drives
-          ));
-
-        // 4. Combine all drives and deduplicate
-        const allDrives = [...ownedDrives, ...memberDrives, ...permissionDrives];
-        const dedupedDrives = Array.from(new Map(allDrives.map(d => [d.id, d])).values());
         // Ceiling a scoped MCP token to its allowed drives + its own role's
         // view access (no-op otherwise).
         const scopedIds = new Set(
           await filterDriveIdsByAppTokenScope(
             context as ToolExecutionContext,
-            dedupedDrives.map(d => d.id).filter((id): id is string => id != null),
+            accessibleDrives.map(d => d.id),
           ),
         );
-        const uniqueDrives = dedupedDrives.filter(d => d.id != null && scopedIds.has(d.id));
+        const uniqueDrives = accessibleDrives.filter(d => scopedIds.has(d.id));
 
         return {
           success: true,
