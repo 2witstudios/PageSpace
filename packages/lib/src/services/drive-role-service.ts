@@ -52,7 +52,11 @@ export interface UpdateRoleInput {
   description?: string | null;
   color?: string | null;
   isDefault?: boolean;
+  // Mutually exclusive with `permissionsPatch`: `permissions` replaces the whole
+  // map, `permissionsPatch` merges specific pages atomically against whatever is
+  // currently stored (see `updateDriveRole`).
   permissions?: RolePermissions;
+  permissionsPatch?: RolePermissionsPatch;
   driveWidePermissions?: PagePerm | null;
 }
 
@@ -219,7 +223,16 @@ export async function createDriveRole(
 }
 
 /**
- * Update an existing role
+ * Update an existing role.
+ *
+ * The read (existing permissions) + merge + write all happen inside a single
+ * transaction with the role row locked via `FOR UPDATE`. Without this, two
+ * concurrent callers merging different pages into `permissions` (or unsetting
+ * other roles' `isDefault`) could each read the same pre-update snapshot and
+ * the second writer would silently clobber the first writer's change — this
+ * is the classic JSONB read-modify-write race. Locking the row and re-reading
+ * it inside the transaction serializes concurrent updates so both merges
+ * survive.
  */
 export async function updateDriveRole(
   driveId: string,
@@ -230,45 +243,56 @@ export async function updateDriveRole(
     throw new Error('Invalid driveWidePermissions structure');
   }
 
-  // Get existing role
-  const existingRole = await db.query.driveRoles.findFirst({
-    where: and(
-      eq(driveRoles.id, roleId),
-      eq(driveRoles.driveId, driveId)
-    ),
+  if (input.permissions !== undefined && input.permissionsPatch !== undefined) {
+    throw new Error('Cannot specify both permissions and permissionsPatch');
+  }
+
+  return db.transaction(async (tx) => {
+    const [existingRole] = await tx
+      .select()
+      .from(driveRoles)
+      .where(and(
+        eq(driveRoles.id, roleId),
+        eq(driveRoles.driveId, driveId)
+      ))
+      .for('update');
+
+    if (!existingRole) {
+      throw new Error('Role not found');
+    }
+
+    // If setting as default and wasn't already, unset other defaults
+    if (input.isDefault && !existingRole.isDefault) {
+      await tx.update(driveRoles)
+        .set({ isDefault: false })
+        .where(eq(driveRoles.driveId, driveId));
+    }
+
+    const resolvedPermissions = input.permissionsPatch !== undefined
+      ? mergeRolePermissionsPatch(existingRole.permissions as RolePermissions, input.permissionsPatch)
+      : input.permissions;
+
+    const [updatedRole] = await tx.update(driveRoles)
+      .set({
+        ...(input.name !== undefined && { name: input.name.trim() }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.color !== undefined && { color: input.color }),
+        ...(input.isDefault !== undefined && { isDefault: input.isDefault }),
+        ...(resolvedPermissions !== undefined && { permissions: resolvedPermissions }),
+        ...(input.driveWidePermissions !== undefined && { driveWidePermissions: input.driveWidePermissions }),
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(driveRoles.id, roleId),
+        eq(driveRoles.driveId, driveId)
+      ))
+      .returning();
+
+    return {
+      role: updatedRole as DriveRole,
+      wasDefault: existingRole.isDefault,
+    };
   });
-
-  if (!existingRole) {
-    throw new Error('Role not found');
-  }
-
-  // If setting as default and wasn't already, unset other defaults
-  if (input.isDefault && !existingRole.isDefault) {
-    await db.update(driveRoles)
-      .set({ isDefault: false })
-      .where(eq(driveRoles.driveId, driveId));
-  }
-
-  const [updatedRole] = await db.update(driveRoles)
-    .set({
-      ...(input.name !== undefined && { name: input.name.trim() }),
-      ...(input.description !== undefined && { description: input.description }),
-      ...(input.color !== undefined && { color: input.color }),
-      ...(input.isDefault !== undefined && { isDefault: input.isDefault }),
-      ...(input.permissions !== undefined && { permissions: input.permissions }),
-      ...(input.driveWidePermissions !== undefined && { driveWidePermissions: input.driveWidePermissions }),
-      updatedAt: new Date(),
-    })
-    .where(and(
-      eq(driveRoles.id, roleId),
-      eq(driveRoles.driveId, driveId)
-    ))
-    .returning();
-
-  return {
-    role: updatedRole as DriveRole,
-    wasDefault: existingRole.isDefault,
-  };
 }
 
 /**

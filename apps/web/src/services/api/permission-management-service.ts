@@ -341,9 +341,12 @@ export const rolePermissionService = {
     const role = await getRoleById(page.driveId, roleId);
     if (!role) return { success: false, error: 'Role not found', status: 404 };
 
+    // permissionsPatch merges this single page atomically against whatever
+    // permissions map is current at write time — a full `permissions` replace
+    // computed from the `role` read above would race a concurrent grant/revoke
+    // on a different page and silently drop it.
     await updateDriveRole(page.driveId, roleId, {
-      permissions: {
-        ...role.permissions,
+      permissionsPatch: {
         [pageId]: {
           canView: permissions.canView,
           canEdit: permissions.canEdit,
@@ -371,10 +374,10 @@ export const rolePermissionService = {
     const role = await getRoleById(page.driveId, roleId);
     if (!role) return { success: false, error: 'Role not found', status: 404 };
 
-    const remainingPermissions = Object.fromEntries(
-      Object.entries(role.permissions).filter(([key]) => key !== pageId)
-    );
-    await updateDriveRole(page.driveId, roleId, { permissions: remainingPermissions });
+    // permissionsPatch with a `null` entry prunes just this page atomically —
+    // see setRolePagePermission above for why a full `permissions` replace
+    // computed from the `role` read would race a concurrent mutation.
+    await updateDriveRole(page.driveId, roleId, { permissionsPatch: { [pageId]: null } });
     return { success: true };
   },
 };
