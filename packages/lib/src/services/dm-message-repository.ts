@@ -375,14 +375,11 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
         fileId: directMessages.fileId,
       });
 
-    const purgedAttachmentPairKeys = new Set<string>();
-    const purgedAttachmentPairs = purgedMessages.flatMap((message) => {
-      if (!message.fileId) return [];
-      const key = `${message.fileId}:${message.conversationId}`;
-      if (purgedAttachmentPairKeys.has(key)) return [];
-      purgedAttachmentPairKeys.add(key);
-      return [{ fileId: message.fileId, conversationId: message.conversationId }];
-    });
+    const purgedAttachmentPairs = purgedMessages.flatMap((message) =>
+      message.fileId
+        ? [{ fileId: message.fileId, conversationId: message.conversationId }]
+        : []
+    );
 
     if (purgedAttachmentPairs.length > 0) {
       const pairValues = () =>
