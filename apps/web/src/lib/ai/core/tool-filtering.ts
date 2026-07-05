@@ -64,7 +64,8 @@ export const WRITE_TOOLS = new Set([
   // Sandbox / code-execution operations — all mutate the persistent sandbox
   // filesystem or a remote. bash can run arbitrary mutations, so it is excluded
   // in read-only mode too. Read-only sandbox tools (readFile, git_status,
-  // git_diff, git_log, gh_pr_list, gh_pr_view, gh_issue_list, gh_issue_view) are
+  // git_diff, git_log, gh_pr_list, gh_pr_view, gh_pr_diff, gh_pr_checks,
+  // gh_run_list, gh_run_view, gh_issue_list, gh_issue_view) are
   // intentionally NOT listed and remain available.
   'bash',
   'writeFile',
@@ -87,6 +88,10 @@ export const WRITE_TOOLS = new Set([
   'gh_pr_create',
   'gh_pr_merge',
   'gh_pr_checkout',
+  'gh_pr_review',
+  'gh_pr_close',
+  'gh_pr_reopen',
+  'gh_pr_ready',
   'gh_issue_create',
 ]);
 
