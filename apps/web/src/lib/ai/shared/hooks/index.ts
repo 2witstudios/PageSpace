@@ -20,3 +20,4 @@ export {
   SIDEBAR_AGENT_CHAT_ID,
   buildChatConfig,
 } from '../chat-config';
+export { buildGlobalChatRequestBody } from '../global-chat-request-body';

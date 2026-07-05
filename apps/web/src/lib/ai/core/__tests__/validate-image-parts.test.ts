@@ -73,6 +73,20 @@ describe('validate-image-parts', () => {
       expect(result.filePartCount).toBe(1);
     });
 
+    it('given a file part with a missing url, should return invalid instead of throwing', () => {
+      const msg = makeUserMessage([{ type: 'file', filename: 'broken.png' }]);
+      const result = validateUserMessageFileParts(msg);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('Image "broken.png" is missing a valid url');
+    });
+
+    it('given a file part with a non-string url, should return invalid instead of throwing', () => {
+      const msg = makeUserMessage([{ type: 'file', url: 42, filename: 'weird.png' }]);
+      const result = validateUserMessageFileParts(msg);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('Image "weird.png" is missing a valid url');
+    });
+
     it('given more than 5 file parts, should return invalid with count error', () => {
       const parts = Array.from({ length: 6 }, (_, i) =>
         makeFilePart({ filename: `img-${i}.png` })

@@ -247,8 +247,38 @@ export async function POST(
     }
     const userId = auth.userId;
 
-    const { id: conversationId } = await context.params;
+    const { id: urlConversationId } = await context.params;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
+
+    // Body size guard — reject payloads over 25MB before parsing
+    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+    if (contentLength > 25 * 1024 * 1024) {
+      loggers.api.warn('Global Assistant Chat API: Request body too large', { contentLength });
+      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
+    }
+
+    // Parse request body
+    const requestBody = await request.json();
+
+    // The URL segment is baked into useChat's transport at construction and
+    // never updates thereafter (its Chat instance is deliberately kept alive
+    // across conversation switches to avoid clobbering messages — see
+    // chat-config.ts). The body's conversationId reflects the client's
+    // current identity state and is what determines where this message
+    // actually lands; the URL segment is only a fallback for callers that
+    // don't send one.
+    const conversationId: string =
+      typeof requestBody.conversationId === 'string' && requestBody.conversationId.length > 0
+        ? requestBody.conversationId
+        : urlConversationId;
+
+    loggers.api.debug('Global Assistant Chat API: Request body received', {
+      messageCount: requestBody.messages?.length || 0,
+      conversationId,
+      selectedProvider: requestBody.selectedProvider,
+      selectedModel: requestBody.selectedModel,
+      hasLocationContext: !!requestBody.locationContext
+    });
 
     // Resolve existing conversation or auto-create on first message (lazy creation).
     // Clients generate the ID locally; this is the point where the DB row is guaranteed.
@@ -263,23 +293,6 @@ export async function POST(
       throw e;
     }
 
-    // Body size guard — reject payloads over 25MB before parsing
-    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
-    if (contentLength > 25 * 1024 * 1024) {
-      loggers.api.warn('Global Assistant Chat API: Request body too large', { contentLength });
-      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
-    }
-
-    // Parse request body
-    const requestBody = await request.json();
-    loggers.api.debug('Global Assistant Chat API: Request body received', {
-      messageCount: requestBody.messages?.length || 0,
-      conversationId,
-      selectedProvider: requestBody.selectedProvider,
-      selectedModel: requestBody.selectedModel,
-      hasLocationContext: !!requestBody.locationContext
-    });
-    
     const {
       messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,

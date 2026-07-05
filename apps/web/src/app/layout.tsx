@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { connection } from "next/server";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "@/styles/editor-readonly.css";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
+import { THEME_COOKIE_NAME } from "@/lib/theme-cookie";
 import ClientTrackingProvider from "@/components/providers/ClientTrackingProvider";
 import ConsentProvider from "@/components/providers/ConsentProvider";
 import { Toaster } from "@/components/ui/sonner";
@@ -81,8 +82,22 @@ export default async function RootLayout({
   const requestHeaders = await headers();
   const nonce = requestHeaders.get(NONCE_HEADER) ?? undefined;
 
+  // Resolve the initial theme from the cookie server-side so the very first
+  // render (and next-themes' pre-hydration script, via defaultTheme) already
+  // agrees with it. Previously this only happened client-side, after mount —
+  // a real post-paint theme switch that mobile WebKit doesn't always repaint
+  // cleanly on `backdrop-filter` surfaces like the navbar (issues #1155, #1202).
+  const cookieStore = await cookies();
+  const themeCookie = cookieStore.get(THEME_COOKIE_NAME)?.value;
+  const initialTheme =
+    themeCookie === "dark" || themeCookie === "light" ? themeCookie : undefined;
+
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={initialTheme === "dark" ? "dark" : undefined}
+    >
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
@@ -154,9 +169,14 @@ export default async function RootLayout({
         />
         <ThemeProvider
           attribute="class"
-          defaultTheme="system"
+          defaultTheme={initialTheme ?? "system"}
           enableSystem
           disableTransitionOnChange
+          // Without the nonce, the enforced CSP (nonce + strict-dynamic, see
+          // security-headers.ts) blocks next-themes' inline pre-hydration
+          // script in production — theme would only apply after hydration,
+          // recreating the late post-paint switch this PR removes.
+          nonce={nonce}
         >
           <ClientTrackingProvider />
           {children}
