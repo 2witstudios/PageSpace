@@ -32,6 +32,10 @@ interface ActiveStreamRow {
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
+interface AccessRevokedPayload {
+  room: string;
+}
+
 export interface UseChannelStreamSocketOptions {
   /** Fires once per messageId on clean finalize (SSE resolve or socket complete); NOT on SSE error. */
   onStreamComplete?: (messageId: string, conversationId?: string) => void;
@@ -362,6 +366,16 @@ export function useChannelStreamSocket(
       onGlobalConversationAddedRef.current?.(payload);
     };
 
+    // The realtime server emits this on permission revocation (see kick-handler.ts) using
+    // the page/channel room id directly (socket.join(pageId)), so `room` is the channelId.
+    const handleAccessRevoked = (payload: AccessRevokedPayload) => {
+      if (payload.room !== channelId) return;
+      for (const controller of controllers.values()) {
+        controller.abort();
+      }
+      clearPageStreams(channelId);
+    };
+
     socket.on('chat:stream_start', handleStreamStart);
     socket.on('chat:stream_complete', handleStreamComplete);
     socket.on('chat:user_message', handleUserMessage);
@@ -372,6 +386,7 @@ export function useChannelStreamSocket(
     socket.on('chat:conversation_renamed', handleConversationRenamed);
     socket.on('chat:conversation_deleted', handleConversationDeleted);
     socket.on('chat:global_conversation_added', handleGlobalConversationAdded);
+    socket.on('access_revoked', handleAccessRevoked);
 
     return () => {
       cancelled = true;
@@ -385,6 +400,7 @@ export function useChannelStreamSocket(
       socket.off('chat:conversation_renamed', handleConversationRenamed);
       socket.off('chat:conversation_deleted', handleConversationDeleted);
       socket.off('chat:global_conversation_added', handleGlobalConversationAdded);
+      socket.off('access_revoked', handleAccessRevoked);
       for (const [msgId, controller] of controllers.entries()) {
         controller.abort();
         releaseBootstrapConsumer(msgId);

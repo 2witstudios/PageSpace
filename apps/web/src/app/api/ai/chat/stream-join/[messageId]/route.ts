@@ -7,6 +7,11 @@ import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
 export const dynamic = 'force-dynamic';
 
+// How often to re-verify view access on an open SSE connection. Bounds the window during
+// which a revoked user can keep receiving an in-flight stream to a few seconds, without
+// putting a permission check in the hot path of every streamed chunk.
+const PERMISSION_RECHECK_INTERVAL_MS = 5000;
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ messageId: string }> },
@@ -35,9 +40,10 @@ export async function GET(
   }
 
   const channelOwner = parseGlobalChannelId(meta.pageId);
-  const canView = channelOwner !== null
-    ? channelOwner === userId
-    : await canUserViewPage(userId, meta.pageId);
+  const hasViewAccess = async (): Promise<boolean> =>
+    channelOwner !== null ? channelOwner === userId : canUserViewPage(userId, meta.pageId);
+
+  const canView = await hasViewAccess();
   if (!canView) {
     auditRequest(request, {
       eventType: 'authz.access.denied',
@@ -55,6 +61,14 @@ export async function GET(
   const preBuffer: Uint8Array[] = [];
   let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
   let streamClosed = false;
+  let recheckIntervalId: ReturnType<typeof setInterval> | null = null;
+
+  const clearRecheckInterval = () => {
+    if (recheckIntervalId !== null) {
+      clearInterval(recheckIntervalId);
+      recheckIntervalId = null;
+    }
+  };
 
   const unsubscribe = streamMulticastRegistry.subscribe(
     messageId,
@@ -67,6 +81,7 @@ export async function GET(
       }
     },
     (aborted) => {
+      clearRecheckInterval();
       const done = encoder.encode(`data: ${JSON.stringify({ done: true, aborted })}\n\n`);
       if (streamController) {
         streamController.enqueue(done);
@@ -111,9 +126,35 @@ export async function GET(
       request.signal.addEventListener('abort', () => {
         if (streamClosed) return;
         streamClosed = true;
+        clearRecheckInterval();
         unsubscribe();
         controller.close();
       }, { once: true });
+
+      recheckIntervalId = setInterval(() => {
+        void (async () => {
+          if (streamClosed) {
+            clearRecheckInterval();
+            return;
+          }
+          const stillAllowed = await hasViewAccess();
+          if (streamClosed || stillAllowed) return;
+
+          streamClosed = true;
+          clearRecheckInterval();
+          unsubscribe();
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            resourceType: 'ai_stream',
+            resourceId: messageId,
+            details: { reason: 'permission_revoked_mid_stream', pageId: meta.pageId },
+            riskScore: 0.5,
+          });
+          const revoked = encoder.encode(`data: ${JSON.stringify({ done: true, aborted: true })}\n\n`);
+          controller.enqueue(revoked);
+          controller.close();
+        })();
+      }, PERMISSION_RECHECK_INTERVAL_MS);
     },
   });
 
