@@ -12,6 +12,8 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
+import { fetchCachedImagePreset } from '../core/image-preset-fetch';
+import { toModelOutputForReadPage } from './read-page-vision-output';
 import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -243,6 +245,7 @@ export const pageReadTools = {
       lineStart: z.number().int().optional().describe('Start line number (1-indexed, inclusive). Omit to start from beginning.'),
       lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end.'),
     }),
+    toModelOutput: ({ output }) => toModelOutputForReadPage(output),
     execute: async ({ title, pageId, lineStart, lineEnd }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
@@ -308,7 +311,33 @@ export const pageReadTools = {
                 };
               }
               
-              // Model supports vision - return metadata about the visual content
+              // Model supports vision - try to deliver actual image bytes from the
+              // processor's cached presets. Falls back to metadata-only (today's
+              // behavior) when no preset in the fallback chain is usable.
+              if (page.contentHash) {
+                const deliveredImage = await fetchCachedImagePreset(
+                  page.contentHash,
+                  page.mimeType || 'application/octet-stream'
+                );
+                if (deliveredImage) {
+                  return {
+                    success: true,
+                    type: 'visual_content_delivered',
+                    pageId: page.id,
+                    title: page.title,
+                    mimeType: deliveredImage.mediaType,
+                    message: `Delivered visual content: "${page.title}" (${deliveredImage.mediaType})`,
+                    imageBase64: deliveredImage.base64,
+                    sizeBytes: page.fileSize || 0,
+                    metadata: {
+                      processingStatus: 'visual',
+                      originalFileName: page.originalFileName,
+                      presetUsed: deliveredImage.preset
+                    }
+                  };
+                }
+              }
+
               // Use page metadata instead of loading the full content
               return {
                 success: true,
