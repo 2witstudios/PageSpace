@@ -118,6 +118,12 @@ export async function middleware(req: NextRequest) {
     // Note: Cron routes handle their own auth via validateSignedCronRequest (HMAC-SHA256 + nonce)
     // Device/mobile auth endpoints authenticate via body tokens (device token, magic link),
     // not session cookies, so they must bypass the cookie check to allow cookie-expired recovery.
+    // OAuth grant endpoints are public by protocol design (RFC 6749/7009/8628): the CLI calls
+    // them with no browser session at all, authenticating via client_id/code/refresh_token/
+    // device_code in the request body instead — each route enforces its own auth internally
+    // (authorize's POST still requires a session; token/revoke/device_authorization never do).
+    // Exact matches only — device_authorization's /verify and /decision sub-routes are the
+    // browser-side /activate screen and DO require a session, so must not be swept in here.
     if (
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/login-csrf') ||
@@ -130,6 +136,10 @@ export async function middleware(req: NextRequest) {
       pathname.startsWith('/api/mcp/') ||
       pathname.startsWith('/api/drives') ||
       pathname.startsWith('/api/cron/') ||
+      pathname === '/api/oauth/authorize' ||
+      pathname === '/api/oauth/token' ||
+      pathname === '/api/oauth/revoke' ||
+      pathname === '/api/oauth/device_authorization' ||
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron' ||
       pathname === '/api/integrations/zoom/webhook' ||
