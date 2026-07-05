@@ -10,6 +10,8 @@
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
 import { isAllowedImageType, validateMagicBytes, type AllowedImageType } from '@/lib/validation/image-validation';
+import { MAX_IMAGE_SIZE_BYTES } from '@/lib/ai/shared/utils/image-resize';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export interface FetchedImagePreset {
   base64: string;
@@ -60,8 +62,26 @@ export async function fetchCachedImagePreset(
   for (const candidate of buildFallbackChain(mimeType)) {
     if (!isAllowedImageType(candidate.mediaType)) continue;
 
-    const bytes = await fetchBytes(contentHash, candidate.preset);
+    let bytes: Buffer | null;
+    try {
+      bytes = await fetchBytes(contentHash, candidate.preset);
+    } catch (err) {
+      // A fetch failure (permissions, transient outage, malformed key) degrades to
+      // "this candidate isn't usable" rather than failing the whole read_page call —
+      // the pre-existing metadata-only behavior must remain a guaranteed-success
+      // fallback regardless of which fetchBytes implementation is in use.
+      loggers.ai.warn('fetchCachedImagePreset: candidate fetch failed, skipping', {
+        contentHash,
+        preset: candidate.preset,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
     if (!bytes) continue;
+    // The ai-vision/ai-chat presets are already resized well under this cap; this
+    // matters for the uncapped "original" fallback, which can otherwise be an
+    // arbitrarily large upload (up to the per-tier max file size).
+    if (bytes.length > MAX_IMAGE_SIZE_BYTES) continue;
 
     const base64 = bytes.toString('base64');
     if (!validateMagicBytes(base64, candidate.mediaType as AllowedImageType)) continue;

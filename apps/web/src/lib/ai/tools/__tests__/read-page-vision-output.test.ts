@@ -9,6 +9,7 @@ describe('toModelOutputForReadPage', () => {
       pageId: 'page-1',
       title: 'diagram.png',
       mimeType: 'image/jpeg',
+      originalMimeType: 'image/png',
       message: 'Delivered visual content: "diagram.png" (image/jpeg)',
       imageBase64: 'ZmFrZS1iYXNlNjQ=',
       sizeBytes: 1234,
@@ -86,6 +87,7 @@ describe('degradeVisualContentToMetadata', () => {
       pageId: 'page-1',
       title: 'diagram.png',
       mimeType: 'image/jpeg',
+      originalMimeType: 'image/png',
       message: 'Delivered visual content: "diagram.png" (image/jpeg)',
       imageBase64: 'ZmFrZS1iYXNlNjQ=',
       sizeBytes: 1234,
@@ -97,6 +99,30 @@ describe('degradeVisualContentToMetadata', () => {
     expect(result.type).toBe('visual_content_metadata');
     expect(result).not.toHaveProperty('imageBase64');
     expect(JSON.stringify(result)).not.toContain(output.imageBase64);
+  });
+
+  it('given a visual_content_delivered output whose delivered bytes were re-encoded to a different format than the original upload, should report the ORIGINAL mimeType, not the delivered preset mimeType', () => {
+    // The processor always re-encodes ai-vision/ai-chat presets as jpeg regardless of
+    // the source format, so a PNG upload's delivered mimeType is 'image/jpeg' — the
+    // degraded result must still tell the model the file is really a PNG.
+    const output = {
+      success: true,
+      type: 'visual_content_delivered',
+      pageId: 'page-1',
+      title: 'diagram.png',
+      mimeType: 'image/jpeg',
+      originalMimeType: 'image/png',
+      message: 'Delivered visual content: "diagram.png" (image/jpeg)',
+      imageBase64: 'ZmFrZS1iYXNlNjQ=',
+      sizeBytes: 1234,
+      metadata: { processingStatus: 'visual', originalFileName: 'diagram.png', presetUsed: 'ai-vision' },
+    };
+
+    const result = degradeVisualContentToMetadata(output) as Record<string, unknown>;
+
+    expect(result.mimeType).toBe('image/png');
+    expect((result.stats as Record<string, unknown>).mimeType).toBe('image/png');
+    expect(result.message).toContain('image/png');
   });
 
   it('given a non-visual output, should return it unchanged', () => {
@@ -115,6 +141,7 @@ describe('guardReadPageToolForVision', () => {
     pageId: 'page-1',
     title: 'diagram.png',
     mimeType: 'image/jpeg',
+    originalMimeType: 'image/png',
     message: 'Delivered visual content: "diagram.png" (image/jpeg)',
     imageBase64: 'ZmFrZS1iYXNlNjQ=',
     sizeBytes: 1234,

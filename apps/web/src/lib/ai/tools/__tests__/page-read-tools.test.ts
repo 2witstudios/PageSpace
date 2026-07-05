@@ -909,7 +909,7 @@ describe('page-read-tools', () => {
         const result = await pageReadTools.read_page.execute!(
           { title: 'diagram.png', pageId: 'page-1' },
           createVisionAuthContext()
-        ) as { type: string; imageBase64: string; mimeType: string; success: boolean };
+        ) as { type: string; imageBase64: string; mimeType: string; originalMimeType: string; success: boolean };
 
         assert({
           given: 'a visual FILE page and a vision-capable model',
@@ -930,6 +930,13 @@ describe('page-read-tools', () => {
           should: "deliver the fetched preset's mediaType rather than the page's declared mimeType",
           actual: result.mimeType,
           expected: 'image/jpeg',
+        });
+
+        assert({
+          given: "a visual FILE page whose delivered preset was re-encoded to a different format (png page, jpeg preset)",
+          should: "still carry the page's true mimeType as originalMimeType, for correct reporting if this result later degrades to metadata-only",
+          actual: result.originalMimeType,
+          expected: 'image/png',
         });
       });
 

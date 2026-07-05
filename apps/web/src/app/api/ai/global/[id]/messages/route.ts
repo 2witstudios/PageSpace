@@ -65,6 +65,7 @@ import {
 import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 import {
   buildVolatileTurnContext,
@@ -779,6 +780,16 @@ MENTION PROCESSING:
       tool_search: createToolSearchTool(filteredAllTools),
       execute_tool: createExecuteTool(nonCoreTools),
     };
+
+    // Guard against a stale read_page tool-result (image bytes delivered on an
+    // earlier turn when the model had vision) being re-embedded as an image when
+    // history is re-converted for a model that no longer has vision.
+    if (finalTools.read_page) {
+      finalTools = {
+        ...finalTools,
+        read_page: guardReadPageToolForVision(finalTools.read_page, hasVisionCapability(currentModel)),
+      };
+    }
 
     loggers.api.debug('Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,

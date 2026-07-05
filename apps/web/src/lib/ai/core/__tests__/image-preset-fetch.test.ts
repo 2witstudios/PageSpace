@@ -76,4 +76,42 @@ describe('fetchCachedImagePreset', () => {
 
     expect(result).toBeNull();
   });
+
+  it('given an oversized original fallback with no smaller preset available, should skip it and return null rather than deliver an unbounded payload', async () => {
+    const OVERSIZED_PNG = Buffer.concat([PNG_BYTES, Buffer.alloc(5 * 1024 * 1024)]);
+    const fetchBytes = async (_contentHash: string, preset: string): Promise<Buffer | null> => {
+      if (preset === 'original') return OVERSIZED_PNG;
+      return null;
+    };
+
+    const result = await fetchCachedImagePreset('hash-6', 'image/png', { fetchBytes });
+
+    expect(result).toBeNull();
+  });
+
+  it('given a non-404 error on one candidate, should treat it as unusable and fall through to the next preset rather than throwing', async () => {
+    const fetchBytes = async (_contentHash: string, preset: string): Promise<Buffer | null> => {
+      if (preset === 'ai-vision') throw Object.assign(new Error('Access Denied'), { $metadata: { httpStatusCode: 403 } });
+      if (preset === 'ai-chat') return JPEG_BYTES;
+      return null;
+    };
+
+    const result = await fetchCachedImagePreset('hash-7', 'image/png', { fetchBytes });
+
+    expect(result).toEqual({
+      base64: JPEG_BYTES.toString('base64'),
+      mediaType: 'image/jpeg',
+      preset: 'ai-chat',
+    });
+  });
+
+  it('given every candidate throws a non-404 error, should return null rather than throwing', async () => {
+    const fetchBytes = async (): Promise<Buffer | null> => {
+      throw new Error('S3 unavailable');
+    };
+
+    const result = await fetchCachedImagePreset('hash-8', 'image/png', { fetchBytes });
+
+    expect(result).toBeNull();
+  });
 });

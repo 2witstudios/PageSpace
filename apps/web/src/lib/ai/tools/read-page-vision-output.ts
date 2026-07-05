@@ -16,7 +16,14 @@ export interface VisualContentDeliveredOutput {
   type: 'visual_content_delivered';
   pageId: string;
   title: string;
+  /** Media type of the delivered bytes (imageBase64) — the processor always
+   * re-encodes ai-vision/ai-chat presets as jpeg, so this can differ from the
+   * page's true upload format. */
   mimeType: string;
+  /** The page's true upload format (page.mimeType), independent of which
+   * preset's bytes were actually delivered. Used when degrading to
+   * metadata-only so a stale result reports the real file type. */
+  originalMimeType: string;
   message: string;
   imageBase64: string;
   sizeBytes: number;
@@ -54,15 +61,19 @@ export function toModelOutputForReadPage(output: unknown): ToolResultOutput {
 }
 
 /**
- * Strips image bytes from a visual_content_delivered result, returning the same
- * visual_content_metadata shape read_page already produces when a model lacks vision.
- * Non-visual outputs pass through unchanged. Used to degrade STALE image tool-results
- * from an earlier, vision-capable turn when the active model no longer has vision.
+ * Builds the "visual_content_metadata" envelope read_page returns whenever it can't
+ * (or won't) deliver image bytes — no vision-capable preset available, or a stale
+ * delivered result degraded back down. Shared so the two call sites (page-read-tools.ts's
+ * own no-preset-available fallback, and degradeVisualContentToMetadata below) can't drift.
  */
-export function degradeVisualContentToMetadata(output: unknown): unknown {
-  if (!isVisualContentDelivered(output)) return output;
-
-  const { pageId, title, mimeType, sizeBytes, metadata } = output;
+export function buildVisualContentMetadata(params: {
+  pageId: string;
+  title: string;
+  mimeType: string;
+  sizeBytes: number;
+  metadata: Record<string, unknown>;
+}): Record<string, unknown> {
+  const { pageId, title, mimeType, sizeBytes, metadata } = params;
   return {
     success: true,
     type: 'visual_content_metadata',
@@ -78,8 +89,27 @@ export function degradeVisualContentToMetadata(output: unknown): unknown {
       sizeBytes,
       sizeMB: (sizeBytes / 1024 / 1024).toFixed(2),
     },
-    metadata: { ...metadata, requiresVisionModel: true, imageOmitted: true },
+    metadata,
   };
+}
+
+/**
+ * Strips image bytes from a visual_content_delivered result, returning the same
+ * visual_content_metadata shape read_page already produces when a model lacks vision.
+ * Non-visual outputs pass through unchanged. Used to degrade STALE image tool-results
+ * from an earlier, vision-capable turn when the active model no longer has vision.
+ */
+export function degradeVisualContentToMetadata(output: unknown): unknown {
+  if (!isVisualContentDelivered(output)) return output;
+
+  const { pageId, title, originalMimeType, sizeBytes, metadata } = output;
+  return buildVisualContentMetadata({
+    pageId,
+    title,
+    mimeType: originalMimeType,
+    sizeBytes,
+    metadata: { ...metadata, requiresVisionModel: true, imageOmitted: true },
+  });
 }
 
 interface ToolWithModelOutput {

@@ -13,7 +13,7 @@ import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
-import { toModelOutputForReadPage } from './read-page-vision-output';
+import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
 import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -326,6 +326,7 @@ export const pageReadTools = {
                     pageId: page.id,
                     title: page.title,
                     mimeType: deliveredImage.mediaType,
+                    originalMimeType: page.mimeType || 'application/octet-stream',
                     message: `Delivered visual content: "${page.title}" (${deliveredImage.mediaType})`,
                     imageBase64: deliveredImage.base64,
                     sizeBytes: page.fileSize || 0,
@@ -339,27 +340,17 @@ export const pageReadTools = {
               }
 
               // Use page metadata instead of loading the full content
-              return {
-                success: true,
-                type: 'visual_content_metadata',
+              return buildVisualContentMetadata({
                 pageId: page.id,
                 title: page.title,
-                message: `Found visual content: "${page.title}" (${page.mimeType || 'unknown type'})`,
                 mimeType: page.mimeType || 'unknown',
                 sizeBytes: page.fileSize || 0,
-                summary: `This is a visual file that requires vision capabilities to process`,
-                stats: {
-                  documentType: 'VISUAL',
-                  mimeType: page.mimeType || 'unknown',
-                  sizeBytes: page.fileSize || 0,
-                  sizeMB: page.fileSize ? (page.fileSize / 1024 / 1024).toFixed(2) : '0'
-                },
                 metadata: {
                   requiresVisionModel: true,
                   processingStatus: 'visual',
                   originalFileName: page.originalFileName
                 }
-              };
+              });
             
             case 'failed':
               return {
