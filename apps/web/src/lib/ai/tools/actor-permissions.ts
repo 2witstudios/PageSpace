@@ -44,6 +44,19 @@ export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boo
 }
 
 /**
+ * The agent id the canActor* helpers should authorize as, or undefined when
+ * the caller is not a page-agent OR the agent has user-scoped access — in
+ * both cases the helpers fall through to the invoking user's own access.
+ * Invoker-scoped by design: a user-scoped agent acts with the CURRENT
+ * chatter's reach, never its owner's.
+ */
+async function resolveActingAgentId(context: ToolExecutionContext): Promise<string | undefined> {
+  const agentPageId = getAgentPageId(context);
+  if (!agentPageId) return undefined;
+  return (await hasAgentUserScopedAccess(agentPageId)) ? undefined : agentPageId;
+}
+
+/**
  * Whether the caller carries an MCP drive-scope restriction (a non-empty
  * allowedDriveIds). Empty/undefined means full access — session auth or an
  * unscoped token — and skips all scope checks.
@@ -159,7 +172,7 @@ export async function canActorEditPage(
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
   if (await pageDeniedByAppToken(context, pageId, 'edit')) return false;
-  const agentPageId = getAgentPageId(context);
+  const agentPageId = await resolveActingAgentId(context);
   if (agentPageId) {
     const perms = await getAgentAccessLevel(agentPageId, pageId);
     return perms?.canEdit ?? false;
@@ -173,7 +186,7 @@ export async function canActorDeletePage(
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
   if (await pageDeniedByAppToken(context, pageId, 'delete')) return false;
-  const agentPageId = getAgentPageId(context);
+  const agentPageId = await resolveActingAgentId(context);
   if (agentPageId) {
     const perms = await getAgentAccessLevel(agentPageId, pageId);
     return perms?.canDelete ?? false;
@@ -187,7 +200,7 @@ export async function canActorViewPage(
 ): Promise<boolean> {
   if (await pageOutsideMcpScope(context, pageId)) return false;
   if (await pageDeniedByAppToken(context, pageId, 'view')) return false;
-  const agentPageId = getAgentPageId(context);
+  const agentPageId = await resolveActingAgentId(context);
   if (agentPageId) {
     const perms = await getAgentAccessLevel(agentPageId, pageId);
     return perms?.canView ?? false;
@@ -207,7 +220,7 @@ export async function canActorAccessDrive(
   if (hasAppTokenCeiling(context) && !(await hasAppDriveMembership(context.mcpTokenId!, driveId))) {
     return false;
   }
-  const agentPageId = getAgentPageId(context);
+  const agentPageId = await resolveActingAgentId(context);
   if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
   return getUserDriveAccess(context.userId, driveId);
 }
@@ -229,7 +242,7 @@ export async function canActorManageDrive(
 ): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return false;
   if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
-  const agentPageId = getAgentPageId(context);
+  const agentPageId = await resolveActingAgentId(context);
   if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
   const access = await checkDriveAccess(driveId, context.userId);
   return access.isOwner || access.isAdmin;
@@ -240,7 +253,7 @@ export async function getActorAccessiblePagesInDrive(
   driveId: string,
 ): Promise<PageWithPermissions[]> {
   if (driveOutsideMcpScope(context, driveId)) return [];
-  const agentPageId = getAgentPageId(context);
+  const agentPageId = await resolveActingAgentId(context);
   const actorPages = agentPageId
     ? await getAgentAccessiblePagesInDrive(agentPageId, driveId)
     : await getUserAccessiblePagesInDriveWithDetails(context.userId, driveId);

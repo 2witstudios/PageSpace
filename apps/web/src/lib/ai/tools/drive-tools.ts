@@ -50,10 +50,12 @@ export const driveTools = {
       }
 
       // Page-agents are scoped to their explicit drive memberships (plus their
-      // home drive), so discovery matches where they can actually act. The user
-      // / global assistant path (no agentPageId) stays user-scoped below.
+      // home drive), so discovery matches where they can actually act — unless
+      // they've opted into user-scoped reach, which falls through to the
+      // user-scoped enumeration below (matching multi_drive_list_agents). The
+      // user / global assistant path (no agentPageId) stays user-scoped below.
       const agentPageId = getAgentPageId(context as ToolExecutionContext);
-      if (agentPageId) {
+      if (agentPageId && !(await hasAgentUserScopedAccess(agentPageId))) {
         try {
           const allAgentDrives = await listAgentDrives(agentPageId);
           // Ceiling a scoped MCP token to its allowed drives + its own role's

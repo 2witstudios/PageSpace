@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 // Mock database - only mock what's actually used in tests
 vi.mock('@pagespace/db/db', () => ({
@@ -6,14 +6,19 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       drives: { findFirst: vi.fn() },
     },
+    select: vi.fn(),
+    selectDistinct: vi.fn(),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  ne: vi.fn(),
+  isNotNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', ownerId: 'ownerId' },
+  pages: { id: 'id', driveId: 'driveId' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -127,6 +132,42 @@ describe('drive-tools', () => {
       expect(result.drives.map((d) => d.id)).toEqual(['d1', 'd2']);
       // The user-scoped DB query path must not be used for an agent actor.
       expect(mockDb.query.drives.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the user-scoped drive list for an agent with userScopedAccess', async () => {
+      vi.mocked(hasAgentUserScopedAccess).mockResolvedValueOnce(true);
+      // User path: owned drives via db.select, member/permission drives via db.selectDistinct.
+      (db.select as unknown as Mock).mockReturnValue({
+        from: () => ({
+          where: () => Promise.resolve([
+            { id: 'du1', name: 'User Drive', slug: 'user-drive', createdAt: new Date(), ownerId: 'user_1' },
+          ]),
+        }),
+      });
+      interface DistinctChain { leftJoin: () => DistinctChain; where: () => Promise<never[]> }
+      const distinctChain: DistinctChain = {
+        leftJoin: () => distinctChain,
+        where: () => Promise.resolve([]),
+      };
+      (db.selectDistinct as unknown as Mock).mockReturnValue({ from: () => distinctChain });
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user_1',
+          chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
+        } as ToolExecutionContext,
+      };
+
+      const result = await driveTools.list_drives.execute!({}, context) as {
+        drives: Array<{ id: string; slug: string; title: string }>;
+      };
+
+      expect(hasAgentUserScopedAccess).toHaveBeenCalledWith('agent_1');
+      // The membership-scoped agent path must not be used.
+      expect(listAgentDrives).not.toHaveBeenCalled();
+      expect(result.drives.map((d) => d.id)).toEqual(['du1']);
     });
   });
 
