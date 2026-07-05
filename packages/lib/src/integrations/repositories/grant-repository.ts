@@ -8,7 +8,7 @@
 import { db as defaultDb } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { integrationToolGrants, type IntegrationToolGrant, type NewIntegrationToolGrant } from '@pagespace/db/schema/integrations';
-import { resolveProviderConfig } from '../providers/builtin-providers';
+import { withResolvedConfig } from '../providers/builtin-providers';
 
 type GrantWithConnection = IntegrationToolGrant & {
   connection: {
@@ -31,16 +31,9 @@ type GrantWithConnection = IntegrationToolGrant & {
  */
 function withResolvedProviderConfig(grant: GrantWithConnection): GrantWithConnection {
   if (!grant.connection?.provider) return grant;
-  return {
-    ...grant,
-    connection: {
-      ...grant.connection,
-      provider: {
-        ...grant.connection.provider,
-        config: resolveProviderConfig(grant.connection.provider),
-      },
-    },
-  };
+  const provider = withResolvedConfig(grant.connection.provider);
+  if (provider === grant.connection.provider) return grant;
+  return { ...grant, connection: { ...grant.connection, provider } };
 }
 
 type GrantWithAgent = IntegrationToolGrant & {

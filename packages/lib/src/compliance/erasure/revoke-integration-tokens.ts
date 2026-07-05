@@ -9,6 +9,43 @@ export interface OAuthRevokeResult {
   failed: number;
 }
 
+interface ConnectionWithProvider {
+  id: string;
+  credentials: unknown;
+  provider: { slug: string; providerType: string; config: unknown } | null;
+}
+
+/**
+ * Best-effort upstream OAuth revoke. Never throws — a malformed or
+ * unexpectedly-shaped provider config must not block marking the connection
+ * revoked in the DB below, since that DB write is what erasure depends on.
+ */
+async function attemptUpstreamRevoke(connection: ConnectionWithProvider): Promise<void> {
+  if (!connection.credentials) return;
+
+  try {
+    const providerConfig = resolveProviderConfig(connection.provider);
+    if (providerConfig?.authMethod.type !== 'oauth2') return;
+
+    const revokeUrl = providerConfig.authMethod.config?.revokeUrl;
+    if (!revokeUrl) return;
+
+    const credentials = await decryptCredentials(connection.credentials as Record<string, string>);
+    const accessToken = credentials.accessToken || credentials.access_token;
+    if (!accessToken) return;
+
+    await fetch(revokeUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `token=${encodeURIComponent(accessToken)}`,
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    // Upstream revoke failure is non-fatal — token may be expired, provider
+    // unreachable, or the persisted config may be malformed/unexpected shape.
+  }
+}
+
 /**
  * Revoke all OAuth tokens for a user before account erasure (Art. 17 GDPR).
  *
@@ -28,35 +65,9 @@ export async function revokeUserIntegrationTokens(userId: string): Promise<OAuth
   let failed = 0;
 
   for (const connection of connections) {
+    await attemptUpstreamRevoke(connection);
+
     try {
-      const providerConfig = resolveProviderConfig(connection.provider);
-
-      if (providerConfig && connection.credentials) {
-        if (providerConfig.authMethod.type === 'oauth2') {
-          const revokeUrl = providerConfig.authMethod.config.revokeUrl;
-
-          if (revokeUrl) {
-            try {
-              const credentials = await decryptCredentials(
-                connection.credentials as Record<string, string>
-              );
-              const accessToken = credentials.accessToken || credentials.access_token;
-
-              if (accessToken) {
-                await fetch(revokeUrl, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: `token=${encodeURIComponent(accessToken)}`,
-                  signal: AbortSignal.timeout(10_000),
-                });
-              }
-            } catch {
-              // HTTP revoke failure is non-fatal — token may be expired or provider unreachable
-            }
-          }
-        }
-      }
-
       await db
         .update(integrationConnections)
         .set({ status: 'revoked' })

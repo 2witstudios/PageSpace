@@ -8,7 +8,7 @@
 import { db as defaultDb } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { integrationConnections, type IntegrationConnection, type NewIntegrationConnection } from '@pagespace/db/schema/integrations';
-import { resolveProviderConfig } from '../providers/builtin-providers';
+import { withResolvedConfig } from '../providers/builtin-providers';
 
 // Type for the database instance (allows dependency injection for testing)
 export type ConnectionRepository = {
@@ -34,13 +34,8 @@ type ConnectionWithProvider = IntegrationConnection & {
  */
 function withResolvedProviderConfig<T extends ConnectionWithProvider>(connection: T): T {
   if (!connection.provider) return connection;
-  return {
-    ...connection,
-    provider: {
-      ...connection.provider,
-      config: resolveProviderConfig(connection.provider),
-    },
-  };
+  const provider = withResolvedConfig(connection.provider);
+  return provider === connection.provider ? connection : { ...connection, provider };
 }
 
 /**

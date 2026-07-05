@@ -33,3 +33,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   `@pagespace/cli`). It keeps working exactly as before — same tools, same env vars — and now
   prints a one-line migration notice to stderr. See the
   [migration guide](packages/cli/docs/migrating-from-pagespace-mcp.md).
+
+### Fixed
+
+- Builtin integrations (GitHub, Slack, Notion, generic webhook) now always use the current tool
+  definitions after a deploy. Previously a stale cached copy of the provider config could keep
+  agents on renamed tools or missing bundles until something happened to refresh it.
+- Custom integration providers can no longer register a slug reserved by a builtin provider
+  (the API now returns 409), and a custom provider whose slug already collides with a builtin
+  keeps its own configuration instead of being silently handed the builtin's tools and OAuth
+  settings.

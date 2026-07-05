@@ -127,4 +127,46 @@ describe('revokeUserIntegrationTokens', () => {
     expect(setFn).toHaveBeenCalledWith({ status: 'revoked' });
     expect(result).toEqual({ revoked: 1, failed: 0 });
   });
+
+  it('still marks the connection revoked when the persisted config is malformed (missing authMethod)', async () => {
+    mockConnections([
+      {
+        id: 'conn-5',
+        credentials: { accessToken: 'enc-token' },
+        // Custom provider row with no authMethod at all — a plausible
+        // hand-created/partially-populated custom provider config.
+        provider: { slug: 'partial-provider', providerType: 'custom', config: {} },
+      },
+    ]);
+    const { setFn } = mockUpdate();
+    vi.mocked(decryptCredentials).mockResolvedValue({ accessToken: 'plain-token' });
+
+    const result = await revokeUserIntegrationTokens('user-1');
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(setFn).toHaveBeenCalledWith({ status: 'revoked' });
+    expect(result).toEqual({ revoked: 1, failed: 0 });
+  });
+
+  it('still marks the connection revoked when authMethod is oauth2 but its config is missing', async () => {
+    mockConnections([
+      {
+        id: 'conn-6',
+        credentials: { accessToken: 'enc-token' },
+        provider: {
+          slug: 'partial-oauth-provider',
+          providerType: 'custom',
+          config: { authMethod: { type: 'oauth2' } },
+        },
+      },
+    ]);
+    const { setFn } = mockUpdate();
+    vi.mocked(decryptCredentials).mockResolvedValue({ accessToken: 'plain-token' });
+
+    const result = await revokeUserIntegrationTokens('user-1');
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(setFn).toHaveBeenCalledWith({ status: 'revoked' });
+    expect(result).toEqual({ revoked: 1, failed: 0 });
+  });
 });

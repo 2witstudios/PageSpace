@@ -21,17 +21,14 @@ export const getBuiltinProvider = (
 export const isBuiltinProvider = (id: string): boolean => id in builtinProviders;
 
 /**
- * The authoritative config for a provider, at any read site.
- *
- * Builtin providers are defined in code and can change shape (new tool ids,
- * renamed bundles) on any deploy. The persisted `integration_providers.config`
- * row is only a cache seeded at install time and refreshed lazily — it can lag
- * behind the in-memory definition until something happens to trigger a refresh.
- * Rather than trust that cache, always prefer the current in-memory definition
- * for a `providerType: 'builtin'` row; custom/openapi/webhook providers keep
- * their persisted config, even if their slug happens to collide with a builtin
- * (rows created before slug reservation existed), so a custom provider is never
- * silently handed a builtin's tools or OAuth metadata.
+ * The authoritative config for a provider, at any read site: for a
+ * `providerType: 'builtin'` row, prefer the current in-memory definition over
+ * the persisted `integration_providers.config` cache, which only refreshes
+ * lazily and can lag behind after a deploy. Every other providerType keeps its
+ * own persisted config unconditionally — including a row whose slug happens
+ * to collide with a builtin — so a custom provider is never silently handed a
+ * builtin's tools or OAuth metadata. The returned object may be the shared
+ * in-memory builtin definition itself; treat it as read-only.
  */
 export const resolveProviderConfig = (
   provider: { slug: string; providerType: string; config: unknown } | null | undefined
@@ -40,4 +37,19 @@ export const resolveProviderConfig = (
   const persisted = provider.config as IntegrationProviderConfig | null;
   if (provider.providerType !== 'builtin') return persisted;
   return getBuiltinProvider(provider.slug) ?? persisted;
+};
+
+/**
+ * Immutably overlay the resolved config onto a provider row. Returns the row
+ * unchanged (same reference) when resolution is a no-op — e.g. custom
+ * providers — so list paths don't clone rows for nothing. Shared by the
+ * repository read paths so connection reads and grant reads can never drift.
+ */
+export const withResolvedConfig = <
+  P extends { slug: string; providerType: string; config: unknown },
+>(
+  provider: P
+): P => {
+  const resolved = resolveProviderConfig(provider);
+  return resolved === provider.config ? provider : { ...provider, config: resolved };
 };

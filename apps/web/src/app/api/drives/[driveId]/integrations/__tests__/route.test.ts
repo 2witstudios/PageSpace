@@ -58,6 +58,7 @@ import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encr
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler'
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 // ============================================================================
 // Test Helpers
@@ -544,6 +545,45 @@ describe('POST /api/drives/[driveId]/integrations', () => {
           redirectUri: 'https://app.example.com/api/user/integrations/callback',
           state: 'signed-state-token',
         })
+      );
+    });
+
+    it('should build the authorize URL from the canonical builtin config, not a stale persisted copy', async () => {
+      process.env.OAUTH_STATE_SECRET = 'test-secret';
+      process.env.INTEGRATION_GITHUB_CLIENT_ID = 'client-id-123';
+
+      // Persisted row is a builtin (providerType: 'builtin') but its authMethod
+      // config has drifted from what's shipped in code.
+      vi.mocked(getProviderById).mockResolvedValue({
+        id: 'prov-oauth',
+        slug: 'github',
+        providerType: 'builtin',
+        enabled: true,
+        driveId: null,
+        config: {
+          authMethod: {
+            type: 'oauth2',
+            config: { authorizationUrl: 'https://stale.example.com/authorize', scopes: [] },
+          },
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as never);
+
+      vi.mocked(createSignedState).mockReturnValue('signed-state-token');
+      vi.mocked(buildOAuthAuthorizationUrl).mockReturnValue('https://github.com/login/oauth/authorize?state=signed-state-token');
+
+      const request = new Request('https://example.com/api/drives/d/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-oauth', name: 'GitHub' }),
+      });
+      const response = await POST(request, createContext(MOCK_DRIVE_ID));
+
+      expect(response.status).toBe(200);
+      // The canonical in-memory GitHub auth config is used, not the stale DB copy.
+      expect(buildOAuthAuthorizationUrl).toHaveBeenCalledWith(
+        builtinProviders.github.authMethod.type === 'oauth2' ? builtinProviders.github.authMethod.config : undefined,
+        expect.anything()
       );
     });
 
