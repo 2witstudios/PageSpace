@@ -35,7 +35,7 @@ import { LocationContext } from '@/lib/ai/shared';
 import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
 import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
-import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, buildChatConfig, SIDEBAR_AGENT_CHAT_ID } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -772,14 +772,15 @@ const SidebarChatTab: React.FC = () => {
           locationContext: locationContext || undefined,
           enabledTools: selectedAgent.enabledTools,
         }
-      : {
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
           showPageTree,
-          locationContext: locationContext || undefined,
+          locationContext,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
-        };
+        });
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body }));
@@ -821,14 +822,15 @@ const SidebarChatTab: React.FC = () => {
           locationContext: locationContext || undefined,
           enabledTools: selectedAgent.enabledTools,
         }
-      : {
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
           showPageTree,
-          locationContext: locationContext || undefined,
+          locationContext,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
-        };
+        });
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     wrapSend(() => sendMessage({ text }, { body }));
