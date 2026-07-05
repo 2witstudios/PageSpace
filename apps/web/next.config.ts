@@ -102,7 +102,11 @@ export const nextConfig: NextConfig = {
     ];
   },
   async rewrites() {
-    return [...WELL_KNOWN_REWRITES];
+    // beforeFiles: /.well-known/* must be rewritten BEFORE Next's filesystem +
+    // prerender check, otherwise the prerendered 404 for that namespace (Next
+    // treats it as static because public/.well-known/ exists) wins and the
+    // afterFiles rewrite never fires. See RFC 8414 discovery — pagespace-cli.
+    return { beforeFiles: [...WELL_KNOWN_REWRITES] };
   },
 };
 
