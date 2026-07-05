@@ -146,9 +146,17 @@ export type InsertDmMessageResult =
  * Validates the attachment (if any) and inserts the top-level DM in one
  * transaction. Without this, a validate-then-insert-later split lets a
  * concurrent `purgeInactiveMessages` orphan-link cleanup delete the
- * `fileConversations` row between our validation read and the INSERT — the
- * SELECT ... FOR UPDATE locks below block that DELETE until this tx commits,
- * so purge's NOT EXISTS check always sees the message we're about to write.
+ * `fileConversations` row between our validation read and the INSERT.
+ *
+ * The SELECT ... FOR UPDATE locks below are one half of a two-sided
+ * protocol with `purgeInactiveMessages`: purge locks the same link rows
+ * (FOR UPDATE) before its orphan-check DELETE, so whichever side wins the
+ * lock, the loser observes the winner's committed state — a send that
+ * loses sees the link already gone and rejects with `not_linked`; a purge
+ * that loses re-checks with a fresh snapshot and sees the message we
+ * committed, keeping the link. The lock alone would NOT be enough: a
+ * single blocked DELETE keeps its pre-block snapshot, which is why purge
+ * re-checks in a separate statement.
  */
 async function insertDmMessageWithAttachment(
   input: InsertDmMessageInput
@@ -368,12 +376,33 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
     );
 
     if (purgedAttachmentPairs.length > 0) {
+      const pairValues = () =>
+        sql.join(
+          purgedAttachmentPairs.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
+          sql`, `
+        );
+
+      // Lock the candidate link rows BEFORE the orphan-check DELETE. A
+      // concurrent top-level send (insertDmMessageWithAttachment) holds
+      // FOR UPDATE on its link row while inserting the message, so this
+      // SELECT blocks until that send commits. The DELETE below then runs
+      // as a separate statement with a fresh READ COMMITTED snapshot, so
+      // its NOT EXISTS sees the just-committed message and keeps the link.
+      // Folding the lock into the DELETE would not work: a DELETE keeps
+      // the snapshot it took before blocking, so its NOT EXISTS could miss
+      // a message that committed while it waited and still drop the link.
+      await tx.execute(sql`
+        SELECT 1
+        FROM file_conversations fc
+        JOIN (VALUES ${pairValues()}) AS pp("fileId", "conversationId")
+          ON fc."fileId" = pp."fileId"
+         AND fc."conversationId" = pp."conversationId"
+        FOR UPDATE OF fc
+      `);
+
       await tx.execute(sql`
         WITH purged_pairs("fileId", "conversationId") AS (
-          VALUES ${sql.join(
-            purgedAttachmentPairs.map((pair) => sql`(${pair.fileId}, ${pair.conversationId})`),
-            sql`, `
-          )}
+          VALUES ${pairValues()}
         )
         DELETE FROM file_conversations fc
         USING purged_pairs pp

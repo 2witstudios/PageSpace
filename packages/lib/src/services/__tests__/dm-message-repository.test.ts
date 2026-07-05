@@ -249,6 +249,46 @@ describe('dmMessageRepository.purgeInactiveMessages', () => {
       },
     });
   });
+
+  it('locks the candidate link rows (FOR UPDATE) in a SEPARATE statement before the orphan-check DELETE — the re-check needs a fresh snapshot that sees a concurrently committed send', async () => {
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    testDbState.seed('directMessages', [
+      { id: 'stale-a', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: 'file-1' },
+    ]);
+    testDbState.seed('fileConversations', [
+      { fileId: 'file-1', conversationId: 'conv-1' },
+    ]);
+
+    await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    const statements = testDbState.executes().map((m) => m.strings.join(' '));
+    const lockIndex = statements.findIndex((s) => /FOR UPDATE OF fc/.test(s) && !/DELETE/i.test(s));
+    const deleteIndex = statements.findIndex((s) => /DELETE\s+FROM\s+file_conversations/i.test(s));
+    assert({
+      given: 'a purge run that produced orphan-link cleanup candidates',
+      should: 'issue exactly two raw statements — a standalone SELECT ... FOR UPDATE OF fc lock, then the NOT EXISTS DELETE — in that order (a single locking DELETE would re-use its pre-block snapshot and could still drop a link a just-committed message depends on)',
+      actual: { total: statements.length, lockIndex, deleteIndex },
+      expected: { total: 2, lockIndex: 0, deleteIndex: 1 },
+    });
+  });
+
+  it('issues NO raw link-cleanup SQL (neither lock nor delete) when no purged message carried an attachment', async () => {
+    const cutoff = new Date('2026-04-01T00:00:00Z');
+    const old = new Date('2026-03-01T00:00:00Z');
+    testDbState.seed('directMessages', [
+      { id: 'stale-text-only', conversationId: 'conv-1', senderId: 'u-1', isActive: false, deletedAt: old, parentId: null, fileId: null },
+    ]);
+
+    const count = await dmMessageRepository.purgeInactiveMessages(cutoff);
+
+    assert({
+      given: 'a purge run whose only candidate was a text-only tombstone',
+      should: 'purge the row without taking link locks or running the cleanup DELETE',
+      actual: { count, executeCount: testDbState.executes().length },
+      expected: { count: 1, executeCount: 0 },
+    });
+  });
 });
 
 describe('dmMessageRepository.insertDmThreadReply', () => {

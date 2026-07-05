@@ -558,6 +558,12 @@ const isSqlJoin = (v: unknown): v is SqlJoinMarker =>
  * leave attachment-link rows stranded and tests would still pass. So we
  * recognize this specific pattern and apply the delete to in-memory state.
  *
+ * The impl also issues a standalone `SELECT ... FOR UPDATE OF fc` lock
+ * statement immediately before that DELETE (lock-then-recheck, so the
+ * DELETE's NOT EXISTS runs on a fresh snapshot). Locks have no in-memory
+ * effect, so that statement is intentionally record-only — tests assert
+ * its presence and ordering via `executes()`.
+ *
  * Any other `execute` shape is left as record-only (caller knows). If a
  * future impl introduces another raw SQL effect, add a branch here.
  */
