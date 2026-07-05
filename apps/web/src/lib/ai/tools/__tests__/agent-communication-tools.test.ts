@@ -187,6 +187,7 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { prepareHistoryForModel, finishModelRequest } from '../../core/context-assembly';
 import { runCompaction } from '../../core/compaction/compaction-service';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import type { z } from 'zod';
 
 const mockDb = vi.mocked(db);
 const mockCanActorViewPage = vi.mocked(canActorViewPage);
@@ -1158,6 +1159,190 @@ describe('agent-communication-tools', () => {
         const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown> | undefined;
         expect(toolsArg?.create_drive).toBeDefined();
         expect(toolsArg?.list_drives).toBeDefined();
+      });
+    });
+
+    describe('imageAttachments input schema', () => {
+      // ask_agent is itself an LLM-callable tool, so this schema is the only
+      // gate on untrusted model-supplied input (not just the trusted channel
+      // responder). The AI SDK parses tool-call args against inputSchema
+      // before execute ever runs, so we exercise the schema directly here.
+      const baseInput = { agentPath: '/test/agent', agentId: 'agent-1', question: 'What is this?' };
+
+      it('rejects a non-https, non-data image URL (e.g. an internal/metadata endpoint)', () => {
+        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
+          ...baseInput,
+          imageAttachments: [{ url: 'http://169.254.169.254/latest/meta-data/', mediaType: 'image/png' }],
+        });
+        expect(result.success).toBe(false);
+      });
+
+      it('accepts an https:// image URL', () => {
+        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
+          ...baseInput,
+          imageAttachments: [{ url: 'https://example.com/x.png', mediaType: 'image/png' }],
+        });
+        expect(result.success).toBe(true);
+      });
+
+      it('accepts a data: image URL', () => {
+        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
+          ...baseInput,
+          imageAttachments: [{ url: 'data:image/png;base64,iVBORw0KGgo=', mediaType: 'image/png' }],
+        });
+        expect(result.success).toBe(true);
+      });
+
+      it('rejects more than the single-message image cap', () => {
+        const tooMany = Array.from({ length: 6 }, (_, i) => ({
+          url: `https://example.com/${i}.png`,
+          mediaType: 'image/png',
+        }));
+        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
+          ...baseInput,
+          imageAttachments: tooMany,
+        });
+        expect(result.success).toBe(false);
+      });
+    });
+
+    describe('imageAttachments', () => {
+      const imageAttachments = [
+        { url: 'https://example.com/signed/screenshot.png', mediaType: 'image/png', filename: 'screenshot.png' },
+      ];
+
+      it('given a vision-capable target agent and imageAttachments, sends file parts to the model but persists only durable text parts', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+          id: 'agent-1',
+          title: 'Vision Agent',
+          type: 'AI_CHAT',
+          driveId: 'drive-1',
+          systemPrompt: 'I can see images',
+          enabledTools: null,
+          aiProvider: 'anthropic',
+          aiModel: 'claude-sonnet-4.5',
+          isTrashed: false,
+        });
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'What is in this screenshot?',
+            imageAttachments,
+          },
+          context
+        );
+
+        // The model request (via prepareHistoryForModel) sees the image file parts...
+        const historyArg = vi.mocked(prepareHistoryForModel).mock.calls[0][0].history as Array<{
+          role: string;
+          parts: Array<{ type: string; url?: string; mediaType?: string; filename?: string }>;
+        }>;
+        const modelUserMessage = historyArg[historyArg.length - 1];
+        expect(modelUserMessage.role).toBe('user');
+        expect(modelUserMessage.parts).toContainEqual({
+          type: 'file',
+          url: imageAttachments[0].url,
+          mediaType: imageAttachments[0].mediaType,
+          filename: imageAttachments[0].filename,
+        });
+
+        // ...but the persisted message must not: the presigned URLs expire,
+        // and replaying them from history would send dead links to the model.
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          (call) => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
+        expect(savedParts.some((part) => part.type === 'file')).toBe(false);
+        const textPart = savedParts.find((part) => part.type === 'text') as { text: string } | undefined;
+        expect(textPart?.text).toMatch(/1 image attachment from recent channel context was attached/i);
+      });
+
+      it('given a non-vision target agent and imageAttachments, omits file parts and adds a text note instead', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+          id: 'agent-2',
+          title: 'Text Agent',
+          type: 'AI_CHAT',
+          driveId: 'drive-1',
+          systemPrompt: 'I am text-only',
+          enabledTools: null,
+          aiProvider: 'openai',
+          aiModel: 'o1-mini',
+          isTrashed: false,
+        });
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-2',
+            question: 'What is in this screenshot?',
+            imageAttachments,
+          },
+          context
+        );
+
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          (call) => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
+        expect(savedParts.some((part) => part.type === 'file')).toBe(false);
+        const textPart = savedParts.find((part) => part.type === 'text') as { text: string } | undefined;
+        expect(textPart?.text).toMatch(/does not support vision/i);
+        // Grammar: a single attachment must read "1 image attachment WAS
+        // provided ... IT could not be viewed", not "were"/"they" (the plural
+        // form leaking into the singular case).
+        expect(textPart?.text).toMatch(/1 image attachment was provided.*it could not be viewed/i);
+      });
+
+      it('given no imageAttachments, behaves exactly as before (no file parts, no vision note)', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
+          id: 'agent-1',
+          title: 'Vision Agent',
+          type: 'AI_CHAT',
+          driveId: 'drive-1',
+          systemPrompt: 'I can see images',
+          enabledTools: null,
+          aiProvider: 'anthropic',
+          aiModel: 'claude-sonnet-4.5',
+          isTrashed: false,
+        });
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          {
+            agentPath: '/test/agent',
+            agentId: 'agent-1',
+            question: 'Plain question',
+          },
+          context
+        );
+
+        const userMessageCall = vi.mocked(saveMessageToDatabase).mock.calls.find(
+          (call) => call[0].role === 'user'
+        );
+        expect(userMessageCall).toBeDefined();
+        const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
+        expect(savedParts).toEqual([{ type: 'text', text: 'Plain question' }]);
       });
     });
 
