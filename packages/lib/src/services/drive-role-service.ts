@@ -179,8 +179,49 @@ export async function getRoleById(
   return role as DriveRole | null;
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /**
- * Create a new role for a drive
+ * Lock every role row in the drive with `FOR UPDATE`, acquiring the locks in a
+ * consistent (id) order.
+ *
+ * Any mutation that writes drive-wide (unsetting other roles' `isDefault`,
+ * reordering positions) needs locks on all of the drive's role rows. If each
+ * writer locked rows in its own order, two concurrent writers could each hold
+ * a row the other needs — a Postgres deadlock. Funneling every drive-wide
+ * writer through this single id-ordered acquisition serializes them instead.
+ */
+async function lockDriveRolesInOrder(tx: Tx, driveId: string) {
+  return tx
+    .select()
+    .from(driveRoles)
+    .where(eq(driveRoles.driveId, driveId))
+    .orderBy(asc(driveRoles.id))
+    .for('update');
+}
+
+/**
+ * Unset `isDefault` on whichever role currently holds it in the drive.
+ * Filtering to `isDefault = true` keeps the write to at most one row instead
+ * of rewriting every role in the drive. Callers must already hold the ordered
+ * drive-wide lock (`lockDriveRolesInOrder`) before calling this.
+ */
+async function unsetOtherDefaultRoles(tx: Tx, driveId: string) {
+  await tx.update(driveRoles)
+    .set({ isDefault: false })
+    .where(and(
+      eq(driveRoles.driveId, driveId),
+      eq(driveRoles.isDefault, true)
+    ));
+}
+
+/**
+ * Create a new role for a drive.
+ *
+ * Runs inside a transaction: when `isDefault` is set, the drive-wide "unset
+ * other defaults" write takes the ordered drive-wide lock (see
+ * `lockDriveRolesInOrder`) so a create racing an `updateDriveRole` default
+ * switch can neither deadlock nor leave two default roles behind.
  */
 export async function createDriveRole(
   driveId: string,
@@ -190,36 +231,39 @@ export async function createDriveRole(
     throw new Error('Invalid driveWidePermissions structure');
   }
 
-  // Get the highest position to add new role at the end
-  const existingRoles = await db.query.driveRoles.findMany({
-    where: eq(driveRoles.driveId, driveId),
-    orderBy: [asc(driveRoles.position)],
+  return db.transaction(async (tx) => {
+    // Read existing roles for the position computation; when creating as
+    // default this doubles as the ordered drive-wide lock acquisition.
+    const existingRoles = input.isDefault
+      ? await lockDriveRolesInOrder(tx, driveId)
+      : await tx
+          .select()
+          .from(driveRoles)
+          .where(eq(driveRoles.driveId, driveId));
+
+    const maxPosition = existingRoles.length > 0
+      ? Math.max(...existingRoles.map(r => r.position)) + 1
+      : 0;
+
+    // If setting as default, unset other defaults
+    if (input.isDefault) {
+      await unsetOtherDefaultRoles(tx, driveId);
+    }
+
+    const [newRole] = await tx.insert(driveRoles).values({
+      driveId,
+      name: input.name.trim(),
+      description: input.description,
+      color: input.color,
+      isDefault: input.isDefault || false,
+      permissions: input.permissions,
+      driveWidePermissions: input.driveWidePermissions ?? null,
+      position: maxPosition,
+      updatedAt: new Date(),
+    }).returning();
+
+    return newRole as DriveRole;
   });
-
-  const maxPosition = existingRoles.length > 0
-    ? Math.max(...existingRoles.map(r => r.position)) + 1
-    : 0;
-
-  // If setting as default, unset other defaults
-  if (input.isDefault) {
-    await db.update(driveRoles)
-      .set({ isDefault: false })
-      .where(eq(driveRoles.driveId, driveId));
-  }
-
-  const [newRole] = await db.insert(driveRoles).values({
-    driveId,
-    name: input.name.trim(),
-    description: input.description,
-    color: input.color,
-    isDefault: input.isDefault || false,
-    permissions: input.permissions,
-    driveWidePermissions: input.driveWidePermissions ?? null,
-    position: maxPosition,
-    updatedAt: new Date(),
-  }).returning();
-
-  return newRole as DriveRole;
 }
 
 /**
@@ -256,14 +300,9 @@ export async function updateDriveRole(
   return db.transaction(async (tx) => {
     let existingRole: typeof driveRoles.$inferSelect | undefined;
     if (input.isDefault) {
-      // Setting a default updates every role row in the drive, so acquire all
-      // of the drive's role locks in id order (see doc comment above).
-      const lockedRoles = await tx
-        .select()
-        .from(driveRoles)
-        .where(eq(driveRoles.driveId, driveId))
-        .orderBy(asc(driveRoles.id))
-        .for('update');
+      // Setting a default updates every role row in the drive, so acquire the
+      // ordered drive-wide lock (see lockDriveRolesInOrder).
+      const lockedRoles = await lockDriveRolesInOrder(tx, driveId);
       existingRole = lockedRoles.find((role) => role.id === roleId);
     } else {
       [existingRole] = await tx
@@ -282,9 +321,7 @@ export async function updateDriveRole(
 
     // If setting as default and wasn't already, unset other defaults
     if (input.isDefault && !existingRole.isDefault) {
-      await tx.update(driveRoles)
-        .set({ isDefault: false })
-        .where(eq(driveRoles.driveId, driveId));
+      await unsetOtherDefaultRoles(tx, driveId);
     }
 
     const resolvedPermissions = input.permissionsPatch !== undefined
@@ -341,26 +378,28 @@ export async function deleteDriveRole(
 }
 
 /**
- * Reorder roles for a drive
+ * Reorder roles for a drive.
+ *
+ * Takes the ordered drive-wide lock before writing: the per-role position
+ * updates run in caller-supplied order, which would otherwise acquire row
+ * locks in an arbitrary order and could deadlock against a concurrent default
+ * switch holding the id-ordered lock. Holding all the rows up front also makes
+ * the membership validation authoritative rather than a pre-transaction
+ * snapshot.
  */
 export async function reorderDriveRoles(
   driveId: string,
   roleIds: string[]
 ): Promise<void> {
-  // Validate that all roleIds belong to this drive
-  const existingRoles = await db.query.driveRoles.findMany({
-    where: eq(driveRoles.driveId, driveId),
-    columns: { id: true },
-  });
-  const existingIds = new Set(existingRoles.map(r => r.id));
-  const invalidIds = roleIds.filter(id => !existingIds.has(id));
-
-  if (invalidIds.length > 0) {
-    throw new Error('Invalid role IDs');
-  }
-
-  // Update positions in a transaction
   await db.transaction(async (tx) => {
+    const existingRoles = await lockDriveRolesInOrder(tx, driveId);
+    const existingIds = new Set(existingRoles.map(r => r.id));
+    const invalidIds = roleIds.filter(id => !existingIds.has(id));
+
+    if (invalidIds.length > 0) {
+      throw new Error('Invalid role IDs');
+    }
+
     for (let index = 0; index < roleIds.length; index++) {
       const roleId = roleIds[index];
       await tx.update(driveRoles)

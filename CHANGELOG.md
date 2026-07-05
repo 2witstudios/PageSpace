@@ -33,3 +33,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   `@pagespace/cli`). It keeps working exactly as before — same tools, same env vars — and now
   prints a one-line migration notice to stderr. See the
   [migration guide](packages/cli/docs/migrating-from-pagespace-mcp.md).
+
+### Fixed
+
+- **Drive role permission updates are now atomic** — granting or revoking a role's per-page
+  permission (via the share dialog, the roles API, or an AI agent tool) could previously race a
+  concurrent grant/revoke on the same role and silently drop it, because the update read the
+  role's permissions, merged in JS, and wrote the whole map back with no lock in between. Updates
+  now merge under a row lock inside a transaction, and setting a role as default no longer risks a
+  database deadlock or two roles ending up marked default at once.
