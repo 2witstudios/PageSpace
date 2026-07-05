@@ -317,6 +317,85 @@ describe('POST /api/v1/chat/completions', () => {
     });
   });
 
+  test('validates file parts in earlier user messages, not just the final one', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.id === 'msg-1');
+    vi.mocked(validateUserMessageFileParts).mockReturnValue({ valid: false, error: 'Image "cat.png" exceeds the 4MB size limit', filePartCount: 1 });
+    const bodyWithEarlierImage = {
+      model: 'ps-agent://page-123',
+      messages: [
+        {
+          role: 'user',
+          id: 'msg-1',
+          content: 'What is in this image?',
+          parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+        },
+        { role: 'assistant', id: 'msg-2', content: 'A cat.', parts: [{ type: 'text', text: 'A cat.' }] },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(bodyWithEarlierImage));
+    const body = await response.json();
+    assert({
+      given: 'a resent full history where only an EARLIER user message carries an invalid file part and the final message is text-only',
+      should: 'still return 400 from file-part validation and never call the prepaid credit gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: { status: 400, error: 'Image "cat.png" exceeds the 4MB size limit', creditGateCalled: false },
+    });
+  });
+
+  test('applies the vision-capability gate to images in earlier user messages', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.id === 'msg-1');
+    vi.mocked(hasVisionCapability).mockReturnValue(false);
+    const bodyWithEarlierImage = {
+      model: 'ps-agent://page-123',
+      messages: [
+        {
+          role: 'user',
+          id: 'msg-1',
+          content: 'What is in this image?',
+          parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+        },
+        { role: 'assistant', id: 'msg-2', content: 'A cat.', parts: [{ type: 'text', text: 'A cat.' }] },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(bodyWithEarlierImage));
+    const body = await response.json();
+    assert({
+      given: 'a resent full history with a valid image in an EARLIER user message and a non-vision model',
+      should: 'return 400 from the vision gate and never call the prepaid credit gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: {
+        status: 400,
+        error: `The selected model "${agentPage.aiModel}" does not support image attachments. Please choose a vision-capable model.`,
+        creditGateCalled: false,
+      },
+    });
+  });
+
+  test('returns 403 to a caller without page access before any vision error can reveal the agent model', async () => {
+    vi.mocked(canPrincipalViewPage).mockResolvedValue(false);
+    vi.mocked(hasFileParts).mockReturnValue(true);
+    vi.mocked(hasVisionCapability).mockReturnValue(false);
+    const bodyWithImage = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        id: 'msg-1',
+        content: 'What is in this image?',
+        parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+      }],
+    };
+    const response = await POST(makeRequest(bodyWithImage));
+    const body = await response.json();
+    assert({
+      given: 'an authenticated caller with a valid image who lacks view permission on a non-vision agent page',
+      should: 'return the permission 403 rather than the vision 400 that would leak the configured model',
+      actual: { status: response.status, error: body.error, leaksModel: String(body.error).includes(String(agentPage.aiModel)) },
+      expected: { status: 403, error: 'Access denied', leaksModel: false },
+    });
+  });
+
   test('returns 401 when auth fails', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),

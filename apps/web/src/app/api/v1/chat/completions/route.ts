@@ -105,24 +105,6 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
   }
 
-  // 4b. Image security + vision-capability gate — mirrors the in-app chat route
-  // (apps/web/src/app/api/ai/chat/route.ts) and runs before the credit hold (6b) so a
-  // rejected image never reserves a hold or an in-flight slot.
-  const userMessageForValidation = messages[messages.length - 1];
-  const messageHasImages = userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation);
-  if (messageHasImages) {
-    const imageValidation = validateUserMessageFileParts(userMessageForValidation);
-    if (!imageValidation.valid) {
-      return NextResponse.json({ error: imageValidation.error }, { status: 400 });
-    }
-    if (page.aiModel && !hasVisionCapability(page.aiModel)) {
-      return NextResponse.json(
-        { error: `The selected model "${page.aiModel}" does not support image attachments. Please choose a vision-capable model.` },
-        { status: 400 },
-      );
-    }
-  }
-
   // 5. Permission check. View is necessary but not sufficient: this endpoint runs
   // the agent's server-side tools (including write tools) with the agent page as the
   // actor, so it requires the same edit gate the in-app page chat enforces before
@@ -138,7 +120,31 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
-  // 5b. Conversation ownership check — if a conversation_id is provided the caller
+  // 5b. Image security + vision-capability gate — mirrors the in-app chat route
+  // (apps/web/src/app/api/ai/chat/route.ts). Runs after the permission checks so an
+  // unauthorized caller gets the 403 and never learns the agent's configured model from
+  // the vision error, and before the credit hold (6b) so a rejected image never reserves
+  // a hold or an in-flight slot. Every user message in the request body is validated —
+  // not just the newest one — because non-threaded and client_manages_history callers
+  // resend full history, and validateInferenceRequest maps image_url parts to file
+  // parts on all of them.
+  const userMessagesWithImages = messages.filter(m => m.role === 'user' && hasFileParts(m));
+  if (userMessagesWithImages.length > 0) {
+    for (const messageWithImages of userMessagesWithImages) {
+      const imageValidation = validateUserMessageFileParts(messageWithImages);
+      if (!imageValidation.valid) {
+        return NextResponse.json({ error: imageValidation.error }, { status: 400 });
+      }
+    }
+    if (page.aiModel && !hasVisionCapability(page.aiModel)) {
+      return NextResponse.json(
+        { error: `The selected model "${page.aiModel}" does not support image attachments. Please choose a vision-capable model.` },
+        { status: 400 },
+      );
+    }
+  }
+
+  // 5c. Conversation ownership check — if a conversation_id is provided the caller
   // must own the conversations row. This prevents one user from appending messages
   // into another user's thread.
   //
