@@ -8,6 +8,7 @@
 import { db as defaultDb } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { integrationToolGrants, type IntegrationToolGrant, type NewIntegrationToolGrant } from '@pagespace/db/schema/integrations';
+import { resolveProviderConfig } from '../providers/builtin-providers';
 
 type GrantWithConnection = IntegrationToolGrant & {
   connection: {
@@ -21,6 +22,25 @@ type GrantWithConnection = IntegrationToolGrant & {
     } | null;
   } | null;
 };
+
+/**
+ * Overlay the authoritative builtin config onto a grant's connection provider
+ * before it leaves the repository, mirroring connection-repository.ts so every
+ * reader of `connection.provider.config` sees canonical config uniformly.
+ */
+function withResolvedProviderConfig(grant: GrantWithConnection): GrantWithConnection {
+  if (!grant.connection?.provider) return grant;
+  return {
+    ...grant,
+    connection: {
+      ...grant.connection,
+      provider: {
+        ...grant.connection.provider,
+        config: resolveProviderConfig(grant.connection.provider),
+      },
+    },
+  };
+}
 
 type GrantWithAgent = IntegrationToolGrant & {
   agent: {
@@ -94,7 +114,7 @@ export const listGrantsByAgent = async (
     },
   });
 
-  return grants;
+  return grants.map(withResolvedProviderConfig);
 };
 
 /**

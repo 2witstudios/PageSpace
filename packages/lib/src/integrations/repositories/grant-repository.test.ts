@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { resolveProviderConfig } from '../providers/builtin-providers';
 
 // Define types locally for testing
 interface MockGrant {
@@ -25,7 +26,7 @@ interface MockConnection {
   id: string;
   name: string;
   status: string;
-  provider?: { slug: string; name: string };
+  provider?: { slug: string; name: string; config: unknown };
 }
 
 interface MockAgent {
@@ -58,6 +59,20 @@ const createMockDb = (): MockDb => ({
 });
 
 // Inline repository implementations for testing
+function withResolvedProviderConfig(grant: MockGrant): MockGrant {
+  if (!grant.connection?.provider) return grant;
+  return {
+    ...grant,
+    connection: {
+      ...grant.connection,
+      provider: {
+        ...grant.connection.provider,
+        config: resolveProviderConfig(grant.connection.provider),
+      },
+    },
+  };
+}
+
 const createGrant = async (
   db: MockDb,
   data: Partial<MockGrant>
@@ -87,10 +102,11 @@ const listGrantsByAgent = async (
   db: MockDb,
   agentId: string
 ): Promise<MockGrant[]> => {
-  return db.query.integrationToolGrants.findMany({
+  const grants = await db.query.integrationToolGrants.findMany({
     where: { agentId },
     with: { connection: { with: { provider: true } } },
-  }) ?? [];
+  });
+  return (grants ?? []).map(withResolvedProviderConfig);
 };
 
 const listGrantsByConnection = async (
@@ -269,7 +285,7 @@ describe('listGrantsByAgent', () => {
           id: 'conn-1',
           name: 'GitHub',
           status: 'active',
-          provider: { slug: 'github', name: 'GitHub' },
+          provider: { slug: 'github', name: 'GitHub', config: {} },
         },
       },
       {
@@ -283,7 +299,7 @@ describe('listGrantsByAgent', () => {
           id: 'conn-2',
           name: 'Slack',
           status: 'active',
-          provider: { slug: 'slack', name: 'Slack' },
+          provider: { slug: 'slack', name: 'Slack', config: {} },
         },
       },
     ];
@@ -295,6 +311,34 @@ describe('listGrantsByAgent', () => {
     expect(result).toHaveLength(2);
     expect(result[0].connection?.provider?.slug).toBe('github');
     expect(result[1].connection?.provider?.slug).toBe('slack');
+  });
+
+  it('given a builtin provider with stale persisted config, should overlay the canonical definition', async () => {
+    const grants: MockGrant[] = [
+      {
+        id: 'grant-1',
+        agentId: 'agent-1',
+        connectionId: 'conn-1',
+        allowedTools: null,
+        deniedTools: null,
+        readOnly: false,
+        connection: {
+          id: 'conn-1',
+          name: 'GitHub',
+          status: 'active',
+          // Stale persisted config — no tools/bundles, as if seeded before a rename.
+          provider: { slug: 'github', name: 'GitHub', config: { tools: [] } },
+        },
+      },
+    ];
+
+    mockDb.query.integrationToolGrants.findMany.mockResolvedValue(grants);
+
+    const result = await listGrantsByAgent(mockDb, 'agent-1');
+
+    const config = result[0].connection?.provider?.config as { tools: unknown[] };
+    expect(config).not.toEqual({ tools: [] });
+    expect(config.tools.length).toBeGreaterThan(0);
   });
 
   it('given agent with no grants, should return empty array', async () => {

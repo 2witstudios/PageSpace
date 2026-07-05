@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { integrationConnections } from '@pagespace/db/schema/integrations';
 import { decryptCredentials } from '../../integrations/credentials/encrypt-credentials';
-import type { IntegrationProviderConfig } from '../../integrations/types';
+import { resolveProviderConfig } from '../../integrations/providers/builtin-providers';
 
 export interface OAuthRevokeResult {
   revoked: number;
@@ -29,9 +29,9 @@ export async function revokeUserIntegrationTokens(userId: string): Promise<OAuth
 
   for (const connection of connections) {
     try {
-      if (connection.provider && connection.credentials) {
-        const providerConfig = connection.provider.config as IntegrationProviderConfig;
+      const providerConfig = resolveProviderConfig(connection.provider);
 
+      if (providerConfig && connection.credentials) {
         if (providerConfig.authMethod.type === 'oauth2') {
           const revokeUrl = providerConfig.authMethod.config.revokeUrl;
 

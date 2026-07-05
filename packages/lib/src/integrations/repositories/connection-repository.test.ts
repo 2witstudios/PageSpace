@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { resolveProviderConfig } from '../providers/builtin-providers';
 
 // Define types locally for testing
 type ConnectionStatus = 'active' | 'expired' | 'error' | 'pending' | 'revoked';
@@ -60,6 +61,17 @@ const createMockDb = (): MockDb => ({
 // Inline repository implementations for testing
 // (Real implementation in connection-repository.ts uses drizzle)
 
+function withResolvedProviderConfig(connection: MockConnection): MockConnection {
+  if (!connection.provider) return connection;
+  return {
+    ...connection,
+    provider: {
+      ...connection.provider,
+      config: resolveProviderConfig(connection.provider),
+    },
+  };
+}
+
 const createConnection = async (
   db: MockDb,
   data: Partial<MockConnection>
@@ -79,10 +91,11 @@ const getConnectionWithProvider = async (
   db: MockDb,
   connectionId: string
 ): Promise<MockConnection | null> => {
-  return db.query.integrationConnections.findFirst({
+  const connection = await db.query.integrationConnections.findFirst({
     where: { id: connectionId },
     with: { provider: true },
-  }) ?? null;
+  });
+  return connection ? withResolvedProviderConfig(connection) : null;
 };
 
 const findUserConnection = async (
@@ -127,20 +140,22 @@ const listUserConnections = async (
   db: MockDb,
   userId: string
 ): Promise<MockConnection[]> => {
-  return db.query.integrationConnections.findMany({
+  const connections = await db.query.integrationConnections.findMany({
     where: { userId },
     with: { provider: true },
-  }) ?? [];
+  });
+  return (connections ?? []).map(withResolvedProviderConfig);
 };
 
 const listDriveConnections = async (
   db: MockDb,
   driveId: string
 ): Promise<MockConnection[]> => {
-  return db.query.integrationConnections.findMany({
+  const connections = await db.query.integrationConnections.findMany({
     where: { driveId },
     with: { provider: true },
-  }) ?? [];
+  });
+  return (connections ?? []).map(withResolvedProviderConfig);
 };
 
 describe('createConnection', () => {
@@ -251,13 +266,13 @@ describe('getConnectionWithProvider', () => {
     const connectionWithProvider: MockConnection = {
       id: 'conn-123',
       providerId: 'provider-1',
-      name: 'My GitHub',
+      name: 'My Custom Integration',
       status: 'active',
       provider: {
         id: 'provider-1',
-        slug: 'github',
-        name: 'GitHub',
-        config: { baseUrl: 'https://api.github.com' },
+        slug: 'my-custom-provider',
+        name: 'Custom',
+        config: { baseUrl: 'https://api.example.com' },
       },
     };
 
@@ -267,7 +282,30 @@ describe('getConnectionWithProvider', () => {
 
     expect(result).toEqual(connectionWithProvider);
     expect(result?.provider).toBeDefined();
-    expect(result?.provider?.slug).toBe('github');
+    expect(result?.provider?.slug).toBe('my-custom-provider');
+  });
+
+  it('given a builtin provider slug, should overlay the canonical config over a stale persisted copy', async () => {
+    const connectionWithStaleProvider: MockConnection = {
+      id: 'conn-123',
+      providerId: 'provider-1',
+      name: 'My GitHub',
+      status: 'active',
+      provider: {
+        id: 'provider-1',
+        slug: 'github',
+        name: 'GitHub',
+        // Stale persisted config — e.g. seeded before a tool rename/bundle addition.
+        config: { baseUrl: 'https://api.github.com', tools: [] },
+      },
+    };
+
+    mockDb.query.integrationConnections.findFirst.mockResolvedValue(connectionWithStaleProvider);
+
+    const result = await getConnectionWithProvider(mockDb, 'conn-123');
+
+    expect(result?.provider?.config).not.toEqual({ baseUrl: 'https://api.github.com', tools: [] });
+    expect((result?.provider?.config as { tools: unknown[] }).tools.length).toBeGreaterThan(0);
   });
 
   it('given non-existent connection ID, should return null', async () => {
@@ -444,8 +482,11 @@ describe('listUserConnections', () => {
 
     const result = await listUserConnections(mockDb, 'user-1');
 
-    expect(result).toEqual(userConnections);
     expect(result).toHaveLength(2);
+    // Stale/empty persisted config (`{}`) is overlaid with the canonical builtin
+    // definition for both connections, not returned as-is.
+    expect(result[0].provider?.config).not.toEqual({});
+    expect(result[1].provider?.config).not.toEqual({});
   });
 
   it('given user with no connections, should return empty array', async () => {
@@ -473,6 +514,7 @@ describe('listDriveConnections', () => {
 
     const result = await listDriveConnections(mockDb, 'drive-1');
 
-    expect(result).toEqual(driveConnections);
+    expect(result).toHaveLength(1);
+    expect(result[0].provider?.config).not.toEqual({});
   });
 });
