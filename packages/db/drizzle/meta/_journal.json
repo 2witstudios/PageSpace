@@ -1254,6 +1254,13 @@
       "when": 1783229015580,
       "tag": "0178_mighty_norrin_radd",
       "breakpoints": true
+    },
+    {
+      "idx": 179,
+      "version": "7",
+      "when": 1783277225114,
+      "tag": "0179_vengeful_metal_master",
+      "breakpoints": true
     }
   ]
 }
