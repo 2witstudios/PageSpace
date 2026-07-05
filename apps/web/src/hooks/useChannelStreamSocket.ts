@@ -203,7 +203,16 @@ export function useChannelStreamSocket(
           // the same messageId is a no-op for onStreamComplete: the catch
           // path already finalized this stream locally.
           processed.add(messageId);
-          removeStream(messageId);
+          // When the store was seeded from a persisted snapshot
+          // (skipReplayCount > 0), a failed join usually means the
+          // originator's process died — its in-memory registry is gone and
+          // the join 404s. That snapshot is the only surviving copy of the
+          // partial content, so keep it rendered; removing it here would
+          // undo the restore that just happened. Streams with no seeded
+          // snapshot have nothing to preserve and are removed as before.
+          if (skipReplayCount === 0) {
+            removeStream(messageId);
+          }
           fireOwnFinalize(messageId);
           if (!controller.signal.aborted) {
             console.error('[useChannelStreamSocket] SSE join error:', err);
@@ -228,20 +237,21 @@ export function useChannelStreamSocket(
         for (const stream of data.streams ?? []) {
           if (shouldSkipBootstrappedStream(stream.messageId, processed, controllers)) continue;
           const isOwn = isOwnStream(stream.triggeredBy, localBrowserSessionId);
+          // Seed the persisted snapshot as the stream's initial parts so the
+          // restored mid-stream content renders immediately — without waiting
+          // on (or depending on) the live multicast, which is unavailable if
+          // the originator's process has died. Seeding through addStream
+          // (a no-op when the entry exists) keeps a co-mounted surface that
+          // bootstrapped the same channel from appending the snapshot twice.
+          const persistedParts = stream.parts ?? [];
           addStream({
             messageId: stream.messageId,
             pageId: channelId,
             conversationId: stream.conversationId,
             triggeredBy: stream.triggeredBy,
             isOwn,
+            parts: persistedParts,
           });
-          // Render the persisted snapshot immediately — restoring mid-stream
-          // content doesn't need to wait on (or depend on) the live multicast,
-          // which is unavailable if the originator's process has died.
-          const persistedParts = stream.parts ?? [];
-          for (const part of persistedParts) {
-            appendPart(stream.messageId, part);
-          }
           if (isOwn) {
             ownStreamIds.add(stream.messageId);
             onOwnStreamBootstrapRef.current?.({ messageId: stream.messageId });
