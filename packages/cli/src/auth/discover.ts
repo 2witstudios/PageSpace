@@ -1,6 +1,9 @@
 /**
  * RFC 8414 authorization server metadata discovery (Phase 4 task 3) — the
- * client-side counterpart to `apps/web/src/app/.well-known/oauth-authorization-server`.
+ * client-side counterpart to `apps/web/src/app/api/well-known/oauth-authorization-server`,
+ * reached via the `/.well-known/oauth-authorization-server` rewrite in
+ * apps/web/next.config.ts (Next.js App Router does not route dot-prefixed
+ * folders under app/).
  * Zero trust: the fetched JSON is untrusted network input, validated with zod
  * before any field is trusted; a missing/malformed endpoint URL fails closed
  * rather than falling back to a guessed path.

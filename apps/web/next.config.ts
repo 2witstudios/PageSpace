@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import CopyPlugin from "copy-webpack-plugin";
 import { withSentryConfig } from "@sentry/nextjs";
+import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
 
 // Guard: only externalize workspace packages when running in production AND
 // their dist directories exist. The production check prevents stale dist/
@@ -101,15 +102,7 @@ export const nextConfig: NextConfig = {
     ];
   },
   async rewrites() {
-    return [
-      // Next.js App Router does not route dot-prefixed folders (app/.well-known/*
-      // never lands in the build manifest), so the RFC 8414 discovery URL is
-      // rewritten to a normal, routable API path.
-      {
-        source: '/.well-known/oauth-authorization-server',
-        destination: '/api/well-known/oauth-authorization-server',
-      },
-    ];
+    return [...WELL_KNOWN_REWRITES];
   },
 };
 

@@ -14,6 +14,7 @@ import {
   isOriginValidationBlocking,
 } from '@/lib/auth';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
+import { WELL_KNOWN_REWRITES } from '@/lib/well-known/rewrites';
 
 // Edge-safe middleware: only checks presence of auth tokens, not validity.
 // Full validation happens in route handlers via verifyAuth()/validateMCPToken().
@@ -103,12 +104,12 @@ export async function middleware(req: NextRequest) {
       return response;
     }
 
-    // RFC 8414 OAuth discovery metadata — must be reachable with no session,
-    // since it's the first request the CLI login flow makes. Middleware sees
-    // the pre-rewrite pathname (next.config's rewrites() runs after
-    // middleware), so this must match the original well-known URL, not its
-    // /api/oauth/authorization-server-metadata destination.
-    if (pathname === '/.well-known/oauth-authorization-server') {
+    // Well-known discovery routes (e.g. RFC 8414 OAuth metadata) must be
+    // reachable with no session — for OAuth discovery it's the first request
+    // the CLI login flow makes. Middleware sees the pre-rewrite pathname
+    // (next.config's rewrites() runs after middleware), so this must match
+    // against WELL_KNOWN_REWRITES' `source` values, not their destinations.
+    if (WELL_KNOWN_REWRITES.some((rewrite) => rewrite.source === pathname)) {
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
       return response;
     }
