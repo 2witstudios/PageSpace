@@ -322,7 +322,7 @@ export async function POST(request: Request): Promise<Response> {
     let inferenceMessages = messages;
     if (isThreadMode && !clientManagesHistory) {
       const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
-      inferenceMessages = [...dbMessages.map(convertDbMessageToUIMessage), userMessage];
+      inferenceMessages = [...await Promise.all(dbMessages.map(convertDbMessageToUIMessage)), userMessage];
     }
 
     // Back-fill: when the client manages full history, persist tool results that arrived

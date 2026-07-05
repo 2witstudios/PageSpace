@@ -31,7 +31,7 @@ vi.mock('@/lib/presigned-url', () => ({
   getS3Bucket: () => 'test-bucket',
 }));
 
-import { issuePresignedPutUrl, checkObjectExists } from '../s3-effects';
+import { issuePresignedPutUrl, checkObjectExists, putObject } from '../s3-effects';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -59,6 +59,28 @@ describe('issuePresignedPutUrl', () => {
       expect.anything(),
       { expiresIn: 600 },
     );
+  });
+});
+
+describe('putObject', () => {
+  it('sends a PutObjectCommand with the bucket, key, body, and content type', async () => {
+    mockSend.mockResolvedValue({});
+    const body = Buffer.from('hello');
+
+    await putObject('chat-attachments/abc/original', body, 'image/png');
+
+    expect(putObjectCtor).toHaveBeenCalledWith({
+      Bucket: 'test-bucket',
+      Key: 'chat-attachments/abc/original',
+      Body: body,
+      ContentType: 'image/png',
+    });
+    expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a failed send', async () => {
+    mockSend.mockRejectedValue(new Error('S3 unavailable'));
+    await expect(putObject('key', Buffer.from('x'), 'image/png')).rejects.toThrow('S3 unavailable');
   });
 });
 

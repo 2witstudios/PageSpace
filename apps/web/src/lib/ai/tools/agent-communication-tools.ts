@@ -468,7 +468,7 @@ export const agentCommunicationTools = {
             ))
             .orderBy(chatMessages.createdAt);
 
-          messages = dbMessages.map(convertDbMessageToUIMessage);
+          messages = await Promise.all(dbMessages.map(convertDbMessageToUIMessage));
 
           loggers.ai.debug('Loaded conversation history for ask_agent:', {
             conversationId,
