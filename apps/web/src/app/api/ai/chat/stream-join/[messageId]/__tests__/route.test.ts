@@ -426,6 +426,47 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       testRegistry.finish(mockMessageId);
       await readSSEBody(response);
     });
+
+    it('given the permission recheck throws (e.g. a transient DB error), should fail closed: close the stream and emit a denial audit event', async () => {
+      vi.useFakeTimers();
+      vi.mocked(canUserViewPage)
+        .mockResolvedValueOnce(true) // initial join-time gate check
+        .mockRejectedValueOnce(new Error('DB connection lost')); // first recheck tick
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      const body = await readSSEBody(response);
+
+      expect(body).toContain('data: {"done":true,"aborted":true}\n\n');
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'authz.access.denied',
+          resourceType: 'ai_stream',
+          resourceId: mockMessageId,
+          details: expect.objectContaining({ reason: 'permission_recheck_failed', pageId: mockPageId }),
+        }),
+      );
+    });
+
+    it('given the permission recheck throws, should not schedule a further recheck (no leaked timer)', async () => {
+      vi.useFakeTimers();
+      vi.mocked(canUserViewPage)
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error('DB connection lost'));
+      testRegistry.register(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      vi.mocked(canUserViewPage).mockClear();
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS * 3);
+
+      expect(canUserViewPage).not.toHaveBeenCalled();
+    });
   });
 
   describe('client disconnect', () => {

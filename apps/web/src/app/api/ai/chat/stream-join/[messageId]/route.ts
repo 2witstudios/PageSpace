@@ -129,23 +129,14 @@ export async function GET(
         controller.close();
       }, { once: true });
 
-      const recheckAccess = async () => {
-        if (streamClosed) return;
-        const stillAllowed = await hasViewAccess();
-        if (streamClosed) return;
-
-        if (stillAllowed) {
-          recheckTimeoutId = setTimeout(() => void recheckAccess(), PERMISSION_RECHECK_INTERVAL_MS);
-          return;
-        }
-
+      const closeStreamAsDenied = (reason: string) => {
         streamClosed = true;
         unsubscribe();
         auditRequest(request, {
           eventType: 'authz.access.denied',
           resourceType: 'ai_stream',
           resourceId: messageId,
-          details: { reason: 'permission_revoked_mid_stream', pageId: meta.pageId },
+          details: { reason, pageId: meta.pageId },
           riskScore: 0.5,
         });
         try {
@@ -156,6 +147,28 @@ export async function GET(
           // firing between the streamClosed check above and this enqueue) — the
           // stream is already torn down either way, nothing more to do.
         }
+      };
+
+      const recheckAccess = async () => {
+        if (streamClosed) return;
+        let stillAllowed: boolean;
+        try {
+          stillAllowed = await hasViewAccess();
+        } catch {
+          // Fail closed: a broken permission check must not silently disable the
+          // revocation backstop for the rest of the stream's lifetime. Without this,
+          // a transient DB error would leave the stream open with no future rechecks.
+          if (!streamClosed) closeStreamAsDenied('permission_recheck_failed');
+          return;
+        }
+        if (streamClosed) return;
+
+        if (stillAllowed) {
+          recheckTimeoutId = setTimeout(() => void recheckAccess(), PERMISSION_RECHECK_INTERVAL_MS);
+          return;
+        }
+
+        closeStreamAsDenied('permission_revoked_mid_stream');
       };
 
       recheckTimeoutId = setTimeout(() => void recheckAccess(), PERMISSION_RECHECK_INTERVAL_MS);
