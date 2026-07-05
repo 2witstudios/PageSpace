@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 const ORIGINAL_ENV = { ...process.env };
 
-describe('GET /.well-known/oauth-authorization-server', () => {
+describe('GET /api/well-known/oauth-authorization-server (destination of the /.well-known/oauth-authorization-server rewrite)', () => {
   beforeEach(() => {
     process.env.WEB_APP_URL = 'https://pagespace.ai';
     delete process.env.NEXT_PUBLIC_APP_URL;

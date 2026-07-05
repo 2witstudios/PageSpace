@@ -103,6 +103,16 @@ export async function middleware(req: NextRequest) {
       return response;
     }
 
+    // RFC 8414 OAuth discovery metadata — must be reachable with no session,
+    // since it's the first request the CLI login flow makes. Middleware sees
+    // the pre-rewrite pathname (next.config's rewrites() runs after
+    // middleware), so this must match the original well-known URL, not its
+    // /api/oauth/authorization-server-metadata destination.
+    if (pathname === '/.well-known/oauth-authorization-server') {
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
+      return response;
+    }
+
     // Public routes that don't require authentication
     // Note: Cron routes handle their own auth via validateSignedCronRequest (HMAC-SHA256 + nonce)
     // Device/mobile auth endpoints authenticate via body tokens (device token, magic link),

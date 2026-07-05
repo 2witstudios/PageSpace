@@ -14,7 +14,9 @@ const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/
 const workspaceDistReady =
   process.env.NODE_ENV === "production" && dbDistExists && libDistExists;
 
-const nextConfig: NextConfig = {
+// Named export so tests can assert on rewrites()/redirects() without going
+// through withSentryConfig's wrapping.
+export const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
   transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
@@ -96,6 +98,17 @@ const nextConfig: NextConfig = {
       { source: '/dashboard/inbox/new', destination: '/dashboard/dms/new', permanent: false },
       { source: '/dashboard/inbox', destination: '/dashboard/dms', permanent: false },
       { source: '/dashboard/:driveId/inbox', destination: '/dashboard/:driveId/channels', permanent: false },
+    ];
+  },
+  async rewrites() {
+    return [
+      // Next.js App Router does not route dot-prefixed folders (app/.well-known/*
+      // never lands in the build manifest), so the RFC 8414 discovery URL is
+      // rewritten to a normal, routable API path.
+      {
+        source: '/.well-known/oauth-authorization-server',
+        destination: '/api/well-known/oauth-authorization-server',
+      },
     ];
   },
 };

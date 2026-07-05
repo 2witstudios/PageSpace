@@ -16,7 +16,10 @@ class NextResponseStub extends Response {
 export const NextResponse = NextResponseStub;
 
 export class NextRequest extends Request {
+  readonly nextUrl: URL;
+
   constructor(input: string | URL | Request, init?: RequestInit) {
     super(input, init);
+    this.nextUrl = new URL(this.url);
   }
 }
