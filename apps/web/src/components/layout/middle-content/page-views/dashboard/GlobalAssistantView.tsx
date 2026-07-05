@@ -68,6 +68,7 @@ import {
   buildChatConfig,
   AGENT_CHAT_ID,
   LocationContext,
+  buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
@@ -810,15 +811,16 @@ const GlobalAssistantView: React.FC = () => {
           webSearchEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
-      : {
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
           showPageTree,
-          locationContext: locationContext || undefined,
+          locationContext,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-        };
+          mcpTools: mcpToolSchemas,
+        });
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody }));
@@ -841,15 +843,16 @@ const GlobalAssistantView: React.FC = () => {
           webSearchEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
-      : {
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
           showPageTree,
-          locationContext: locationContext || undefined,
+          locationContext,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-        };
+          mcpTools: mcpToolSchemas,
+        });
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     wrapSend(() => sendMessage({ text }, { body: requestBody }));
