@@ -19,6 +19,7 @@ import {
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
+import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
@@ -403,6 +404,19 @@ export async function triggerMentionedAgentResponses(
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
+
+        // Member drives this agent has opted (via includeContext) to carry
+        // into its behavior, same set chat/route.ts injects for direct chat —
+        // routed through the `context` field here since this path delegates
+        // to ask_agent's own system-prompt assembly, which we don't own.
+        const contextDrives = await getAgentContextDrives(agent.id).catch(() => []);
+        const driveContextSection = contextDrives.length > 0
+          ? [
+              'Workspace instructions from drives you are a member of:',
+              ...contextDrives.map((d) => `## DRIVE CONTEXT: ${d.driveName}\n\n${d.drivePrompt}`),
+            ].join('\n\n')
+          : '';
+
         const rawAskResult: unknown = await askAgentExecute(
           {
             agentPath: `/${agent.title}`,
@@ -415,6 +429,7 @@ export async function triggerMentionedAgentResponses(
               'Recent channel transcript (oldest to newest):',
               transcript,
               ...(commandContext ? ['', commandContext] : []),
+              ...(driveContextSection ? ['', driveContextSection] : []),
             ].join('\n'),
             conversationId: mentionConversationId,
           },

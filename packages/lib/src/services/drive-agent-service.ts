@@ -28,6 +28,8 @@ export interface AddAgentToDriveInput {
   requestedRole?: AgentDriveRole;
   /** Optional custom drive role to assign (owners/admins only). */
   requestedCustomRoleId?: string | null;
+  /** Whether this drive's drivePrompt should be injected into the agent's system prompt. Defaults to false. */
+  includeContext?: boolean;
 }
 
 export type ServiceFailure = { ok: false; status: number; error: string };
@@ -43,6 +45,7 @@ export interface AgentDriveMembership {
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
   customRoleId: string | null;
   isHome: boolean;
+  includeContext: boolean;
 }
 
 /**
@@ -94,7 +97,7 @@ async function resolveGranterAccess(
  * user's own access to the drive.
  */
 export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddAgentToDriveResult> {
-  const { actingUserId, agentPageId, driveId, requestedRole, requestedCustomRoleId } = input;
+  const { actingUserId, agentPageId, driveId, requestedRole, requestedCustomRoleId, includeContext } = input;
 
   const [agentPage] = await db
     .select({ id: pages.id, type: pages.type })
@@ -162,6 +165,7 @@ export async function addAgentToDrive(input: AddAgentToDriveInput): Promise<AddA
         agentPageId,
         role: effectiveRole,
         customRoleId: effectiveCustomRoleId,
+        includeContext: includeContext ?? false,
         addedBy: actingUserId,
       })
       .returning();
@@ -210,6 +214,49 @@ export async function removeAgentFromDrive(input: {
 
   if (deleted.length === 0) return { ok: false, status: 404, error: 'Membership not found' };
   return { ok: true };
+}
+
+/**
+ * Toggle whether a non-home membership's drive carries its `drivePrompt` into
+ * the agent's system prompt. Shares removeAgentFromDrive's dual authorization
+ * (agent editor OR drive owner/admin) since either side may reasonably manage
+ * this. The home drive is excluded — its own prompt inclusion is governed by
+ * `pages.includeDrivePrompt`, not this per-membership flag.
+ */
+export async function setAgentDriveIncludeContext(input: {
+  actingUserId: string;
+  agentPageId: string;
+  driveId: string;
+  includeContext: boolean;
+}): Promise<{ ok: true; member: typeof driveAgentMembers.$inferSelect } | ServiceFailure> {
+  const { actingUserId, agentPageId, driveId, includeContext } = input;
+
+  const [agentPage] = await db
+    .select({ id: pages.id, driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, agentPageId))
+    .limit(1);
+
+  if (!agentPage) return { ok: false, status: 404, error: 'Agent page not found' };
+  if (agentPage.driveId === driveId) {
+    return { ok: false, status: 400, error: 'Home drive context is controlled by includeDrivePrompt, not this flag' };
+  }
+
+  const canManage =
+    (await canUserEditPage(actingUserId, agentPageId)) ||
+    (await isDriveOwnerOrAdmin(actingUserId, driveId));
+  if (!canManage) {
+    return { ok: false, status: 403, error: 'You cannot manage this agent membership' };
+  }
+
+  const [updated] = await db
+    .update(driveAgentMembers)
+    .set({ includeContext })
+    .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
+    .returning();
+
+  if (!updated) return { ok: false, status: 404, error: 'Membership not found' };
+  return { ok: true, member: updated };
 }
 
 /** A Drizzle transaction handle, accepted alongside the module-level `db`. */
@@ -397,6 +444,7 @@ export async function listAgentDrives(agentPageId: string): Promise<AgentDriveMe
       driveId: driveAgentMembers.driveId,
       role: driveAgentMembers.role,
       customRoleId: driveAgentMembers.customRoleId,
+      includeContext: driveAgentMembers.includeContext,
       driveName: drives.name,
       driveSlug: drives.slug,
     })
@@ -411,6 +459,7 @@ export async function listAgentDrives(agentPageId: string): Promise<AgentDriveMe
     role: r.role,
     customRoleId: r.customRoleId ?? null,
     isHome: r.driveId === agentPage.driveId,
+    includeContext: r.includeContext,
   }));
 
   if (!result.some((r) => r.isHome)) {
@@ -427,9 +476,49 @@ export async function listAgentDrives(agentPageId: string): Promise<AgentDriveMe
         role: 'ADMIN',
         customRoleId: null,
         isHome: true,
+        // The home drive's own drivePrompt is handled separately by
+        // `pages.includeDrivePrompt`, not this per-membership flag.
+        includeContext: false,
       });
     }
   }
 
   return result;
+}
+
+/**
+ * Non-home drives this agent should carry into its system prompt: every
+ * `driveAgentMembers` row with `includeContext = true`, paired with that
+ * drive's `drivePrompt`. Excludes the agent's home drive — its own prompt
+ * inclusion is governed by `pages.includeDrivePrompt`, not this flag.
+ * Rows with an empty/absent `drivePrompt` are dropped (nothing to inject).
+ */
+export async function getAgentContextDrives(
+  agentPageId: string,
+): Promise<Array<{ driveId: string; driveName: string; drivePrompt: string }>> {
+  const [agentPage] = await db
+    .select({ driveId: pages.driveId })
+    .from(pages)
+    .where(eq(pages.id, agentPageId))
+    .limit(1);
+
+  if (!agentPage) return [];
+
+  const rows = await db
+    .select({
+      driveId: driveAgentMembers.driveId,
+      driveName: drives.name,
+      drivePrompt: drives.drivePrompt,
+    })
+    .from(driveAgentMembers)
+    .innerJoin(drives, eq(driveAgentMembers.driveId, drives.id))
+    .where(and(
+      eq(driveAgentMembers.agentPageId, agentPageId),
+      eq(driveAgentMembers.includeContext, true),
+      ne(driveAgentMembers.driveId, agentPage.driveId),
+    ));
+
+  return rows
+    .filter((r): r is typeof r & { drivePrompt: string } => !!r.drivePrompt?.trim())
+    .map((r) => ({ driveId: r.driveId, driveName: r.driveName, drivePrompt: r.drivePrompt }));
 }

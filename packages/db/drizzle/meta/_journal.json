@@ -1247,6 +1247,13 @@
       "when": 1783178735370,
       "tag": "0177_hot_songbird",
       "breakpoints": true
+    },
+    {
+      "idx": 178,
+      "version": "7",
+      "when": 1783229015580,
+      "tag": "0178_mighty_norrin_radd",
+      "breakpoints": true
     }
   ]
 }

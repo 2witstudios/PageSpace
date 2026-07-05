@@ -24,6 +24,9 @@ vi.mock('@pagespace/db/schema/chat', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserViewPage: vi.fn(),
 }));
+vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
+  getAgentContextDrives: vi.fn(),
+}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
     ai: {
@@ -83,6 +86,7 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import {
@@ -94,6 +98,7 @@ import {
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
+const mockGetAgentContextDrives = vi.mocked(getAgentContextDrives);
 
 const askAgentExecute = agentCommunicationTools.ask_agent.execute;
 const sendChannelExecute = channelTools.send_channel_message.execute;
@@ -169,6 +174,7 @@ describe('agent-mention-responder', () => {
     mockPagesFindMany.mockResolvedValue([]);
     mockChannelMessagesFindMany.mockResolvedValue([]);
     mockCanUserViewPage.mockResolvedValue(true);
+    mockGetAgentContextDrives.mockResolvedValue([]);
     mockAskAgentExecute.mockResolvedValue(createAskAgentSuccess('Agent reply'));
     mockSendChannelExecute.mockResolvedValue(createSendChannelSuccess());
     mockInsertChannelThreadReply.mockResolvedValue({
@@ -245,6 +251,40 @@ describe('agent-mention-responder', () => {
       agentTitle: 'Budget Agent',
     });
     expect(sendContext.requestOrigin).toBe('agent');
+  });
+
+  it('appends includeContext=true member-drive drivePrompts into the ask_agent context string', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockGetAgentContextDrives.mockResolvedValue([
+      { driveId: 'drive-marketing', driveName: 'Marketing', drivePrompt: 'Keep replies casual.' },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: 'Ping @[Budget Agent](agent-1:page)',
+    });
+
+    expect(mockGetAgentContextDrives).toHaveBeenCalledWith('agent-1');
+    const askArgs = mockAskAgentExecute.mock.calls[0];
+    expect(askArgs[0].context).toContain('## DRIVE CONTEXT: Marketing');
+    expect(askArgs[0].context).toContain('Keep replies casual.');
+  });
+
+  it('omits the drive-context section when the agent has no includeContext memberships', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] },
+    ]);
+    mockGetAgentContextDrives.mockResolvedValue([]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: 'Ping @[Budget Agent](agent-1:page)',
+    });
+
+    const askArgs = mockAskAgentExecute.mock.calls[0];
+    expect(askArgs[0].context).not.toContain('DRIVE CONTEXT');
   });
 
   it('given mention of non-existent agent, should skip without consulting or posting', async () => {

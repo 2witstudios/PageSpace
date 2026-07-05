@@ -56,6 +56,7 @@ export async function GET(
 
 const postBodySchema = z.object({
   driveId: z.string().min(1),
+  includeContext: z.boolean().optional(),
 });
 
 /**
@@ -93,6 +94,7 @@ export async function POST(
       actingUserId: userId,
       agentPageId: agentId,
       driveId: parsed.data.driveId,
+      includeContext: parsed.data.includeContext,
     });
 
     if (!result.ok) {
