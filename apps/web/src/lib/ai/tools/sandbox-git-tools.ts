@@ -1,5 +1,5 @@
 /**
- * Agent git/GitHub tools: all 26 tools running inside a sandbox.
+ * Agent git/GitHub tools: all 34 tools running inside a sandbox.
  *
  * Pure factory — no DB imports, no Sprites SDK. Production wiring lives in
  * `sandbox-git-tools-runtime.ts`. Each tool's execute handler:
@@ -229,13 +229,34 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   });
 
   const gitDiff = tool({
-    description: 'Show changes in the working tree or staged changes.',
+    description:
+      'Show changes in the working tree, staged changes, or between two refs. Pass base + head to diff between branches/commits (e.g. base: "origin/master", head: "HEAD"). Uses three-dot diff (merge-base to head) so only changes unique to head are shown. Falls back to working-tree diff when neither is given.',
     inputSchema: z
-      .object({ staged: z.boolean().optional(), path: z.string().optional(), cwd: cwdField })
+      .object({
+        staged: z.boolean().optional(),
+        path: z.string().optional(),
+        base: z
+          .string()
+          .optional()
+          .describe('Base ref to diff from (e.g. "origin/master", "HEAD~1")'),
+        head: z
+          .string()
+          .optional()
+          .describe('Head ref to diff to (defaults to HEAD when base is given)'),
+        cwd: cwdField,
+      })
       .strict(),
-    execute: async ({ staged, path, cwd }, options) => {
+    execute: async ({ staged, path, base, head, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
+      if (base) {
+        return git(
+          'git',
+          ['diff', `${base}...${head ?? 'HEAD'}`, ...(path ? ['--', path] : [])],
+          opened.ctx,
+          cwd,
+        );
+      }
       return git(
         'git',
         ['diff', ...(staged ? ['--cached'] : []), ...(path ? ['--', path] : [])],
@@ -559,7 +580,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   });
 
   const ghPrView = tool({
-    description: 'View a pull request. Requires a connected GitHub account.',
+    description: 'View a pull request with CI status, review state, and file change counts. Requires a connected GitHub account.',
     inputSchema: z
       .object({ number: z.number().int().positive().optional(), cwd: cwdField })
       .strict(),
@@ -570,8 +591,38 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
           [
             'pr', 'view',
             ...(number ? [String(number)] : []),
-            '--json', 'number,title,body,state,url,headRefName,baseRefName,mergeable',
+            '--json', 'number,title,body,state,url,headRefName,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,reviewDecision,isDraft',
           ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghPrDiff = tool({
+    description:
+      'Get the server-side diff for a pull request. Always merge-base correct, unaffected by local clone depth. Prefer this over git_diff for PR review. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive().optional(), cwd: cwdField })
+      .strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR('gh', ['pr', 'diff', ...(number ? [String(number)] : []), '--color', 'never'], ctx, token, cwd),
+      ),
+  });
+
+  const ghPrChecks = tool({
+    description:
+      'List CI check statuses for a pull request (name, state, link). Each check is PASS/FAIL/PENDING/SKIP. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive().optional(), cwd: cwdField })
+      .strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          ['pr', 'checks', ...(number ? [String(number)] : []), '--json', 'name,state,startedAt,completedAt,link'],
           ctx,
           token,
           cwd,
@@ -609,6 +660,135 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     inputSchema: z.object({ number: z.number().int().positive(), cwd: cwdField }).strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) => gitR('gh', ['pr', 'checkout', String(number)], ctx, token, cwd)),
+  });
+
+  const ghPrReview = tool({
+    description:
+      'Submit a review on a pull request: approve, request changes, or leave a comment. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        number: z.number().int().positive(),
+        action: z.enum(['approve', 'request_changes', 'comment']),
+        body: z.string().optional().describe('Review body / comment text'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ number, action, body, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'pr', 'review', String(number),
+            ...(action === 'approve' ? ['--approve'] : action === 'request_changes' ? ['--request-changes'] : ['--comment']),
+            ...(body ? ['--body', body] : []),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghPrClose = tool({
+    description: 'Close a pull request with an optional comment. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        number: z.number().int().positive(),
+        comment: z.string().optional().describe('Comment to post when closing'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ number, comment, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          ['pr', 'close', String(number), ...(comment ? ['--comment', comment] : [])],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghPrReopen = tool({
+    description: 'Reopen a closed pull request. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive(), cwd: cwdField })
+      .strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR('gh', ['pr', 'reopen', String(number)], ctx, token, cwd),
+      ),
+  });
+
+  const ghPrReady = tool({
+    description: 'Mark a draft pull request as ready for review. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive(), cwd: cwdField })
+      .strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR('gh', ['pr', 'ready', String(number)], ctx, token, cwd),
+      ),
+  });
+
+  // ── GitHub Actions / CI ───────────────────────────────────────────────
+
+  const ghRunList = tool({
+    description:
+      'List GitHub Actions workflow runs. Use to check CI status after pushing or to find failing runs. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        branch: z.string().optional(),
+        limit: z.number().int().positive().max(50).optional(),
+        status: z.enum(['queued', 'in_progress', 'completed']).optional(),
+        event: z.string().optional().describe('Filter by trigger event (e.g. "pull_request", "push")'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ branch, limit, status, event, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'run', 'list',
+            '--limit', String(limit ?? 10),
+            ...(branch ? ['--branch', branch] : []),
+            ...(status ? ['--status', status] : []),
+            ...(event ? ['--event', event] : []),
+            '--json', 'databaseId,status,conclusion,name,headBranch,event,createdAt,displayTitle',
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghRunView = tool({
+    description:
+      'View details of a specific GitHub Actions run including job-level pass/fail status. Pass log: true to include logs for failed jobs (can be large). Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        runId: z.number().int().positive().describe('Run databaseId from gh_run_list'),
+        log: z.boolean().optional().describe('Include logs for failed jobs'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ runId, log, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'run', 'view', String(runId),
+            ...(log ? ['--log-failed'] : []),
+            ...(log ? [] : ['--json', 'databaseId,status,conclusion,name,headBranch,displayTitle,jobs']),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
   });
 
   // ── GitHub Issues (token required) ──────────────────────────────────────
@@ -709,8 +889,16 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     gh_pr_create: ghPrCreate,
     gh_pr_list: ghPrList,
     gh_pr_view: ghPrView,
+    gh_pr_diff: ghPrDiff,
+    gh_pr_checks: ghPrChecks,
     gh_pr_merge: ghPrMerge,
     gh_pr_checkout: ghPrCheckout,
+    gh_pr_review: ghPrReview,
+    gh_pr_close: ghPrClose,
+    gh_pr_reopen: ghPrReopen,
+    gh_pr_ready: ghPrReady,
+    gh_run_list: ghRunList,
+    gh_run_view: ghRunView,
     gh_issue_create: ghIssueCreate,
     gh_issue_list: ghIssueList,
     gh_issue_view: ghIssueView,
