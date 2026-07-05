@@ -460,6 +460,35 @@ describe('usePageAgentDashboardStore', () => {
       expect(result.current.isConversationMessagesLoading).toBe(false);
     });
 
+    it('given createNewConversation is called while a prior loadConversation fetch is still in-flight, should clear isConversationMessagesLoading so the new conversation does not show a stuck spinner', async () => {
+      let resolveStaleFetch!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('/conversations') && !url.includes('limit=50')) {
+          return Promise.resolve({ ok: true, json: async () => ({ id: 'server-conv-id' }) });
+        }
+        return new Promise((resolve) => { resolveStaleFetch = resolve; });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      act(() => {
+        void result.current.loadConversation('stale-conv');
+      });
+      expect(result.current.isConversationMessagesLoading).toBe(true);
+
+      await act(() => result.current.createNewConversation());
+
+      expect(result.current.isConversationMessagesLoading).toBe(false);
+
+      // The stale loadConversation fetch resolving afterward must not flip it back on.
+      await act(async () => {
+        resolveStaleFetch({ ok: true, json: async () => ({ messages: [] }) });
+        await Promise.resolve();
+      });
+      expect(result.current.isConversationMessagesLoading).toBe(false);
+    });
+
     it('given loadMostRecentConversation resolves AFTER createNewConversation already set a newer identity, should not clobber the newer conversationId', async () => {
       let resolveMostRecentList!: (value: unknown) => void;
       mockFetchWithAuth.mockImplementation((url: string) => {

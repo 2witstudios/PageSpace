@@ -414,6 +414,31 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
 
     expect(result.current.isMessagesLoading).toBe(false);
   });
+
+  it('given loadConversation\'s messages fetch returns a non-ok response, should clear initialMessages instead of leaving the previous conversation\'s messages visible', async () => {
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url === '/api/ai/global/active') return okResponse({ id: CONV_ID });
+      if (url === `/api/ai/global/${CONV_ID}/messages?limit=50`) {
+        return okResponse([{ id: 'stale-msg', role: 'user', parts: [] }]);
+      }
+      if (url === '/api/ai/global/conv-2/messages?limit=50') {
+        return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) });
+      }
+      return okResponse({ messages: [] });
+    });
+
+    const { result } = renderProvider();
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+    await waitFor(() => expect(result.current.initialMessages).toEqual([
+      expect.objectContaining({ id: 'stale-msg' }),
+    ]));
+
+    await act(async () => {
+      await result.current.loadConversation('conv-2');
+    });
+
+    expect(result.current.initialMessages).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

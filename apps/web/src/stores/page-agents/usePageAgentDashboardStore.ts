@@ -282,6 +282,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
       conversationMessages: [],
       conversationAgentId: agent.id,
       conversationLoadSignal: get().conversationLoadSignal + 1,
+      isConversationMessagesLoading: false,
     });
 
     // Update URL for bookmarkability

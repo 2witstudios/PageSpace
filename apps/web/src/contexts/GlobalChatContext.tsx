@@ -150,6 +150,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         setInitialMessages(loadedMessages);
       } else {
         console.error('Failed to load conversation:', conversationId);
+        setInitialMessages([]);
       }
       setIsMessagesLoading(false);
     } catch (error) {

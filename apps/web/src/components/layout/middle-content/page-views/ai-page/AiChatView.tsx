@@ -134,10 +134,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Always reflects the current page.id so async callbacks can detect stale pages
   const pageIdRef = useRef(page.id);
   useEffect(() => { pageIdRef.current = page.id; }, [page.id]);
-  // Always reflects the current identity's conversationId (kept in sync by an
-  // effect further below, once currentConversationId is derived) so async
-  // reconciliation callbacks (e.g. the late-joiner sync) can detect that the
-  // user has since switched away before applying a stale setIdentity call.
+  // Always reflects the current identity's conversationId (kept in sync
+  // directly during render, further below, once currentConversationId is
+  // derived) so async reconciliation callbacks (e.g. the late-joiner sync)
+  // can detect that the user has since switched away before applying a
+  // stale setIdentity call.
   const currentConversationIdRef = useRef<string | null>(null);
   // Tracks the conversationId of the most recent loadMessagesForConversation call so
   // stale in-flight fetches (from a previous conversation) are silently dropped.
@@ -302,6 +303,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   } = useConversationIdentity({ resolve: resolveConversation });
 
   const currentConversationId = conversationIdFrom(identityState);
+  // Updated directly during render (not via an effect like pageIdRef) so the
+  // late-joiner sync callback always reads the value from the most recently
+  // rendered pass with no effect-flush lag. This component uses no
+  // concurrent-rendering features (no Suspense/startTransition) that could
+  // discard an in-progress render before commit, so the theoretical
+  // staleness a render-body write risks doesn't apply here — but an effect
+  // introduces a real one: an async callback firing before React flushes a
+  // just-scheduled effect would read a stale ref value.
   currentConversationIdRef.current = currentConversationId;
   const isInitialized = !isResolving(identityState) && identityState.status !== 'idle';
   const conversationResolveError = identityState.status === 'error' ? identityState.message : null;

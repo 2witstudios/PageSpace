@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createId } from '@paralleldrive/cuid2';
+import { createId, isCuid } from '@paralleldrive/cuid2';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -184,9 +184,10 @@ export async function POST(
 
     // Prefer a client-generated id (cuid2) so the caller knows its conversation
     // id synchronously, before this request resolves. Fall back to generating
-    // one server-side for callers that don't supply it.
+    // one server-side for callers that don't supply one, or that supply a
+    // malformed value — only genuine CUID2 strings are trusted as a row id.
     const conversationId: string =
-      typeof body.conversationId === 'string' && body.conversationId.length > 0
+      typeof body.conversationId === 'string' && isCuid(body.conversationId)
         ? body.conversationId
         : createId();
 
