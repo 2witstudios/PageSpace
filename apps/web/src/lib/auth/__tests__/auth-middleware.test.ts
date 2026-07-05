@@ -139,6 +139,18 @@ describe('Auth Middleware', () => {
       expect(result).toEqual(mockSessionClaims);
     });
 
+    it('only accepts user-type sessions — non-user tokens (socket/service/mcp/device) must not authenticate web requests', async () => {
+      // Arrange
+      vi.mocked(sessionService.validateSession).mockResolvedValue(mockSessionClaims);
+
+      // Act
+      await validateSessionToken('ps_sock_leaked');
+
+      // Assert: the type restriction is delegated to sessionService via expectedType,
+      // so a ps_sock_*/ps_svc_*/etc. value in the session cookie can never yield claims.
+      expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sock_leaked', { expectedType: 'user' });
+    });
+
     it('returns null when sessionService throws error', async () => {
       // Arrange
       vi.mocked(sessionService.validateSession).mockRejectedValue(

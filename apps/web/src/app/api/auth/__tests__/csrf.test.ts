@@ -95,7 +95,7 @@ describe('/api/auth/csrf', () => {
       await GET(request);
 
       // Assert: CSRF token is generated using the session ID
-      expect(sessionService.validateSession).toHaveBeenCalledWith('valid-session-token');
+      expect(sessionService.validateSession).toHaveBeenCalledWith('valid-session-token', { expectedType: 'user' });
       expect(generateCSRFToken).toHaveBeenCalledWith('test-session-id');
     });
   });

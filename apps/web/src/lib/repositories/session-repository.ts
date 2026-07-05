@@ -6,7 +6,7 @@
 
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray, type InferSelectModel } from '@pagespace/db/operators'
-import { socketTokens, deviceTokens, mcpTokens } from '@pagespace/db/schema/auth'
+import { deviceTokens, mcpTokens } from '@pagespace/db/schema/auth'
 import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { drives } from '@pagespace/db/schema/core';
 
@@ -14,17 +14,6 @@ export type DeviceToken = InferSelectModel<typeof deviceTokens>;
 export type McpToken = InferSelectModel<typeof mcpTokens>;
 
 export const sessionRepository = {
-  /**
-   * Store a hashed socket token for Socket.IO authentication.
-   */
-  async createSocketToken(data: {
-    tokenHash: string;
-    userId: string;
-    expiresAt: Date;
-  }): Promise<void> {
-    await db.insert(socketTokens).values(data);
-  },
-
   /**
    * Update a device token's deviceId (one-time OAuth migration fix).
    * Returns the updated record, or null if not found.

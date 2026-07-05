@@ -36,7 +36,8 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     redirect(`/auth/signin?next=${encodeURIComponent(nextTarget)}`);
   }
 
-  const session = await sessionService.validateSession(sessionToken);
+  // Consent screen is gated on a real browser session only.
+  const session = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
   if (!session) {
     redirect(`/auth/signin?next=${encodeURIComponent(nextTarget)}`);
   }
