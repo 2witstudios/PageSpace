@@ -104,8 +104,8 @@ describe('drive-tools', () => {
 
     it('scopes to the agent\'s drives when called by a page-agent', async () => {
       vi.mocked(listAgentDrives).mockResolvedValue([
-        { driveId: 'd1', driveName: 'Home', driveSlug: 'home', role: 'ADMIN', customRoleId: null, isHome: true },
-        { driveId: 'd2', driveName: 'Hub', driveSlug: 'hub', role: 'MEMBER', customRoleId: null, isHome: false },
+        { driveId: 'd1', driveName: 'Home', driveSlug: 'home', role: 'ADMIN', customRoleId: null, isHome: true, includeContext: false },
+        { driveId: 'd2', driveName: 'Hub', driveSlug: 'hub', role: 'MEMBER', customRoleId: null, isHome: false, includeContext: false },
       ]);
 
       const context = {

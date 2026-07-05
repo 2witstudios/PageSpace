@@ -1,0 +1,1 @@
+ALTER TABLE "drive_agent_members" ADD COLUMN "includeContext" boolean DEFAULT false NOT NULL;
