@@ -6,6 +6,7 @@
  * caller closes it — this is a single-use, single-attempt server per login.
  */
 import { createServer } from 'node:http';
+import type { Socket } from 'node:net';
 import { CALLBACK_PATH } from './loopback-flow.js';
 import type { LoopbackCallback, LoopbackServer } from './loopback-flow.js';
 
@@ -25,7 +26,25 @@ export function createLoopbackServer(): Promise<LoopbackServer> {
     let pendingResolve: ((callback: LoopbackCallback) => void) | null = null;
     let respond: ((html: string) => void) | null = null;
 
+    // Every socket the server accepts is tracked so close() can deterministically
+    // clear connections that never reached a response — a TCP connection can be
+    // opened (favicon prefetch, a stray probe) and simply never send request
+    // bytes, in which case the 'request' event (and therefore the Connection:
+    // close header below) never fires for it, and Node's default server.close()
+    // would then wait on that socket forever. Sockets that DID reach a request
+    // are left alone: their response always carries Connection: close, so Node
+    // ends them itself once the write flushes — never truncating an in-flight
+    // response.
+    const sockets = new Set<Socket>();
+    const respondedSockets = new WeakSet<Socket>();
+
+    server.on('connection', (socket) => {
+      sockets.add(socket);
+      socket.on('close', () => sockets.delete(socket));
+    });
+
     server.on('request', (req, res) => {
+      respondedSockets.add(req.socket);
       const url = new URL(req.url ?? '/', `http://${LOOPBACK_HOST}`);
 
       // Browsers routinely fire off incidental requests (favicon, prefetch)
@@ -34,7 +53,7 @@ export function createLoopbackServer(): Promise<LoopbackServer> {
       // path must never touch pendingResolve/respond — otherwise it can
       // consume the single-use callback slot the real redirect needs.
       if (url.pathname !== CALLBACK_PATH) {
-        res.writeHead(404).end();
+        res.writeHead(404, { Connection: 'close' }).end();
         return;
       }
 
@@ -49,7 +68,7 @@ export function createLoopbackServer(): Promise<LoopbackServer> {
       );
 
       respond = (html: string) => {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' });
         res.end(html);
       };
 
@@ -84,6 +103,11 @@ export function createLoopbackServer(): Promise<LoopbackServer> {
           respond?.(html);
         },
         close(): Promise<void> {
+          for (const socket of sockets) {
+            if (!respondedSockets.has(socket)) {
+              socket.destroy();
+            }
+          }
           return new Promise((res) => server.close(() => res()));
         },
       });
