@@ -103,10 +103,126 @@ export type LoopbackLoginResult =
 
 export const CALLBACK_PATH = '/callback';
 
-const SUCCESS_HTML =
-  "<!doctype html><html><head><title>PageSpace</title></head><body><p>You're logged in — return to your terminal.</p></body></html>";
-const ERROR_HTML =
-  '<!doctype html><html><head><title>PageSpace</title></head><body><p>Login failed — return to your terminal.</p></body></html>';
+/**
+ * Light-mode hex values are copied from `packages/lib/src/email-templates/shared-styles.ts`
+ * (`colors.pageBackground`, `colors.heading`, `colors.text`, `colors.mutedText`, `colors.primary`,
+ * `colors.border`, `colors.accent`, `shadows.md`) — the repo's one existing precise conversion of
+ * these OKLCH design tokens to hex, done for the transactional emails. Reusing those values here
+ * keeps this page in sync instead of re-deriving a second, drifting approximation. Success/error
+ * accent colors have no email-template equivalent, so they're approximated directly from
+ * `apps/web/src/app/globals.css`'s `--success`/`--destructive` tokens. Dark-mode values have no
+ * existing source (email templates don't support dark mode) and are approximated the same way.
+ */
+const CALLBACK_PAGE_STYLE = `
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: Geist, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+      background: #F8F9FB;
+      color: #2C3442;
+    }
+    .card {
+      max-width: 360px;
+      width: calc(100% - 48px);
+      padding: 32px;
+      border-radius: 16px;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+      text-align: center;
+    }
+    .badge {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 20px;
+      border-radius: 9999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .badge svg { width: 28px; height: 28px; }
+    .badge--success { background: rgba(34, 160, 107, 0.12); color: #22a06b; }
+    .badge--error { background: rgba(220, 68, 68, 0.12); color: #dc4444; }
+    .wordmark { font-size: 13px; font-weight: 600; letter-spacing: 0.02em; color: #3D64C8; margin: 0 0 16px; }
+    h1 { font-size: 20px; font-weight: 700; margin: 0 0 8px; color: #111723; }
+    p { font-size: 14px; line-height: 1.5; color: #697386; margin: 0; }
+    button {
+      margin-top: 24px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      border: 1px solid #E4E6EA;
+      background: transparent;
+      color: #2C3442;
+      font: inherit;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { background: #F0F1F4; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #1a1a1a; color: #eeeeee; }
+      .card { background: #262626; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35); }
+      .badge--success { background: rgba(79, 185, 138, 0.16); color: #4fb98a; }
+      .badge--error { background: rgba(226, 87, 74, 0.16); color: #e2574a; }
+      .wordmark { color: #4a90c9; }
+      h1 { color: #eeeeee; }
+      p { color: #a8adb5; }
+      button { border-color: #3a3a3a; color: #eeeeee; }
+      button:hover { background: #2f2f2f; }
+    }
+`;
+
+const SUCCESS_ICON_PATH = '<path d="M5 13l4 4L19 7"/>';
+const ERROR_ICON_PATH = '<path d="M6 6l12 12M18 6L6 18"/>';
+
+function buildCallbackPage(params: {
+  readonly badgeVariant: 'success' | 'error';
+  readonly iconPath: string;
+  readonly heading: string;
+  readonly subtext: string;
+  readonly closeButton: boolean;
+}): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PageSpace</title>
+<style>${CALLBACK_PAGE_STYLE}</style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge badge--${params.badgeVariant}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${params.iconPath}</svg>
+    </div>
+    <p class="wordmark">PageSpace</p>
+    <h1>${params.heading}</h1>
+    <p>${params.subtext}</p>
+    ${params.closeButton ? '<button onclick="window.close()">Close this tab</button>' : ''}
+  </div>
+</body>
+</html>`;
+}
+
+const SUCCESS_HTML = buildCallbackPage({
+  badgeVariant: 'success',
+  iconPath: SUCCESS_ICON_PATH,
+  heading: "You're logged in",
+  subtext: 'You can close this tab and return to your terminal.',
+  closeButton: true,
+});
+
+const ERROR_HTML = buildCallbackPage({
+  badgeVariant: 'error',
+  iconPath: ERROR_ICON_PATH,
+  heading: 'Login failed',
+  subtext: 'Return to your terminal and try again.',
+  closeButton: false,
+});
 
 function toBase64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64url');

@@ -41,6 +41,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **`pagespace login` no longer hangs after a successful login** — the post-login identity
+  lookup used to retry for up to 2 minutes before the CLI would return control to your terminal;
+  it's now bounded to a few seconds so the command finishes promptly. The browser callback page
+  shown at the end of the flow is also redesigned to match PageSpace's branding instead of
+  showing a bare, unstyled page.
 - **Drive role permission updates are now atomic** — granting or revoking a role's per-page
   permission (via the share dialog, the roles API, or an AI agent tool) could previously race a
   concurrent grant/revoke on the same role and silently drop it, because the update read the
