@@ -60,7 +60,7 @@ const normalizeMessage = (msg: Record<string, unknown>): NormalizeMessageResult 
         if (!mapped.ok) {
           return { ok: false, error: mapped.error };
         }
-        parts.push(mapped.part);
+        parts.push({ ...mapped.part });
       }
     }
     return { ok: true, message: { id, role, parts } as unknown as UIMessage };
