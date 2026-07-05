@@ -6,6 +6,7 @@
  * the consent POST, single-use code hashed at rest, state echoed verbatim.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { NextRequest } from 'next/server';
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -41,6 +42,7 @@ import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createAuthorizationCode } from '@/lib/repositories/oauth-repository';
+import { nextConfig } from '../../../../../../next.config';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
 const CODE_CHALLENGE = 'a'.repeat(43);
@@ -193,6 +195,59 @@ describe('GET /api/oauth/authorize — session gate', () => {
     expect(location.pathname).toBe('/oauth/consent');
     expect(location.searchParams.get('client_id')).toBe('pagespace-cli');
     expect(location.searchParams.get('state')).toBe('xyz123');
+  });
+});
+
+describe('GET /api/oauth/authorize — loopback redirect_uri normalization', () => {
+  const cliAuthorizeUrl =
+    'http://web.local/api/oauth/authorize?response_type=code&client_id=pagespace-cli&redirect_uri=http%3A%2F%2F127.0.0.1%3A53397%2Fcallback&code_challenge=uWhtGkQARlvr1Drqj_gD3BMeFu9Q6V96GY7RWuH1Aks&code_challenge_method=S256&scope=account+offline_access&state=x';
+
+  it('keeps middleware URL normalization disabled in Next config', () => {
+    expect(nextConfig.skipMiddlewareUrlNormalize).toBe(true);
+  });
+
+  it('preserves 127.0.0.1 in encoded redirect_uri query params under the NextRequest flag', () => {
+    const previous = process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE;
+    process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE = '1';
+
+    try {
+      const req = new NextRequest(cliAuthorizeUrl);
+
+      expect(req.url).toContain('redirect_uri=http%3A%2F%2F127.0.0.1%3A53397%2Fcallback');
+      expect(req.url).not.toContain('redirect_uri=http%3A%2F%2Flocalhost%3A53397%2Fcallback');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE;
+      } else {
+        process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE = previous;
+      }
+    }
+  });
+
+  it('redirects unauthenticated CLI authorization requests to signin instead of rejecting the redirect_uri', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      error: new Response(null, { status: 401 }),
+    } as never);
+
+    const previous = process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE;
+    process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE = '1';
+
+    try {
+      const res = await GET(new NextRequest(cliAuthorizeUrl));
+
+      expect(res.status).toBe(302);
+      const location = new URL(res.headers.get('location')!);
+      expect(location.pathname).toBe('/auth/signin');
+      const next = decodeURIComponent(location.searchParams.get('next')!);
+      expect(next).toContain('redirect_uri=http://127.0.0.1:53397/callback');
+      expect(next).not.toContain('redirect_uri=http://localhost:53397/callback');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE;
+      } else {
+        process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE = previous;
+      }
+    }
   });
 });
 
