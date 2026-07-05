@@ -179,6 +179,26 @@ describe('GET /api/oauth/authorize — session gate', () => {
     expect(decodeURIComponent(next)).toContain('state=xyz123');
   });
 
+  it('uses forwarded public origin for signin redirects instead of internal standalone bind host', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      error: new Response(null, { status: 401 }),
+    } as never);
+
+    const res = await GET(new NextRequest(authorizeUrl(), {
+      headers: {
+        host: '[::]:3000',
+        'x-forwarded-host': 'pagespace.ai',
+        'x-forwarded-proto': 'https',
+      },
+    }));
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.get('location')!);
+    expect(location.origin).toBe('https://pagespace.ai');
+    expect(location.pathname).toBe('/auth/signin');
+    expect(location.href).not.toContain('[::]');
+  });
+
   it('redirects to the consent screen, preserving the full authorize request, when authenticated', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
       tokenType: 'session',
@@ -195,6 +215,31 @@ describe('GET /api/oauth/authorize — session gate', () => {
     expect(location.pathname).toBe('/oauth/consent');
     expect(location.searchParams.get('client_id')).toBe('pagespace-cli');
     expect(location.searchParams.get('state')).toBe('xyz123');
+  });
+
+  it('uses forwarded public origin for consent redirects instead of internal standalone bind host', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      tokenType: 'session',
+      userId: 'user-1',
+      role: 'user',
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      sessionId: 'sess-1',
+    } as never);
+
+    const res = await GET(new NextRequest(authorizeUrl(), {
+      headers: {
+        host: '[::]:3000',
+        'x-forwarded-host': 'pagespace.ai',
+        'x-forwarded-proto': 'https',
+      },
+    }));
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.get('location')!);
+    expect(location.origin).toBe('https://pagespace.ai');
+    expect(location.pathname).toBe('/oauth/consent');
+    expect(location.href).not.toContain('[::]');
   });
 });
 
