@@ -245,6 +245,38 @@ describe('SessionService', () => {
       });
       expect(sessionRepository.touchSession).toHaveBeenCalledWith('hashed_ps_sess_valid');
     });
+
+    it('validateSession_withExpectedTypeMismatch_returnsNullWithoutSideEffects', async () => {
+      vi.mocked(isValidTokenFormat).mockReturnValue(true);
+      vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
+        id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
+        adminRoleVersion: 0, type: 'socket', scopes: [],
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null, createdAt: new Date(),
+        resourceType: null, resourceId: null, driveId: null,
+        user: { id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0, suspendedAt: null },
+      });
+
+      const result = await service.validateSession('ps_sock_valid', { expectedType: 'user' });
+
+      expect(result).toBeNull();
+      expect(sessionRepository.revokeByHash).not.toHaveBeenCalled();
+      expect(sessionRepository.touchSession).not.toHaveBeenCalled();
+    });
+
+    it('validateSession_withMatchingExpectedType_returnsClaims', async () => {
+      vi.mocked(isValidTokenFormat).mockReturnValue(true);
+      vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
+        id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
+        adminRoleVersion: 0, type: 'socket', scopes: [],
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null, createdAt: new Date(),
+        resourceType: null, resourceId: null, driveId: null,
+        user: { id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0, suspendedAt: null },
+      });
+
+      const result = await service.validateSession('ps_sock_valid', { expectedType: 'socket' });
+
+      expect(result?.type).toBe('socket');
+    });
   });
 
   describe('revokeSession', () => {

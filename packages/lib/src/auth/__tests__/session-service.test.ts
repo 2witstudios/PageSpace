@@ -319,6 +319,56 @@ describe('Session Service', () => {
       const claims = await sessionService.validateSession(token);
       expect(claims).toBeNull();
     });
+
+    it('rejects a socket token where a user session is expected (cookie/bearer surface)', async () => {
+      const token = await sessionService.createSession({
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      const claims = await sessionService.validateSession(token, { expectedType: 'user' });
+      expect(claims).toBeNull();
+    });
+
+    it('accepts a socket token where a socket session is expected (realtime handshake)', async () => {
+      const token = await sessionService.createSession({
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      const claims = await sessionService.validateSession(token, { expectedType: 'socket' });
+      expect(claims?.type).toBe('socket');
+    });
+
+    it('rejects a user session where a socket token is expected', async () => {
+      const token = await sessionService.createSession({
+        userId: testUserId,
+        type: 'user',
+        scopes: ['*'],
+        expiresInMs: 3600000,
+      });
+
+      const claims = await sessionService.validateSession(token, { expectedType: 'socket' });
+      expect(claims).toBeNull();
+    });
+
+    it('type-mismatch rejection does not revoke the token for its own surface', async () => {
+      const token = await sessionService.createSession({
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      await sessionService.validateSession(token, { expectedType: 'user' });
+
+      const claims = await sessionService.validateSession(token, { expectedType: 'socket' });
+      expect(claims?.type).toBe('socket');
+    });
   });
 
   describe('per-app session scoping', () => {

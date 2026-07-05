@@ -578,7 +578,7 @@ io.use(async (socket: AuthSocket, next) => {
   // same way as the ps_sess_* branch below.
   if (token.startsWith('ps_sock_')) {
     try {
-      const sessionClaims = await sessionService.validateSession(token);
+      const sessionClaims = await sessionService.validateSession(token, { expectedType: 'socket' });
       if (!sessionClaims) {
         loggers.realtime.warn('Socket.IO: Socket token validation failed');
         return next(new Error('Authentication error: Invalid or expired socket token.'));
@@ -597,7 +597,7 @@ io.use(async (socket: AuthSocket, next) => {
   // Check for session token (ps_sess_*) - used by mobile/desktop clients
   if (token.startsWith('ps_sess_')) {
     try {
-      const sessionClaims = await sessionService.validateSession(token);
+      const sessionClaims = await sessionService.validateSession(token, { expectedType: 'user' });
       if (!sessionClaims) {
         loggers.realtime.warn('Socket.IO: Session token validation failed');
         return next(new Error('Authentication error: Invalid or expired session.'));

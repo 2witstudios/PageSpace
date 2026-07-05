@@ -73,8 +73,16 @@ export class SessionService {
 
   /**
    * Validate token and return claims - this is the ONLY way to get claims
+   *
+   * `expectedType` scopes the token to one authentication surface: pass it at
+   * every boundary that only serves a single session type (e.g. 'user' for
+   * browser cookie/bearer auth, 'socket' for the Socket.IO handshake) so a
+   * token leaked from one surface cannot be replayed on another.
    */
-  async validateSession(token: string): Promise<SessionClaims | null> {
+  async validateSession(
+    token: string,
+    options?: { expectedType?: SessionClaims['type'] }
+  ): Promise<SessionClaims | null> {
     if (!isValidTokenFormat(token)) {
       return null;
     }
@@ -85,6 +93,12 @@ export class SessionService {
 
     if (!session) return null;
     if (!session.user) return null;
+
+    // Wrong-surface token (e.g. a socket token presented as a session cookie):
+    // reject without side effects — the token stays valid at its own surface.
+    if (options?.expectedType && session.type !== options.expectedType) {
+      return null;
+    }
 
     // Check if user is suspended (administrative action)
     if (session.user.suspendedAt) {

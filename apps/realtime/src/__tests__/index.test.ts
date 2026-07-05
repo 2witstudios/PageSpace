@@ -670,7 +670,7 @@ describe('Socket.IO middleware - auth', () => {
 
     await capturedIoUseCallback!(socket, next);
 
-    expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sock_validtoken123');
+    expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sock_validtoken123', { expectedType: 'socket' });
     expect(next).toHaveBeenCalledWith(/* no error */);
     expect(next.mock.calls[0]).toHaveLength(0);
   });

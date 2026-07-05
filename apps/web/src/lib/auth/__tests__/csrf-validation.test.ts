@@ -265,7 +265,7 @@ describe('csrf-validation', () => {
 
         // Assert: Verify the session-based binding flow
         expect(getSessionFromCookies).toHaveBeenCalled();
-        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_valid');
+        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_valid', { expectedType: 'user' });
         expect(validateCSRFToken).toHaveBeenCalledWith('valid-csrf-token', mockSessionId);
       });
     });
@@ -324,7 +324,7 @@ describe('csrf-validation', () => {
         await validateCSRF(request);
 
         // Assert: Session service validates the correct token
-        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_custom');
+        expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sess_custom', { expectedType: 'user' });
       });
     });
   });
