@@ -192,6 +192,66 @@ describe('validateInferenceRequest', () => {
     });
   });
 
+  test('content-array message with text and a data: image_url part normalizes both into parts', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'What is in this image?' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } },
+        ],
+      }],
+    };
+    const result = validateInferenceRequest(body);
+    const parts = result.ok ? result.data.messages[0].parts as Array<Record<string, unknown>> : [];
+    assert({
+      given: 'a content-array message with a text part and a data: image_url part',
+      should: 'return ok:true with both a text part and a file part (image no longer dropped)',
+      actual: result.ok
+        ? { ok: true, partCount: parts.length, firstType: parts[0]?.type, secondType: parts[1]?.type, secondUrl: parts[1]?.url }
+        : { ok: false },
+      expected: { ok: true, partCount: 2, firstType: 'text', secondType: 'file', secondUrl: 'data:image/png;base64,aGVsbG8=' },
+    });
+  });
+
+  test('content-array message with only a data: image_url part is not treated as empty content', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } }],
+      }],
+    };
+    const result = validateInferenceRequest(body);
+    const parts = result.ok ? result.data.messages[0].parts as Array<Record<string, unknown>> : [];
+    assert({
+      given: 'a content-array message with only a data: image_url part (no text)',
+      should: 'return ok:true with a single file part, not a 400 for empty content',
+      actual: result.ok
+        ? { ok: true, partCount: parts.length, partType: parts[0]?.type }
+        : { ok: false },
+      expected: { ok: true, partCount: 1, partType: 'file' },
+    });
+  });
+
+  test('content-array message with a remote-URL image_url part returns 400 with a descriptive error', () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image_url', image_url: { url: 'https://example.com/cat.png' } }],
+      }],
+    };
+    const result = validateInferenceRequest(body);
+    assert({
+      given: 'a content-array message with an image_url part pointing at a remote http(s) URL',
+      should: 'return ok:false with status 400 and a descriptive error, not silently drop the image',
+      actual: result,
+      expected: { ok: false, status: 400, error: 'image_url must be a data: URL — remote image URLs are not supported' },
+    });
+  });
+
   test('conversation_id is extracted and returned as conversationId', () => {
     const messages = [{ role: 'user' as const, id: 'msg-1', content: 'Hi', parts: [{ type: 'text' as const, text: 'Hi' }] }];
     const body = { model: 'ps-agent://page-123', messages, conversation_id: 'conv-xyz' };
