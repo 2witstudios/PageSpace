@@ -40,3 +40,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   in-progress AI reply's content is now checkpointed to the database as it streams, so reopening
   the channel (or resuming on mobile) shows the restored partial answer instead of a stalled
   "streaming" indicator with nothing behind it.
+- On mobile, the app no longer loads in the wrong theme and switches after first paint — a race
+  that could leave the navbar "half stuck" in the previous theme's colors on iOS/Android WebKit.
+  The saved theme is now resolved server-side before the first render, and theme toggles force the
+  translucent "liquid glass" surfaces to repaint.

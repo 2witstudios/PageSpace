@@ -177,6 +177,55 @@ describe('git_diff', () => {
     const calls = getRunCalls(deps);
     expect(calls[0].args).toContain('--cached');
   });
+
+  it('uses three-dot merge-base diff when base is given', async () => {
+    const deps = makeDeps();
+    const { git_diff } = createSandboxGitTools(deps);
+    await git_diff.execute!({ base: 'origin/master' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('origin/master...HEAD');
+  });
+
+  it('uses explicit head ref when both base and head are given', async () => {
+    const deps = makeDeps();
+    const { git_diff } = createSandboxGitTools(deps);
+    await git_diff.execute!({ base: 'origin/master', head: 'feature-x' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('origin/master...feature-x');
+  });
+
+  it('includes --path filter when path is given with base', async () => {
+    const deps = makeDeps();
+    const { git_diff } = createSandboxGitTools(deps);
+    await git_diff.execute!({ base: 'origin/master', path: 'src/foo.ts' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('--');
+    expect(calls[0].args).toContain('src/foo.ts');
+  });
+
+  it('falls back to working-tree diff when base is not given', async () => {
+    const deps = makeDeps();
+    const { git_diff } = createSandboxGitTools(deps);
+    await git_diff.execute!({}, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toEqual(['diff']);
+    expect(calls[0].args).not.toContain('...');
+  });
+
+  it('rejects head without base', () => {
+    const { git_diff } = createSandboxGitTools(makeDeps());
+    const ok = (v: unknown) => (git_diff.inputSchema as unknown as { safeParse: (v: unknown) => { success: boolean } }).safeParse(v).success;
+    expect(ok({ head: 'feature-x' })).toBe(false);
+    expect(ok({ base: 'origin/master', head: 'feature-x' })).toBe(true);
+  });
+
+  it('rejects staged combined with base', () => {
+    const { git_diff } = createSandboxGitTools(makeDeps());
+    const ok = (v: unknown) => (git_diff.inputSchema as unknown as { safeParse: (v: unknown) => { success: boolean } }).safeParse(v).success;
+    expect(ok({ staged: true, base: 'origin/master' })).toBe(false);
+    expect(ok({ staged: true })).toBe(true);
+    expect(ok({ base: 'origin/master' })).toBe(true);
+  });
 });
 
 // ── git_reset ──────────────────────────────────────────────────────────────
@@ -479,6 +528,27 @@ describe('gh_pr_create', () => {
   });
 });
 
+// ── gh_pr_diff ─────────────────────────────────────────────────────────────
+
+describe('gh_pr_diff', () => {
+  it('builds ["pr", "diff", "<number>"]', async () => {
+    const deps = makeDeps();
+    const { gh_pr_diff } = createSandboxGitTools(deps);
+    await gh_pr_diff.execute!({ number: 42 }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].cmd).toBe('gh');
+    expect(calls[0].args).toEqual(['pr', 'diff', '42', '--color', 'never']);
+  });
+
+  it('returns no-connection error when token is null', async () => {
+    const deps = makeDeps(null);
+    const { gh_pr_diff } = createSandboxGitTools(deps);
+    const result = await gh_pr_diff.execute!({ number: 42 }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
 // ── gh_issue_create ────────────────────────────────────────────────────────
 
 describe('gh_issue_create', () => {
@@ -493,6 +563,212 @@ describe('gh_issue_create', () => {
     const deps = makeDeps(null);
     const { gh_issue_create } = createSandboxGitTools(deps);
     const result = await gh_issue_create.execute!({ title: 'Issue', body: 'b' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
+// ── gh_run_list ─────────────────────────────────────────────────────────────
+
+describe('gh_run_list', () => {
+  it('defaults to limit 10', async () => {
+    const deps = makeDeps();
+    const { gh_run_list } = createSandboxGitTools(deps);
+    await gh_run_list.execute!({}, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].cmd).toBe('gh');
+    expect(calls[0].args).toContain('--limit');
+    const limitIdx = calls[0].args.indexOf('--limit');
+    expect(calls[0].args[limitIdx + 1]).toBe('10');
+  });
+
+  it('passes branch and status filters', async () => {
+    const deps = makeDeps();
+    const { gh_run_list } = createSandboxGitTools(deps);
+    await gh_run_list.execute!({ branch: 'feat/x', status: 'completed' }, {} as never);
+    const calls = getRunCalls(deps);
+    const branchIdx = calls[0].args.indexOf('--branch');
+    expect(calls[0].args[branchIdx + 1]).toBe('feat/x');
+    const statusIdx = calls[0].args.indexOf('--status');
+    expect(calls[0].args[statusIdx + 1]).toBe('completed');
+  });
+
+  it('returns no-connection error when token is null', async () => {
+    const deps = makeDeps(null);
+    const { gh_run_list } = createSandboxGitTools(deps);
+    const result = await gh_run_list.execute!({}, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
+// ── gh_run_view ──────────────────────────────────────────────────────────────
+
+describe('gh_run_view', () => {
+  it('uses --json when log is not set', async () => {
+    const deps = makeDeps();
+    const { gh_run_view } = createSandboxGitTools(deps);
+    await gh_run_view.execute!({ runId: 12345 }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].cmd).toBe('gh');
+    expect(calls[0].args).toContain('--json');
+    expect(calls[0].args).toContain('12345');
+    expect(calls[0].args).not.toContain('--log-failed');
+  });
+
+  it('uses --log-failed when log: true', async () => {
+    const deps = makeDeps();
+    const { gh_run_view } = createSandboxGitTools(deps);
+    await gh_run_view.execute!({ runId: 12345, log: true }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('--log-failed');
+    expect(calls[0].args).not.toContain('--json');
+  });
+
+  it('returns no-connection error when token is null', async () => {
+    const deps = makeDeps(null);
+    const { gh_run_view } = createSandboxGitTools(deps);
+    const result = await gh_run_view.execute!({ runId: 12345 }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
+// ── gh_pr_checks ───────────────────────────────────────────────────────────
+
+describe('gh_pr_checks', () => {
+  it('calls gh pr checks with JSON output', async () => {
+    const deps = makeDeps();
+    const { gh_pr_checks } = createSandboxGitTools(deps);
+    await gh_pr_checks.execute!({ number: 42 }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].cmd).toBe('gh');
+    expect(calls[0].args).toContain('checks');
+    expect(calls[0].args).toContain('42');
+    const jsonIdx = calls[0].args.indexOf('--json');
+    expect(jsonIdx).toBeGreaterThan(-1);
+    expect(calls[0].args[jsonIdx + 1]).toContain('name');
+    expect(calls[0].args[jsonIdx + 1]).toContain('state');
+  });
+
+  it('returns no-connection error when token is null', async () => {
+    const deps = makeDeps(null);
+    const { gh_pr_checks } = createSandboxGitTools(deps);
+    const result = await gh_pr_checks.execute!({ number: 42 }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
+// ── gh_pr_review ───────────────────────────────────────────────────────────
+
+describe('gh_pr_review', () => {
+  it('uses --approve for approve action', async () => {
+    const deps = makeDeps();
+    const { gh_pr_review } = createSandboxGitTools(deps);
+    await gh_pr_review.execute!({ number: 42, action: 'approve', body: 'LGTM' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].cmd).toBe('gh');
+    expect(calls[0].args).toContain('--approve');
+    expect(calls[0].args).toContain('LGTM');
+  });
+
+  it('uses --request-changes for request_changes action', async () => {
+    const deps = makeDeps();
+    const { gh_pr_review } = createSandboxGitTools(deps);
+    await gh_pr_review.execute!({ number: 42, action: 'request_changes', body: 'Fix X' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('--request-changes');
+    expect(calls[0].args).toContain('Fix X');
+  });
+
+  it('uses --comment for comment action', async () => {
+    const deps = makeDeps();
+    const { gh_pr_review } = createSandboxGitTools(deps);
+    await gh_pr_review.execute!({ number: 42, action: 'comment', body: 'Note: ...' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('--comment');
+    expect(calls[0].args).toContain('Note: ...');
+  });
+
+  it('returns no-connection error when token is null', async () => {
+    const deps = makeDeps(null);
+    const { gh_pr_review } = createSandboxGitTools(deps);
+    const result = await gh_pr_review.execute!({ number: 42, action: 'approve' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
+// ── gh_pr_close ────────────────────────────────────────────────────────────
+
+describe('gh_pr_close', () => {
+  it('includes --comment when comment is given', async () => {
+    const deps = makeDeps();
+    const { gh_pr_close } = createSandboxGitTools(deps);
+    await gh_pr_close.execute!({ number: 42, comment: 'Duplicate' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].cmd).toBe('gh');
+    expect(calls[0].args).toContain('close');
+    expect(calls[0].args).toContain('42');
+    expect(calls[0].args).toContain('--comment');
+    expect(calls[0].args).toContain('Duplicate');
+  });
+
+  it('omits --comment when not given', async () => {
+    const deps = makeDeps();
+    const { gh_pr_close } = createSandboxGitTools(deps);
+    await gh_pr_close.execute!({ number: 42 }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).not.toContain('--comment');
+  });
+
+  it('returns no-connection error when token is null', async () => {
+    const deps = makeDeps(null);
+    const { gh_pr_close } = createSandboxGitTools(deps);
+    const result = await gh_pr_close.execute!({ number: 42 }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
+// ── gh_pr_reopen ───────────────────────────────────────────────────────────
+
+describe('gh_pr_reopen', () => {
+  it('builds ["pr", "reopen", "<number>"]', async () => {
+    const deps = makeDeps();
+    const { gh_pr_reopen } = createSandboxGitTools(deps);
+    await gh_pr_reopen.execute!({ number: 42 }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].cmd).toBe('gh');
+    expect(calls[0].args).toEqual(['pr', 'reopen', '42']);
+  });
+
+  it('returns no-connection error when token is null', async () => {
+    const deps = makeDeps(null);
+    const { gh_pr_reopen } = createSandboxGitTools(deps);
+    const result = await gh_pr_reopen.execute!({ number: 42 }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
+// ── gh_pr_ready ────────────────────────────────────────────────────────────
+
+describe('gh_pr_ready', () => {
+  it('builds ["pr", "ready", "<number>"]', async () => {
+    const deps = makeDeps();
+    const { gh_pr_ready } = createSandboxGitTools(deps);
+    await gh_pr_ready.execute!({ number: 42 }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].cmd).toBe('gh');
+    expect(calls[0].args).toEqual(['pr', 'ready', '42']);
+  });
+
+  it('returns no-connection error when token is null', async () => {
+    const deps = makeDeps(null);
+    const { gh_pr_ready } = createSandboxGitTools(deps);
+    const result = await gh_pr_ready.execute!({ number: 42 }, {} as never);
     expect(result).toMatchObject({ success: false });
     expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
@@ -571,10 +847,10 @@ describe('schema strictness', () => {
 // ── tool count ─────────────────────────────────────────────────────────────
 
 describe('createSandboxGitTools', () => {
-  it('exports exactly 26 tools', () => {
+  it('exports exactly 34 tools', () => {
     const deps = makeDeps();
     const tools = createSandboxGitTools(deps);
-    expect(Object.keys(tools)).toHaveLength(26);
+    expect(Object.keys(tools)).toHaveLength(34);
   });
 
   it('no tool passes sh or -c as the cmd or first arg', async () => {

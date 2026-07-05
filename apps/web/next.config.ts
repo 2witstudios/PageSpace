@@ -21,6 +21,9 @@ export const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
   transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
+  // Preserve RFC 8252 loopback redirect_uri query values; NextRequest URL
+  // normalization rewrites percent-encoded 127.0.0.1 to localhost otherwise.
+  skipMiddlewareUrlNormalize: true,
   // pg resolves via bun's cache path (~/.bun/install/cache/pg@.../), which
   // contains no "node_modules" segment, so Next.js's path-based heuristic
   // fails to auto-externalize it. List it explicitly here as a backstop; the
