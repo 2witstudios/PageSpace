@@ -728,6 +728,55 @@ describe('useChannelStreamSocket', () => {
     });
   });
 
+  describe('access_revoked', () => {
+    it('given access_revoked for the current channel, should abort the open controller and call clearPageStreams', () => {
+      let capturedSignal!: AbortSignal;
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, signal: AbortSignal) => {
+          capturedSignal = signal;
+          return new Promise(() => {}); // never resolves
+        },
+      );
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      act(() => { mockSocket._trigger('access_revoked', { room: 'page-a', reason: 'permission_revoked' }); });
+
+      expect(capturedSignal.aborted).toBe(true);
+      expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
+    });
+
+    it('given access_revoked for a different room, should NOT abort the controller or clear this channel', () => {
+      let capturedSignal!: AbortSignal;
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, signal: AbortSignal) => {
+          capturedSignal = signal;
+          return new Promise(() => {}); // never resolves
+        },
+      );
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      act(() => { mockSocket._trigger('access_revoked', { room: 'page-b', reason: 'permission_revoked' }); });
+
+      expect(capturedSignal.aborted).toBe(false);
+      expect(mockClearPageStreams).not.toHaveBeenCalledWith('page-a');
+    });
+
+    it('given the hook unmounts, should remove the access_revoked listener', () => {
+      const { unmount } = renderHook(() => useChannelStreamSocket('page-a'));
+
+      unmount();
+      mockClearPageStreams.mockClear();
+
+      act(() => { mockSocket._trigger('access_revoked', { room: 'page-a', reason: 'permission_revoked' }); });
+
+      expect(mockClearPageStreams).not.toHaveBeenCalled();
+    });
+  });
+
   describe('cleanup on unmount', () => {
     it('should remove socket listeners, abort controllers, and clearPageStreams', () => {
       const { unmount } = renderHook(() => useChannelStreamSocket('page-a'));

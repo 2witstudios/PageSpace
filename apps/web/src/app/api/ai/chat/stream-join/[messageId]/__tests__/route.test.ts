@@ -318,6 +318,84 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     });
   });
 
+  describe('permission recheck (revocation backstop)', () => {
+    const RECHECK_INTERVAL_MS = 5000;
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('given permission is revoked before the first recheck tick, should send a done+aborted frame and stop pushing further chunks', async () => {
+      vi.useFakeTimers();
+      let allowed = true;
+      vi.mocked(canUserViewPage).mockImplementation(async () => allowed);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      expect(response.status).toBe(200);
+
+      allowed = false;
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      // Further pushes after revocation must not reach the (already-closed) response body.
+      testRegistry.push(mockMessageId, { type: 'text', text: 'after-revoke' });
+
+      const body = await readSSEBody(response);
+
+      expect(body).toContain('data: {"done":true,"aborted":true}\n\n');
+      expect(body).not.toContain('after-revoke');
+    });
+
+    it('given permission is revoked mid-stream, should unsubscribe from the registry', async () => {
+      vi.useFakeTimers();
+      let allowed = true;
+      vi.mocked(canUserViewPage).mockImplementation(async () => allowed);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      allowed = false;
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      // finish() notifies subscribers via onComplete; if the route already unsubscribed,
+      // this must not throw and must not double-close the (already-closed) controller.
+      expect(() => testRegistry.finish(mockMessageId)).not.toThrow();
+    });
+
+    it('given permission remains granted at recheck time, should keep the stream open and continue delivering chunks', async () => {
+      vi.useFakeTimers();
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      testRegistry.push(mockMessageId, { type: 'text', text: 'still-allowed' });
+      testRegistry.finish(mockMessageId);
+
+      const body = await readSSEBody(response);
+
+      expect(body).toContain('data: {"part":{"type":"text","text":"still-allowed"}}\n\n');
+      expect(body).toContain('data: {"done":true,"aborted":false}\n\n');
+    });
+
+    it('given the stream finishes naturally before any recheck fires, should clear the recheck interval', async () => {
+      vi.useFakeTimers();
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+      testRegistry.finish(mockMessageId);
+
+      vi.mocked(canUserViewPage).mockClear();
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS * 3);
+
+      // No leaked interval still polling after the stream naturally finished.
+      expect(canUserViewPage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('client disconnect', () => {
     it('given client disconnect, should unsubscribe without leaking resources', async () => {
       const abortController = new AbortController();
