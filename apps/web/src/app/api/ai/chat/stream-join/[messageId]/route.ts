@@ -56,19 +56,17 @@ export async function GET(
   }
 
   const encoder = new TextEncoder();
+  const encodeDoneFrame = (aborted: boolean): Uint8Array =>
+    encoder.encode(`data: ${JSON.stringify({ done: true, aborted })}\n\n`);
   // Chunks that arrive during subscribe's synchronous buffer replay, before the
   // ReadableStream controller exists, are collected here and flushed in start().
   const preBuffer: Uint8Array[] = [];
   let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
   let streamClosed = false;
-  let recheckIntervalId: ReturnType<typeof setInterval> | null = null;
-
-  const clearRecheckInterval = () => {
-    if (recheckIntervalId !== null) {
-      clearInterval(recheckIntervalId);
-      recheckIntervalId = null;
-    }
-  };
+  // Self-rescheduled after each check resolves (see recheckAccess) rather than a
+  // fixed-cadence interval, so a slow permission check can't stack overlapping ones.
+  let recheckTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  const clearRecheckTimeout = () => clearTimeout(recheckTimeoutId);
 
   const unsubscribe = streamMulticastRegistry.subscribe(
     messageId,
@@ -81,8 +79,8 @@ export async function GET(
       }
     },
     (aborted) => {
-      clearRecheckInterval();
-      const done = encoder.encode(`data: ${JSON.stringify({ done: true, aborted })}\n\n`);
+      clearRecheckTimeout();
+      const done = encodeDoneFrame(aborted);
       if (streamController) {
         streamController.enqueue(done);
         streamController.close();
@@ -126,35 +124,41 @@ export async function GET(
       request.signal.addEventListener('abort', () => {
         if (streamClosed) return;
         streamClosed = true;
-        clearRecheckInterval();
+        clearRecheckTimeout();
         unsubscribe();
         controller.close();
       }, { once: true });
 
-      recheckIntervalId = setInterval(() => {
-        void (async () => {
-          if (streamClosed) {
-            clearRecheckInterval();
-            return;
-          }
-          const stillAllowed = await hasViewAccess();
-          if (streamClosed || stillAllowed) return;
+      const recheckAccess = async () => {
+        if (streamClosed) return;
+        const stillAllowed = await hasViewAccess();
+        if (streamClosed) return;
 
-          streamClosed = true;
-          clearRecheckInterval();
-          unsubscribe();
-          auditRequest(request, {
-            eventType: 'authz.access.denied',
-            resourceType: 'ai_stream',
-            resourceId: messageId,
-            details: { reason: 'permission_revoked_mid_stream', pageId: meta.pageId },
-            riskScore: 0.5,
-          });
-          const revoked = encoder.encode(`data: ${JSON.stringify({ done: true, aborted: true })}\n\n`);
-          controller.enqueue(revoked);
+        if (stillAllowed) {
+          recheckTimeoutId = setTimeout(() => void recheckAccess(), PERMISSION_RECHECK_INTERVAL_MS);
+          return;
+        }
+
+        streamClosed = true;
+        unsubscribe();
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          resourceType: 'ai_stream',
+          resourceId: messageId,
+          details: { reason: 'permission_revoked_mid_stream', pageId: meta.pageId },
+          riskScore: 0.5,
+        });
+        try {
+          controller.enqueue(encodeDoneFrame(true));
           controller.close();
-        })();
-      }, PERMISSION_RECHECK_INTERVAL_MS);
+        } catch {
+          // Controller may already be closed via a racing path (e.g. client abort
+          // firing between the streamClosed check above and this enqueue) — the
+          // stream is already torn down either way, nothing more to do.
+        }
+      };
+
+      recheckTimeoutId = setTimeout(() => void recheckAccess(), PERMISSION_RECHECK_INTERVAL_MS);
     },
   });
 

@@ -394,6 +394,38 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       // No leaked interval still polling after the stream naturally finished.
       expect(canUserViewPage).not.toHaveBeenCalled();
     });
+
+    it('given a slow permission check, should not start a second overlapping check before the first resolves', async () => {
+      vi.useFakeTimers();
+      let resolveRecheck!: (allowed: boolean) => void;
+      let callCount = 0;
+      vi.mocked(canUserViewPage).mockImplementation(() => {
+        callCount += 1;
+        // Call #1 is the initial join-time gate check — resolve it immediately
+        // so the stream actually starts; only the recheck ticks are made slow.
+        if (callCount === 1) return Promise.resolve(true);
+        return new Promise((res) => { resolveRecheck = res; });
+      });
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      // First recheck tick fires; canUserViewPage is now pending (not yet resolved).
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+      expect(canUserViewPage).toHaveBeenCalledTimes(2);
+
+      // Advancing well past another interval must not start a second recheck —
+      // the next one is only scheduled once the pending check resolves.
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS * 3);
+      expect(canUserViewPage).toHaveBeenCalledTimes(2);
+
+      resolveRecheck(true);
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+      expect(canUserViewPage).toHaveBeenCalledTimes(3);
+
+      testRegistry.finish(mockMessageId);
+      await readSSEBody(response);
+    });
   });
 
   describe('client disconnect', () => {
