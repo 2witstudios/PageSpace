@@ -5,14 +5,22 @@ import { sessionRepository } from '@/lib/repositories/session-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { normalizeDriveScopes } from '@pagespace/lib/auth/mcp-token-scopes';
+import { normalizeDriveScopes, computeMcpTokenActionBinding } from '@pagespace/lib/auth/mcp-token-scopes';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 import { rejectScopedOAuth } from '../scope-guard';
 
 // 'oauth' lets the pagespace CLI (`pagespace tokens revoke`) authenticate
-// with an OAuth access token instead of a session cookie — see the sibling
-// mcp-tokens/route.ts for the read/write route this pairs with.
-const AUTH_OPTIONS = { allow: ['session', 'oauth'] as const, requireCSRF: true };
+// with an OAuth access token instead of a session cookie. Revocation only
+// ever narrows access, so it stays outside the step-up gate below — see
+// the sibling mcp-tokens/route.ts for the read/write route this pairs with.
+const AUTH_OPTIONS_DELETE = { allow: ['session', 'oauth'] as const, requireCSRF: true };
+
+// PATCH widens an EXISTING mcp_* token's drive scopes — architecturally the
+// same escalation shape as POST /api/auth/mcp-tokens (Phase 8 credential
+// minting security correction), so it gets the same session-only + step-up
+// gate and drops 'oauth' bearer auth entirely.
+const AUTH_OPTIONS_PATCH = { allow: ['session'] as const, requireCSRF: true };
 
 // Schema for PATCH (editing drive scopes on an existing token)
 const updateTokenScopesSchema = z.object({
@@ -24,6 +32,11 @@ const updateTokenScopesSchema = z.object({
     role: z.enum(['ADMIN', 'MEMBER']).nullish(),
     customRoleId: z.string().optional(),
   })).optional(),
+  // Required at runtime (checked explicitly below, not via zod) so a request
+  // missing only this field still reports the SAME validation errors on
+  // drives/driveIds it always has — no separate error shape leaks whether a
+  // caller forgot the step-up token specifically.
+  stepUpToken: z.string().min(1).optional(),
 }).refine(d => !(d.drives && d.driveIds), {
   message: 'Provide drives or driveIds, not both',
 }).refine(d => d.drives !== undefined || d.driveIds !== undefined, {
@@ -35,7 +48,7 @@ export async function DELETE(
   req: NextRequest,
   context: { params: Promise<{ tokenId: string }> }
 ) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_DELETE);
   if (isAuthError(auth)) return auth.error;
   const scopeRejection = rejectScopedOAuth(auth);
   if (scopeRejection) return scopeRejection;
@@ -75,10 +88,8 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ tokenId: string }> }
 ) {
-  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_PATCH);
   if (isAuthError(auth)) return auth.error;
-  const scopeRejection = rejectScopedOAuth(auth);
-  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   const { tokenId } = await context.params;
@@ -89,10 +100,29 @@ export async function PATCH(
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues }, { status: 400 });
     }
-    const { drives: rawDrives, driveIds: rawDriveIds } = parsed.data;
+    const { drives: rawDrives, driveIds: rawDriveIds, stepUpToken } = parsed.data;
 
     // Normalize using pure function
     const driveScopes = normalizeDriveScopes(rawDrives, rawDriveIds);
+
+    // Step-up gate (Phase 8): widening an existing token's drive scopes is a
+    // credential escalation, same as minting a new one — require a live
+    // step-up grant bound to exactly this tokenId + target scopes before
+    // anything is read or written. `name: tokenId` reuses the mint binding
+    // helper's identifying-string slot to scope the grant to this token.
+    if (!stepUpToken) {
+      auditRequest(req, { eventType: 'authz.access.denied', userId, details: { reason: 'mcp_token_update_missing_step_up' } });
+      return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+    }
+    const stepUpResult = await consumeStepUpGrant({
+      userId,
+      token: stepUpToken,
+      actionBinding: computeMcpTokenActionBinding({ name: tokenId, driveScopes }),
+    });
+    if (!stepUpResult.ok) {
+      auditRequest(req, { eventType: 'authz.access.denied', userId, details: { reason: 'mcp_token_update_step_up_invalid' } });
+      return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+    }
 
     // Ownership check — token must belong to the requesting user
     const existingToken = await sessionRepository.findMcpTokenByIdAndUser(tokenId, userId);

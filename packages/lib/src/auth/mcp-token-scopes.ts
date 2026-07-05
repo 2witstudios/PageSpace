@@ -60,3 +60,23 @@ export function normalizeDriveScopes(
 
   return [];
 }
+
+/**
+ * Canonical, order-independent action-binding parts for an mcp-token mint/update
+ * request (Phase 8 step-up gate). Fed into `computeActionBindingHash`
+ * (`step-up-decisions.ts`) so a step-up grant obtained for one set of
+ * name/drive-scope parameters can never be spent minting a different one.
+ */
+export function computeMcpTokenActionBinding({
+  name,
+  driveScopes,
+}: {
+  name: string;
+  driveScopes: NormalizedDriveScope[];
+}): Record<string, string> {
+  const canonicalDrives = [...driveScopes]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((scope) => `${scope.id}:${scope.role ?? ''}:${scope.customRoleId ?? ''}`)
+    .join(',');
+  return { name, driveScopes: canonicalDrives };
+}

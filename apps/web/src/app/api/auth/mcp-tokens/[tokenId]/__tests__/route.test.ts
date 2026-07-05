@@ -58,12 +58,17 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   validateDriveScopeAccess: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/auth/step-up-service', () => ({
+  consumeStepUpGrant: vi.fn(),
+}));
+
 import { DELETE, PATCH } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 
 const createContext = (tokenId = 'token-123') => ({
   params: Promise.resolve({ tokenId }),
@@ -259,24 +264,71 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
       invalidCustomRoles: [],
       unauthorizedCustomRoles: [],
     });
+    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
   });
 
-  it('P1a: rejects a drive-scoped OAuth token, never reaching the repository', async () => {
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(DRIVE_SCOPED_OAUTH as never);
-
+  it('no longer accepts OAuth bearer tokens — widening scopes requires a session, not just a token', async () => {
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
       method: 'PATCH',
       headers: {
         Cookie: 'ps_session=valid-token',
         'X-CSRF-Token': 'valid-csrf-token',
       },
-      body: JSON.stringify({ drives: [{ id: 'drive-1' }] }),
+      body: JSON.stringify({ drives: [{ id: 'drive-1' }], stepUpToken: 'ps_stepup_test' }),
     });
 
-    const response = await PATCH(request, createContext());
+    await PATCH(request, createContext());
 
-    expect(response.status).toBe(403);
-    expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
+    expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+      request,
+      { allow: ['session'], requireCSRF: true },
+    );
+  });
+
+  describe('step-up gate', () => {
+    it('returns 401 when stepUpToken is missing, never reaching the repository', async () => {
+      const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+        method: 'PATCH',
+        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
+        body: JSON.stringify({ drives: [{ id: 'drive-1' }] }),
+      });
+
+      const response = await PATCH(request, createContext());
+
+      expect(response.status).toBe(401);
+      expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 when the step-up grant fails to consume, never reaching the repository', async () => {
+      vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: false, error: { code: 'STEP_UP_REQUIRED' } } as never);
+
+      const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+        method: 'PATCH',
+        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
+        body: JSON.stringify({ drives: [{ id: 'drive-1' }], stepUpToken: 'ps_stepup_bad' }),
+      });
+
+      const response = await PATCH(request, createContext());
+
+      expect(response.status).toBe(401);
+      expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
+    });
+
+    it('consumes the step-up grant bound to this tokenId + target drive scopes', async () => {
+      const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+        method: 'PATCH',
+        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
+        body: JSON.stringify({ drives: [{ id: 'drive-1', role: 'ADMIN' }], stepUpToken: 'ps_stepup_test' }),
+      });
+
+      await PATCH(request, createContext());
+
+      expect(consumeStepUpGrant).toHaveBeenCalledWith({
+        userId: 'test-user-id',
+        token: 'ps_stepup_test',
+        actionBinding: { name: 'token-123', driveScopes: 'drive-1:ADMIN:' },
+      });
+    });
   });
 
   it('returns 404 when token not found', async () => {
@@ -288,7 +340,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
         Cookie: 'ps_session=valid-token',
         'X-CSRF-Token': 'valid-csrf-token',
       },
-      body: JSON.stringify({ drives: [{ id: 'drive-1' }] }),
+      body: JSON.stringify({ drives: [{ id: 'drive-1' }], stepUpToken: 'ps_stepup_test' }),
     });
 
     const response = await PATCH(request, createContext());
@@ -324,6 +376,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
       body: JSON.stringify({
         drives: [{ id: 'drive-1' }],
         driveIds: ['drive-2'],
+        stepUpToken: 'ps_stepup_test',
       }),
     });
 
@@ -345,7 +398,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
         Cookie: 'ps_session=valid-token',
         'X-CSRF-Token': 'valid-csrf-token',
       },
-      body: JSON.stringify({ drives: [{ id: 'forbidden-drive' }] }),
+      body: JSON.stringify({ drives: [{ id: 'forbidden-drive' }], stepUpToken: 'ps_stepup_test' }),
     });
 
     const response = await PATCH(request, createContext());
@@ -366,7 +419,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
         Cookie: 'ps_session=valid-token',
         'X-CSRF-Token': 'valid-csrf-token',
       },
-      body: JSON.stringify({ drives: [{ id: 'drive-1', role: 'ADMIN' }] }),
+      body: JSON.stringify({ drives: [{ id: 'drive-1', role: 'ADMIN' }], stepUpToken: 'ps_stepup_test' }),
     });
 
     const response = await PATCH(request, createContext());
@@ -380,7 +433,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
         Cookie: 'ps_session=valid-token',
         'X-CSRF-Token': 'valid-csrf-token',
       },
-      body: JSON.stringify({ drives: [{ id: 'drive-1', role: 'ADMIN' }] }),
+      body: JSON.stringify({ drives: [{ id: 'drive-1', role: 'ADMIN' }], stepUpToken: 'ps_stepup_test' }),
     });
 
     const response = await PATCH(request, createContext());
@@ -404,7 +457,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
         Cookie: 'ps_session=valid-token',
         'X-CSRF-Token': 'valid-csrf-token',
       },
-      body: JSON.stringify({ driveIds: ['drive-1'] }),
+      body: JSON.stringify({ driveIds: ['drive-1'], stepUpToken: 'ps_stepup_test' }),
     });
 
     const response = await PATCH(request, createContext());
@@ -423,7 +476,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
         Cookie: 'ps_session=valid-token',
         'X-CSRF-Token': 'valid-csrf-token',
       },
-      body: JSON.stringify({ drives: [] }),
+      body: JSON.stringify({ drives: [], stepUpToken: 'ps_stepup_test' }),
     });
 
     const response = await PATCH(request, createContext());
@@ -445,7 +498,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
         Cookie: 'ps_session=valid-token',
         'X-CSRF-Token': 'valid-csrf-token',
       },
-      body: JSON.stringify({ driveIds: [] }),
+      body: JSON.stringify({ driveIds: [], stepUpToken: 'ps_stepup_test' }),
     });
 
     const response = await PATCH(request, createContext());
@@ -471,7 +524,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
         Cookie: 'ps_session=valid-token',
         'X-CSRF-Token': 'valid-csrf-token',
       },
-      body: JSON.stringify({ drives: [{ id: 'drive-1' }] }),
+      body: JSON.stringify({ drives: [{ id: 'drive-1' }], stepUpToken: 'ps_stepup_test' }),
     });
 
     const response = await PATCH(request, createContext());

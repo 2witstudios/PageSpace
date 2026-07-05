@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeDriveScopes, type DriveScopeInput } from '../mcp-token-scopes';
+import { normalizeDriveScopes, computeMcpTokenActionBinding, type DriveScopeInput } from '../mcp-token-scopes';
 
 describe('normalizeDriveScopes', () => {
  it('returns empty array when both inputs are undefined', () => {
@@ -66,4 +66,49 @@ describe('normalizeDriveScopes', () => {
    expect(result[1]).toEqual({ id: 'd2', role: 'MEMBER', customRoleId: 'cr-1' });
    expect(result[2]).toEqual({ id: 'd3', role: null, customRoleId: 'cr-2' });
  });
+});
+
+describe('computeMcpTokenActionBinding', () => {
+  it('is independent of drive array order', () => {
+    const a = computeMcpTokenActionBinding({
+      name: 'My Token',
+      driveScopes: normalizeDriveScopes([{ id: 'drive-1', role: 'ADMIN' }, { id: 'drive-2', role: 'MEMBER' }]),
+    });
+    const b = computeMcpTokenActionBinding({
+      name: 'My Token',
+      driveScopes: normalizeDriveScopes([{ id: 'drive-2', role: 'MEMBER' }, { id: 'drive-1', role: 'ADMIN' }]),
+    });
+    expect(a).toEqual(b);
+  });
+
+  it('changes when the token name changes', () => {
+    const driveScopes = normalizeDriveScopes([{ id: 'drive-1', role: 'ADMIN' }]);
+    const a = computeMcpTokenActionBinding({ name: 'Token A', driveScopes });
+    const b = computeMcpTokenActionBinding({ name: 'Token B', driveScopes });
+    expect(a).not.toEqual(b);
+  });
+
+  it('changes when a drive role changes', () => {
+    const a = computeMcpTokenActionBinding({
+      name: 'My Token',
+      driveScopes: normalizeDriveScopes([{ id: 'drive-1', role: 'ADMIN' }]),
+    });
+    const b = computeMcpTokenActionBinding({
+      name: 'My Token',
+      driveScopes: normalizeDriveScopes([{ id: 'drive-1', role: 'MEMBER' }]),
+    });
+    expect(a).not.toEqual(b);
+  });
+
+  it('produces the same binding for equivalent legacy driveIds and drives input', () => {
+    const a = computeMcpTokenActionBinding({
+      name: 'My Token',
+      driveScopes: normalizeDriveScopes(undefined, ['drive-1']),
+    });
+    const b = computeMcpTokenActionBinding({
+      name: 'My Token',
+      driveScopes: normalizeDriveScopes([{ id: 'drive-1', role: null }]),
+    });
+    expect(a).toEqual(b);
+  });
 });

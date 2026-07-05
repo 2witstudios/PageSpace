@@ -72,6 +72,10 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   validateDriveScopeAccess: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/auth/step-up-service', () => ({
+  consumeStepUpGrant: vi.fn(),
+}));
+
 import { POST, GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
@@ -79,6 +83,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
+import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 
 const DRIVE_SCOPED_OAUTH = {
   userId: 'test-user-id',
@@ -151,22 +156,25 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       invalidCustomRoles: [],
       unauthorizedCustomRoles: [],
     });
+
+    // Default: step-up grant is valid
+    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
     describe('authentication', () => {
-      it('allows OAuth bearer tokens (CLI `pagespace tokens create`), not just session cookies', async () => {
+      it('no longer accepts OAuth bearer tokens — write requires a session, not just a token', async () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Token' }),
+          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
         });
 
         await POST(request);
 
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          expect.objectContaining({ allow: expect.arrayContaining(['oauth']) })
+          { allow: ['session'], requireCSRF: true },
         );
       });
 
@@ -179,7 +187,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Token' }),
+          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);
@@ -187,10 +195,8 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       });
     });
 
-    describe('P1a — OAuth account-scope enforcement (a drive-scoped OAuth token must not mint an unscoped MCP token)', () => {
-      it('rejects a drive-scoped OAuth token, never reaching the repository', async () => {
-        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(DRIVE_SCOPED_OAUTH as never);
-
+    describe('step-up gate (Phase 8: bearer-OAuth minting escalation fix)', () => {
+      it('returns 401 when stepUpToken is missing from the body, never reaching the repository', async () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -199,34 +205,44 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
         const response = await POST(request);
 
-        expect(response.status).toBe(403);
+        expect(response.status).toBe(401);
+        expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+        expect(consumeStepUpGrant).not.toHaveBeenCalled();
+      });
+
+      it('returns 401 when the step-up grant fails to consume, never reaching the repository', async () => {
+        vi.mocked(consumeStepUpGrant).mockResolvedValue({
+          ok: false,
+          error: { code: 'STEP_UP_REQUIRED' },
+        } as never);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_bad' }),
+        });
+
+        const response = await POST(request);
+
+        expect(response.status).toBe(401);
         expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
       });
 
-      it('allows an account-scoped OAuth token', async () => {
-        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(ACCOUNT_SCOPED_OAUTH as never);
-
+      it('proceeds to mint once the step-up grant is consumed', async () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Token' }),
+          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);
 
         expect(response.status).toBe(200);
-      });
-
-      it('leaves session auth unaffected', async () => {
-        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Token' }),
+        expect(consumeStepUpGrant).toHaveBeenCalledWith({
+          userId: 'test-user-id',
+          token: 'ps_stepup_test',
+          actionBinding: { name: 'My Token', driveScopes: '' },
         });
-
-        const response = await POST(request);
-
-        expect(response.status).toBe(200);
       });
     });
 
@@ -246,7 +262,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
             Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
-          body: JSON.stringify({ name: 'Scoped Token', driveIds: ['drive-1', 'drive-2'] }),
+          body: JSON.stringify({ name: 'Scoped Token', driveIds: ['drive-1', 'drive-2'], stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);
@@ -271,7 +287,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
             Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
-          body: JSON.stringify({ name: 'Scoped Token', driveIds: ['drive-1'] }),
+          body: JSON.stringify({ name: 'Scoped Token', driveIds: ['drive-1'], stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);
@@ -290,7 +306,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
             Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
-          body: JSON.stringify({ name: 'Token', driveIds: ['drive-1', 'drive-1', 'drive-1'] }),
+          body: JSON.stringify({ name: 'Token', driveIds: ['drive-1', 'drive-1', 'drive-1'], stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);
@@ -321,7 +337,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
             Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
-          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1' }] }),
+          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1' }], stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);
@@ -344,7 +360,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'x' },
-          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1', role: 'MEMBER', customRoleId: 'role-other' }] }),
+          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1', role: 'MEMBER', customRoleId: 'role-other' }], stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);
@@ -360,7 +376,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'x' },
-          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1', role: 'MEMBER', customRoleId: 'role-xyz' }] }),
+          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1', role: 'MEMBER', customRoleId: 'role-xyz' }], stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);
@@ -377,7 +393,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'x' },
-          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1', role: 'MEMBER', customRoleId: 'any-role' }] }),
+          body: JSON.stringify({ name: 'Token', drives: [{ id: 'drive-1', role: 'MEMBER', customRoleId: 'any-role' }], stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);
@@ -398,7 +414,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
             Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
-          body: JSON.stringify({ name: 'My Token' }),
+          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
         });
 
         const response = await POST(request);

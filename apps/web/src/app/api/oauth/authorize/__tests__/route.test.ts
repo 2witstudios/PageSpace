@@ -38,10 +38,15 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/auth/step-up-service', () => ({
+  consumeStepUpGrant: vi.fn(),
+}));
+
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createAuthorizationCode } from '@/lib/repositories/oauth-repository';
+import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 import { nextConfig } from '../../../../../../next.config';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
@@ -77,6 +82,7 @@ function getRequest(overrides: Record<string, string | undefined> = {}): Request
 beforeEach(() => {
   vi.clearAllMocks();
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
+  vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
 });
 
 describe('GET /api/oauth/authorize — per-IP rate limiting', () => {
@@ -313,6 +319,7 @@ const approvalBody = {
   scope: 'account',
   state: 'xyz123',
   action: 'approve',
+  stepUpToken: 'ps_stepup_test',
 };
 
 describe('POST /api/oauth/authorize — consent CSRF', () => {
@@ -425,5 +432,58 @@ describe('POST /api/oauth/authorize — approve', () => {
     const res = await POST(postRequest({ ...approvalBody, redirectUri: 'http://evil.example.com/callback' }) as never);
     expect(res.status).toBe(400);
     expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth minting escalation fix)', () => {
+  beforeEach(() => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      tokenType: 'session',
+      userId: 'user-1',
+      role: 'user',
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      sessionId: 'sess-1',
+    } as never);
+  });
+
+  it('returns 401 when stepUpToken is missing, never minting a code', async () => {
+    const { stepUpToken: _omit, ...withoutStepUp } = approvalBody;
+    const res = await POST(postRequest(withoutStepUp) as never);
+
+    expect(res.status).toBe(401);
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the step-up grant fails to consume, never minting a code', async () => {
+    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: false, error: { code: 'STEP_UP_REQUIRED' } } as never);
+
+    const res = await POST(postRequest(approvalBody) as never);
+
+    expect(res.status).toBe(401);
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+
+  it('consumes the step-up grant bound to client_id + redirect_uri + scope + state', async () => {
+    await POST(postRequest(approvalBody) as never);
+
+    expect(consumeStepUpGrant).toHaveBeenCalledWith({
+      userId: 'user-1',
+      token: 'ps_stepup_test',
+      actionBinding: {
+        clientId: 'pagespace-cli',
+        redirectUri: REDIRECT_URI,
+        scope: 'account',
+        state: 'xyz123',
+      },
+    });
+  });
+
+  it('denial never requires a step-up token', async () => {
+    const { stepUpToken: _omit, ...withoutStepUp } = approvalBody;
+    const res = await POST(postRequest({ ...withoutStepUp, action: 'deny' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
   });
 });

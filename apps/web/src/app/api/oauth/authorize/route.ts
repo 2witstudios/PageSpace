@@ -31,6 +31,7 @@ import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
 import { ensureOAuthClientRow, createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 
 function rateLimitedResponse(retryAfter: number): NextResponse {
   return NextResponse.json({ error: 'rate_limited', retryAfter }, { status: 429 });
@@ -151,6 +152,10 @@ const approvalSchema = z.object({
   scope: z.string(),
   state: z.string().optional(),
   action: z.enum(['approve', 'deny']),
+  // Required only for action=approve (checked explicitly below, not via zod,
+  // so a malformed approve body still reports the same validation errors it
+  // always has — denial never needs a step-up, it only narrows access).
+  stepUpToken: z.string().min(1).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -211,6 +216,35 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       redirectUri: buildRedirectWithParams(result.redirectUri, { error: 'access_denied', state: result.state }),
     });
+  }
+
+  // Step-up gate (Phase 8 credential minting security correction): approving
+  // consent mints an authorization code — the same escalation shape as
+  // minting an mcp_* token — so it requires a live step-up grant bound to
+  // exactly this client_id + redirect_uri + scope + state, not just a valid
+  // session. Bound on the RAW wire params (not `result.*`) because that's
+  // exactly what the consent page's step-up ceremony independently computes
+  // client-side before the user ever clicks Allow.
+  if (!body.stepUpToken) {
+    auditRequest(req, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      details: { clientId: result.client.clientId, oauthEvent: 'consent_missing_step_up' },
+    });
+    return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+  }
+  const stepUpResult = await consumeStepUpGrant({
+    userId: auth.userId,
+    token: body.stepUpToken,
+    actionBinding: { clientId: body.clientId, redirectUri: body.redirectUri, scope: body.scope, state: body.state ?? '' },
+  });
+  if (!stepUpResult.ok) {
+    auditRequest(req, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      details: { clientId: result.client.clientId, oauthEvent: 'consent_step_up_invalid' },
+    });
+    return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
   }
 
   // Consent = minting: enforce the same authority caps as mcp-tokens (ADR 0002

@@ -1062,6 +1062,21 @@
       "import": "./dist/auth/passkey-client-constants.js",
       "default": "./dist/auth/passkey-client-constants.js"
     },
+    "./auth/step-up-service": {
+      "types": "./dist/auth/step-up-service.d.ts",
+      "import": "./dist/auth/step-up-service.js",
+      "require": "./dist/auth/step-up-service.js"
+    },
+    "./auth/step-up-decisions": {
+      "types": "./dist/auth/step-up-decisions.d.ts",
+      "import": "./dist/auth/step-up-decisions.js",
+      "require": "./dist/auth/step-up-decisions.js"
+    },
+    "./auth/step-up-constants": {
+      "types": "./dist/auth/step-up-constants.d.ts",
+      "import": "./dist/auth/step-up-constants.js",
+      "default": "./dist/auth/step-up-constants.js"
+    },
     "./permissions/permissions": {
       "types": "./dist/permissions/permissions.d.ts",
       "import": "./dist/permissions/permissions.js",
