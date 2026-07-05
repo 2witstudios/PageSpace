@@ -35,6 +35,11 @@ vi.mock('../actor-permissions', () => ({
   getActorAccessiblePagesInDrive: vi.fn(),
   getAgentPageId: vi.fn(),
   isMcpScoped: vi.fn(() => false),
+  filterDriveIdsByAppTokenScope: vi.fn(async (_ctx: unknown, ids: string[]) => ids),
+  hasAgentUserScopedAccess: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
+  listAgentDrives: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   getAgentAccessLevel: vi.fn(),
@@ -158,7 +163,8 @@ vi.mock('../../core/ai-providers-config', () => ({
 
 import { agentCommunicationTools } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
-import { canActorViewPage, isMcpScoped } from '../actor-permissions';
+import { canActorViewPage, isMcpScoped, getAgentPageId, hasAgentUserScopedAccess } from '../actor-permissions';
+import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { createAIProvider } from '../../core/provider-factory';
 import { saveMessageToDatabase } from '../../core/message-utils';
 import type { ToolExecutionContext } from '../../core/types';
@@ -239,6 +245,75 @@ describe('agent-communication-tools', () => {
           context
         )
       ).rejects.toThrow('User authentication required');
+    });
+
+    it('scopes to the agent\'s drive memberships when called by a page-agent', async () => {
+      vi.mocked(getAgentPageId).mockReturnValue('agent_1');
+      vi.mocked(hasAgentUserScopedAccess).mockResolvedValue(false);
+      vi.mocked(listAgentDrives).mockResolvedValue([]);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user_1',
+          chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
+        } as ToolExecutionContext,
+      };
+
+      const result = await agentCommunicationTools.multi_drive_list_agents!.execute!(
+        { includeSystemPrompt: false, includeTools: false, groupByDrive: true },
+        context
+      ) as { totalCount: number; driveCount: number };
+
+      expect(listAgentDrives).toHaveBeenCalledWith('agent_1');
+      expect(result.totalCount).toBe(0);
+      expect(result.driveCount).toBe(0);
+      // The raw ownerId-scoped user query must not be used for an agent actor.
+      expect(mockDb.select).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the user-scoped query when the agent has user-scoped access enabled', async () => {
+      vi.mocked(getAgentPageId).mockReturnValue('agent_1');
+      vi.mocked(hasAgentUserScopedAccess).mockResolvedValue(true);
+      (mockDb as unknown as MockDb).where.mockResolvedValue([]);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user_1',
+          chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
+        } as ToolExecutionContext,
+      };
+
+      const result = await agentCommunicationTools.multi_drive_list_agents!.execute!(
+        { includeSystemPrompt: false, includeTools: false, groupByDrive: true },
+        context
+      ) as { totalCount: number; driveCount: number };
+
+      expect(listAgentDrives).not.toHaveBeenCalled();
+      expect(mockDb.select).toHaveBeenCalled();
+      expect(result.totalCount).toBe(0);
+    });
+
+    it('does not consult agent scoping for a plain user (non-agent) call', async () => {
+      vi.mocked(getAgentPageId).mockReturnValue(undefined);
+      (mockDb as unknown as MockDb).where.mockResolvedValue([]);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user_1' } as ToolExecutionContext,
+      };
+
+      await agentCommunicationTools.multi_drive_list_agents!.execute!(
+        { includeSystemPrompt: false, includeTools: false, groupByDrive: true },
+        context
+      );
+
+      expect(hasAgentUserScopedAccess).not.toHaveBeenCalled();
+      expect(listAgentDrives).not.toHaveBeenCalled();
     });
 
   });

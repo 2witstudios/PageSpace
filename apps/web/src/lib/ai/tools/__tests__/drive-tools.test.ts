@@ -66,6 +66,7 @@ vi.mock('../actor-permissions', async (importOriginal) => {
   return {
     ...actual,
     canActorManageDrive: vi.fn().mockResolvedValue(true),
+    hasAgentUserScopedAccess: vi.fn().mockResolvedValue(false),
   };
 });
 
@@ -78,6 +79,7 @@ import { db } from '@pagespace/db/db';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { getDriveById, isValidDriveHomePage, updateDrive } from '@pagespace/lib/services/drive-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
+import { hasAgentUserScopedAccess } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
@@ -166,6 +168,55 @@ describe('drive-tools', () => {
       await expect(
         driveTools.create_drive.execute!({ name: 'Personal' }, context)
       ).rejects.toThrow('Cannot create a drive named "Personal"');
+    });
+
+    it('blocks a page-agent without user-scoped access from creating a drive', async () => {
+      vi.mocked(hasAgentUserScopedAccess).mockResolvedValue(false);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user_1',
+          chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
+        } as ToolExecutionContext,
+      };
+
+      await expect(
+        driveTools.create_drive.execute!({ name: 'Test Drive' }, context)
+      ).rejects.toThrow('cannot create new drives');
+      expect(hasAgentUserScopedAccess).toHaveBeenCalledWith('agent_1');
+    });
+
+    it('lets a page-agent with user-scoped access past the membership gate', async () => {
+      vi.mocked(hasAgentUserScopedAccess).mockResolvedValue(true);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user_1',
+          chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
+        } as ToolExecutionContext,
+      };
+
+      // Empty name still fails downstream validation, proving the agent gate
+      // let this request through rather than blocking it earlier.
+      await expect(
+        driveTools.create_drive.execute!({ name: '' }, context)
+      ).rejects.toThrow('Drive name is required');
+    });
+
+    it('does not consult user-scoped access for a plain user (non-agent) call', async () => {
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        driveTools.create_drive.execute!({ name: '' }, context)
+      ).rejects.toThrow('Drive name is required');
+      expect(hasAgentUserScopedAccess).not.toHaveBeenCalled();
     });
   });
 

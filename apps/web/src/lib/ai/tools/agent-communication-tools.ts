@@ -8,7 +8,8 @@ import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, isMcpScoped } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, isMcpScoped, getAgentPageId, hasAgentUserScopedAccess } from './actor-permissions';
+import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
@@ -248,21 +249,36 @@ export const agentCommunicationTools = {
       }
       
       try {
-        // Get all drives the user has access to
-        const allUserDrives = await db
-          .select({
-            id: drives.id,
-            name: drives.name,
-            slug: drives.slug,
-          })
-          .from(drives)
-          .where(eq(drives.ownerId, userId)); // Simplified - you might want more complex permission logic
+        // Page-agents are scoped to their explicit drive memberships (matching
+        // list_drives), unless they've opted into user-scoped reach.
+        const agentPageId = getAgentPageId(executionContext);
+        let userDrives: { id: string; name: string; slug: string }[];
 
-        // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
-        const allowedIds = new Set(
-          await filterDriveIdsByAppTokenScope(executionContext, allUserDrives.map((d) => d.id)),
-        );
-        const userDrives = allUserDrives.filter((d) => allowedIds.has(d.id));
+        if (agentPageId && !(await hasAgentUserScopedAccess(agentPageId))) {
+          const allAgentDrives = await listAgentDrives(agentPageId);
+          const scopedIds = new Set(
+            await filterDriveIdsByAppTokenScope(executionContext, allAgentDrives.map((d) => d.driveId)),
+          );
+          userDrives = allAgentDrives
+            .filter((d) => scopedIds.has(d.driveId))
+            .map((d) => ({ id: d.driveId, name: d.driveName, slug: d.driveSlug }));
+        } else {
+          // Get all drives the user has access to
+          const allUserDrives = await db
+            .select({
+              id: drives.id,
+              name: drives.name,
+              slug: drives.slug,
+            })
+            .from(drives)
+            .where(eq(drives.ownerId, userId)); // Simplified - you might want more complex permission logic
+
+          // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
+          const allowedIds = new Set(
+            await filterDriveIdsByAppTokenScope(executionContext, allUserDrives.map((d) => d.id)),
+          );
+          userDrives = allUserDrives.filter((d) => allowedIds.has(d.id));
+        }
 
         let totalAgentCount = 0;
         const agentsByDrive = [];

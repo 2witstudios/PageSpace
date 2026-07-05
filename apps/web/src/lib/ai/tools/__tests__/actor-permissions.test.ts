@@ -59,6 +59,7 @@ import {
   driveOutsideMcpScope,
   driveDeniedByAppToken,
   filterDriveIdsByAppTokenScope,
+  hasAgentUserScopedAccess,
 } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -326,5 +327,24 @@ describe('filterDriveIdsByMcpScope / driveOutsideMcpScope', () => {
     expect(driveOutsideMcpScope(scoped, 'c')).toBe(true);
     expect(driveOutsideMcpScope(scoped, 'a')).toBe(false);
     expect(driveOutsideMcpScope(unscoped, 'c')).toBe(false);
+  });
+});
+
+describe('hasAgentUserScopedAccess', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns true when the agent page has userScopedAccess set', async () => {
+    mockDbWhere.mockResolvedValue([{ userScopedAccess: true }]);
+    expect(await hasAgentUserScopedAccess('agent-1')).toBe(true);
+  });
+
+  it('returns false when the agent page has userScopedAccess unset', async () => {
+    mockDbWhere.mockResolvedValue([{ userScopedAccess: false }]);
+    expect(await hasAgentUserScopedAccess('agent-1')).toBe(false);
+  });
+
+  it('defaults to false when the agent page is not found', async () => {
+    mockDbWhere.mockResolvedValue([]);
+    expect(await hasAgentUserScopedAccess('missing-agent')).toBe(false);
   });
 });

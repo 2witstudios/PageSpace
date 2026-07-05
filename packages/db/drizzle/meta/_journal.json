@@ -1247,6 +1247,13 @@
       "when": 1783178735370,
       "tag": "0177_hot_songbird",
       "breakpoints": true
+    },
+    {
+      "idx": 178,
+      "version": "7",
+      "when": 1783227899382,
+      "tag": "0178_chief_hiroim",
+      "breakpoints": true
     }
   ]
 }

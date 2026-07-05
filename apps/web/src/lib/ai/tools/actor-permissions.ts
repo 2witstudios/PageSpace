@@ -29,6 +29,21 @@ export function getAgentPageId(context: ToolExecutionContext): string | undefine
 }
 
 /**
+ * Whether a page-agent has opted into user-scoped reach (`pages.userScopedAccess`,
+ * owner-toggled via update_agent_config, default false). When true, tools that
+ * would otherwise confine the agent to its own drive memberships should fall
+ * back to the invoking user's own access instead — for personal/global-style
+ * assistants that need the user's full reach rather than explicit membership.
+ */
+export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ userScopedAccess: pages.userScopedAccess })
+    .from(pages)
+    .where(eq(pages.id, agentPageId));
+  return row?.userScopedAccess ?? false;
+}
+
+/**
  * Whether the caller carries an MCP drive-scope restriction (a non-empty
  * allowedDriveIds). Empty/undefined means full access — session auth or an
  * unscoped token — and skips all scope checks.

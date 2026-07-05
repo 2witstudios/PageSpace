@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { canActorEditPage, isMcpScoped } from './actor-permissions';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentRepository } from '@pagespace/lib/repositories/agent-repository';
@@ -33,8 +34,9 @@ export const agentTools = {
       includePageTree: z.boolean().optional().describe('Include page tree structure in the agent\'s context.'),
       pageTreeScope: z.enum(['children', 'drive']).optional().describe('Scope for page tree: "children" or "drive".'),
       toolExposureMode: z.enum(['upfront', 'search']).optional().describe('How tools are exposed to the agent: "upfront" sends every enabled tool schema directly, "search" sends only core tools plus tool_search/execute_tool so the model discovers the rest on demand.'),
+      userScopedAccess: z.boolean().optional().describe('Owner-only: when true, this agent falls back to the invoking user\'s own access instead of being confined to its own drive memberships. Use for personal/global-style assistants that need the user\'s full reach.'),
     }),
-    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope, toolExposureMode }, { experimental_context: context }) => {
+    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope, toolExposureMode, userScopedAccess }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -52,6 +54,16 @@ export const agentTools = {
         const canEdit = await canActorEditPage(context as ToolExecutionContext, agent.id);
         if (!canEdit) {
           throw new Error('Insufficient permissions to update this AI agent');
+        }
+
+        // userScopedAccess widens the agent's reach to the invoking user's entire
+        // account, so it's gated stricter than general edit access — only the
+        // drive owner may toggle it, mirroring the issue's "owner-only" flag.
+        if (userScopedAccess !== undefined) {
+          const driveAccess = await checkDriveAccess(agent.driveId, userId);
+          if (!driveAccess.isOwner) {
+            throw new Error('Only the drive owner can change this agent\'s user-scoped access setting');
+          }
         }
 
         // Validate enabled tools if provided. A drive-scoped MCP token cannot
@@ -90,6 +102,7 @@ export const agentTools = {
           includePageTree?: boolean;
           pageTreeScope?: 'children' | 'drive';
           toolExposureMode?: 'upfront' | 'search';
+          userScopedAccess?: boolean;
         }
 
         const updateData: AgentUpdateData = {};
@@ -123,6 +136,9 @@ export const agentTools = {
         }
         if (toolExposureMode !== undefined) {
           updateData.toolExposureMode = toolExposureMode;
+        }
+        if (userScopedAccess !== undefined) {
+          updateData.userScopedAccess = userScopedAccess;
         }
 
         const updatedFields = Object.keys(updateData);

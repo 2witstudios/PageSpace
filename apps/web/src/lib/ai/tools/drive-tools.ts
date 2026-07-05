@@ -12,7 +12,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
-import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
+import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive, hasAgentUserScopedAccess } from './actor-permissions';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 
 // Helper: Extract AI attribution context with actor info for activity logging
@@ -191,6 +191,15 @@ export const driveTools = {
       // new ones (mirrors the /api/mcp/drives REST gate). No-op for unscoped callers.
       if (isMcpScoped(context as ToolExecutionContext)) {
         throw new Error('This token is scoped to specific drives and cannot create new drives');
+      }
+
+      // A brand-new drive is by definition outside a page-agent's existing
+      // memberships, so creating one is gated behind the same user-scoped-access
+      // opt-in that lets an agent reach beyond its explicit memberships
+      // (mirrors the list_drives / multi_drive_list_agents agent branch).
+      const agentPageId = getAgentPageId(context as ToolExecutionContext);
+      if (agentPageId && !(await hasAgentUserScopedAccess(agentPageId))) {
+        throw new Error('This agent is scoped to its own drive memberships and cannot create new drives. Enable user-scoped access in the agent settings to allow this.');
       }
 
       try {
