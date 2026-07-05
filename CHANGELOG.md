@@ -21,6 +21,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **`pagespace mcp`** — a stdio MCP server generated from the same operation registry as the CLI
   and SDK, so Claude Desktop, Claude Code, Cursor, and other MCP clients get a tool surface that
   can't drift from what the CLI itself supports.
+- **Channel image attachments for @mentioned agents** — when you @mention an AI agent in a
+  channel or DM, recent image attachments in the conversation are now passed to vision-capable
+  agents as visual context (capped at 5 images per consultation, matching the per-message chat
+  limit). Agents without a vision-capable model get a text note instead, so they know an
+  attachment existed but couldn't be viewed.
 
 ### Changed
 

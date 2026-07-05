@@ -168,6 +168,7 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { prepareHistoryForModel, finishModelRequest } from '../../core/context-assembly';
 import { runCompaction } from '../../core/compaction/compaction-service';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import type { z } from 'zod';
 
 const mockDb = vi.mocked(db);
 const mockCanActorViewPage = vi.mocked(canActorViewPage);
@@ -1059,6 +1060,50 @@ describe('agent-communication-tools', () => {
       });
     });
 
+    describe('imageAttachments input schema', () => {
+      // ask_agent is itself an LLM-callable tool, so this schema is the only
+      // gate on untrusted model-supplied input (not just the trusted channel
+      // responder). The AI SDK parses tool-call args against inputSchema
+      // before execute ever runs, so we exercise the schema directly here.
+      const baseInput = { agentPath: '/test/agent', agentId: 'agent-1', question: 'What is this?' };
+
+      it('rejects a non-https, non-data image URL (e.g. an internal/metadata endpoint)', () => {
+        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
+          ...baseInput,
+          imageAttachments: [{ url: 'http://169.254.169.254/latest/meta-data/', mediaType: 'image/png' }],
+        });
+        expect(result.success).toBe(false);
+      });
+
+      it('accepts an https:// image URL', () => {
+        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
+          ...baseInput,
+          imageAttachments: [{ url: 'https://example.com/x.png', mediaType: 'image/png' }],
+        });
+        expect(result.success).toBe(true);
+      });
+
+      it('accepts a data: image URL', () => {
+        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
+          ...baseInput,
+          imageAttachments: [{ url: 'data:image/png;base64,iVBORw0KGgo=', mediaType: 'image/png' }],
+        });
+        expect(result.success).toBe(true);
+      });
+
+      it('rejects more than the single-message image cap', () => {
+        const tooMany = Array.from({ length: 6 }, (_, i) => ({
+          url: `https://example.com/${i}.png`,
+          mediaType: 'image/png',
+        }));
+        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
+          ...baseInput,
+          imageAttachments: tooMany,
+        });
+        expect(result.success).toBe(false);
+      });
+    });
+
     describe('imageAttachments', () => {
       const imageAttachments = [
         { url: 'https://example.com/signed/screenshot.png', mediaType: 'image/png', filename: 'screenshot.png' },
@@ -1116,7 +1161,7 @@ describe('agent-communication-tools', () => {
         const savedParts = userMessageCall![0].uiMessage?.parts ?? [];
         expect(savedParts.some((part) => part.type === 'file')).toBe(false);
         const textPart = savedParts.find((part) => part.type === 'text') as { text: string } | undefined;
-        expect(textPart?.text).toMatch(/1 image attachment from recent channel context is attached/i);
+        expect(textPart?.text).toMatch(/1 image attachment from recent channel context was attached/i);
       });
 
       it('given a non-vision target agent and imageAttachments, omits file parts and adds a text note instead', async () => {
@@ -1156,6 +1201,10 @@ describe('agent-communication-tools', () => {
         expect(savedParts.some((part) => part.type === 'file')).toBe(false);
         const textPart = savedParts.find((part) => part.type === 'text') as { text: string } | undefined;
         expect(textPart?.text).toMatch(/does not support vision/i);
+        // Grammar: a single attachment must read "1 image attachment WAS
+        // provided ... IT could not be viewed", not "were"/"they" (the plural
+        // form leaking into the singular case).
+        expect(textPart?.text).toMatch(/1 image attachment was provided.*it could not be viewed/i);
       });
 
       it('given no imageAttachments, behaves exactly as before (no file parts, no vision note)', async () => {

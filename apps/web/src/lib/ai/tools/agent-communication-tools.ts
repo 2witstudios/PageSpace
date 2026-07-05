@@ -26,6 +26,7 @@ import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { MAX_FILE_PARTS_PER_MESSAGE } from '@/lib/ai/core/validate-image-parts';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
 // until inner stepCountIs budget is reworked — see PR #713. Raising this without
@@ -390,11 +391,22 @@ export const agentCommunicationTools = {
       question: z.string().describe('Question or request for the target agent. Be specific and provide context.'),
       context: z.string().optional().describe('Additional context about why you\'re asking this question or what you need the response for'),
       conversationId: z.string().optional().describe('Optional conversation ID to continue a previous conversation. If not provided, a new conversation will be created. Use the conversationId returned in previous responses to continue the same conversation.'),
+      // ask_agent is itself an LLM-callable tool, so this input is untrusted
+      // model output, not just internal plumbing from the channel responder.
+      // The URL scheme restriction (https/data only) exists specifically so a
+      // prompt-injected caller can't point the model's file-part fetch at an
+      // arbitrary internal host (e.g. cloud metadata endpoints) — providers
+      // that don't accept URL passthrough have the AI SDK download file-part
+      // URLs server-side. The count cap mirrors the human-upload limit in
+      // validate-image-parts.ts so this path can't be used to bypass it.
       imageAttachments: z.array(z.object({
-        url: z.string().describe('Fetchable URL (data: URL or HTTPS) for the image'),
+        url: z.string().refine(
+          (url) => url.startsWith('https://') || url.startsWith('data:'),
+          { message: 'imageAttachments url must be an https:// or data: URL' }
+        ).describe('Fetchable URL (data: URL or HTTPS) for the image'),
         mediaType: z.string().describe('Image MIME type, e.g. image/png'),
         filename: z.string().optional().describe('Original filename, if known'),
-      })).optional().describe('Recent image attachments (e.g. from channel context) to give the target agent visual context. Ignored if the target agent\'s model does not support vision — a text note is added instead.'),
+      })).max(MAX_FILE_PARTS_PER_MESSAGE).optional().describe('Recent image attachments (e.g. from channel context) to give the target agent visual context. Ignored if the target agent\'s model does not support vision — a text note is added instead.'),
     }),
     execute: async ({ agentPath, agentId, question, context, conversationId, imageAttachments }, { experimental_context }) => {
       const executionContext = experimental_context as ToolExecutionContext;
@@ -486,15 +498,21 @@ export const agentCommunicationTools = {
         // 5. Build and save the user's question message
         const userMessageId = createId();
         const targetHasVision = hasVisionCapability(targetAgent.aiModel || DEFAULT_MODEL);
-        const hasImageAttachments = !!imageAttachments && imageAttachments.length > 0;
-        const visionNote = hasImageAttachments
-          ? targetHasVision
-            ? `\n\n[${imageAttachments!.length} image attachment${imageAttachments!.length === 1 ? '' : 's'} from recent channel context ${imageAttachments!.length === 1 ? 'is' : 'are'} attached to this message.]`
-            : `\n\n[${imageAttachments!.length} image attachment${imageAttachments!.length === 1 ? '' : 's'} were provided but this agent's model does not support vision, so they could not be viewed.]`
-          : '';
+        const attachments = imageAttachments ?? [];
+        const attachmentCount = attachments.length;
+        const hasImageAttachments = attachmentCount > 0;
+        const attachmentNoun = attachmentCount === 1 ? 'image attachment' : 'image attachments';
+        // Past tense throughout: this note is replayed on every later turn of
+        // this conversation, but the file parts themselves are never persisted
+        // (see below) — "is/are attached" would read as still-true on replay.
+        const visionNote = !hasImageAttachments
+          ? ''
+          : targetHasVision
+            ? `\n\n[${attachmentCount} ${attachmentNoun} from recent channel context ${attachmentCount === 1 ? 'was' : 'were'} attached to this message.]`
+            : `\n\n[${attachmentCount} ${attachmentNoun} ${attachmentCount === 1 ? 'was' : 'were'} provided but this agent's model does not support vision, so ${attachmentCount === 1 ? 'it' : 'they'} could not be viewed.]`;
         const userMessageContent = `${context ? `Context: ${context}\n\n` : ''}${question}${visionNote}`;
         const imageFileParts = hasImageAttachments && targetHasVision
-          ? imageAttachments!.map((attachment) => ({
+          ? attachments.map((attachment) => ({
               type: 'file' as const,
               url: attachment.url,
               mediaType: attachment.mediaType,
@@ -516,9 +534,7 @@ export const agentCommunicationTools = {
             },
           ]
         };
-        const modelUserMessage: UIMessage = imageFileParts.length > 0
-          ? { ...userMessage, parts: [...userMessage.parts, ...imageFileParts] }
-          : userMessage;
+        const modelUserMessage: UIMessage = { ...userMessage, parts: [...userMessage.parts, ...imageFileParts] };
 
         // Determine sourceAgentId - only set if the calling context is an AI_CHAT page
         const callingPage = executionContext?.locationContext?.currentPage;

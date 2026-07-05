@@ -1,12 +1,13 @@
 import { isAllowedImageType } from '@/lib/validation/image-validation';
+import { MAX_FILE_PARTS_PER_MESSAGE, MAX_DATA_URL_LENGTH } from '@/lib/ai/core/validate-image-parts';
 
 /**
- * Mirrors the single-message caps in validate-image-parts.ts (5 images,
+ * Same single-message caps enforced in validate-image-parts.ts (5 images,
  * 4MB each) so a mentioned agent never receives more visual context per
  * consultation than a human would attach to one chat message.
  */
-export const MAX_RECENT_IMAGE_ATTACHMENTS = 5;
-export const MAX_RECENT_IMAGE_ATTACHMENT_SIZE_BYTES = 4 * 1024 * 1024;
+export const MAX_RECENT_IMAGE_ATTACHMENTS = MAX_FILE_PARTS_PER_MESSAGE;
+export const MAX_RECENT_IMAGE_ATTACHMENT_SIZE_BYTES = MAX_DATA_URL_LENGTH;
 
 export interface RecentImageFileCandidate {
   fileId: string;

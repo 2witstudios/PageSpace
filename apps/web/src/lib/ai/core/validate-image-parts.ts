@@ -11,8 +11,8 @@ import {
   extractBase64DataUrl,
 } from '@/lib/validation/image-validation';
 
-const MAX_FILE_PARTS_PER_MESSAGE = 5;
-const MAX_DATA_URL_LENGTH = 4 * 1024 * 1024; // 4MB per data URL
+export const MAX_FILE_PARTS_PER_MESSAGE = 5;
+export const MAX_DATA_URL_LENGTH = 4 * 1024 * 1024; // 4MB per data URL
 
 export interface FilePartValidationResult {
   valid: boolean;

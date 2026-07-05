@@ -73,6 +73,10 @@ const mockGeneratePresignedUrl = vi.fn();
 vi.mock('@/lib/presigned-url', () => ({
   generatePresignedUrl: (...args: unknown[]) => mockGeneratePresignedUrl(...args),
   getPresignedUrlTtl: () => 3600,
+  toContentHash: (storagePath: string) => {
+    const m = storagePath.match(/^files\/([a-f0-9]{64})\/original$/i);
+    return m ? m[1].toLowerCase() : storagePath;
+  },
 }));
 
 import { db } from '@pagespace/db/db';
@@ -258,5 +262,75 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     const askArgs = mockAskAgentExecute.mock.calls[0][0];
     expect(askArgs.imageAttachments).toBeUndefined();
+  });
+
+  it('given the same fileId attached to multiple recent messages, access-checks and signs it only once', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+    // Same fileId re-shared across three of the recent messages, plus one distinct image.
+    mockChannelMessagesFindMany.mockResolvedValue([
+      { ...imageMessage, createdAt: new Date('2026-07-01T00:00:00.000Z') },
+      { ...imageMessage, createdAt: new Date('2026-07-01T00:01:00.000Z') },
+      {
+        ...imageMessage,
+        fileId: 'file-2',
+        createdAt: new Date('2026-07-01T00:02:00.000Z'),
+        attachmentMeta: { ...imageMessage.attachmentMeta, originalName: 'other.png' },
+      },
+      { ...imageMessage, createdAt: new Date('2026-07-01T00:03:00.000Z') },
+    ]);
+    mockFilesFindMany.mockResolvedValue([
+      fileRow,
+      { ...fileRow, id: 'file-2', storagePath: `files/${'b'.repeat(64)}/original` },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    // Two distinct files, not four — the repeated fileId is deduped before
+    // any access-check or presign work, and doesn't crowd out the distinct one.
+    expect(mockCanUserAccessFile).toHaveBeenCalledTimes(2);
+    expect(mockGeneratePresignedUrl).toHaveBeenCalledTimes(2);
+    const askArgs = mockAskAgentExecute.mock.calls[0][0];
+    expect(askArgs.imageAttachments).toHaveLength(2);
+  });
+
+  it('given a files row with no storagePath (reaped/stub blob), skips it rather than signing a dead key', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+    mockFilesFindMany.mockResolvedValue([{ ...fileRow, storagePath: null }]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    expect(mockCanUserAccessFile).not.toHaveBeenCalled();
+    expect(mockGeneratePresignedUrl).not.toHaveBeenCalled();
+    const askArgs = mockAskAgentExecute.mock.calls[0][0];
+    expect(askArgs.imageAttachments).toBeUndefined();
+  });
+
+  it('given attachment resolution throws (e.g. S3 signing failure), still sends a text-only reply instead of dropping the mention entirely', async () => {
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+    mockGeneratePresignedUrl.mockRejectedValue(new Error('S3 signer unavailable'));
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    // The mention still gets a reply — image resolution degrades to
+    // text-only rather than aborting triggerMentionedAgentResponses entirely.
+    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
+    const askArgs = mockAskAgentExecute.mock.calls[0][0];
+    expect(askArgs.imageAttachments).toBeUndefined();
+    expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
   });
 });
