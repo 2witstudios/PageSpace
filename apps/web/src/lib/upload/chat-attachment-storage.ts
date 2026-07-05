@@ -7,6 +7,10 @@ import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects
 const CHAT_ATTACHMENT_PREFIX = 'chat-attachments';
 const PUT_URL_TTL_SECONDS = 300;
 const GET_URL_TTL_SECONDS = 3600;
+// Defense-in-depth mirror of MAX_DATA_URL_LENGTH in validate-image-parts.ts: the
+// chat route validates inbound data URLs, but this helper must stay safe for any
+// future caller that skips route-level validation.
+const MAX_CHAT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
 export function hashAttachmentBuffer(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex');
@@ -20,6 +24,11 @@ export async function uploadChatAttachment(
   buffer: Buffer,
   mediaType: string,
 ): Promise<{ storageKey: string; contentHash: string }> {
+  if (buffer.byteLength > MAX_CHAT_ATTACHMENT_BYTES) {
+    throw new Error(
+      `Chat attachment of ${buffer.byteLength} bytes exceeds the ${MAX_CHAT_ATTACHMENT_BYTES}-byte limit`,
+    );
+  }
   const contentHash = hashAttachmentBuffer(buffer);
   const storageKey = buildChatAttachmentKey(contentHash);
 

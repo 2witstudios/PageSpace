@@ -79,4 +79,24 @@ describe('uploadChatAttachment', () => {
 
     await expect(uploadChatAttachment(buffer, mediaType)).rejects.toThrow();
   });
+
+  it('given a buffer over the 4MB cap, should throw without touching S3', async () => {
+    const oversized = Buffer.alloc(4 * 1024 * 1024 + 1);
+
+    await expect(uploadChatAttachment(oversized, mediaType)).rejects.toThrow(/exceeds/i);
+
+    expect(mockCheckObjectExists).not.toHaveBeenCalled();
+    expect(mockIssuePresignedPutUrl).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('given a buffer exactly at the 4MB cap, should upload normally', async () => {
+    mockCheckObjectExists.mockResolvedValue(false);
+    const atLimit = Buffer.alloc(4 * 1024 * 1024);
+
+    const result = await uploadChatAttachment(atLimit, mediaType);
+
+    expect(result.storageKey).toBe(buildChatAttachmentKey(result.contentHash));
+    expect(mockFetch).toHaveBeenCalled();
+  });
 });
