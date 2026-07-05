@@ -11,7 +11,7 @@ export interface SessionClaims {
   userRole: 'user' | 'admin';
   tokenVersion: number;
   adminRoleVersion: number;
-  type: 'user' | 'service' | 'mcp' | 'device';
+  type: 'user' | 'service' | 'mcp' | 'device' | 'socket';
   scopes: string[];
   expiresAt: Date; // When this session expires - critical for enforcing TTL on persistent connections
   resourceType?: string;
@@ -21,7 +21,7 @@ export interface SessionClaims {
 
 export interface CreateSessionOptions {
   userId: string;
-  type: 'user' | 'service' | 'mcp' | 'device';
+  type: 'user' | 'service' | 'mcp' | 'device' | 'socket';
   scopes: string[];
   expiresInMs: number;
   deviceId?: string;
@@ -46,7 +46,8 @@ export class SessionService {
     const tokenType: TokenType =
       options.type === 'service' ? 'svc' :
       options.type === 'mcp' ? 'mcp' :
-      options.type === 'device' ? 'dev' : 'sess';
+      options.type === 'device' ? 'dev' :
+      options.type === 'socket' ? 'sock' : 'sess';
 
     const { token, tokenHash, tokenPrefix } = generateOpaqueToken(tokenType);
 

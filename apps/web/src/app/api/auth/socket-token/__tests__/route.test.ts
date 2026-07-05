@@ -13,8 +13,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  *
  * Dependencies mocked at service seam:
  *   - @/lib/auth/auth-helpers: requireAuth, isAuthError
- *   - @/lib/repositories/session-repository: sessionRepository.createSocketToken
- *   - crypto is NOT mocked (pure utility, real implementation used)
+ *   - @pagespace/lib/auth/session-service: sessionService.createSession (#1054 — unified
+ *     opaque-token model, replaces the old sessionRepository.createSocketToken path)
  */
 
 vi.mock('@/lib/auth/auth-helpers', () => ({
@@ -26,9 +26,9 @@ vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
-vi.mock('@/lib/repositories/session-repository', () => ({
-  sessionRepository: {
-    createSocketToken: vi.fn().mockResolvedValue(undefined),
+vi.mock('@pagespace/lib/auth/session-service', () => ({
+  sessionService: {
+    createSession: vi.fn().mockResolvedValue('ps_sock_mocktoken1234567890'),
   },
 }));
 
@@ -51,7 +51,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { sessionRepository } from '@/lib/repositories/session-repository';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { GET } from '../route';
 
 describe('/api/auth/socket-token', () => {
@@ -86,13 +86,13 @@ describe('/api/auth/socket-token', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.token).toMatch(/^ps_sock_/);
+      expect(body.token).toBe('ps_sock_mocktoken1234567890');
       expect(body.expiresAt).toBe(
         new Date(Date.now() + 5 * 60 * 1000).toISOString()
       );
     });
 
-    it('GET_withValidSession_storesHashedTokenViaRepository', async () => {
+    it('GET_withValidSession_mintsSocketSessionViaSessionService', async () => {
       const request = new Request('http://localhost/api/auth/socket-token', {
         method: 'GET',
         headers: { Cookie: 'session=valid-token' },
@@ -100,26 +100,13 @@ describe('/api/auth/socket-token', () => {
 
       await GET(request);
 
-      expect(sessionRepository.createSocketToken).toHaveBeenCalledTimes(1);
-      const storedArg = vi.mocked(sessionRepository.createSocketToken).mock.calls[0][0];
-      expect(storedArg.userId).toBe('test-user-id');
-      expect(storedArg.expiresAt).toEqual(new Date(Date.now() + 5 * 60 * 1000));
-      expect(storedArg.tokenHash).toMatch(/^[a-f0-9]{64}$/);
-      expect(storedArg.tokenHash.length).toBe(64);
-    });
-
-    it('GET_withValidSession_storesHashNotPlaintext', async () => {
-      const request = new Request('http://localhost/api/auth/socket-token', {
-        method: 'GET',
-        headers: { Cookie: 'session=valid-token' },
+      expect(sessionService.createSession).toHaveBeenCalledTimes(1);
+      expect(sessionService.createSession).toHaveBeenCalledWith({
+        userId: 'test-user-id',
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
       });
-
-      const response = await GET(request);
-      const body = await response.json();
-
-      // The stored hash differs from the returned token
-      const storedCall = vi.mocked(sessionRepository.createSocketToken).mock.calls[0][0];
-      expect(storedCall.tokenHash).not.toBe(body.token);
     });
 
     it('GET_withValidSession_setsCacheControlHeaders', async () => {
@@ -182,7 +169,7 @@ describe('/api/auth/socket-token', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(401);
-      expect(sessionRepository.createSocketToken).not.toHaveBeenCalled();
+      expect(sessionService.createSession).not.toHaveBeenCalled();
     });
   });
 });

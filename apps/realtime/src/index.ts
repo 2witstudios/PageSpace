@@ -2,13 +2,12 @@ import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
 import { db } from '@pagespace/db/db';
-import { eq, gt, and, or } from '@pagespace/db/operators';
+import { eq, and, or } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
-import { socketTokens, users } from '@pagespace/db/schema/auth';
+import { users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
@@ -163,42 +162,6 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
   }).catch(() => {});
 
   return { ok: true, sandboxId, sessionKey: sandboxResult.sessionKey, sprite, releaseSlot };
-}
-
-/**
- * Validate a short-lived socket token (ps_sock_* format).
- * These tokens are created by /api/auth/socket-token to bypass sameSite: 'strict' cookies.
- *
- * @param token - The socket token to validate
- * @returns Object with userId if valid, null if invalid or expired
- */
-async function validateSocketToken(token: string): Promise<{ userId: string } | null> {
-  /* c8 ignore next 3 */
-  if (!token.startsWith('ps_sock_')) {
-    return null;
-  }
-
-  const tokenHash = hashToken(token);
-
-  try {
-    const record = await db.query.socketTokens.findFirst({
-      where: and(
-        eq(socketTokens.tokenHash, tokenHash),
-        gt(socketTokens.expiresAt, new Date())
-      ),
-    });
-
-    if (!record) {
-      loggers.realtime.debug('Socket token not found or expired', { tokenHashPrefix: tokenHash.substring(0, 8) });
-      return null;
-    }
-
-    loggers.realtime.debug('Socket token validated successfully', { userId: record.userId });
-    return { userId: record.userId };
-  } catch (error) {
-    loggers.realtime.error('Error validating socket token', error as Error);
-    return null;
-  }
 }
 
 /**
@@ -610,17 +573,25 @@ io.use(async (socket: AuthSocket, next) => {
     return next(new Error('Authentication error: No token provided.'));
   }
 
-  // Check for socket token (ps_sock_*) first - these bypass sameSite: 'strict' cookies
+  // Check for socket token (ps_sock_*) first - these bypass sameSite: 'strict' cookies.
+  // Socket tokens are unified opaque sessions (type: 'socket', #1054) validated the
+  // same way as the ps_sess_* branch below.
   if (token.startsWith('ps_sock_')) {
-    const socketAuth = await validateSocketToken(token);
-    if (socketAuth) {
-      socket.data.user = { id: socketAuth.userId, name: 'Unknown', avatarUrl: null };
+    try {
+      const sessionClaims = await sessionService.validateSession(token);
+      if (!sessionClaims) {
+        loggers.realtime.warn('Socket.IO: Socket token validation failed');
+        return next(new Error('Authentication error: Invalid or expired socket token.'));
+      }
+
+      socket.data.user = { id: sessionClaims.userId, name: 'Unknown', avatarUrl: null };
       await populateUserMetadata(socket);
-      loggers.realtime.info('Socket.IO: User authenticated via socket token', { userId: socketAuth.userId });
+      loggers.realtime.info('Socket.IO: User authenticated via socket token', { userId: sessionClaims.userId });
       return next();
+    } catch (error) {
+      loggers.realtime.error('Error validating socket token', error as Error);
+      return next(new Error('Authentication error: Server failed.'));
     }
-    loggers.realtime.warn('Socket.IO: Socket token validation failed');
-    return next(new Error('Authentication error: Invalid or expired socket token.'));
   }
 
   // Check for session token (ps_sess_*) - used by mobile/desktop clients

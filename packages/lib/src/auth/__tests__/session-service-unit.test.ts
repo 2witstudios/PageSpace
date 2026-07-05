@@ -125,6 +125,22 @@ describe('SessionService', () => {
 
       expect(generateOpaqueToken).toHaveBeenCalledWith('dev');
     });
+
+    it('createSession_withSocketType_generatesTokenWithSockPrefix', async () => {
+      vi.mocked(sessionRepository.findUserById).mockResolvedValue({
+        id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0,
+      });
+      vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
+
+      await service.createSession({
+        userId: 'user-1', type: 'socket', scopes: [], expiresInMs: 60000,
+      });
+
+      expect(generateOpaqueToken).toHaveBeenCalledWith('sock');
+      expect(sessionRepository.insertSession).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'socket' }),
+      );
+    });
   });
 
   describe('validateSession', () => {

@@ -265,6 +265,62 @@ describe('Session Service', () => {
     });
   });
 
+  describe('socket tokens (#1054)', () => {
+    it('mints a ps_sock_* token', async () => {
+      const token = await sessionService.createSession({
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      expect(token).toMatch(/^ps_sock_/);
+    });
+
+    it('validates a socket token and returns claims with type socket', async () => {
+      const token = await sessionService.createSession({
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      const claims = await sessionService.validateSession(token);
+
+      expect(claims).toBeTruthy();
+      expect(claims?.userId).toBe(testUserId);
+      expect(claims?.type).toBe('socket');
+    });
+
+    it('returns null for an expired socket token', async () => {
+      const token = await sessionService.createSession({
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 50,
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const claims = await sessionService.validateSession(token);
+      expect(claims).toBeNull();
+    });
+
+    it('returns null for a revoked socket token', async () => {
+      const token = await sessionService.createSession({
+        userId: testUserId,
+        type: 'socket',
+        scopes: [],
+        expiresInMs: 5 * 60 * 1000,
+      });
+
+      await sessionService.revokeSession(token, 'test');
+
+      const claims = await sessionService.validateSession(token);
+      expect(claims).toBeNull();
+    });
+  });
+
   describe('per-app session scoping', () => {
     async function createWebSession() {
       return sessionService.createSession({
