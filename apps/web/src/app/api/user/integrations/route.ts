@@ -7,10 +7,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listUserConnections, createConnection, findUserConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
 import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository';
+import { resolveProviderConfig } from '@pagespace/lib/integrations/providers/builtin-providers';
 import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials';
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler';
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
-import type { IntegrationProviderConfig } from '@pagespace/lib/integrations/types';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -101,7 +101,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Connection already exists for this provider' }, { status: 409 });
     }
 
-    const config = provider.config as IntegrationProviderConfig;
+    // Builtin providers may have changed shape (new scopes, renamed auth
+    // params) since this row was persisted — resolve to the canonical
+    // in-memory definition rather than trusting the possibly-stale DB copy.
+    const config = resolveProviderConfig(provider);
+    if (!config) {
+      return NextResponse.json({ error: 'Provider configuration is missing' }, { status: 500 });
+    }
 
     // OAuth providers: redirect to auth URL
     if (config.authMethod.type === 'oauth2') {

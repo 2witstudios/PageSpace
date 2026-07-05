@@ -1,5 +1,5 @@
 {
-  "id": "8351cbbd-7228-4682-9b57-72f98e086bb4",
+  "id": "f65de496-3432-42ef-8e54-cba92b1d6319",
   "prevId": "c1cf102c-fb01-46d5-abf7-a9a974474d30",
   "version": "7",
   "dialect": "postgresql",
@@ -2890,6 +2890,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "includeContext": {
+          "name": "includeContext",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "addedBy": {
           "name": "addedBy",
@@ -15039,13 +15046,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'streaming'"
-        },
-        "parts": {
-          "name": "parts",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
         },
         "started_at": {
           "name": "started_at",

@@ -49,6 +49,9 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
+vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
+  getAgentContextDrives: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     ai: {

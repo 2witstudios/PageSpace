@@ -1,1 +1,0 @@
-ALTER TABLE "ai_stream_sessions" ADD COLUMN "parts" jsonb DEFAULT '[]'::jsonb NOT NULL;

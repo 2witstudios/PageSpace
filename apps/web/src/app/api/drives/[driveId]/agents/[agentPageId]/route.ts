@@ -13,6 +13,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 const patchBodySchema = z.object({
   role: z.enum(['MEMBER', 'ADMIN']).optional(),
   customRoleId: z.string().min(1).nullable().optional(),
+  includeContext: z.boolean().optional(),
 });
 
 /**
@@ -44,10 +45,10 @@ export async function PATCH(
       return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { role, customRoleId } = parsed.data;
+    const { role, customRoleId, includeContext } = parsed.data;
 
-    if (!role && customRoleId === undefined) {
-      return NextResponse.json({ error: 'Provide at least one of: role, customRoleId' }, { status: 400 });
+    if (!role && customRoleId === undefined && includeContext === undefined) {
+      return NextResponse.json({ error: 'Provide at least one of: role, customRoleId, includeContext' }, { status: 400 });
     }
 
     // Verify membership exists
@@ -76,6 +77,7 @@ export async function PATCH(
     const updateValues: Partial<typeof driveAgentMembers.$inferInsert> = {};
     if (role !== undefined) updateValues.role = role;
     if (customRoleId !== undefined) updateValues.customRoleId = customRoleId;
+    if (includeContext !== undefined) updateValues.includeContext = includeContext;
 
     const [updated] = await db
       .update(driveAgentMembers)
@@ -88,7 +90,7 @@ export async function PATCH(
       userId,
       resourceType: 'drive',
       resourceId: driveId,
-      details: { agentPageId, role, customRoleId },
+      details: { agentPageId, role, customRoleId, includeContext },
     });
 
     return NextResponse.json({ success: true, member: updated });

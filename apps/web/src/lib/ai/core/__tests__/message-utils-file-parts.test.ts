@@ -19,7 +19,7 @@ describe('convertDbMessageToUIMessage with file parts', () => {
     toolResults: null,
   };
 
-  it('given structured content with file parts, should reconstruct file parts in order', () => {
+  it('given structured content with file parts, should reconstruct file parts in order', async () => {
     const structuredContent = JSON.stringify({
       textParts: ['Look at this image:'],
       fileParts: [
@@ -32,7 +32,7 @@ describe('convertDbMessageToUIMessage with file parts', () => {
       originalContent: 'Look at this image:',
     });
 
-    const result = convertDbMessageToUIMessage({
+    const result = await convertDbMessageToUIMessage({
       ...baseMeta,
       content: structuredContent,
     });
@@ -47,7 +47,7 @@ describe('convertDbMessageToUIMessage with file parts', () => {
     });
   });
 
-  it('given multiple interleaved text and file parts, should preserve ordering', () => {
+  it('given multiple interleaved text and file parts, should preserve ordering', async () => {
     const structuredContent = JSON.stringify({
       textParts: ['First text', 'Second text'],
       fileParts: [
@@ -63,7 +63,7 @@ describe('convertDbMessageToUIMessage with file parts', () => {
       originalContent: 'First text Second text',
     });
 
-    const result = convertDbMessageToUIMessage({
+    const result = await convertDbMessageToUIMessage({
       ...baseMeta,
       content: structuredContent,
     });
@@ -84,8 +84,8 @@ describe('convertDbMessageToUIMessage with file parts', () => {
     expect(filePart2.filename).toBe('chart.png');
   });
 
-  it('given plain text content (no structured data), should return single text part', () => {
-    const result = convertDbMessageToUIMessage({
+  it('given plain text content (no structured data), should return single text part', async () => {
+    const result = await convertDbMessageToUIMessage({
       ...baseMeta,
       content: 'Just plain text',
     });
@@ -94,14 +94,14 @@ describe('convertDbMessageToUIMessage with file parts', () => {
     expect(result.parts[0]).toEqual({ type: 'text', text: 'Just plain text' });
   });
 
-  it('given structured content without fileParts, should handle backward compatibility', () => {
+  it('given structured content without fileParts, should handle backward compatibility', async () => {
     const structuredContent = JSON.stringify({
       textParts: ['Hello world'],
       partsOrder: [{ index: 0, type: 'text' }],
       originalContent: 'Hello world',
     });
 
-    const result = convertDbMessageToUIMessage({
+    const result = await convertDbMessageToUIMessage({
       ...baseMeta,
       content: structuredContent,
     });
@@ -110,7 +110,7 @@ describe('convertDbMessageToUIMessage with file parts', () => {
     expect(result.parts[0]).toEqual({ type: 'text', text: 'Hello world' });
   });
 
-  it('given structured content with file parts but missing optional fields, should handle gracefully', () => {
+  it('given structured content with file parts but missing optional fields, should handle gracefully', async () => {
     const structuredContent = JSON.stringify({
       textParts: [],
       fileParts: [
@@ -122,7 +122,7 @@ describe('convertDbMessageToUIMessage with file parts', () => {
       originalContent: '',
     });
 
-    const result = convertDbMessageToUIMessage({
+    const result = await convertDbMessageToUIMessage({
       ...baseMeta,
       content: structuredContent,
     });
@@ -135,8 +135,8 @@ describe('convertDbMessageToUIMessage with file parts', () => {
     expect(filePart.filename).toBeUndefined();
   });
 
-  it('given null content, should return empty text part', () => {
-    const result = convertDbMessageToUIMessage({
+  it('given null content, should return empty text part', async () => {
+    const result = await convertDbMessageToUIMessage({
       ...baseMeta,
       content: null as unknown as string,
     });
