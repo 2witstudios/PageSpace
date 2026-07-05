@@ -42,3 +42,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   role's permissions, merged in JS, and wrote the whole map back with no lock in between. Updates
   now merge under a row lock inside a transaction, and setting a role as default no longer risks a
   database deadlock or two roles ending up marked default at once.
+- On mobile, the app no longer loads in the wrong theme and switches after first paint — a race
+  that could leave the navbar "half stuck" in the previous theme's colors on iOS/Android WebKit.
+  The saved theme is now resolved server-side before the first render, and theme toggles force the
+  translucent "liquid glass" surfaces to repaint.
