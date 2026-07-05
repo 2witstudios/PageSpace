@@ -10,6 +10,15 @@ import { chatMessages } from '@pagespace/db/schema/core'
 import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
+import { uploadChatAttachment, getChatAttachmentUrl } from '@/lib/upload/chat-attachment-storage';
+
+/** Parse a `data:<mediaType>;base64,<data>` URL into its raw bytes and media type. */
+function decodeDataUrl(dataUrl: string): { buffer: Buffer; mediaType: string } | null {
+  const match = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl);
+  if (!match) return null;
+  const [, mediaType, base64Data] = match;
+  return { buffer: Buffer.from(base64Data, 'base64'), mediaType };
+}
 
 /** Narrow a UIMessage part to TextUIPart */
 function isTextPart(part: { type: string }): part is TextUIPart {
@@ -136,9 +145,17 @@ interface PersistedDataPart {
   data: unknown;
 }
 
+/** A persisted file part is either a fresh S3-backed `storageKey` or a legacy `url` (never both). */
+interface PersistedFilePart {
+  url?: string;
+  storageKey?: string;
+  mediaType?: string;
+  filename?: string;
+}
+
 interface StructuredContentData {
   textParts: string[];
-  fileParts?: Array<{ url: string; mediaType?: string; filename?: string }>;
+  fileParts?: PersistedFilePart[];
   dataParts?: PersistedDataPart[];
   partsOrder: Array<{ index: number; type: string; toolCallId?: string }>;
   originalContent?: string;
@@ -263,7 +280,7 @@ function parseToolResults(raw: unknown): ToolResult[] {
 /**
  * Convert database message to UIMessage format with tool parts
  */
-export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessage {
+export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): Promise<UIMessage> {
   // Parse structured content
   if (dbMessage.content) {
     try {
@@ -274,7 +291,7 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
           totalPartsCount: parsed.partsOrder.length
         });
 
-        const structured = reconstructMessageFromStructuredContent(dbMessage, parsed);
+        const structured = await reconstructMessageFromStructuredContent(dbMessage, parsed);
         return { ...structured, userName: dbMessage.userName } as ExtendedUIMessage;
       }
     } catch {
@@ -299,10 +316,10 @@ export function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): UIMessa
  * Shared helper: reconstruct a UIMessage from structured content data and
  * the common fields present on both DatabaseMessage and GlobalAssistantMessage.
  */
-function reconstructFromStructuredContent(
+async function reconstructFromStructuredContent(
   msg: ReconstructableMessage,
   structuredData: StructuredContentData
-): UIMessage {
+): Promise<UIMessage> {
   const parts: Array<TextUIPart | ToolPart | FileUIPart | PersistedDataPart> = [];
   let textPartIndex = 0;
   let filePartIndex = 0;
@@ -323,7 +340,7 @@ function reconstructFromStructuredContent(
   const dataParts = structuredData.dataParts || [];
 
   // Reconstruct parts in original order
-  structuredData.partsOrder.forEach(partOrder => {
+  for (const partOrder of structuredData.partsOrder) {
     if (partOrder.type === 'text') {
       if (textPartIndex < structuredData.textParts.length) {
         const textContent = structuredData.textParts[textPartIndex];
@@ -338,9 +355,10 @@ function reconstructFromStructuredContent(
     } else if (partOrder.type === 'file') {
       if (filePartIndex < fileParts.length) {
         const fp = fileParts[filePartIndex];
+        const url = fp.storageKey ? await getChatAttachmentUrl(fp.storageKey) : fp.url;
         parts.push({
           type: 'file',
-          url: fp.url,
+          url: url || '',
           mediaType: fp.mediaType || 'application/octet-stream',
           filename: fp.filename,
         });
@@ -373,7 +391,7 @@ function reconstructFromStructuredContent(
     } else if (partOrder.type === 'step-start') {
       // Skip step-start parts for now - they're AI SDK internal
     }
-  });
+  }
 
   const resolvedParts: UIMessage['parts'] = parts.length > 0
     ? parts as UIMessage['parts']
@@ -392,28 +410,33 @@ function reconstructFromStructuredContent(
 /**
  * Reconstruct message from structured content (new format with chronological ordering)
  */
-function reconstructMessageFromStructuredContent(
+async function reconstructMessageFromStructuredContent(
   dbMessage: DatabaseMessage,
   structuredData: StructuredContentData
-): UIMessage {
+): Promise<UIMessage> {
   return reconstructFromStructuredContent(dbMessage, structuredData);
 }
 
 /**
  * Extract structured content data from UIMessage parts for database storage
  */
-export function extractStructuredContentFromParts(uiParts: UIMessage['parts'], originalContent: string): string {
+export async function extractStructuredContentFromParts(uiParts: UIMessage['parts'], originalContent: string): Promise<string> {
   const textParts = uiParts
     .filter(isTextPart)
     .map(p => p.text || '');
 
-  const filePartsData = uiParts
-    .filter(isFilePart)
-    .map(fp => ({
-      url: fp.url,
-      mediaType: fp.mediaType,
-      filename: fp.filename,
-    }));
+  const filePartsData: PersistedFilePart[] = await Promise.all(
+    uiParts
+      .filter(isFilePart)
+      .map(async (fp): Promise<PersistedFilePart> => {
+        const decoded = decodeDataUrl(fp.url);
+        if (!decoded) {
+          return { url: fp.url, mediaType: fp.mediaType, filename: fp.filename };
+        }
+        const { storageKey } = await uploadChatAttachment(decoded.buffer, fp.mediaType || decoded.mediaType);
+        return { storageKey, mediaType: fp.mediaType, filename: fp.filename };
+      })
+  );
 
   const dataPartsData: PersistedDataPart[] = uiParts
     .filter(isDataPart)
@@ -475,7 +498,7 @@ export async function saveMessageToDatabase({
 
     // If we have the complete UIMessage, store structured content to preserve chronological order
     if (uiMessage?.parts && uiMessage.parts.length > 0) {
-      structuredContent = extractStructuredContentFromParts(uiMessage.parts, content);
+      structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
 
       debugLogAI('Saving structured content', {
         textPartsCount: uiMessage.parts.filter(isTextPart).length,
@@ -529,7 +552,7 @@ export async function saveMessageToDatabase({
 /**
  * Convert Global Assistant database message to UIMessage format
  */
-export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssistantMessage): UIMessage {
+export async function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssistantMessage): Promise<UIMessage> {
   // Parse structured content
   if (dbMessage.content) {
     try {
@@ -540,7 +563,7 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
           totalPartsCount: parsed.partsOrder.length
         });
 
-        return reconstructGlobalAssistantMessageFromStructuredContent(dbMessage, parsed);
+        return await reconstructGlobalAssistantMessageFromStructuredContent(dbMessage, parsed);
       }
     } catch {
       // Content is plain text, not structured
@@ -562,10 +585,10 @@ export function convertGlobalAssistantMessageToUIMessage(dbMessage: GlobalAssist
 /**
  * Reconstruct Global Assistant message from structured content (new format with chronological ordering)
  */
-function reconstructGlobalAssistantMessageFromStructuredContent(
+async function reconstructGlobalAssistantMessageFromStructuredContent(
   dbMessage: GlobalAssistantMessage,
   structuredData: StructuredContentData
-): UIMessage {
+): Promise<UIMessage> {
   return reconstructFromStructuredContent(dbMessage, structuredData);
 }
 
@@ -598,7 +621,7 @@ export async function saveGlobalAssistantMessageToDatabase({
 
     // If we have the complete UIMessage, store structured content to preserve chronological order
     if (uiMessage?.parts && uiMessage.parts.length > 0) {
-      structuredContent = extractStructuredContentFromParts(uiMessage.parts, content);
+      structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
 
       debugLogAI('Global Assistant: Saving structured content', {
         textPartsCount: uiMessage.parts.filter(isTextPart).length,
