@@ -13,20 +13,43 @@ import { syncThemeToCookie } from "@/lib/theme-cookie";
 // theme switch (not just a settle) and mobile WebKit can fail to repaint
 // `backdrop-filter` surfaces (e.g. the navbar) when it happens — see
 // GlassRepaintFix below.
+//
+// The cookie is a strict mirror of next-themes' state, "system" included.
+// Skipping "system" would leave a stale "dark"/"light" cookie behind when a
+// user switches back to system: the server would then paint the stale theme
+// and the client would flip it after hydration — the exact post-paint switch
+// this PR removes. (layout.tsx treats any value other than "dark"/"light"
+// as "no explicit theme".)
+//
+// localStorage is mirrored too: when the theme came from the cookie alone
+// (fresh device via defaultTheme, see layout.tsx), next-themes never writes
+// its storage key — only setTheme does — and Safari's ITP expires
+// script-written cookies after ~7 days, so without this the preference
+// would silently reset. Writing storage directly is invisible, unlike the
+// setTheme call this PR removed.
+const THEME_STORAGE_KEY = "theme"; // next-themes' default storageKey
+
 function ThemeCookieSync() {
   const { theme } = useTheme();
 
   React.useEffect(() => {
-    if (theme && theme !== "system") {
-      syncThemeToCookie(theme);
+    if (!theme) return;
+    syncThemeToCookie(theme);
+    try {
+      if (localStorage.getItem(THEME_STORAGE_KEY) !== theme) {
+        localStorage.setItem(THEME_STORAGE_KEY, theme);
+      }
+    } catch {
+      // Storage unavailable (private mode / blocked) — cookie still covers us.
     }
   }, [theme]);
 
   return null;
 }
 
-const GLASS_SELECTOR =
-  ".liquid-glass-thin, .liquid-glass-regular, .liquid-glass-thick";
+// Attribute match rather than an explicit class list so future glass
+// variants added in globals.css are covered without touching this file.
+const GLASS_SELECTOR = '[class*="liquid-glass-"]';
 
 // Mobile WebKit has a known bug: elements combining `position: sticky` with
 // `backdrop-filter` (our "liquid glass" surfaces — the navbar is the one
@@ -46,19 +69,47 @@ function GlassRepaintFix() {
   React.useEffect(() => {
     const html = document.documentElement;
     let wasDark = html.classList.contains("dark");
+    let restore: (() => void) | null = null;
+    let frame = 0;
+
     const observer = new MutationObserver(() => {
       const isDark = html.classList.contains("dark");
       if (isDark === wasDark) return;
       wasDark = isDark;
-      document.querySelectorAll<HTMLElement>(GLASS_SELECTOR).forEach((el) => {
-        const prevTransform = el.style.transform;
+      // Finish any in-flight nudge first so we never capture our own
+      // perturbed transform as the value to restore.
+      if (restore) {
+        cancelAnimationFrame(frame);
+        restore();
+      }
+      const els = Array.from(
+        document.querySelectorAll<HTMLElement>(GLASS_SELECTOR)
+      );
+      const prevTransforms = els.map((el) => el.style.transform);
+      els.forEach((el) => {
         el.style.transform = "translateZ(0.01px)";
-        void el.offsetHeight;
-        el.style.transform = prevTransform;
       });
+      restore = () => {
+        els.forEach((el, i) => {
+          el.style.transform = prevTransforms[i];
+        });
+        restore = null;
+      };
+      // Restore on the next frame, not synchronously: transform is
+      // layout-inert, so a same-task set-and-restore is a net style no-op by
+      // paint time and the compositor may skip the recomposite entirely. The
+      // perturbed value must survive to one real paint. (translateZ has no
+      // visual effect without perspective, so the held frame is invisible.)
+      frame = requestAnimationFrame(restore);
     });
     observer.observe(html, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (restore) {
+        cancelAnimationFrame(frame);
+        restore();
+      }
+    };
   }, []);
 
   return null;

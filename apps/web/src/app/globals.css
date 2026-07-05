@@ -55,6 +55,10 @@ svg.lucide {
 }
 
 :root {
+  /* Keep native UI (scrollbars, form controls, overscroll canvas) in step
+     with the theme from the very first server-rendered paint — next-themes
+     only sets an inline color-scheme once its script runs. */
+  color-scheme: light;
   --radius: 0.625rem;
 
   /* iOS Safe Area Support */
@@ -126,6 +130,7 @@ svg.lucide {
 }
 
 .dark {
+  color-scheme: dark;
   --radius: 0.625rem;
   --background: oklch(0.15 0 0);
   --foreground: oklch(0.94 0 0);
@@ -292,13 +297,18 @@ svg.lucide {
 
 @layer components {
   /* Liquid Glass Utilities */
-  /* `transform: translateZ(0)` promotes each surface to its own compositing
+  /* `transform: translateZ(0)` promotes the surface to its own compositing
      layer. Mobile WebKit has a long-standing bug where a `backdrop-filter`
-     element (especially combined with `position: sticky`, e.g. the navbar)
-     doesn't repaint its blurred background after an ancestor's `.dark` class
-     toggles — it keeps showing the previous theme's colors until something
-     else forces a repaint. Layer promotion up front makes that repaint
-     reliable; see also GlassRepaintFix in ThemeProvider.tsx for a runtime nudge. */
+     element combined with `position: sticky` (the navbar and document header
+     — the surfaces users reported stuck in the old theme) doesn't repaint
+     its blurred background after an ancestor's `.dark` class toggles.
+     Layer promotion up front makes that repaint reliable; see also
+     GlassRepaintFix in ThemeProvider.tsx for a runtime nudge.
+     Deliberately scoped to `-thin` (the only sticky surfaces): promoting the
+     large non-sticky sidebars would cost permanent layer memory on mobile,
+     and `transform` turns each surface into a containing block for
+     `position: fixed` descendants — a layout hazard the sticky navbar
+     doesn't share. */
   .liquid-glass-thin {
     background: var(--material-thin);
     backdrop-filter: blur(20px) saturate(180%);
@@ -318,7 +328,6 @@ svg.lucide {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.6),
       var(--shadow-elevated);
-    transform: translateZ(0);
   }
 
   /* Dark Mode Glossy Gradient */
@@ -333,14 +342,12 @@ svg.lucide {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.03),
       var(--shadow-elevated);
-    transform: translateZ(0);
   }
 
   .liquid-glass-thick {
     background: var(--material-thick);
     backdrop-filter: blur(32px) saturate(190%);
     -webkit-backdrop-filter: blur(32px) saturate(190%);
-    transform: translateZ(0);
   }
 
   /* Reduced transparency support */
@@ -352,6 +359,9 @@ svg.lucide {
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
       box-shadow: none;
+      /* No blur here, so no WebKit repaint bug — don't pay for a permanent
+         compositing layer on the devices most likely to use this setting. */
+      transform: none;
     }
   }
 

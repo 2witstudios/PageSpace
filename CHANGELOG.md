@@ -33,3 +33,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   `@pagespace/cli`). It keeps working exactly as before — same tools, same env vars — and now
   prints a one-line migration notice to stderr. See the
   [migration guide](packages/cli/docs/migrating-from-pagespace-mcp.md).
+
+### Fixed
+
+- On mobile, the app no longer loads in the wrong theme and switches after first paint — a race
+  that could leave the navbar "half stuck" in the previous theme's colors on iOS/Android WebKit.
+  The saved theme is now resolved server-side before the first render, and theme toggles force the
+  translucent "liquid glass" surfaces to repaint.

@@ -172,6 +172,11 @@ export default async function RootLayout({
           defaultTheme={initialTheme ?? "system"}
           enableSystem
           disableTransitionOnChange
+          // Without the nonce, the enforced CSP (nonce + strict-dynamic, see
+          // security-headers.ts) blocks next-themes' inline pre-hydration
+          // script in production — theme would only apply after hydration,
+          // recreating the late post-paint switch this PR removes.
+          nonce={nonce}
         >
           <ClientTrackingProvider />
           {children}
