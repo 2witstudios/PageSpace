@@ -503,6 +503,25 @@ describe('extractAndStripOgMeta', () => {
     expect(meta.ogImageUrl).toBe(IMG);
   });
 
+  it('extracts og:title and removes the tag from html', () => {
+    const { meta, html } = extractAndStripOgMeta(`<p>hi</p><meta property="og:title" content="My Custom Title">`);
+    expect(meta.ogTitle).toBe('My Custom Title');
+    expect(html).not.toContain('og:title');
+    expect(html).toContain('<p>hi</p>');
+  });
+
+  it('extracts og:title when content attribute comes before property', () => {
+    const { meta } = extractAndStripOgMeta(`<meta content="My Custom Title" property="og:title">`);
+    expect(meta.ogTitle).toBe('My Custom Title');
+  });
+
+  it('keeps only the first og:title when multiple are present', () => {
+    const { meta } = extractAndStripOgMeta(
+      `<meta property="og:title" content="First"><meta property="og:title" content="Second">`
+    );
+    expect(meta.ogTitle).toBe('First');
+  });
+
   it('extracts og:description and removes the tag', () => {
     const { meta, html } = extractAndStripOgMeta('<meta property="og:description" content="My page">');
     expect(meta.ogDescription).toBe('My page');

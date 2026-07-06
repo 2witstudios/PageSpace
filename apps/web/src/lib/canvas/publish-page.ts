@@ -257,7 +257,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     override: { title: effectiveTitle, description: effectiveDescription, ogImageUrl: effectiveOgImageUrl },
     noindex: effectiveNoindex,
     pageTitle: page.title,
-    canvasMeta: { ogImageUrl: meta.ogImageUrl, ogDescription: meta.ogDescription },
+    canvasMeta: { ogTitle: meta.ogTitle, ogImageUrl: meta.ogImageUrl, ogDescription: meta.ogDescription },
     driveDefaultOgImageUrl: drive.publishDefaultOgImageUrl,
     body: bodyHtml,
   });
