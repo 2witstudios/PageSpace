@@ -4,7 +4,14 @@ import { pages } from '@pagespace/db/schema/core';
 import { formTargets, type FormTarget, type FormFieldDef, type FormTargetStatus } from '@pagespace/db/schema/form-targets';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells } from '@pagespace/lib/sheets/sheet';
+import {
+  isSheetType,
+  parseSheetContent,
+  serializeSheetContent,
+  updateSheetCells,
+  encodeCellAddress,
+  type SheetCellUpdate,
+} from '@pagespace/lib/sheets/sheet';
 import { generateToken, hashToken } from '@pagespace/lib/auth/token-utils';
 import { buildHeaderRowUpdates, buildSubmissionRowUpdates } from '@pagespace/lib/forms/cell-mapping';
 import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
@@ -29,6 +36,10 @@ export interface CreateFormTargetInput {
   fields: FormFieldDef[];
   createdBy: string;
   mutationContext: PageMutationContext;
+  /** The Canvas page this target's HTML will be embedded in, if provisioned
+   *  through the Forms settings UI. Omitted for AI-tool-provisioned targets
+   *  that don't (yet) know which Canvas page will embed the form. */
+  canvasPageId?: string;
 }
 
 export interface CreateFormTargetResult {
@@ -53,6 +64,7 @@ export async function createFormTarget({
   fields,
   createdBy,
   mutationContext,
+  canvasPageId,
 }: CreateFormTargetInput): Promise<CreateFormTargetResult> {
   const page = await pageRepository.findById(sheetPageId);
   if (!page) {
@@ -88,6 +100,7 @@ export async function createFormTarget({
           driveId: page.driveId,
           pageId: page.id,
           action: 'sheet:append',
+          canvasPageId,
           fields,
           headerRow: HEADER_ROW,
           nextRow: HEADER_ROW + 1,
@@ -117,6 +130,20 @@ export async function getFormTargetById(formTargetId: string): Promise<FormTarge
     .select()
     .from(formTargets)
     .where(eq(formTargets.id, formTargetId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Looks up the form target embedded in a given Canvas page, if any. Returns
+ * any status (not just active), same as getFormTargetById — the Forms
+ * settings UI must still show a paused/archived target so it can be resumed.
+ */
+export async function getFormTargetByCanvasPageId(canvasPageId: string): Promise<FormTarget | null> {
+  const [row] = await db
+    .select()
+    .from(formTargets)
+    .where(eq(formTargets.canvasPageId, canvasPageId))
     .limit(1);
   return row ?? null;
 }
@@ -163,6 +190,147 @@ export async function updateFormTargetStatus({
   }
 
   return updated;
+}
+
+const MAX_FIELDS = 20;
+
+export class FormTargetFieldLimitError extends Error {}
+export class FormTargetDuplicateFieldNameError extends Error {}
+export class FormTargetFieldIndexError extends Error {}
+
+/**
+ * The only mutations a Forms settings UI may make to an existing target's
+ * fields — reordering and true removal are deliberately absent, since
+ * `fields[i]` is a fixed column position once written (see cell-mapping.ts).
+ * This mirrors Google Forms: adding a question appends a new column,
+ * deleting one retires it without touching history, and renaming only
+ * updates cosmetic text.
+ */
+export type FormTargetFieldMutation =
+  | { op: 'add-field'; field: FormFieldDef }
+  | { op: 'update-field'; index: number; patch: Partial<Pick<FormFieldDef, 'label' | 'required' | 'type'>> }
+  | { op: 'archive-field'; index: number }
+  | { op: 'unarchive-field'; index: number };
+
+export interface UpdateFormTargetFieldsInput {
+  formTargetId: string;
+  mutation: FormTargetFieldMutation;
+  mutationContext: PageMutationContext;
+}
+
+/**
+ * Applies one field-level mutation to an existing form target. Only
+ * `add-field` (and a label change on a non-archived field) touch the Sheet's
+ * header row — archiving/unarchiving and non-label edits are metadata-only,
+ * matching Google Forms leaving a retired question's header text alone.
+ * Locks the form_targets row (`FOR UPDATE`) and retries on
+ * `PageRevisionMismatchError` the same bounded number of times as
+ * `appendFormSubmission`, since the header write rides the same
+ * revision-checked page-mutation pipeline.
+ */
+export async function updateFormTargetFields({
+  formTargetId,
+  mutation,
+  mutationContext,
+}: UpdateFormTargetFieldsInput): Promise<FormTarget> {
+  for (let attempt = 1; attempt <= MAX_APPEND_ATTEMPTS; attempt++) {
+    try {
+      return await db.transaction(async (tx) => {
+        const [formTarget] = await tx
+          .select()
+          .from(formTargets)
+          .where(eq(formTargets.id, formTargetId))
+          .for('update');
+
+        if (!formTarget) {
+          throw new Error(`Form target "${formTargetId}" not found`);
+        }
+
+        const fields = [...formTarget.fields];
+        let headerCellUpdate: SheetCellUpdate | null = null;
+
+        if (mutation.op === 'add-field') {
+          if (fields.length >= MAX_FIELDS) {
+            throw new FormTargetFieldLimitError(`Form target "${formTargetId}" already has the maximum of ${MAX_FIELDS} fields`);
+          }
+          // Uniqueness is checked against ALL fields, including archived ones —
+          // reusing a retired field's name would make two fields read the same
+          // submitted JSON key.
+          if (fields.some((field) => field.name === mutation.field.name)) {
+            throw new FormTargetDuplicateFieldNameError(
+              `Field name "${mutation.field.name}" is already used on this form target (including archived fields)`
+            );
+          }
+          const columnIndex = fields.length;
+          fields.push(mutation.field);
+          headerCellUpdate = {
+            address: encodeCellAddress(formTarget.headerRow - 1, columnIndex),
+            value: mutation.field.label,
+          };
+        } else {
+          const existing = fields[mutation.index];
+          if (!existing) {
+            throw new FormTargetFieldIndexError(`No field at index ${mutation.index} on form target "${formTargetId}"`);
+          }
+
+          if (mutation.op === 'update-field') {
+            const updatedField = { ...existing, ...mutation.patch };
+            fields[mutation.index] = updatedField;
+            if (
+              mutation.patch.label !== undefined &&
+              mutation.patch.label !== existing.label &&
+              !existing.archived
+            ) {
+              headerCellUpdate = {
+                address: encodeCellAddress(formTarget.headerRow - 1, mutation.index),
+                value: updatedField.label,
+              };
+            }
+          } else if (mutation.op === 'archive-field') {
+            fields[mutation.index] = { ...existing, archived: true };
+          } else {
+            fields[mutation.index] = { ...existing, archived: false };
+          }
+        }
+
+        if (headerCellUpdate) {
+          const [page] = await tx.select().from(pages).where(eq(pages.id, formTarget.pageId)).limit(1);
+          if (!page) {
+            throw new Error(`Page "${formTarget.pageId}" not found`);
+          }
+
+          const sheetData = parseSheetContent(page.content);
+          const updatedSheet = updateSheetCells(sheetData, [headerCellUpdate]);
+          const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
+
+          await applyPageMutation({
+            pageId: page.id,
+            operation: 'update',
+            updates: { content: newContent },
+            updatedFields: ['content'],
+            expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+            context: mutationContext,
+            tx,
+          });
+        }
+
+        await tx
+          .update(formTargets)
+          .set({ fields })
+          .where(eq(formTargets.id, formTargetId));
+
+        return { ...formTarget, fields };
+      });
+    } catch (error) {
+      if (error instanceof PageRevisionMismatchError && attempt < MAX_APPEND_ATTEMPTS) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  // Unreachable: the loop above always either returns or throws on its final attempt.
+  throw new Error(`Failed to update form target "${formTargetId}" after ${MAX_APPEND_ATTEMPTS} attempts`);
 }
 
 export interface AppendFormSubmissionInput {

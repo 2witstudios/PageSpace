@@ -69,7 +69,19 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...conditions: unknown[]) => ({ and: conditions })),
 }));
 
-import { createFormTarget, lookupActiveFormTarget, updateFormTargetStatus, getFormTargetById, appendFormSubmission, FormTargetAlreadyActiveError } from '../form-target-service';
+import {
+  createFormTarget,
+  lookupActiveFormTarget,
+  updateFormTargetStatus,
+  updateFormTargetFields,
+  getFormTargetById,
+  getFormTargetByCanvasPageId,
+  appendFormSubmission,
+  FormTargetAlreadyActiveError,
+  FormTargetFieldLimitError,
+  FormTargetDuplicateFieldNameError,
+  FormTargetFieldIndexError,
+} from '../form-target-service';
 import { PageRevisionMismatchError } from '../page-mutation-service';
 
 const fields: FormFieldDef[] = [
@@ -219,6 +231,26 @@ describe('getFormTargetById', () => {
   });
 });
 
+describe('getFormTargetByCanvasPageId', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the row embedded in the given Canvas page regardless of status', async () => {
+    mockSelectLimit.mockResolvedValue([{ id: 'ft-1', canvasPageId: 'canvas-1', status: 'paused' }]);
+
+    const result = await getFormTargetByCanvasPageId('canvas-1');
+    expect(result).toEqual({ id: 'ft-1', canvasPageId: 'canvas-1', status: 'paused' });
+  });
+
+  it('returns null when no form target is embedded in the given Canvas page', async () => {
+    mockSelectLimit.mockResolvedValue([]);
+
+    const result = await getFormTargetByCanvasPageId('canvas-missing');
+    expect(result).toBeNull();
+  });
+});
+
 describe('updateFormTargetStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -237,6 +269,156 @@ describe('updateFormTargetStatus', () => {
     await expect(
       updateFormTargetStatus({ formTargetId: 'missing', status: 'paused' })
     ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('updateFormTargetFields', () => {
+  const fieldsTarget = {
+    id: 'ft-1',
+    pageId: 'sheet-1',
+    headerRow: 1,
+    fields: [
+      { name: 'name', label: 'Name', type: 'text', required: true },
+      { name: 'email', label: 'Email', type: 'email', required: true },
+    ] as FormFieldDef[],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTransaction.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
+    mockTxSelectFor.mockResolvedValue([{ ...fieldsTarget, fields: [...fieldsTarget.fields] }]);
+    mockTxSelectLimit.mockResolvedValue([{ ...sheetPage, revision: 5 }]);
+    mockTxUpdateWhere.mockResolvedValue(undefined);
+    mockApplyPageMutation.mockResolvedValue({ nextRevision: 6 });
+  });
+
+  it('appends a new field at the next column and writes its header cell', async () => {
+    const result = await updateFormTargetFields({
+      formTargetId: 'ft-1',
+      mutation: { op: 'add-field', field: { name: 'phone', label: 'Phone', type: 'text', required: false } },
+      mutationContext: { userId: 'user-1' },
+    });
+
+    expect(result.fields).toHaveLength(3);
+    expect(result.fields[2]).toEqual({ name: 'phone', label: 'Phone', type: 'text', required: false });
+    expect(mockApplyPageMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects adding a field once the 20-field cap is reached', async () => {
+    const fullFields = Array.from({ length: 20 }, (_, i) => ({
+      name: `f${i}`,
+      label: `F${i}`,
+      type: 'text' as const,
+      required: false,
+    }));
+    mockTxSelectFor.mockResolvedValue([{ ...fieldsTarget, fields: fullFields }]);
+
+    await expect(
+      updateFormTargetFields({
+        formTargetId: 'ft-1',
+        mutation: { op: 'add-field', field: { name: 'one-too-many', label: 'X', type: 'text', required: false } },
+        mutationContext: { userId: 'user-1' },
+      })
+    ).rejects.toThrow(FormTargetFieldLimitError);
+  });
+
+  it('rejects reusing an archived field\'s name — two fields must never read the same submitted key', async () => {
+    mockTxSelectFor.mockResolvedValue([
+      {
+        ...fieldsTarget,
+        fields: [
+          { name: 'name', label: 'Name', type: 'text', required: true },
+          { name: 'email', label: 'Email', type: 'email', required: true, archived: true },
+        ],
+      },
+    ]);
+
+    await expect(
+      updateFormTargetFields({
+        formTargetId: 'ft-1',
+        mutation: { op: 'add-field', field: { name: 'email', label: 'Email again', type: 'text', required: false } },
+        mutationContext: { userId: 'user-1' },
+      })
+    ).rejects.toThrow(FormTargetDuplicateFieldNameError);
+  });
+
+  it('updates a label and re-syncs the sheet header for that column only', async () => {
+    const result = await updateFormTargetFields({
+      formTargetId: 'ft-1',
+      mutation: { op: 'update-field', index: 1, patch: { label: 'Email address' } },
+      mutationContext: { userId: 'user-1' },
+    });
+
+    expect(result.fields[1].label).toBe('Email address');
+    expect(result.fields[0]).toEqual(fieldsTarget.fields[0]); // untouched
+    expect(mockApplyPageMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not touch the sheet when only required/type change (no label change)', async () => {
+    await updateFormTargetFields({
+      formTargetId: 'ft-1',
+      mutation: { op: 'update-field', index: 1, patch: { required: false } },
+      mutationContext: { userId: 'user-1' },
+    });
+
+    expect(mockApplyPageMutation).not.toHaveBeenCalled();
+  });
+
+  it('archives a field without writing to the sheet, preserving its column position', async () => {
+    const result = await updateFormTargetFields({
+      formTargetId: 'ft-1',
+      mutation: { op: 'archive-field', index: 0 },
+      mutationContext: { userId: 'user-1' },
+    });
+
+    expect(result.fields[0]).toMatchObject({ name: 'name', archived: true });
+    expect(result.fields[1]).toEqual(fieldsTarget.fields[1]); // untouched, still at column B
+    expect(mockApplyPageMutation).not.toHaveBeenCalled();
+  });
+
+  it('restores an archived field via unarchive-field', async () => {
+    mockTxSelectFor.mockResolvedValue([
+      {
+        ...fieldsTarget,
+        fields: [
+          { name: 'name', label: 'Name', type: 'text', required: true, archived: true },
+          { name: 'email', label: 'Email', type: 'email', required: true },
+        ],
+      },
+    ]);
+
+    const result = await updateFormTargetFields({
+      formTargetId: 'ft-1',
+      mutation: { op: 'unarchive-field', index: 0 },
+      mutationContext: { userId: 'user-1' },
+    });
+
+    expect(result.fields[0]).toMatchObject({ name: 'name', archived: false });
+  });
+
+  it('throws for an out-of-range field index', async () => {
+    await expect(
+      updateFormTargetFields({
+        formTargetId: 'ft-1',
+        mutation: { op: 'update-field', index: 99, patch: { label: 'X' } },
+        mutationContext: { userId: 'user-1' },
+      })
+    ).rejects.toThrow(FormTargetFieldIndexError);
+  });
+
+  it('retries on a page-revision mismatch up to a bounded limit', async () => {
+    mockApplyPageMutation
+      .mockRejectedValueOnce(new PageRevisionMismatchError('stale', 6, 5))
+      .mockResolvedValueOnce({ nextRevision: 7 });
+
+    const result = await updateFormTargetFields({
+      formTargetId: 'ft-1',
+      mutation: { op: 'add-field', field: { name: 'phone', label: 'Phone', type: 'text', required: false } },
+      mutationContext: { userId: 'user-1' },
+    });
+
+    expect(mockApplyPageMutation).toHaveBeenCalledTimes(2);
+    expect(result.fields).toHaveLength(3);
   });
 });
 

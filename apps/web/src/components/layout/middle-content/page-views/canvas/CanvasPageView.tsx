@@ -12,6 +12,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { useFindStore } from '@/stores/useFindStore';
 import CanvasPublishControls from './CanvasPublishControls';
+import CanvasFormsSettingsTab from './CanvasFormsSettingsTab';
 
 interface CanvasPageViewProps {
   pageId: string;
@@ -147,6 +148,17 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     saveWithDebounce(value);
   }, [updateContent, saveWithDebounce]);
 
+  // Splices a freshly-created form's HTML into the Canvas content (wrapped in
+  // a marker comment) and saves it — the Forms tab only ever needs to do this
+  // once, at creation, since that's the only moment the raw submit token
+  // (and therefore a complete formHtml) is available at all.
+  const handleEmbedFormHtml = useCallback((html: string, formTargetId: string) => {
+    const marker = `<!-- pagespace:form:${formTargetId} start -->\n${html}\n<!-- pagespace:form:${formTargetId} end -->`;
+    const value = content ? `${content}\n\n${marker}\n` : `${marker}\n`;
+    updateContent(value);
+    saveWithDebounce(value);
+  }, [content, updateContent, saveWithDebounce]);
+
   // Cleanup on unmount - auto-save any unsaved changes
   useEffect(() => {
     return () => {
@@ -171,6 +183,12 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
         >
           View
         </button>
+        <button
+          className={`px-4 py-2 ${activeTab === 'forms' ? 'border-b-2 border-blue-500' : ''}`}
+          onClick={() => setActiveTab('forms')}
+        >
+          Forms
+        </button>
         <div className="ml-auto min-w-0 max-w-full">
           <CanvasPublishControls pageId={pageId} contentDirty={documentState?.isDirty} />
         </div>
@@ -189,6 +207,11 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           <ErrorBoundary>
             <CanvasFrame html={content} />
           </ErrorBoundary>
+        </div>
+      )}
+      {activeTab === 'forms' && (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <CanvasFormsSettingsTab pageId={pageId} onEmbedFormHtml={handleEmbedFormHtml} />
         </div>
       )}
 

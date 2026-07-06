@@ -13,6 +13,10 @@ export interface FormFieldDef {
   label: string;
   type: FormFieldType;
   required: boolean;
+  /** Soft-retired field: keeps its column position and historical data, but
+   *  is excluded from new form HTML, submission validation, and future sheet
+   *  writes. Mirrors Google Forms leaving a deleted question's column intact. */
+  archived?: boolean;
 }
 
 export type FormTargetStatus = 'active' | 'paused' | 'archived';
@@ -32,6 +36,13 @@ export const formTargets = pgTable('form_targets', {
   driveId: text('drive_id').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   pageId: text('page_id').notNull().references(() => pages.id, { onDelete: 'cascade' }),
   action: text('action', { enum: ['sheet:append'] }).notNull().default('sheet:append'),
+
+  // The Canvas page this target's <form> HTML is embedded in, if provisioned
+  // (or later claimed) through the Forms settings UI. Nullable — AI-tool-
+  // provisioned targets that were never opened in the UI leave this unset.
+  // `onDelete: 'set null'` so deleting the Canvas page doesn't cascade into
+  // deleting the (still-valid) form target and its Sheet wiring.
+  canvasPageId: text('canvas_page_id').references(() => pages.id, { onDelete: 'set null' }),
 
   // Ordered — fields[i] always maps to sheet column i, fixed at provisioning
   // time. Never re-derived from the sheet's live header row, so manually
@@ -58,6 +69,7 @@ export const formTargets = pgTable('form_targets', {
   pageIdx: index('form_targets_page_id_idx').on(table.pageId),
   driveIdx: index('form_targets_drive_id_idx').on(table.driveId),
   statusIdx: index('form_targets_status_idx').on(table.status),
+  canvasPageIdx: index('form_targets_canvas_page_id_idx').on(table.canvasPageId),
   // At most one ACTIVE form target per Sheet page — enforced in Postgres
   // (not just app logic) so two concurrent provisions can't both succeed and
   // silently share/collide on `nextRow`. Paused/archived rows are unaffected,

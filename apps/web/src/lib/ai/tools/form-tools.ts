@@ -10,6 +10,12 @@ import {
   FormTargetAlreadyActiveError,
 } from '@/services/api/form-target-service';
 import { buildFormHtml } from '@pagespace/lib/forms/form-html';
+// Shared with the Forms settings API route (apps/web/src/app/api/pages/[pageId]/form-target)
+// so a brand-new field list is validated identically whether it comes from
+// an AI agent or the settings UI.
+import { formFieldsSchema } from '@pagespace/lib/forms/field-schema';
+
+export { formFieldsSchema };
 
 function getWebAppUrl(): string {
   const url = process.env.WEB_APP_URL;
@@ -18,25 +24,6 @@ function getWebAppUrl(): string {
   }
   return url;
 }
-
-const formFieldSchema = z.object({
-  name: z.string().describe('Stable field key — used as the <input name="..."> and the submitted JSON key'),
-  label: z.string().describe('Header-row column label, e.g. "Email"'),
-  type: z.enum(['text', 'email', 'textarea', 'checkbox']),
-  required: z.boolean().default(true),
-});
-
-// Exported (not just used inline) so tests can exercise validation directly —
-// the `ai` package's `tool()` wrapper doesn't expose zod's `.safeParse` in its
-// public type, even though the runtime schema is unchanged.
-export const formFieldsSchema = z
-  .array(formFieldSchema)
-  .min(1)
-  .max(20)
-  .refine(
-    (fields) => new Set(fields.map((field) => field.name)).size === fields.length,
-    { message: 'Field names must be unique — a duplicate name silently drops the earlier value on submit' }
-  );
 
 export const formTools = {
   provision_form_target: tool({
@@ -50,8 +37,12 @@ export const formTools = {
     inputSchema: z.object({
       sheetPageId: z.string().describe('The target SHEET page that will receive one new row per submission'),
       fields: formFieldsSchema,
+      canvasPageId: z
+        .string()
+        .optional()
+        .describe('The Canvas page formHtml will be embedded into, if known — lets the Forms settings UI find and manage this target later'),
     }),
-    execute: async ({ sheetPageId, fields }, { experimental_context: context }) => {
+    execute: async ({ sheetPageId, fields, canvasPageId }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -68,6 +59,7 @@ export const formTools = {
           fields,
           createdBy: userId,
           mutationContext: { userId, isAiGenerated: true },
+          canvasPageId,
         });
 
         const submitUrl = `${getWebAppUrl()}/api/public/forms/${token}/submit`;

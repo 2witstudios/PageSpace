@@ -66,6 +66,17 @@ describe('buildFormHtml', () => {
     expect(html).not.toContain('&amp;b=');
   });
 
+  it('omits an archived field from the rendered form', () => {
+    const withArchived: FormFieldDef[] = [
+      { name: 'name', label: 'Name', type: 'text', required: true },
+      { name: 'email', label: 'Email', type: 'email', required: true, archived: true },
+    ];
+    const html = buildFormHtml({ fields: withArchived, submitUrl: 'https://app.pagespace.ai/api/public/forms/tok/submit' });
+
+    expect(html).toContain('name="name"');
+    expect(html).not.toContain('name="email"');
+  });
+
   it('does not let a formId containing "</script>" break out of the inline script block', () => {
     const html = buildFormHtml({
       fields,

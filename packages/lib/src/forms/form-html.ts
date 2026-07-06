@@ -20,7 +20,14 @@ export interface BuildFormHtmlInput {
   formId?: string;
 }
 
-function buildFieldMarkup(field: FormFieldDef): string {
+/**
+ * Markup for a single field — a `<label>` wrapping its control. Exported so a
+ * form-target edit that appends one new field (which can't safely regenerate
+ * the whole embedded <form>, since the original submit token isn't
+ * recoverable after creation) can return just this one field's snippet for
+ * the user to paste into their existing embedded form.
+ */
+export function buildFieldMarkup(field: FormFieldDef): string {
   const safeName = escapeHtml(field.name);
   const safeLabel = escapeHtml(field.label);
   const requiredAttr = field.required ? ' required' : '';
@@ -43,7 +50,7 @@ function buildFieldMarkup(field: FormFieldDef): string {
  */
 export function buildFormHtml({ fields, submitUrl, formId = 'pagespace-form' }: BuildFormHtmlInput): string {
   const safeFormId = escapeHtml(formId);
-  const fieldsMarkup = fields.map(buildFieldMarkup).join('\n');
+  const fieldsMarkup = fields.filter((field) => !field.archived).map(buildFieldMarkup).join('\n');
 
   return `<form id="${safeFormId}">
 ${fieldsMarkup}
