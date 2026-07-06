@@ -50,6 +50,8 @@ export * from './schema/custom-domains';
 export * from './schema/incidents';
 export * from './schema/data-subject-requests';
 export * from './schema/oauth';
+export * from './schema/machine-sessions';
+export * from './schema/machine-projects';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -103,6 +105,8 @@ import * as customDomains from './schema/custom-domains';
 import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
 import * as oauth from './schema/oauth';
+import * as machineSessions from './schema/machine-sessions';
+import * as machineProjects from './schema/machine-projects';
 
 export const schema = {
   ...auth,
@@ -157,4 +161,6 @@ export const schema = {
   ...incidents,
   ...dataSubjectRequests,
   ...oauth,
+  ...machineSessions,
+  ...machineProjects,
 };

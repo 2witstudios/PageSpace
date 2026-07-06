@@ -1,5 +1,5 @@
 {
-  "id": "537dbecc-1b53-42c9-badb-5a4e04db238a",
+  "id": "f840b28c-7767-4980-9b67-88a04744b5b4",
   "prevId": "514ea963-4876-4889-b039-be7602174e7f",
   "version": "7",
   "dialect": "postgresql",
@@ -15926,6 +15926,157 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
+    "public.sandbox_sessions": {
+      "name": "sandbox_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "sessionKey": {
+          "name": "sessionKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversationId": {
+          "name": "conversationId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tenantId": {
+          "name": "tenantId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sandboxId": {
+          "name": "sandboxId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lastActiveAt": {
+          "name": "lastActiveAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "sandbox_sessions_conversation_id_idx": {
+          "name": "sandbox_sessions_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "conversationId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sandbox_sessions_last_active_at_idx": {
+          "name": "sandbox_sessions_last_active_at_idx",
+          "columns": [
+            {
+              "expression": "lastActiveAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "sandbox_sessions_conversationId_conversations_id_fk": {
+          "name": "sandbox_sessions_conversationId_conversations_id_fk",
+          "tableFrom": "sandbox_sessions",
+          "tableTo": "conversations",
+          "columnsFrom": [
+            "conversationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sandbox_sessions_driveId_drives_id_fk": {
+          "name": "sandbox_sessions_driveId_drives_id_fk",
+          "tableFrom": "sandbox_sessions",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sandbox_sessions_userId_users_id_fk": {
+          "name": "sandbox_sessions_userId_users_id_fk",
+          "tableFrom": "sandbox_sessions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "sandbox_sessions_sessionKey_unique": {
+          "name": "sandbox_sessions_sessionKey_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "sessionKey"
+          ]
+        }
+      }
+    },
     "public.terminal_sessions": {
       "name": "terminal_sessions",
       "schema": "",
@@ -18316,6 +18467,233 @@
           ]
         }
       }
+    },
+    "public.machine_sessions": {
+      "name": "machine_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "sessionKey": {
+          "name": "sessionKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ownerId": {
+          "name": "ownerId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sandboxId": {
+          "name": "sandboxId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lastActiveAt": {
+          "name": "lastActiveAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "machine_sessions_last_active_at_idx": {
+          "name": "machine_sessions_last_active_at_idx",
+          "columns": [
+            {
+              "expression": "lastActiveAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "machine_sessions_ownerId_users_id_fk": {
+          "name": "machine_sessions_ownerId_users_id_fk",
+          "tableFrom": "machine_sessions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "machine_sessions_sessionKey_unique": {
+          "name": "machine_sessions_sessionKey_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "sessionKey"
+          ]
+        }
+      }
+    },
+    "public.machine_projects": {
+      "name": "machine_projects",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "ownerId": {
+          "name": "ownerId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "machineKind": {
+          "name": "machineKind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "terminalId": {
+          "name": "terminalId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "machineKey": {
+          "name": "machineKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "repoUrl": {
+          "name": "repoUrl",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "path": {
+          "name": "path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "machine_projects_machine_key_idx": {
+          "name": "machine_projects_machine_key_idx",
+          "columns": [
+            {
+              "expression": "machineKey",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "machine_projects_machine_key_name_idx": {
+          "name": "machine_projects_machine_key_name_idx",
+          "columns": [
+            {
+              "expression": "machineKey",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "machine_projects_ownerId_users_id_fk": {
+          "name": "machine_projects_ownerId_users_id_fk",
+          "tableFrom": "machine_projects",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "machine_projects_terminalId_pages_id_fk": {
+          "name": "machine_projects_terminalId_pages_id_fk",
+          "tableFrom": "machine_projects",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "terminalId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
     }
   },
   "enums": {
