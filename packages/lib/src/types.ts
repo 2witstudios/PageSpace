@@ -96,6 +96,12 @@ export interface Drive {
   // Drive-wide default social share image for published pages lacking their own.
   // Optional: predates the field on zustand-persisted Drive objects.
   publishDefaultOgImageUrl?: string | null;
+  // Canvas page rendered as the published site's 404.html. Optional: predates
+  // the field on zustand-persisted Drive objects.
+  notFoundPageId?: string | null;
+  // Drive-wide favicon override for published pages lacking their own <link rel="icon">.
+  // Optional: predates the field on zustand-persisted Drive objects.
+  publishFaviconUrl?: string | null;
 }
 
 // Inbox types for unified DM/Channel inbox

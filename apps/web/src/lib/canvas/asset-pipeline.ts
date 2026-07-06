@@ -179,6 +179,51 @@ function resolvePublishAsset(row: FilePageRow, kind: FileReferenceKind): Publish
   }
 }
 
+/**
+ * Resolve an uploaded FILE page to a durable public CDN URL, copying it to the
+ * publish bucket if needed (idempotent — see `copyObjectToPublishBucket`).
+ *
+ * Used wherever a user picks one of their own uploaded files as an image
+ * reference (OG image, favicon) instead of pasting a URL: `/api/files/{id}/view`
+ * and `/dashboard/.../view` both require auth, so a pasted link to one of those
+ * silently fails for anonymous site visitors. Resolving through this function
+ * — the same resolution `rewriteCanvasAssets` already applies to canvas-embedded
+ * images — turns the reference into a URL that actually loads publicly.
+ *
+ * Returns null when the page doesn't exist, is trashed, isn't viewable by
+ * `userId`, isn't in `driveId`, or has no resolvable asset (e.g. no
+ * contentHash yet).
+ */
+export async function resolveUploadedImageAssetUrl(params: {
+  fileId: string;
+  driveId: string;
+  userId: string;
+  db: Pick<typeof DbType, 'query'>;
+}): Promise<string | null> {
+  const { fileId, driveId, userId, db } = params;
+
+  const row = (await db.query.pages.findFirst({
+    where: and(eq(pages.id, fileId), eq(pages.isTrashed, false)),
+    columns: { id: true, driveId: true, contentHash: true, mimeType: true, extractionMetadata: true },
+  })) as FilePageRow | undefined;
+  if (!row) return null;
+  // Scope to the drive being configured — same precondition rewriteCanvasAssets
+  // enforces for dashboard-style file references (line ~255 below). Without
+  // this, a user with mere view access to a file in an unrelated drive (e.g. a
+  // page shared with them individually) could make it publicly served as
+  // another drive's OG image/favicon — view access isn't consent to publish.
+  if (row.driveId !== driveId) return null;
+
+  const canView = await canUserViewPage(userId, fileId).catch(() => false);
+  if (!canView) return null;
+
+  const asset = resolvePublishAsset(row, 'view');
+  if (!asset) return null;
+
+  await copyObjectToPublishBucket(asset);
+  return buildAssetUrlFromKey(asset.assetKey);
+}
+
 async function filterViewableRows(userId: string, rows: FilePageRow[]): Promise<FilePageRow[]> {
   const checks = await Promise.all(
     rows.map(async (row) => ({

@@ -7,6 +7,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Custom 404 pages for published Canvas sites** — pick any Canvas page in a drive's Domains &
+  Publishing settings to serve as the site's 404 page, instead of the generic branded fallback.
+- **Drive-wide favicon setting** — set a favicon for a published site (previously only settable by
+  hand-authoring a `<link rel="icon">` tag inside a canvas page).
+- **Pick an uploaded image for OG share image / favicon** — the Domains & Publishing settings and
+  the per-page publish dialog now offer a "browse uploaded files" picker as an alternative to
+  pasting a URL. Picking a file resolves it to a durable public link, fixing links to your own
+  uploaded files that previously required sign-in and silently failed to load for site visitors.
+
 - **21 new sandbox git/GitHub tools** — agents with code execution can now edit PR titles and
   descriptions (`gh_pr_edit`), leave top-level PR and issue comments, edit/close/reopen issues,
   discover repositories (`gh_repo_view`/`gh_repo_list`), search GitHub code/issues/PRs/repos
