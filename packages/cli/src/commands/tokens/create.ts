@@ -20,6 +20,7 @@
 import { randomBytes } from 'node:crypto';
 import { PAGESPACE_CLI_CLIENT_ID } from '../../auth/client.js';
 import { resolveConfig } from '../../config/resolve.js';
+import { DEFAULT_PROFILE_NAME } from '../../credentials/serialize.js';
 import { createCredentialStore } from '../../credentials/store.js';
 import type { CredentialStore } from '../../credentials/store.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../exit-codes.js';
@@ -103,11 +104,22 @@ export function buildTokenScope(drives: readonly DriveScopeArg[]): BuildTokenSco
 
 export type ResolveTokenProfileNameResult = { readonly ok: true; readonly name: string } | { readonly ok: false; readonly message: string };
 
-/** `--save-as-profile` if given, else the sole drive's id — ambiguous for multiple drives. */
+/**
+ * `--save-as-profile` if given, else the sole drive's id — ambiguous for
+ * multiple drives. The `"default"` name is refused outright: that slot holds
+ * the personal credential `pagespace login` stores, and letting a scoped
+ * token land there would let either credential silently clobber the other.
+ */
 export function resolveTokenProfileName({
   saveAsProfile,
   drives,
 }: Pick<CreateTokenArgs, 'saveAsProfile' | 'drives'>): ResolveTokenProfileNameResult {
+  if (saveAsProfile === DEFAULT_PROFILE_NAME) {
+    return {
+      ok: false,
+      message: `--save-as-profile "${DEFAULT_PROFILE_NAME}" is reserved for the personal credential stored by "pagespace login". Choose another profile name.`,
+    };
+  }
   if (saveAsProfile !== undefined) {
     return { ok: true, name: saveAsProfile };
   }
