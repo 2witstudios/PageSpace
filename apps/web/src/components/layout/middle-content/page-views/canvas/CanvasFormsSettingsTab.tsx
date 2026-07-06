@@ -294,7 +294,13 @@ export default function CanvasFormsSettingsTab({ pageId, content, onContentChang
           toast.error(await readError(res));
           return;
         }
-        onContentChange(deleteFormBlock({ content, formTargetId }));
+        // A no-op for an "orphaned" target (its tag already isn't in
+        // content) — skip the save rather than re-persisting identical
+        // content and needlessly marking the document dirty.
+        const nextContent = deleteFormBlock({ content, formTargetId });
+        if (nextContent !== content) {
+          onContentChange(nextContent);
+        }
         toast.success('Form deleted');
         await loadFormTargets();
       } catch {
