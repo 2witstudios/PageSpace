@@ -75,9 +75,9 @@ export function resolveAuth(
     return { kind: 'env', token: envToken };
   }
 
-  const credential = profiles[host]?.[profileName];
-  if (credential) {
-    return { kind: 'profile', host, profileName, credential };
+  const hostProfiles = profiles[host];
+  if (hostProfiles !== undefined && Object.hasOwn(hostProfiles, profileName)) {
+    return { kind: 'profile', host, profileName, credential: hostProfiles[profileName] };
   }
 
   return { kind: 'none', host };

@@ -144,6 +144,35 @@ describe('resolveAuth — named profiles (Phase 8 task 3)', () => {
   });
 });
 
+describe('resolveAuth — prototype-named profiles are ordinary data, never Object.prototype lookups', () => {
+  const PROTOTYPE_NAMES = ['__proto__', 'constructor', 'toString'] as const;
+
+  it('a prototype-named profile that was never stored resolves to none, not a bogus Object.prototype credential', () => {
+    const profiles = { [HOST]: { default: CREDENTIAL } };
+    for (const name of PROTOTYPE_NAMES) {
+      expect(resolveAuth({}, {}, profiles, HOST, name)).toEqual({ kind: 'none', host: HOST });
+    }
+  });
+
+  it('a prototype-named profile that was never stored resolves to none even with no profiles for the host at all', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      expect(resolveAuth({}, {}, {}, HOST, name)).toEqual({ kind: 'none', host: HOST });
+    }
+  });
+
+  it('stores and resolves a genuinely prototype-named profile like any other name', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      const profiles = { [HOST]: { [name]: CREDENTIAL } };
+      expect(resolveAuth({}, {}, profiles, HOST, name)).toEqual({
+        kind: 'profile',
+        host: HOST,
+        profileName: name,
+        credential: CREDENTIAL,
+      });
+    }
+  });
+});
+
 describe('resolveProfileName — precedence table', () => {
   it('flag alone -> flag value', () => {
     expect(resolveProfileName({ profile: 'work' }, {})).toBe('work');
