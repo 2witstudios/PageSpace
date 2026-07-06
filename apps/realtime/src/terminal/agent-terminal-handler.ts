@@ -2,6 +2,7 @@ import type { TerminalSessionMap, TerminalSession } from './terminal-session-map
 import { DETACHED_IDLE_MS } from './terminal-session-map';
 import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
 import { validateAgentTerminalConnectPayload, clampTerminalDimensions } from './validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -157,6 +158,11 @@ export function buildAgentTerminalHandlers({
           sessionId: authResult.streamSessionId ?? undefined,
           command: authResult.command,
           args: authResult.args,
+          // A branch-terminal's repo is always cloned here (spawnBranch /
+          // machine-branches.ts) — a fresh agent terminal must start inside
+          // it, not at the Sprite's bare sandbox root, or "a terminal IS a
+          // worktree" would require the agent to `cd` there itself first.
+          cwd: BRANCH_REPO_PATH,
           onOutput: (data) => {
             session.scrollback.push(data);
             session.outputFn(data);

@@ -3,6 +3,7 @@ import { buildAgentTerminalHandlers, MAX_INPUT_BYTES } from '../agent-terminal-h
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { AgentTerminalCheckAuthFn, OpenShellFn, SocketLike } from '../agent-terminal-handler';
 import type { PtyShell } from '../sprites-shell';
+import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
 
 function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: ReturnType<typeof vi.fn> } {
   return { id, data: { user: { id: userId } }, emit: vi.fn() };
@@ -78,6 +79,13 @@ describe('buildAgentTerminalHandlers', () => {
         expect.objectContaining({ cols: 80, rows: 24, command: 'pagespace-cli', args: [] }),
       );
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', {});
+    });
+
+    it('given a fresh session, should launch inside the branch\'s cloned repo, not the bare sandbox root', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ cwd: BRANCH_REPO_PATH }));
     });
 
     it('given a claude agent terminal, should launch claude instead of pagespace-cli', async () => {
