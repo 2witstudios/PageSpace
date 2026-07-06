@@ -72,6 +72,8 @@ describe('createLoginDeviceHandler', () => {
     expect(allOutput).toContain(AUTHORIZATION.userCode);
     expect(allOutput).toContain(AUTHORIZATION.verificationUriComplete);
     expect(allOutput).toContain('ada@example.com');
+    expect(allOutput).toContain(FIXED_TOKENS.scope);
+    expect(allOutput).toMatch(/personal account access/i);
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
   });

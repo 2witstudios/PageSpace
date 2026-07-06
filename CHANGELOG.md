@@ -26,11 +26,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   agents as visual context (capped at 5 images per consultation, matching the per-message chat
   limit). Agents without a vision-capable model get a text note instead, so they know an
   attachment existed but couldn't be viewed.
+- **`packages/cli/docs/agent-access.md`** — states plainly what a scoped `pagespace tokens create`
+  credential does and doesn't protect against: it limits what a leaked/misused credential can do,
+  not who else on the same machine can use it. A process with real shell access reads whatever its
+  OS user can read, credential store included — no CLI feature changes that. The actual isolation
+  boundary is a dedicated OS user, container, or VM that receives only a scoped token via
+  `PAGESPACE_TOKEN`.
 
 ### Changed
 
-- The MCP integration docs and the Settings > MCP page now lead with `pagespace login` for
-  personal use, keeping token creation for agents, CI, and drive-scoped access.
+- **`pagespace login` is for you, personally; `pagespace tokens create` is for an agent** — the
+  README, `docs/agent-access.md`, and the Settings > MCP page now say this explicitly and point
+  agent/MCP setups at `pagespace tokens create --drive <id> --save-as-profile agent` (paired with
+  `--profile agent` / `PAGESPACE_PROFILE`) instead of `pagespace login`, which grants full personal
+  account access.
+- **`pagespace login` (and `--device`) now print the scope granted on success**, e.g. `Scope:
+  account offline_access — this is your full personal account access.`, bringing it to parity with
+  `whoami`, which already reported scope.
+- **`pagespace help` is grouped by resource** (Auth, Drives, Pages, Search, Tasks, Agents, Tokens,
+  MCP, Other) with one runnable example per group, replacing the previous flat ~46-line list.
 
 ### Deprecated
 

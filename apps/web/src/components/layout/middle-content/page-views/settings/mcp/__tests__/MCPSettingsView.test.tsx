@@ -367,13 +367,15 @@ describe('MCPSettingsView — Quick MCP Setup', () => {
     });
   });
 
-  it('mentions `pagespace login` and that PAGESPACE_TOKEN can be omitted afterward, on the Global install tab', async () => {
+  it('steers agent MCP setup toward `tokens create --save-as-profile agent`, not `pagespace login`, on the Global install tab', async () => {
     await renderView();
 
     const setupCard = screen.getByText('Quick MCP Setup').closest('[data-slot="card"]') as HTMLElement;
     expect(within(setupCard).getByText(/pagespace login/)).toBeInTheDocument();
+    expect(within(setupCard).getByText(/tokens create --drive/)).toBeInTheDocument();
     expect(within(setupCard).getByText('PAGESPACE_TOKEN', { selector: 'code' })).toBeInTheDocument();
-    expect(within(setupCard).getByText(/reuse your stored credential/i)).toBeInTheDocument();
+    expect(within(setupCard).getByText(/PAGESPACE_PROFILE/)).toBeInTheDocument();
+    expect(within(setupCard).getByText(/reuse that scoped credential/i)).toBeInTheDocument();
   });
 
   it('switching to the No install (npx) tab hides the install step and emits an npx config', async () => {

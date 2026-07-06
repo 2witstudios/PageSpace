@@ -642,11 +642,15 @@ export default function MCPSettingsView() {
         </Button>
         <h1 className="text-3xl font-bold mb-6">MCP Integration</h1>
         <p className="mb-8 text-muted-foreground">
-          Connect Claude Code, Claude Desktop, and other MCP clients to PageSpace. For your own
-          machine, the <code className="rounded bg-muted px-1">pagespace</code> CLI&apos;s{' '}
-          <code className="rounded bg-muted px-1">pagespace login</code> is the fastest path — no
-          token to copy. The tokens below are for agents, CI, and service accounts, or whenever you
-          want access scoped to specific drives.
+          Connect Claude Code, Claude Desktop, and other MCP clients to PageSpace.{' '}
+          <code className="rounded bg-muted px-1">pagespace login</code> is for you, personally —
+          it grants your full personal account access, so it isn&apos;t the right choice for an
+          agent or MCP client. For an agent, CI job, or service account, mint a token scoped to
+          specific drives instead — either below, or from the terminal with{' '}
+          <code className="rounded bg-muted px-1">
+            pagespace tokens create --drive &lt;id&gt; --save-as-profile agent
+          </code>
+          .
         </p>
       </div>
 
@@ -1024,10 +1028,15 @@ export default function MCPSettingsView() {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   This installs <code className="rounded bg-muted px-1">pagespace mcp</code>, which the
-                  config below points at. Run <code className="rounded bg-muted px-1">pagespace login</code>{' '}
-                  once to authenticate in your browser — afterward you can remove{' '}
-                  <code className="rounded bg-muted px-1">PAGESPACE_TOKEN</code> from the config below and
-                  the MCP will reuse your stored credential.
+                  config below points at. Don&apos;t authenticate it with{' '}
+                  <code className="rounded bg-muted px-1">pagespace login</code> — that&apos;s your
+                  personal account access. Instead run{' '}
+                  <code className="rounded bg-muted px-1">
+                    pagespace tokens create --drive &lt;id&gt; --save-as-profile agent
+                  </code>{' '}
+                  once, then swap <code className="rounded bg-muted px-1">PAGESPACE_TOKEN</code> in the
+                  config below for <code className="rounded bg-muted px-1">PAGESPACE_PROFILE: &quot;agent&quot;</code>{' '}
+                  — the MCP will reuse that scoped credential instead of a portable token.
                 </p>
               </div>
 

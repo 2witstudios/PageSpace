@@ -49,8 +49,8 @@ export { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from './exit-codes
 export type { ExitCode } from './exit-codes.js';
 
 // Built-in commands.
-export { createHelpHandler } from './commands/help.js';
-export type { HelpCommandDescriptor } from './commands/help.js';
+export { createHelpHandler, groupHelpCommands } from './commands/help.js';
+export type { HelpCommandDescriptor, HelpGroup } from './commands/help.js';
 export { helpHandler, ROUTES } from './router/routes.js';
 export type { RouteEntry } from './router/routes.js';
 export { CLI_VERSION, versionHandler } from './commands/version.js';
