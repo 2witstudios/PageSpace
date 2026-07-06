@@ -22,6 +22,8 @@ const companyLinks = [
   { label: "Contact", href: "/contact" },
   { label: "Privacy", href: "/privacy" },
   { label: "Terms", href: "/terms" },
+  { label: "Cookies", href: "/cookies" },
+  { label: "Subprocessors", href: "/subprocessors" },
 ];
 
 function FooterLinkGroup({ title, links }: { title: string; links: { label: string; href: string }[] }) {
