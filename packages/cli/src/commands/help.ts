@@ -77,16 +77,21 @@ export function groupHelpCommands(commands: readonly HelpCommandDescriptor[]): r
   })).filter((group) => group.commands.length > 0);
 }
 
-function commandLines(commands: readonly HelpCommandDescriptor[]): string[] {
-  const entries = commands.map((c) => ({ name: c.path.join(' '), summary: c.summary }));
-  const width = Math.max(...entries.map((e) => e.name.length));
-  return entries.map((e) => `    ${e.name.padEnd(width)}  ${e.summary}`);
+function commandLines(commands: readonly HelpCommandDescriptor[], width: number): string[] {
+  return commands.map((c) => `    ${c.path.join(' ').padEnd(width)}  ${c.summary}`);
 }
 
+/**
+ * The summary column's width is computed once across every command in every
+ * group (not per group) so the column lines up across group boundaries —
+ * e.g. Auth's longest name ("whoami") is much shorter than Tokens', but both
+ * groups' summaries still start in the same place.
+ */
 function groupedLines(groups: readonly HelpGroup[]): string[] {
+  const width = Math.max(...groups.flatMap((group) => group.commands.map((c) => c.path.join(' ').length)));
   return groups.flatMap((group) => [
     `${group.title}:`,
-    ...commandLines(group.commands),
+    ...commandLines(group.commands, width),
     `    e.g. ${group.example}`,
     '',
   ]);

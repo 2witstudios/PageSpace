@@ -69,6 +69,24 @@ describe('helpHandler', () => {
     expect(output).toContain('e.g. pagespace login');
     expect(output).toContain('e.g. pagespace tokens create --drive <id> --role member --save-as-profile agent');
   });
+
+  it('aligns the summary column consistently across every group, not just within each group', async () => {
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout });
+    const intent = parseArgv(['help']);
+    if (intent.kind !== 'command') throw new Error('expected command');
+
+    await helpHandler(ctx, intent);
+
+    const lines = stdout.lines.join('').split('\n');
+    // Auth's longest command name ("whoami") is much shorter than Tokens'
+    // ("tokens create"), so a per-group column width would misalign them.
+    const authLine = lines.find((line) => line.includes('Log in'))!;
+    const tokensLine = lines.find((line) => line.includes('Mint a new MCP access token'))!;
+    expect(authLine).toBeDefined();
+    expect(tokensLine).toBeDefined();
+    expect(authLine.indexOf('Log in')).toBe(tokensLine.indexOf('Mint a new MCP access token'));
+  });
 });
 
 describe('groupHelpCommands', () => {
