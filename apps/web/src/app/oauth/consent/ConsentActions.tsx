@@ -91,6 +91,14 @@ export function ConsentActions(props: ConsentActionsProps) {
             setIsSubmitting(false);
             return;
           }
+          // Any other ceremony failure (most commonly the user dismissing or
+          // cancelling the browser's WebAuthn prompt) must not leave the
+          // button stuck showing "Confirming…" — explicitly drop back to
+          // idle and clear any token so a retry starts a genuinely fresh
+          // ceremony. The outer catch below still surfaces the user-facing
+          // error and re-enables the buttons.
+          setStepUpStatus('idle');
+          setStepUpToken(null);
           throw ceremonyError;
         }
         setStepUpToken(token);
