@@ -27,7 +27,7 @@ import {
   type ResolveSandboxContext,
   type SandboxGate,
 } from './sandbox-tools';
-import type { MachineRef } from './machine-ref';
+import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 import type { ToolExecutionContext } from '../core/types';
 
 // Optional per-call working directory, relative to the sandbox root (/workspace).

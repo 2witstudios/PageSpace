@@ -5,7 +5,7 @@
 
 import { ModelCapabilities } from './model-capabilities';
 import type { CommandExecutionData } from './command-processor';
-import type { MachineRef } from '../tools/machine-ref';
+import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
 export interface ToolExecutionContext {
   userId: string;

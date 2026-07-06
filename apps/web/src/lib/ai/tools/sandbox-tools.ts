@@ -31,9 +31,23 @@ import {
 import { MAX_COMMAND_BYTES } from '@pagespace/lib/services/sandbox/command-policy';
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
 import type { ToolExecutionContext } from '../core/types';
-import { type MachineRef, machineRefEquals, machineRefFromId, machineRefId } from './machine-ref';
+import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
 export const MAX_PATH_LENGTH = 1024;
+
+/** Stable id for a MachineRef, used as the agent-facing handle in list_machines/switch_machine. */
+export function machineRefId(machine: MachineRef): string {
+  return machine.kind === 'own' ? 'own' : machine.terminalId;
+}
+
+export function machineRefEquals(a: MachineRef, b: MachineRef): boolean {
+  return machineRefId(a) === machineRefId(b);
+}
+
+/** Resolves an agent-facing id (from switch_machine's input) back to a configured MachineRef. */
+export function machineRefFromId(id: string, configured: MachineRef[]): MachineRef | undefined {
+  return configured.find((m) => machineRefId(m) === id);
+}
 
 export const bashInputSchema = z
   .object({
@@ -86,9 +100,12 @@ export interface MachineDescriptor {
 
 /**
  * Resolves an actor's configured machines and their metadata/accessibility.
- * Config-model seam: until the sibling "Config model" PR ships
- * `machines: MachineRef[]` on agent config, production wires `listMachines`
- * to a fixed `[{ kind: 'own' }]` — every actor has exactly one machine.
+ * `PageAgentConfig.terminalAccess`/`machines` (apps/web/src/lib/repositories/
+ * page-agent-repository.ts) is the canonical config source, but wiring it
+ * into `ToolExecutionContext` per-turn is the sibling "route tools to the
+ * active machine" PR's job — until that lands, production wires
+ * `listMachines` to a fixed `[{ kind: 'own' }]` (every actor has exactly one
+ * machine).
  */
 export interface MachineDirectoryDeps {
   /** List this actor's configured machines; machines[0] is the default active machine. */

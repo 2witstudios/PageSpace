@@ -303,9 +303,11 @@ const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
  * Factory for the machine directory, with injected deps for testing. The
  * default export (`machineDirectory`) wires the real DB.
  *
- * Config-model seam: until the sibling "Config model" PR ships
- * `machines: MachineRef[]` on agent config, `listMachines` always returns
- * `[{ kind: 'own' }]` — every actor has exactly one configured machine. The
+ * `PageAgentConfig.terminalAccess`/`machines` (apps/web/src/lib/repositories/
+ * page-agent-repository.ts) is the canonical config source, but reading it
+ * per-turn into `ToolExecutionContext` is the sibling "route tools to the
+ * active machine" PR's job — until that lands, `listMachines` always returns
+ * `[{ kind: 'own' }]` (every actor has exactly one configured machine). The
  * 'existing' branches below are exercised today only via the pure factory's
  * unit tests (injected fakes); they'll become reachable once that PR wires a
  * real `machines[]` source into `ToolExecutionContext`.
