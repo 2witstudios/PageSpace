@@ -89,6 +89,31 @@ embedded NUL bytes (confirmed via `file`, reads as text, not binary).
 Local validation: `@pagespace/lib`, `web`, and `@pagespace/cli` typecheck clean; the touched
 `ConnectedAppsList.test.tsx` suite (8 tests) passes.
 
+## Round-9 — CI failure root-caused as a Phase 8/Phase 9 merge-boundary conflict (HEAD `24ee98e4e`)
+
+`ci / Unit Tests` failed after the round-8 push: 4 tests in
+`apps/web/src/app/api/auth/mcp-tokens/{__tests__,[tokenId]/__tests__}/manage-keys-scope.test.ts`
+expected 200/403 but got 401. Root cause (via `git log -p`/`git show` across both merge parents):
+master's Phase 9 foundation (`8f1e2436b`) added these tests against its own pre-Phase-8 state where
+`AUTH_OPTIONS_WRITE`/`AUTH_OPTIONS_PATCH` allowed `['session','oauth']`; this branch's own Task 1
+commit (`f18ca87a2`) independently tightened both to `['session']` + added the step-up gate (per
+this phase's own Law: minting/escalating must never accept a bearer/refresh token alone). The merge
+combined both changes without reconciling — the tests still asserted the old, pre-hardening
+behavior. This is **not** a production security regression: the step-up gate was already correctly
+blocking every credential shape, including a manage_keys-only OAuth credential, exactly as this
+phase's Law requires (a manage_keys OAuth token is itself an ambient secret with no special
+exemption — the epic's own scope note confirms Phase 9's key-management flows call through this
+phase's existing session + browser-consent minting path, not a raw bearer POST). Fixed by updating
+the two test files' POST/PATCH assertions from 200/403 to 401 `step_up_required`; GET/DELETE
+assertions (which exercise the real, still-working manage_keys carve-out, since revocation/listing
+never escalate) were untouched. Full writeup recorded on the PageSpace epic board
+(`nfy6g0c1c4c15iguiyozfjga`, "round 7" findings).
+
+Also discovered the inline `// codeql[...]` suppression comment added in round-8 does **not**
+actually suppress CodeQL alerts in this repo's setup — the alert re-fired on the next analysis run
+regardless. Dismissed alert #250 directly via the code-scanning API instead (the mechanism that
+actually works) and removed the dead comment.
+
 ## Verdict
 
 **0 blockers / 0 majors open · 3 minors/nits open (all pre-existing, non-blocking, tracked
