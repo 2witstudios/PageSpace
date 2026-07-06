@@ -7,9 +7,10 @@
  * scrub itself is proven against real logActivity/anonymizeForUser code in
  * packages/lib/src/monitoring/__tests__/anonymize-resource-title.test.ts —
  * this test only verifies the worker's step wiring (order + arguments), so
- * every collaborator is mocked, matching this repo's convention of not
- * exercising cross-package (@pagespace/lib) internals from apps/processor
- * worker tests.
+ * every collaborator is mocked. (Vitest's mock registry can't intercept
+ * @pagespace/db/db from within @pagespace/lib's compiled dist output when
+ * imported cross-package like this, so partial-mocking real logActivity here
+ * would hit a live Postgres connection instead of a fake — hence the split.)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 

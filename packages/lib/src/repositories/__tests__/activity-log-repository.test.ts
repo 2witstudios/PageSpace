@@ -10,12 +10,7 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
-  activityLogs: {
-    userId: 'userId',
-    actorEmail: 'actorEmail',
-    actorDisplayName: 'actorDisplayName',
-    resourceTitle: 'resourceTitle',
-  },
+  activityLogs: { userId: 'userId', actorEmail: 'actorEmail', actorDisplayName: 'actorDisplayName' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
