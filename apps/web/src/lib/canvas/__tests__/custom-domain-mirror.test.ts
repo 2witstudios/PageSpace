@@ -13,7 +13,14 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 
 vi.mock('@pagespace/db/schema/custom-domains', () => ({
-  customDomains: { driveId: 'customDomains.driveId', hostname: 'customDomains.hostname', status: 'customDomains.status', createdAt: 'customDomains.createdAt' },
+  customDomains: {
+    driveId: 'customDomains.driveId',
+    hostname: 'customDomains.hostname',
+    status: 'customDomains.status',
+    createdAt: 'customDomains.createdAt',
+    isPrimary: 'customDomains.isPrimary',
+    platformOwned: 'customDomains.platformOwned',
+  },
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -516,6 +523,27 @@ describe('getActiveDomainRecords', () => {
 
   it('returns empty array when no active domains', async () => {
     mockSelect([{ hostname: 'pending.example.com', status: 'pending', createdAt: new Date() }]);
+
+    const records = await getActiveDomainRecords('drive-1');
+
+    expect(records).toHaveLength(0);
+  });
+
+  it('excludes platformOwned rows even when active, so they never win primary-host selection', async () => {
+    const createdAt = new Date('2026-01-01T00:00:00.000Z');
+    mockSelect([
+      { hostname: 'pagespace.ai', status: 'active', createdAt, platformOwned: true },
+      { hostname: 'custom.example.com', status: 'active', createdAt, platformOwned: false },
+    ]);
+
+    const records = await getActiveDomainRecords('drive-1');
+
+    expect(records).toHaveLength(1);
+    expect(records[0].hostname).toBe('custom.example.com');
+  });
+
+  it('is a no-op array when the only active domain is platformOwned', async () => {
+    mockSelect([{ hostname: 'pagespace.ai', status: 'active', createdAt: new Date(), platformOwned: true }]);
 
     const records = await getActiveDomainRecords('drive-1');
 

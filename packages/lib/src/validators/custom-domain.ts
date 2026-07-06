@@ -21,6 +21,15 @@ const BLOCKED_SUFFIXES = ['pagespace.ai', 'pagespace.site'];
 const BLOCKED_PATTERN = /\.pagespace\./;
 
 /**
+ * Platform-owned domains a platform admin may register as a custom domain
+ * (via `validateCustomDomain`'s `allowPlatformDomain` bypass) to alias a
+ * drive's published content onto the app's own domain. Shared by the domains
+ * API route so "what bypasses the blocklist" and "what gets inserted as
+ * `platformOwned`" never drift apart.
+ */
+export const PLATFORM_OWNED_DOMAINS = ['pagespace.ai'];
+
+/**
  * Normalize a raw hostname input:
  * - lowercase
  * - strip http:// or https:// scheme
@@ -52,9 +61,15 @@ export type DomainValidationResult = { valid: true } | { valid: false; reason: s
  * 1. Not empty, not exceeding 253 chars total.
  * 2. Has at least 2 labels (bare TLDs rejected).
  * 3. Each label: ≤63 chars, alphanumeric + hyphens, no leading/trailing hyphen.
- * 4. Not a pagespace.ai, pagespace.site, or *.pagespace.* host.
+ * 4. Not a pagespace.ai, pagespace.site, or *.pagespace.* host — unless
+ *    `opts.allowPlatformDomain` is explicitly set, which lets a platform admin
+ *    register a domain in {@link PLATFORM_OWNED_DOMAINS} as a custom domain.
+ *    Defaults to closed so every existing caller keeps rejecting these hosts.
  */
-export function validateCustomDomain(hostname: string): DomainValidationResult {
+export function validateCustomDomain(
+  hostname: string,
+  opts: { allowPlatformDomain?: boolean } = {},
+): DomainValidationResult {
   if (!hostname) {
     return { valid: false, reason: 'Domain cannot be empty' };
   }
@@ -84,14 +99,20 @@ export function validateCustomDomain(hostname: string): DomainValidationResult {
     }
   }
 
-  // Block platform-owned domains
-  for (const suffix of BLOCKED_SUFFIXES) {
-    if (hostname === suffix || hostname.endsWith(`.${suffix}`)) {
-      return { valid: false, reason: `Domain cannot be a pagespace.ai or pagespace.site host` };
+  // Block platform-owned domains — unless the caller explicitly allows it AND
+  // the hostname is exactly one of PLATFORM_OWNED_DOMAINS. The allowlist check
+  // lives here (not just in the caller) so `allowPlatformDomain: true` can
+  // never be used to smuggle through an arbitrary *.pagespace.* host.
+  const isAllowedPlatformDomain = opts.allowPlatformDomain && PLATFORM_OWNED_DOMAINS.includes(hostname);
+  if (!isAllowedPlatformDomain) {
+    for (const suffix of BLOCKED_SUFFIXES) {
+      if (hostname === suffix || hostname.endsWith(`.${suffix}`)) {
+        return { valid: false, reason: `Domain cannot be a pagespace.ai or pagespace.site host` };
+      }
     }
-  }
-  if (BLOCKED_PATTERN.test(hostname)) {
-    return { valid: false, reason: `Domain cannot be a pagespace.* host` };
+    if (BLOCKED_PATTERN.test(hostname)) {
+      return { valid: false, reason: `Domain cannot be a pagespace.* host` };
+    }
   }
 
   return { valid: true };
