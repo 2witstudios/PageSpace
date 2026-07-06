@@ -22,6 +22,12 @@ export interface UsageLedgerRow {
   provider: string | null;
   chargeMillicents: number | null;
   totalTokens: number | null;
+  /** The machine's backing Terminal page (source:'terminal' rows only; null for every other source). */
+  pageId: string | null;
+  /** The backing page's title, pre-joined by the query — null when the page was deleted or unresolvable. */
+  pageTitle: string | null;
+  /** Active-window duration in milliseconds (source:'terminal' rows only). */
+  durationMs: number | null;
 }
 
 export interface UsageBreakdownPeriod {
@@ -47,10 +53,22 @@ export interface UsageModelRow {
   sharePct: number;
 }
 
+export interface UsageMachineRow {
+  /** Null when the row predates pageId attribution or has no backing page (e.g. the global assistant). */
+  pageId: string | null;
+  label: string;
+  activeSeconds: number;
+  spendCents: number;
+  calls: number;
+  /** Share of TERMINAL spend (not overall spend) this machine accounts for. */
+  sharePct: number;
+}
+
 export interface UsageBreakdown extends UsageBreakdownPeriod {
   totalSpendCents: number;
   byFeature: UsageFeatureRow[];
   byModel: UsageModelRow[];
+  byMachine: UsageMachineRow[];
 }
 
 /** Internal accumulator (spend tracked in millicents for precision). */
@@ -76,7 +94,9 @@ export function aggregateUsageBreakdown(
 ): UsageBreakdown {
   const featureBuckets = new Map<AIUsageSource, Bucket>();
   const modelBuckets = new Map<string, Bucket & { model: string; provider: string }>();
+  const machineBuckets = new Map<string, { millicents: number; calls: number; activeSeconds: number; pageId: string | null; label: string }>();
   let totalMillicents = 0;
+  let terminalMillicents = 0;
 
   for (const r of rows) {
     const charge = r.chargeMillicents ?? 0;
@@ -99,6 +119,20 @@ export function aggregateUsageBreakdown(
     mb.tokens += tokens;
     mb.calls += 1;
     modelBuckets.set(key, mb);
+
+    if (source === 'terminal') {
+      terminalMillicents += charge;
+      // Rows without a resolvable page (pre-attribution history, or a machine with
+      // no backing page e.g. the global assistant) collapse into one bucket rather
+      // than being dropped, so terminal spend is never silently under-reported.
+      const machineKey = r.pageId ?? '__unattributed__';
+      const label = r.pageId ? (r.pageTitle ?? 'Untitled machine') : 'Unattributed machine';
+      const mkb = machineBuckets.get(machineKey) ?? { millicents: 0, calls: 0, activeSeconds: 0, pageId: r.pageId, label };
+      mkb.millicents += charge;
+      mkb.calls += 1;
+      mkb.activeSeconds += (r.durationMs ?? 0) / 1000;
+      machineBuckets.set(machineKey, mkb);
+    }
   }
 
   const byFeature: UsageFeatureRow[] = Array.from(featureBuckets.entries())
@@ -123,11 +157,23 @@ export function aggregateUsageBreakdown(
     }))
     .sort((a, b) => b.spendCents - a.spendCents);
 
+  const byMachine: UsageMachineRow[] = Array.from(machineBuckets.values())
+    .map((b) => ({
+      pageId: b.pageId,
+      label: b.label,
+      activeSeconds: Math.round(b.activeSeconds),
+      spendCents: millicentsToCents(b.millicents),
+      calls: b.calls,
+      sharePct: sharePct(b.millicents, terminalMillicents),
+    }))
+    .sort((a, b) => b.spendCents - a.spendCents);
+
   return {
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,
     totalSpendCents: millicentsToCents(totalMillicents),
     byFeature,
     byModel,
+    byMachine,
   };
 }

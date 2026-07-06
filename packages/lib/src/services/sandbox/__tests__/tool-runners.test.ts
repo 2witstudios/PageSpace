@@ -736,12 +736,12 @@ function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
   billing: NonNullable<SandboxRunDeps['billing']>;
   resolvePayerIdCalls: Array<{ tenantId: string; machinePageId?: string }>;
   gateCalls: Array<{ payerId: string }>;
-  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number }>;
+  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string }>;
   releaseHoldCalls: string[];
 } {
   const resolvePayerIdCalls: Array<{ tenantId: string; machinePageId?: string }> = [];
   const gateCalls: Array<{ payerId: string }> = [];
-  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number }> = [];
+  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string }> = [];
   const releaseHoldCalls: string[] = [];
   const billing: NonNullable<SandboxRunDeps['billing']> = {
     resolvePayerId: async (input) => {
@@ -874,6 +874,31 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     ]);
   });
 
+  it("forwards the resolved machinePageId as pageId to trackUsage, so usage-breakdown can attribute cost to the right machine", async () => {
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(3000);
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    const { billing, trackUsageCalls } = makeBilling();
+    const { deps } = makeDeps({ billing, reconnect: async () => sandbox, now: clock.now });
+
+    await runBashInSandbox({
+      command: 'echo hi',
+      ctx: makeCtx({
+        tenantId: 'acting-user',
+        activeMachine: { kind: 'existing', terminalId: 'other-terminal-page' },
+      }),
+      deps,
+    });
+
+    expect(trackUsageCalls).toEqual([
+      { payerId: 'acting-user', holdId: 'hold-1', activeSeconds: 3, pageId: 'other-terminal-page' },
+    ]);
+  });
+
   it("gates and settles usage against the PAYER resolvePayerId returns, not the raw tenantId, when they differ (owner-pays for a machine owned by someone else)", async () => {
     const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
     const sandbox = makeSandbox({
@@ -898,6 +923,8 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
 
     expect(result).toMatchObject({ success: true });
     expect(gateCalls).toEqual([{ payerId: 'real-owner-99' }]);
-    expect(trackUsageCalls).toEqual([{ payerId: 'real-owner-99', holdId: 'hold-1', activeSeconds: 2 }]);
+    expect(trackUsageCalls).toEqual([
+      { payerId: 'real-owner-99', holdId: 'hold-1', activeSeconds: 2, pageId: 'other-terminal-page' },
+    ]);
   });
 });

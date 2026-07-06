@@ -139,6 +139,18 @@ describe('defaultSandboxBillingDeps.trackUsage', () => {
     const call = mockTrackUsage.mock.calls[0][0];
     expect(call.providerCostDollars).toBe(0);
   });
+
+  it('forwards pageId to AIMonitoring.trackUsage so usage-breakdown can attribute spend per machine', async () => {
+    mockTrackUsage.mockResolvedValue(undefined);
+    await defaultSandboxBillingDeps.trackUsage({
+      payerId: 'owner-1',
+      holdId: 'hold-1',
+      activeSeconds: 60,
+      pageId: 'terminal-page-1',
+    });
+    const call = mockTrackUsage.mock.calls[0][0];
+    expect(call.pageId).toBe('terminal-page-1');
+  });
 });
 
 describe('defaultSandboxBillingDeps.releaseHold', () => {
