@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { UIMessage } from 'ai';
-import { MessageRenderer } from '../MessageRenderer';
+import { CompactMessageRenderer } from '../CompactMessageRenderer';
 import type { ConversationMessage } from '../message-types';
 
 vi.mock('@/hooks/useAuth', () => ({
@@ -32,7 +32,10 @@ function messageWithParts(parts: unknown[]): ConversationMessage {
   } as unknown as ConversationMessage & UIMessage;
 }
 
-describe('MessageRenderer tool-call grouping — closed by default, no auto-expand from running/error status', () => {
+// Parity coverage for the sidebar/compact surface, mirroring
+// MessageRenderer.toolCallGrouping.test.tsx so the two surfaces can't
+// silently drift on the same closed-by-default, no-auto-expand behavior.
+describe('CompactMessageRenderer tool-call grouping — closed by default, no auto-expand from running/error status', () => {
   it('keeps a manually-expanded solo tool call expanded once it becomes the head of a run', async () => {
     const user = userEvent.setup();
 
@@ -40,55 +43,42 @@ describe('MessageRenderer tool-call grouping — closed by default, no auto-expa
       toolPart({ toolCallId: 'call-1', toolName: 'list_pages', state: 'output-available' }),
     ]);
 
-    const { rerender } = render(<MessageRenderer message={solo} />);
+    const { rerender } = render(<CompactMessageRenderer message={solo} />);
 
-    // Solo call renders through the same persistent run component, closed by
-    // default; expand it.
-    const trigger = screen.getByTitle('Pages');
-    expect(trigger.closest('button')).toHaveAttribute('data-state', 'closed');
+    const trigger = screen.getByTitle('List Pages');
+    expect(trigger.closest('button')).toHaveAttribute('aria-expanded', 'false');
     await user.click(trigger);
-    expect(trigger.closest('button')).toHaveAttribute('data-state', 'open');
+    expect(trigger.closest('button')).toHaveAttribute('aria-expanded', 'true');
 
-    // A second consecutive non-diff call streams in, still running — since
-    // both share the same runKey (derived from call-1's toolCallId, which
-    // never changes as the run grows), this is the *same* component
-    // instance, not a remount, so the manual toggle survives.
     const grouped = messageWithParts([
       toolPart({ toolCallId: 'call-1', toolName: 'list_pages', state: 'output-available' }),
       toolPart({ toolCallId: 'call-2', toolName: 'read_page', state: 'input-available' }),
     ]);
-    rerender(<MessageRenderer message={grouped} />);
+    rerender(<CompactMessageRenderer message={grouped} />);
 
-    // The group summary header appears, still open (no remount, no reset).
     const groupTrigger = screen.getByText(/Ran 2 commands/);
-    expect(groupTrigger.closest('button')).toHaveAttribute('data-state', 'open');
+    expect(groupTrigger.closest('button')).toHaveAttribute('aria-expanded', 'true');
 
-    // ...and the first call's row, now nested inside the group, is also
-    // expanded — the solo toggle seeded the row's own key too.
-    const nestedTrigger = screen.getByTitle('Pages');
-    expect(nestedTrigger.closest('button')).toHaveAttribute('data-state', 'open');
+    const nestedTrigger = screen.getByTitle('List Pages');
+    expect(nestedTrigger.closest('button')).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('leaves an untouched run closed by default through solo -> group growth, even while running', async () => {
+  it('leaves an untouched run closed by default through solo -> group growth, even while running', () => {
     const solo = messageWithParts([
       toolPart({ toolCallId: 'call-1', toolName: 'list_pages', state: 'output-available' }),
     ]);
 
-    const { rerender } = render(<MessageRenderer message={solo} />);
-    // Deliberately do not click anything — the run stays at its default state.
+    const { rerender } = render(<CompactMessageRenderer message={solo} />);
 
     const grouped = messageWithParts([
       toolPart({ toolCallId: 'call-1', toolName: 'list_pages', state: 'output-available' }),
-      // Still running — with the old auto-expand behavior this would pop
-      // open on its own; it must not.
       toolPart({ toolCallId: 'call-2', toolName: 'read_page', state: 'input-available' }),
     ]);
-    rerender(<MessageRenderer message={grouped} />);
+    rerender(<CompactMessageRenderer message={grouped} />);
 
     const groupTrigger = screen.getByText(/Ran 2 commands/);
-    expect(groupTrigger.closest('button')).toHaveAttribute('data-state', 'closed');
-    // Closed means Radix doesn't mount the nested rows at all.
-    expect(screen.queryByTitle('Pages')).not.toBeInTheDocument();
+    expect(groupTrigger.closest('button')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTitle('List Pages')).not.toBeInTheDocument();
   });
 
   it('leaves a run with an errored call closed by default (error shown via icon only, never a forced expand)', () => {
@@ -97,9 +87,9 @@ describe('MessageRenderer tool-call grouping — closed by default, no auto-expa
       toolPart({ toolCallId: 'call-2', toolName: 'read_page', state: 'output-error' }),
     ]);
 
-    render(<MessageRenderer message={grouped} />);
+    render(<CompactMessageRenderer message={grouped} />);
 
     const groupTrigger = screen.getByText(/Ran 2 commands/);
-    expect(groupTrigger.closest('button')).toHaveAttribute('data-state', 'closed');
+    expect(groupTrigger.closest('button')).toHaveAttribute('aria-expanded', 'false');
   });
 });

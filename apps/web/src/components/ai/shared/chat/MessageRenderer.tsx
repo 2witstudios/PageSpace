@@ -385,9 +385,10 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             );
           } else if (isToolRunGroupPart(group)) {
             return (
-              <div key={`${message.id}-toolrun-${index}`} className="mr-2 sm:mr-8">
+              <div key={`${message.id}-toolrun-${group.runKey}`} className="mr-2 sm:mr-8">
                 <ToolRunGroup
                   parts={group.parts}
+                  runKey={group.runKey}
                   getToolCallOpen={getToolCallOpen}
                   setToolCallOpen={setToolCallOpen}
                 />

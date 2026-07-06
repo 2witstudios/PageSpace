@@ -86,7 +86,10 @@ describe('useGroupedParts', () => {
 
     expect(result.current).toHaveLength(3);
     expect(isTextGroupPart(result.current[0])).toBe(true);
-    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    expect(isToolRunGroupPart(result.current[1])).toBe(true);
+    if (isToolRunGroupPart(result.current[1])) {
+      expect(result.current[1].parts).toHaveLength(1);
+    }
     expect(isTextGroupPart(result.current[2])).toBe(true);
   });
 
@@ -106,7 +109,10 @@ describe('useGroupedParts', () => {
 
     expect(result.current).toHaveLength(3);
     expect(isFileGroupPart(result.current[0])).toBe(true);
-    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    expect(isToolRunGroupPart(result.current[1])).toBe(true);
+    if (isToolRunGroupPart(result.current[1])) {
+      expect(result.current[1].parts).toHaveLength(1);
+    }
     expect(isFileGroupPart(result.current[2])).toBe(true);
   });
 
@@ -149,8 +155,9 @@ describe('useGroupedParts', () => {
 
     expect(result.current).toHaveLength(1);
     const group = result.current[0];
-    if (isProcessedToolPart(group)) {
-      expect(group.state).toBe('input-available');
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts[0].state).toBe('input-available');
     }
   });
 
@@ -228,18 +235,49 @@ describe('useGroupedParts', () => {
     }
   });
 
-  it('given a single non-diff tool call, should render it standalone (no group wrapper)', () => {
+  it('given a single non-diff tool call, should render it as a length-1 run carrying a stable runKey', () => {
     const parts = asMessageParts([
       { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
     ]);
     const { result } = renderHook(() => useGroupedParts(parts));
 
     expect(result.current).toHaveLength(1);
-    expect(isProcessedToolPart(result.current[0])).toBe(true);
-    expect(isToolRunGroupPart(result.current[0])).toBe(false);
+    const group = result.current[0];
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts).toHaveLength(1);
+      expect(group.runKey).toBe('run:tc-1');
+    }
   });
 
-  it('given a diff tool call in the middle of a run, should break the run in two', () => {
+  it('given a 2nd consecutive call joins an existing run, should keep the same runKey as before it joined', () => {
+    const solo = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result, rerender } = renderHook(({ parts }) => useGroupedParts(parts), {
+      initialProps: { parts: solo },
+    });
+
+    const soloGroup = result.current[0];
+    expect(isToolRunGroupPart(soloGroup)).toBe(true);
+    const soloRunKey = isToolRunGroupPart(soloGroup) ? soloGroup.runKey : undefined;
+
+    const grown = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'input-available', input: {} },
+    ]);
+    rerender({ parts: grown });
+
+    const grownGroup = result.current[0];
+    expect(result.current).toHaveLength(1);
+    expect(isToolRunGroupPart(grownGroup)).toBe(true);
+    if (isToolRunGroupPart(grownGroup)) {
+      expect(grownGroup.parts).toHaveLength(2);
+      expect(grownGroup.runKey).toBe(soloRunKey);
+    }
+  });
+
+  it('given a diff tool call in the middle of a run, should break the run in two with different runKeys', () => {
     const parts = asMessageParts([
       { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
       { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
@@ -256,6 +294,9 @@ describe('useGroupedParts', () => {
       expect(result.current[1].toolName).toBe('edit');
     }
     expect(isToolRunGroupPart(result.current[2])).toBe(true);
+    if (isToolRunGroupPart(result.current[0]) && isToolRunGroupPart(result.current[2])) {
+      expect(result.current[0].runKey).not.toBe(result.current[2].runKey);
+    }
   });
 
   it('given an execute_tool-wrapped diff tool, should still break a run by the inner tool name', () => {
