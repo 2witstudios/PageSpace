@@ -30,6 +30,13 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
     let cancelled = false;
     let teardown: (() => void) | undefined;
 
+    // The Terminal workspace's splittable panes all share ONE socket (one
+    // connection per browser tab, not per pane) — this id is how the realtime
+    // bridge (and this listener) tells this pane's PTY stream apart from a
+    // sibling pane's on the exact same socket. Fresh per mount; switching
+    // scope re-mounts (keyed by sessionId at the call site) and gets a new one.
+    const connectionId = crypto.randomUUID();
+
     void (async () => {
       try {
         const [{ Terminal }, { FitAddon }] = await Promise.all([
@@ -45,19 +52,32 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
         terminal.open(containerRef.current);
         fitAddon.fit();
 
-        const onData = terminal.onData((data) => socket.emit('agent-terminal:input', { data }));
+        const onData = terminal.onData((data) => socket.emit('agent-terminal:input', { data, connectionId }));
 
-        const handleOutput = ({ data }: { data: string }) => terminal.write(data);
-        const handleReady = ({ scrollback }: { scrollback?: string } = {}) => {
-          if (scrollback) terminal.write(scrollback);
+        // Every mounted XtermTerminal shares this one socket, so every one of
+        // its listeners sees every pane's events — drop anything tagged with
+        // a DIFFERENT connectionId rather than rendering it into this pane.
+        const isMine = (payload: { connectionId?: string } | undefined) =>
+          payload?.connectionId === undefined || payload.connectionId === connectionId;
+
+        const handleOutput = (payload: { data: string; connectionId?: string }) => {
+          if (!isMine(payload)) return;
+          terminal.write(payload.data);
+        };
+        const handleReady = (payload: { scrollback?: string; connectionId?: string } = {}) => {
+          if (!isMine(payload)) return;
+          if (payload.scrollback) terminal.write(payload.scrollback);
           useEditingStore.getState().startEditing(sessionId, 'other', { componentName: 'agent-terminal' });
           onReady?.();
         };
-        const handleClosed = ({ exitCode }: { exitCode: number }) =>
-          terminal.writeln(`\r\n\x1b[90mProcess exited with code ${exitCode}\x1b[0m`);
-        const handleError = ({ message }: { message: string }) => {
-          terminal.writeln(`\r\n\x1b[31mError: ${message}\x1b[0m`);
-          onError?.(message);
+        const handleClosed = (payload: { exitCode: number; connectionId?: string }) => {
+          if (!isMine(payload)) return;
+          terminal.writeln(`\r\n\x1b[90mProcess exited with code ${payload.exitCode}\x1b[0m`);
+        };
+        const handleError = (payload: { message: string; connectionId?: string }) => {
+          if (!isMine(payload)) return;
+          terminal.writeln(`\r\n\x1b[31mError: ${payload.message}\x1b[0m`);
+          onError?.(payload.message);
         };
 
         // Register listeners BEFORE emitting agent-terminal:connect so we don't
@@ -75,6 +95,11 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
           socket.off('agent-terminal:ready', handleReady);
           socket.off('agent-terminal:closed', handleClosed);
           socket.off('agent-terminal:error', handleError);
+          // Tell the server THIS pane is gone (not the whole socket) — with
+          // several panes multiplexed over one socket, only an explicit
+          // per-connection signal (not the socket's own disconnect/idle
+          // timeout) correctly reflects "this one pane closed".
+          socket.emit('agent-terminal:disconnect', { connectionId });
           terminal.dispose();
           useEditingStore.getState().endEditing(sessionId);
         };
@@ -83,11 +108,11 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
         // add-terminal dialog reserves it (spawnAgentTerminal) before it's ever
         // offered as something to open, so connecting here only ever attaches
         // to (or resumes) an already-known session.
-        socket.emit('agent-terminal:connect', { ...connectPayload, cols: terminal.cols, rows: terminal.rows });
+        socket.emit('agent-terminal:connect', { ...connectPayload, connectionId, cols: terminal.cols, rows: terminal.rows });
 
         resize.observer = new ResizeObserver(() => {
           fitAddon.fit();
-          socket.emit('agent-terminal:resize', { cols: terminal.cols, rows: terminal.rows });
+          socket.emit('agent-terminal:resize', { cols: terminal.cols, rows: terminal.rows, connectionId });
         });
         resize.observer.observe(containerRef.current!);
 

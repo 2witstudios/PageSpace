@@ -31,7 +31,9 @@ export function useMachineProjects(terminalId: string | null) {
   const addProject = useCallback(
     async (name: string, repoUrl: string) => {
       if (!terminalId) throw new Error('No active machine');
-      const result = await post<{ project: MachineProject }>('/api/machines/projects', { terminalId, name, repoUrl });
+      // The POST route returns only `{ name, repoUrl, path }` — no `createdAt`
+      // (that's set by the DB and only surfaced by the GET list route).
+      const result = await post<{ project: Omit<MachineProject, 'createdAt'> }>('/api/machines/projects', { terminalId, name, repoUrl });
       await mutate();
       return result.project;
     },

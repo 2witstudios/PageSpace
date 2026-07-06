@@ -16,6 +16,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -68,8 +78,18 @@ export default function Navigator({ terminalId, onOpenTerminal }: NavigatorProps
 
 function MachineNode({ terminalId, onOpenTerminal }: { terminalId: string; onOpenTerminal(scope: OpenTerminalScope): void }) {
   const [expanded, setExpanded] = useState(true);
-  const { agentTerminals, addAgentTerminal, removeAgentTerminal } = useAgentTerminals(expanded ? terminalId : null, null, null);
-  const { projects, isLoading: projectsLoading, addProject, removeProject } = useMachineProjects(terminalId);
+  const {
+    agentTerminals,
+    isLoading: terminalsLoading,
+    addAgentTerminal,
+    removeAgentTerminal,
+  } = useAgentTerminals(expanded ? terminalId : null, null, null);
+  const {
+    projects,
+    isLoading: projectsLoading,
+    addProject,
+    removeProject,
+  } = useMachineProjects(expanded ? terminalId : null);
 
   return (
     <div>
@@ -86,6 +106,7 @@ function MachineNode({ terminalId, onOpenTerminal }: { terminalId: string; onOpe
         <div className="pl-4">
           <TerminalList
             terminals={agentTerminals}
+            isLoading={terminalsLoading}
             emptyLabel="No terminals yet"
             onAdd={addAgentTerminal}
             onRemove={removeAgentTerminal}
@@ -110,10 +131,7 @@ function MachineNode({ terminalId, onOpenTerminal }: { terminalId: string; onOpe
               terminalId={terminalId}
               projectName={project.name}
               onOpenTerminal={onOpenTerminal}
-              onRemoveProject={() => {
-                if (!window.confirm(`Remove project "${project.name}"? This does not touch its branch-terminals.`)) return;
-                void removeProject(project.name).catch((err) => toast.error(err instanceof Error ? err.message : 'Failed to remove project'));
-              }}
+              onRemoveProject={() => removeProject(project.name)}
             />
           ))}
         </div>
@@ -131,15 +149,22 @@ function ProjectNode({
   terminalId: string;
   projectName: string;
   onOpenTerminal(scope: OpenTerminalScope): void;
-  onRemoveProject(): void;
+  onRemoveProject(): Promise<unknown>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const { agentTerminals, addAgentTerminal, removeAgentTerminal } = useAgentTerminals(
-    expanded ? terminalId : null,
-    projectName,
-    null,
-  );
-  const { branches, addBranch, removeBranch } = useMachineBranches(expanded ? terminalId : null, projectName);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const {
+    agentTerminals,
+    isLoading: terminalsLoading,
+    addAgentTerminal,
+    removeAgentTerminal,
+  } = useAgentTerminals(expanded ? terminalId : null, projectName, null);
+  const {
+    branches,
+    isLoading: branchesLoading,
+    addBranch,
+    removeBranch,
+  } = useMachineBranches(expanded ? terminalId : null, projectName);
 
   return (
     <div>
@@ -155,17 +180,25 @@ function ProjectNode({
         </button>
         <button
           type="button"
-          onClick={onRemoveProject}
+          onClick={() => setConfirmingRemove(true)}
           className="invisible size-5 shrink-0 rounded-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:visible"
           title="Remove project"
         >
           <X className="mx-auto size-3.5" />
         </button>
       </div>
+      <ConfirmRemoveDialog
+        open={confirmingRemove}
+        onOpenChange={setConfirmingRemove}
+        title="Remove project?"
+        description={`Remove project "${projectName}"? This does not touch its branch-terminals.`}
+        onConfirm={onRemoveProject}
+      />
       {expanded && (
         <div className="pl-4">
           <TerminalList
             terminals={agentTerminals}
+            isLoading={terminalsLoading}
             emptyLabel="No terminals yet"
             onAdd={addAgentTerminal}
             onRemove={removeAgentTerminal}
@@ -175,7 +208,10 @@ function ProjectNode({
             <span className="text-xs text-muted-foreground">Branches</span>
             <AddBranchDialog onAdd={addBranch} />
           </div>
-          {branches.length === 0 && <div className="px-2 py-1 text-xs text-muted-foreground">No branches yet</div>}
+          {branchesLoading && <div className="px-2 py-1 text-xs text-muted-foreground">Loading branches…</div>}
+          {!branchesLoading && branches.length === 0 && (
+            <div className="px-2 py-1 text-xs text-muted-foreground">No branches yet</div>
+          )}
           {branches.map((branch) => (
             <BranchNode
               key={branch.branchName}
@@ -183,12 +219,7 @@ function ProjectNode({
               projectName={projectName}
               branchName={branch.branchName}
               onOpenTerminal={onOpenTerminal}
-              onRemoveBranch={() => {
-                if (!window.confirm(`Remove branch-terminal "${branch.branchName}"? Its Sprite will be destroyed.`)) return;
-                void removeBranch(branch.branchName).catch((err) =>
-                  toast.error(err instanceof Error ? err.message : 'Failed to remove branch'),
-                );
-              }}
+              onRemoveBranch={() => removeBranch(branch.branchName)}
             />
           ))}
         </div>
@@ -208,14 +239,16 @@ function BranchNode({
   projectName: string;
   branchName: string;
   onOpenTerminal(scope: OpenTerminalScope): void;
-  onRemoveBranch(): void;
+  onRemoveBranch(): Promise<unknown>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const { agentTerminals, addAgentTerminal, removeAgentTerminal } = useAgentTerminals(
-    expanded ? terminalId : null,
-    projectName,
-    branchName,
-  );
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const {
+    agentTerminals,
+    isLoading: terminalsLoading,
+    addAgentTerminal,
+    removeAgentTerminal,
+  } = useAgentTerminals(expanded ? terminalId : null, projectName, branchName);
 
   return (
     <div>
@@ -231,17 +264,25 @@ function BranchNode({
         </button>
         <button
           type="button"
-          onClick={onRemoveBranch}
+          onClick={() => setConfirmingRemove(true)}
           className="invisible size-5 shrink-0 rounded-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:visible"
           title="Remove branch-terminal"
         >
           <X className="mx-auto size-3.5" />
         </button>
       </div>
+      <ConfirmRemoveDialog
+        open={confirmingRemove}
+        onOpenChange={setConfirmingRemove}
+        title="Remove branch-terminal?"
+        description={`Remove branch-terminal "${branchName}"? Its Sprite will be destroyed.`}
+        onConfirm={onRemoveBranch}
+      />
       {expanded && (
         <div className="pl-4">
           <TerminalList
             terminals={agentTerminals}
+            isLoading={terminalsLoading}
             emptyLabel="No terminals yet"
             onAdd={addAgentTerminal}
             onRemove={removeAgentTerminal}
@@ -255,24 +296,29 @@ function BranchNode({
 
 function TerminalList({
   terminals,
+  isLoading,
   emptyLabel,
   onAdd,
   onRemove,
   onOpen,
 }: {
   terminals: AgentTerminal[];
+  isLoading: boolean;
   emptyLabel: string;
   onAdd(name: string, agentType: AgentRuntimeType): Promise<unknown>;
   onRemove(name: string): Promise<unknown>;
   onOpen(name: string): void;
 }) {
+  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+
   return (
     <div>
       <div className="flex items-center justify-between py-0.5 pr-1">
         <span className="text-xs text-muted-foreground">Terminals</span>
         <AddAgentTerminalDialog onAdd={onAdd} />
       </div>
-      {terminals.length === 0 && <div className="px-2 py-1 text-xs text-muted-foreground">{emptyLabel}</div>}
+      {isLoading && <div className="px-2 py-1 text-xs text-muted-foreground">Loading terminals…</div>}
+      {!isLoading && terminals.length === 0 && <div className="px-2 py-1 text-xs text-muted-foreground">{emptyLabel}</div>}
       {terminals.map((terminal) => (
         <div key={terminal.name} className="group flex items-center gap-1 rounded-sm py-1 pr-1 hover:bg-accent/50">
           <button
@@ -288,10 +334,7 @@ function TerminalList({
           </button>
           <button
             type="button"
-            onClick={() => {
-              if (!window.confirm(`Remove terminal "${terminal.name}"?`)) return;
-              void onRemove(terminal.name).catch((err) => toast.error(err instanceof Error ? err.message : 'Failed to remove terminal'));
-            }}
+            onClick={() => setPendingRemove(terminal.name)}
             className="invisible size-5 shrink-0 rounded-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:visible"
             title="Remove terminal"
           >
@@ -299,7 +342,66 @@ function TerminalList({
           </button>
         </div>
       ))}
+      <ConfirmRemoveDialog
+        open={pendingRemove !== null}
+        onOpenChange={(open) => !open && setPendingRemove(null)}
+        title="Remove terminal?"
+        description={pendingRemove ? `Remove terminal "${pendingRemove}"?` : ''}
+        onConfirm={() => {
+          if (pendingRemove === null) return Promise.resolve();
+          return onRemove(pendingRemove);
+        }}
+      />
     </div>
+  );
+}
+
+function ConfirmRemoveDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  title: string;
+  description: string;
+  onConfirm(): Promise<unknown>;
+}) {
+  const [removing, setRemoving] = useState(false);
+
+  const handleConfirm = async () => {
+    setRemoving(true);
+    try {
+      await onConfirm();
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to remove');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <AlertDialog open={open} onOpenChange={(v) => !removing && onOpenChange(v)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleConfirm}
+            disabled={removing}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            {removing ? 'Removing…' : 'Remove'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

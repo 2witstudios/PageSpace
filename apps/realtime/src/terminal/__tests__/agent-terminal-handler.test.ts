@@ -137,7 +137,7 @@ describe('buildAgentTerminalHandlers', () => {
       expect(openShell).toHaveBeenCalledWith(
         expect.objectContaining({ cols: 80, rows: 24, command: 'pagespace-cli', args: [] }),
       );
-      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', {});
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1' });
     });
 
     it('given a branch-scoped agent terminal, should launch inside the branch\'s cloned repo cwd resolved by checkAuth', async () => {
@@ -337,7 +337,7 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(shell.kill).toHaveBeenCalledWith();
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
-      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2 });
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock1' });
     });
   });
 
@@ -371,6 +371,95 @@ describe('buildAgentTerminalHandlers', () => {
       onResize({ cols: 100, rows: 40 });
 
       expect(shell.resize).toHaveBeenCalledWith(100, 40);
+    });
+  });
+
+  describe('multiplexed connections on one socket (splittable panes)', () => {
+    it('given two connect calls on the SAME socket with distinct connectionIds and different scopes, should track them independently', async () => {
+      const shellA = makeShell();
+      const shellB = makeShell();
+      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      checkAuth = vi
+        .fn()
+        .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'branch1:agent:cli' }))
+        .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'branch1:agent:reviewer', command: 'claude' })) as unknown as ReturnType<typeof vi.fn> &
+        AgentTerminalCheckAuthFn;
+      const { onConnect, onInput } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await onConnect({ ...validPayload, name: 'cli', connectionId: 'pane-a' });
+      await onConnect({ ...validPayload, name: 'reviewer', connectionId: 'pane-b' });
+
+      expect(sessionMap.getBySocket('pane-a')).toMatchObject({ sessionKey: 'branch1:agent:cli' });
+      expect(sessionMap.getBySocket('pane-b')).toMatchObject({ sessionKey: 'branch1:agent:reviewer' });
+
+      // Input routed by connectionId reaches the pane it was typed into, not whichever pane connected last.
+      onInput({ data: 'echo a\n', connectionId: 'pane-a' });
+      onInput({ data: 'echo b\n', connectionId: 'pane-b' });
+      expect(shellA.write).toHaveBeenCalledWith('echo a\n');
+      expect(shellB.write).toHaveBeenCalledWith('echo b\n');
+      expect(shellA.write).not.toHaveBeenCalledWith('echo b\n');
+      expect(shellB.write).not.toHaveBeenCalledWith('echo a\n');
+    });
+
+    it('given output on two different panes, should tag each emitted event with its own connectionId so the client can route it to the right pane', async () => {
+      const shellA = makeShell();
+      const shellB = makeShell();
+      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      checkAuth = vi
+        .fn()
+        .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'branch1:agent:cli' }))
+        .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'branch1:agent:reviewer' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await onConnect({ ...validPayload, name: 'cli', connectionId: 'pane-a' });
+      await onConnect({ ...validPayload, name: 'reviewer', connectionId: 'pane-b' });
+
+      const onOutputA = openShell.mock.calls[0][0].onOutput as (data: string) => void;
+      const onOutputB = openShell.mock.calls[1][0].onOutput as (data: string) => void;
+      onOutputA('from A');
+      onOutputB('from B');
+
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:output', { data: 'from A', connectionId: 'pane-a' });
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:output', { data: 'from B', connectionId: 'pane-b' });
+    });
+
+    it('given onDisconnect for one specific connectionId, should detach only that pane and leave the other live', async () => {
+      const shellA = makeShell();
+      const shellB = makeShell();
+      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      checkAuth = vi
+        .fn()
+        .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'branch1:agent:cli' }))
+        .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'branch1:agent:reviewer' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await onConnect({ ...validPayload, name: 'cli', connectionId: 'pane-a' });
+      await onConnect({ ...validPayload, name: 'reviewer', connectionId: 'pane-b' });
+
+      onDisconnect({ connectionId: 'pane-a' });
+
+      expect(sessionMap.getBySocket('pane-a')).toBeUndefined();
+      expect(sessionMap.getBySocket('pane-b')).toBeDefined();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined(); // shell survives until the idle timeout, same as a single-pane disconnect
+    });
+
+    it('given onDisconnect with no payload (the socket itself disconnected), should detach every connection this socket had open', async () => {
+      const shellA = makeShell();
+      const shellB = makeShell();
+      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      checkAuth = vi
+        .fn()
+        .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'branch1:agent:cli' }))
+        .mockResolvedValueOnce(makeAuthSuccess({ sessionKey: 'branch1:agent:reviewer' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await onConnect({ ...validPayload, name: 'cli', connectionId: 'pane-a' });
+      await onConnect({ ...validPayload, name: 'reviewer', connectionId: 'pane-b' });
+
+      onDisconnect();
+
+      expect(sessionMap.getBySocket('pane-a')).toBeUndefined();
+      expect(sessionMap.getBySocket('pane-b')).toBeUndefined();
     });
   });
 
