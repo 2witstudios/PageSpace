@@ -314,6 +314,28 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
       expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
     });
 
+    it('reports an empty-string stepUpToken with the exact same error shape as a missing one — no validation oracle', async () => {
+      const missingRequest = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+        method: 'PATCH',
+        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
+        body: JSON.stringify({ drives: [{ id: 'drive-1' }] }),
+      });
+      const emptyRequest = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
+        method: 'PATCH',
+        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
+        body: JSON.stringify({ drives: [{ id: 'drive-1' }], stepUpToken: '' }),
+      });
+
+      const missingResponse = await PATCH(missingRequest, createContext());
+      const emptyResponse = await PATCH(emptyRequest, createContext());
+
+      expect(emptyResponse.status).toBe(missingResponse.status);
+      expect(emptyResponse.status).toBe(401);
+      expect(await emptyResponse.json()).toEqual(await missingResponse.json());
+      expect(consumeStepUpGrant).not.toHaveBeenCalled();
+      expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
+    });
+
     it('consumes the step-up grant bound to this tokenId + target drive scopes', async () => {
       const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
         method: 'PATCH',
@@ -326,7 +348,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
       expect(consumeStepUpGrant).toHaveBeenCalledWith({
         userId: 'test-user-id',
         token: 'ps_stepup_test',
-        actionBinding: { name: 'token-123', driveScopes: '[["drive-1","ADMIN",""]]' },
+        actionBinding: { op: 'update', name: 'token-123', driveScopes: '[["drive-1","ADMIN",""]]' },
       });
     });
   });

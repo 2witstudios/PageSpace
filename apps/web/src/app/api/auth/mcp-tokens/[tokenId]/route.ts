@@ -7,8 +7,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { normalizeDriveScopes, computeMcpTokenActionBinding } from '@pagespace/lib/auth/mcp-token-scopes';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
-import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 import { rejectScopedOAuth } from '../scope-guard';
+import { requireStepUpGrant } from '../step-up-gate';
 
 // 'oauth' lets the pagespace CLI (`pagespace tokens revoke`) authenticate
 // with an OAuth access token instead of a session cookie. Revocation only
@@ -32,11 +32,12 @@ const updateTokenScopesSchema = z.object({
     role: z.enum(['ADMIN', 'MEMBER']).nullish(),
     customRoleId: z.string().optional(),
   })).optional(),
-  // Required at runtime (checked explicitly below, not via zod) so a request
-  // missing only this field still reports the SAME validation errors on
-  // drives/driveIds it always has — no separate error shape leaks whether a
-  // caller forgot the step-up token specifically.
-  stepUpToken: z.string().min(1).optional(),
+  // Required at runtime (checked explicitly below, not via zod — no .min(1)
+  // either, so an empty string fails the same falsy check a missing field
+  // does) so a request missing only this field still reports the SAME
+  // validation errors on drives/driveIds it always has — no separate error
+  // shape leaks whether a caller forgot the step-up token specifically.
+  stepUpToken: z.string().optional(),
 }).refine(d => !(d.drives && d.driveIds), {
   message: 'Provide drives or driveIds, not both',
 }).refine(d => d.drives !== undefined || d.driveIds !== undefined, {
@@ -110,19 +111,15 @@ export async function PATCH(
     // step-up grant bound to exactly this tokenId + target scopes before
     // anything is read or written. `name: tokenId` reuses the mint binding
     // helper's identifying-string slot to scope the grant to this token.
-    if (!stepUpToken) {
-      auditRequest(req, { eventType: 'authz.access.denied', userId, details: { reason: 'mcp_token_update_missing_step_up' } });
-      return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
-    }
-    const stepUpResult = await consumeStepUpGrant({
+    const stepUpRejection = await requireStepUpGrant({
+      req,
       userId,
-      token: stepUpToken,
-      actionBinding: computeMcpTokenActionBinding({ name: tokenId, driveScopes }),
+      stepUpToken,
+      actionBinding: computeMcpTokenActionBinding({ op: 'update', name: tokenId, driveScopes }),
+      missingReason: 'mcp_token_update_missing_step_up',
+      invalidReason: 'mcp_token_update_step_up_invalid',
     });
-    if (!stepUpResult.ok) {
-      auditRequest(req, { eventType: 'authz.access.denied', userId, details: { reason: 'mcp_token_update_step_up_invalid' } });
-      return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
-    }
+    if (stepUpRejection) return stepUpRejection;
 
     // Ownership check — token must belong to the requesting user
     const existingToken = await sessionRepository.findMcpTokenByIdAndUser(tokenId, userId);

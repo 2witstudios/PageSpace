@@ -8,8 +8,8 @@ import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activi
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { computeMcpTokenActionBinding } from '@pagespace/lib/auth/mcp-token-scopes';
-import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 import { rejectScopedOAuth } from './scope-guard';
+import { requireStepUpGrant } from './step-up-gate';
 
 // 'oauth' lets the pagespace CLI (which never holds a session cookie —
 // `pagespace tokens list` authenticates with an OAuth access token from
@@ -60,19 +60,15 @@ export async function POST(req: NextRequest) {
     // Step-up gate (Phase 8): minting a new mcp_* token is credential
     // creation — require a live step-up grant bound to exactly this name +
     // drive-scope set before anything is validated or written.
-    if (!stepUpToken) {
-      auditRequest(req, { eventType: 'authz.access.denied', userId, details: { reason: 'mcp_token_mint_missing_step_up' } });
-      return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
-    }
-    const stepUpResult = await consumeStepUpGrant({
+    const stepUpRejection = await requireStepUpGrant({
+      req,
       userId,
-      token: stepUpToken,
-      actionBinding: computeMcpTokenActionBinding({ name, driveScopes: uniqueDriveScopes }),
+      stepUpToken,
+      actionBinding: computeMcpTokenActionBinding({ op: 'mint', name, driveScopes: uniqueDriveScopes }),
+      missingReason: 'mcp_token_mint_missing_step_up',
+      invalidReason: 'mcp_token_mint_step_up_invalid',
     });
-    if (!stepUpResult.ok) {
-      auditRequest(req, { eventType: 'authz.access.denied', userId, details: { reason: 'mcp_token_mint_step_up_invalid' } });
-      return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
-    }
+    if (stepUpRejection) return stepUpRejection;
 
     if (uniqueDriveScopes.length > 0) {
       const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles } =
