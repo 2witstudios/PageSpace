@@ -41,8 +41,12 @@ import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { isTerminalPage } from '@pagespace/lib/content/page-types.config';
+import type { PageType } from '@pagespace/lib/utils/enums';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
-import { createSandboxTools, type ResolveSandboxContext } from './sandbox-tools';
+import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext } from './sandbox-tools';
+import { canActorViewPage } from './actor-permissions';
+import type { ToolExecutionContext } from '../core/types';
 
 // The session store and Sprites client are process-wide singletons: the store
 // reconnects to one DB pool and the client is stateless. Both are built lazily
@@ -281,11 +285,68 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
   createResolveSandboxActorContext();
 
 /**
+ * IO dependencies for the machine directory. Injected so it can be unit-tested
+ * without a real database connection.
+ */
+export interface MachineDirectoryRuntimeDeps {
+  findPage: (pageId: string) => Promise<{ title: string; type: string } | undefined>;
+  canViewPage: (rawContext: ToolExecutionContext, pageId: string) => Promise<boolean>;
+}
+
+const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
+  findPage: async (pageId) =>
+    db.query.pages.findFirst({ where: eq(pages.id, pageId), columns: { title: true, type: true } }),
+  canViewPage: canActorViewPage,
+};
+
+/**
+ * Factory for the machine directory, with injected deps for testing. The
+ * default export (`machineDirectory`) wires the real DB.
+ *
+ * `PageAgentConfig.terminalAccess`/`machines` (apps/web/src/lib/repositories/
+ * page-agent-repository.ts) is the canonical config source, but reading it
+ * per-turn into `ToolExecutionContext` is the sibling "route tools to the
+ * active machine" PR's job — until that lands, `listMachines` always returns
+ * `[{ kind: 'own' }]` (every actor has exactly one configured machine). The
+ * 'existing' branches below are exercised today only via the pure factory's
+ * unit tests (injected fakes); they'll become reachable once that PR wires a
+ * real `machines[]` source into `ToolExecutionContext`.
+ */
+export function createMachineDirectory(
+  deps: MachineDirectoryRuntimeDeps = defaultMachineDirectoryDeps,
+): MachineDirectoryDeps {
+  return {
+    listMachines: async () => [{ kind: 'own' }],
+    describeMachine: async (_rawContext, machine) => {
+      if (machine.kind === 'own') return { name: 'My Machine' };
+      const page = await deps.findPage(machine.terminalId);
+      return { name: page?.title ?? 'Terminal' };
+    },
+    isMachineAccessible: async (rawContext, machine) => {
+      if (machine.kind === 'own') return true;
+      if (!rawContext) return false;
+      const page = await deps.findPage(machine.terminalId);
+      if (!page || !isTerminalPage(page.type as PageType)) return false;
+      return deps.canViewPage(rawContext, machine.terminalId);
+    },
+  };
+}
+
+export const machineDirectory: MachineDirectoryDeps = createMachineDirectory();
+
+/**
  * Production sandbox tools, fully wired. Exported for PR4 to register behind the
  * default-OFF feature flag — importing this object does not expose anything by
  * itself.
  */
-export function buildSandboxTools(): { bash: Tool; writeFile: Tool; readFile: Tool; editFile: Tool } {
+export function buildSandboxTools(): {
+  bash: Tool;
+  writeFile: Tool;
+  readFile: Tool;
+  editFile: Tool;
+  switch_machine: Tool;
+  list_machines: Tool;
+} {
   return createSandboxTools({
     runDeps: buildRealSandboxRunDeps(),
     resolveContext: resolveSandboxActorContext,
@@ -298,5 +359,6 @@ export function buildSandboxTools(): { bash: Tool; writeFile: Tool; readFile: To
         agentPageId: ctx.agentPageId,
         tier: ctx.tier,
       }),
+    machines: machineDirectory,
   });
 }

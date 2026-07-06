@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   createResolveSandboxActorContext,
+  createMachineDirectory,
   type ResolveSandboxActorContextDeps,
+  type MachineDirectoryRuntimeDeps,
 } from '../sandbox-tools-runtime';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -145,6 +147,95 @@ describe('resolveSandboxActorContext', () => {
       if ('error' in result) return;
       expect(result.driveId).toBe('d1');
       expect(result.tenantId).toBe('tenant-from-drive');
+    });
+  });
+});
+
+function makeMachineDirectoryDeps(
+  overrides: Partial<MachineDirectoryRuntimeDeps> = {},
+): MachineDirectoryRuntimeDeps {
+  return {
+    findPage: async () => ({ title: 'Shared Terminal', type: 'TERMINAL' }),
+    canViewPage: async () => true,
+    ...overrides,
+  };
+}
+
+describe('createMachineDirectory', () => {
+  describe('listMachines', () => {
+    it('should return a fixed single own machine (config-model seam not yet wired)', async () => {
+      const directory = createMachineDirectory(makeMachineDirectoryDeps());
+      await expect(directory.listMachines(undefined)).resolves.toEqual([{ kind: 'own' }]);
+    });
+  });
+
+  describe('describeMachine', () => {
+    it('given the own machine, should return a fixed name without a DB lookup', async () => {
+      const findPage = async () => ({ title: 'should not be used', type: 'TERMINAL' });
+      const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage }));
+      await expect(directory.describeMachine(undefined, { kind: 'own' })).resolves.toEqual({ name: 'My Machine' });
+    });
+
+    it('given an existing machine, should return the Terminal page title', async () => {
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Shared Terminal', type: 'TERMINAL' }) }),
+      );
+      await expect(
+        directory.describeMachine(undefined, { kind: 'existing', terminalId: 't1' }),
+      ).resolves.toEqual({ name: 'Shared Terminal' });
+    });
+
+    it('given an existing machine whose page is missing, should fall back to a generic name', async () => {
+      const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage: async () => undefined }));
+      await expect(
+        directory.describeMachine(undefined, { kind: 'existing', terminalId: 'gone' }),
+      ).resolves.toEqual({ name: 'Terminal' });
+    });
+  });
+
+  describe('isMachineAccessible', () => {
+    const context: ToolExecutionContext = { userId: 'u1' };
+
+    it('given the own machine, should always be accessible', async () => {
+      const directory = createMachineDirectory(makeMachineDirectoryDeps());
+      await expect(directory.isMachineAccessible(undefined, { kind: 'own' })).resolves.toBe(true);
+    });
+
+    it('given no rawContext, should deny an existing machine (fail closed)', async () => {
+      const directory = createMachineDirectory(makeMachineDirectoryDeps());
+      await expect(
+        directory.isMachineAccessible(undefined, { kind: 'existing', terminalId: 't1' }),
+      ).resolves.toBe(false);
+    });
+
+    it('given the terminal page is missing, should deny', async () => {
+      const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage: async () => undefined }));
+      await expect(
+        directory.isMachineAccessible(context, { kind: 'existing', terminalId: 'gone' }),
+      ).resolves.toBe(false);
+    });
+
+    it('given the page exists but is not a TERMINAL page, should deny', async () => {
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Not a terminal', type: 'DOCUMENT' }) }),
+      );
+      await expect(
+        directory.isMachineAccessible(context, { kind: 'existing', terminalId: 'doc-1' }),
+      ).resolves.toBe(false);
+    });
+
+    it('given a TERMINAL page the actor cannot view, should deny', async () => {
+      const directory = createMachineDirectory(makeMachineDirectoryDeps({ canViewPage: async () => false }));
+      await expect(
+        directory.isMachineAccessible(context, { kind: 'existing', terminalId: 't1' }),
+      ).resolves.toBe(false);
+    });
+
+    it('given a TERMINAL page the actor can view, should allow', async () => {
+      const directory = createMachineDirectory(makeMachineDirectoryDeps({ canViewPage: async () => true }));
+      await expect(
+        directory.isMachineAccessible(context, { kind: 'existing', terminalId: 't1' }),
+      ).resolves.toBe(true);
     });
   });
 });

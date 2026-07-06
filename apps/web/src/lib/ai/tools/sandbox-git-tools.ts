@@ -20,7 +20,14 @@ import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-r
 import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { runGitInSandbox } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { resolveSandboxPath, SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
-import { MAX_PATH_LENGTH, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
+import {
+  MAX_PATH_LENGTH,
+  resolveActiveMachine,
+  type MachineDirectoryDeps,
+  type ResolveSandboxContext,
+  type SandboxGate,
+} from './sandbox-tools';
+import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 import type { ToolExecutionContext } from '../core/types';
 
 // Optional per-call working directory, relative to the sandbox root (/workspace).
@@ -54,6 +61,7 @@ export interface GitSandboxToolsDeps {
   gitRunDeps: GitSandboxRunDeps;
   resolveContext: ResolveSandboxContext;
   gate: SandboxGate;
+  machines: MachineDirectoryDeps;
 }
 
 function readContext(options: unknown): ToolExecutionContext | undefined {
@@ -67,19 +75,26 @@ const NO_CONNECTION_ERROR = {
   reason: 'error' as const,
 };
 
-export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitSandboxToolsDeps): Record<string, Tool> {
-  /** Resolve context + gate check shared by every tool. */
+export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machines }: GitSandboxToolsDeps): Record<string, Tool> {
+  /**
+   * Resolve context + gate check shared by every tool. Also resolves the
+   * ACTIVE machine and threads it onto ctx — the same seam bash/file tools
+   * use in sandbox-tools.ts, so git commands run against the same active
+   * machine as the rest of the terminal tool group.
+   */
   const open = async (
     options: unknown,
   ): Promise<
-    | { ok: true; userId: string; ctx: SandboxActorContext }
+    | { ok: true; userId: string; ctx: SandboxActorContext & { activeMachine: MachineRef } }
     | { ok: false; error: { success: false; error: string } }
   > => {
-    const ctx = await resolveContext(readContext(options));
+    const rawContext = readContext(options);
+    const ctx = await resolveContext(rawContext);
     if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
     const decision = await gate(ctx);
     if (!decision.ok) return { ok: false, error: { success: false, error: decision.error } };
-    return { ok: true, userId: ctx.userId, ctx };
+    const activeMachine = await resolveActiveMachine(rawContext, machines);
+    return { ok: true, userId: ctx.userId, ctx: { ...ctx, activeMachine } };
   };
 
   /** Direct-exec helper for local git commands (no token needed). */
