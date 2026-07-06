@@ -5,9 +5,16 @@ import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getOrCreateConfig, updateConfig } from '@pagespace/lib/integrations/repositories/config-repository';
+import { isMachineRefArray } from '@/lib/repositories/page-agent-repository';
+import { globalTerminalConfigRepository, MAX_MACHINES } from '@/lib/repositories/global-terminal-config-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+
+const machineRefSchema = z.union([
+  z.object({ kind: z.literal('own') }),
+  z.object({ kind: z.literal('existing'), terminalId: z.string().min(1) }),
+]);
 
 const updateConfigSchema = z.object({
   enabledUserIntegrations: z.array(z.string()).nullable().optional(),
@@ -16,6 +23,8 @@ const updateConfigSchema = z.object({
     enabledIntegrations: z.array(z.string()).optional(),
   })).optional(),
   inheritDriveIntegrations: z.boolean().optional(),
+  terminalAccess: z.boolean().optional(),
+  machines: z.array(machineRefSchema).max(MAX_MACHINES).optional(),
 });
 
 /**
@@ -31,11 +40,26 @@ export async function GET(request: Request) {
   try {
     const config = await getOrCreateConfig(db, auth.userId);
 
+    // Terminal pages in the user's Home drive they can see, for the "use
+    // existing machine" picker — mirrors agent-config/route.ts's
+    // availableTerminals, scoped to the Home drive (the global assistant's
+    // stand-in for "the agent's own drive").
+    let availableTerminals: Array<{ id: string; title: string }> = [];
+    try {
+      availableTerminals = await globalTerminalConfigRepository.getAvailableTerminals(auth.userId);
+    } catch (error) {
+      loggers.api.error('Error fetching available terminals:', error as Error);
+      // Continue with an empty list on error
+    }
+
     return NextResponse.json({
       config: {
         enabledUserIntegrations: config.enabledUserIntegrations,
         driveOverrides: config.driveOverrides,
         inheritDriveIntegrations: config.inheritDriveIntegrations,
+        terminalAccess: config.terminalAccess ?? false,
+        machines: isMachineRefArray(config.machines) ? config.machines : [],
+        availableTerminals,
         createdAt: config.createdAt,
         updatedAt: config.updatedAt,
       },
@@ -66,6 +90,23 @@ export async function PUT(request: Request) {
       );
     }
 
+    // Validate machines: verify every "existing" terminalId points to a
+    // non-trashed TERMINAL page in the user's Home drive they can access —
+    // mirrors agent-config/route.ts's scoping, so a caller can't attach a
+    // Terminal outside their access via a direct API call.
+    if (validation.data.machines !== undefined) {
+      const machinesValidation = await globalTerminalConfigRepository.validateMachines(
+        auth.userId,
+        validation.data.machines,
+      );
+      if (!machinesValidation.ok) {
+        return NextResponse.json(
+          { error: `Invalid terminal reference(s): ${machinesValidation.invalidIds.join(', ')}` },
+          { status: 400 },
+        );
+      }
+    }
+
     const updateData: Record<string, unknown> = {};
 
     if (validation.data.enabledUserIntegrations !== undefined) {
@@ -74,6 +115,14 @@ export async function PUT(request: Request) {
 
     if (validation.data.inheritDriveIntegrations !== undefined) {
       updateData.inheritDriveIntegrations = validation.data.inheritDriveIntegrations;
+    }
+
+    if (validation.data.terminalAccess !== undefined) {
+      updateData.terminalAccess = validation.data.terminalAccess;
+    }
+
+    if (validation.data.machines !== undefined) {
+      updateData.machines = validation.data.machines;
     }
 
     // Merge driveOverrides with existing
@@ -95,6 +144,8 @@ export async function PUT(request: Request) {
         enabledUserIntegrations: config.enabledUserIntegrations,
         driveOverrides: config.driveOverrides,
         inheritDriveIntegrations: config.inheritDriveIntegrations,
+        terminalAccess: config.terminalAccess ?? false,
+        machines: isMachineRefArray(config.machines) ? config.machines : [],
         updatedAt: config.updatedAt,
       },
     });

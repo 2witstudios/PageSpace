@@ -114,6 +114,21 @@ export interface MachineDirectoryDeps {
   ) => Promise<MachineDescriptor>;
   /** Page-permission accessibility check ('existing' checks Terminal page view access; 'own' is always true). */
   isMachineAccessible: (rawContext: ToolExecutionContext | undefined, machine: MachineRef) => Promise<boolean>;
+  /**
+   * Resolve the drive that actually backs a machine, overriding the ambient
+   * `ctx.driveId` (from chat location context) when it differs. Needed for
+   * the global assistant: its ambient driveId (if any) reflects wherever the
+   * user happens to be chatting FROM, which may not be the drive containing
+   * the active machine's Terminal page. Optional — omitted implementations
+   * (existing page-agent wiring) keep using the ambient driveId unchanged,
+   * which is always correct there since a page agent's 'existing' machines
+   * are constrained to its own drive.
+   */
+  resolveDriveId?: (
+    rawContext: ToolExecutionContext | undefined,
+    machine: MachineRef,
+    ambientDriveId: string | undefined,
+  ) => Promise<string | undefined>;
 }
 
 /**
@@ -205,7 +220,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
         },
       };
     }
-    return { ok: true, ctx: { ...ctx, activeMachine } };
+    const driveId = machines.resolveDriveId
+      ? await machines.resolveDriveId(rawContext, activeMachine, ctx.driveId)
+      : ctx.driveId;
+    return { ok: true, ctx: { ...ctx, driveId, activeMachine } };
   };
 
   return {

@@ -378,6 +378,38 @@ describe('createSandboxTools', () => {
     });
   });
 
+  describe('resolveDriveId override', () => {
+    it('given machines has no resolveDriveId, should use the ambient ctx.driveId unchanged', async () => {
+      const seenAcquisitions: unknown[] = [];
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async (input) => {
+        seenAcquisitions.push(input);
+        return { ok: true, sandboxId: 'sbx', resumed: false };
+      };
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      await exec(tools.bash, { command: 'echo hi' }, {});
+      expect(seenAcquisitions).toEqual([expect.objectContaining({ driveId: 'd1' })]);
+    });
+
+    it('given machines provides resolveDriveId, should override the ambient ctx.driveId with its result', async () => {
+      const seenAcquisitions: unknown[] = [];
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async (input) => {
+        seenAcquisitions.push(input);
+        return { ok: true, sandboxId: 'sbx', resumed: false };
+      };
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [{ kind: 'existing', terminalId: 't1' }],
+        describeMachine: async () => ({ name: 'Shared Terminal' }),
+        isMachineAccessible: async () => true,
+        resolveDriveId: async () => 'home-drive-1',
+      };
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+      await exec(tools.bash, { command: 'echo hi' }, {});
+      expect(seenAcquisitions).toEqual([expect.objectContaining({ driveId: 'home-drive-1' })]);
+    });
+  });
+
   describe('terminal tools resolve the active machine before delegating', () => {
     it('bash/writeFile/readFile/editFile should each resolve the configured machines to determine the active one', async () => {
       const listMachines = vi.fn().mockResolvedValue([{ kind: 'own' }]);
