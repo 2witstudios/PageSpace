@@ -19,6 +19,7 @@
 import type { CanRunCodeInput, CanRunCodeResult, CodeExecutionDenialReason } from './can-run-code';
 import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
 import { acquireTerminalSandbox, type SandboxClient, type TerminalSessionStore } from './terminal-session-manager';
+import type { MachineRuntimeGuardrailDecision } from './quota';
 
 /**
  * Structural mirror of the canonical `MachineRef`
@@ -54,6 +55,15 @@ export interface AcquireMachineSandboxDeps {
   secret: string;
   /** REQUIRED full-egress enablement gate — see terminal-session-manager.ts. */
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
+  /**
+   * Per-machine active-runtime cost backstop (Terminal Epic 1 T1.5, pulled
+   * forward from Epic 3's full metering) — see quota.ts. Checked AFTER authz
+   * (an unauthorized actor is denied on its own merits, not because the
+   * machine happens to be busy) and BEFORE provisioning.
+   */
+  checkMachineRuntimeGuardrail: (input: { machineKey: string; now: number }) => MachineRuntimeGuardrailDecision;
+  /** Record that the machine was just active, extending (or starting) its continuous-activity window. */
+  recordMachineActivity: (input: { machineKey: string; now: number }) => void;
 }
 
 export interface AcquireMachineSandboxInput {
@@ -68,10 +78,15 @@ export interface AcquireMachineSandboxInput {
 }
 
 export type AcquireMachineSandboxResult =
-  | { ok: true; sandboxId: string; resumed: boolean }
+  | { ok: true; sandboxId: string; resumed: boolean; pageId?: string }
   | {
       ok: false;
-      reason: CodeExecutionDenialReason | 'provision_failed' | 'no_machine' | FullEgressDenialReason;
+      reason:
+        | CodeExecutionDenialReason
+        | 'provision_failed'
+        | 'no_machine'
+        | FullEgressDenialReason
+        | 'machine_runtime_exceeded';
       cause?: unknown;
     };
 
@@ -85,6 +100,10 @@ export async function acquireMachineSandbox(
 
   const authorization = await deps.authorize({ userId, driveId, requestOrigin, agentPageId });
   if (!authorization.ok) return { ok: false, reason: authorization.reason };
+
+  const nowMs = deps.now().getTime();
+  const guardrail = deps.checkMachineRuntimeGuardrail({ machineKey: pageId, now: nowMs });
+  if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
 
   const result = await acquireTerminalSandbox({
     pageId,
@@ -105,5 +124,7 @@ export async function acquireMachineSandbox(
     // 'deny' cannot arise here (canRun is always true) — mapped defensively.
     return { ok: false, reason: result.reason === 'deny' ? 'error' : result.reason, cause: result.cause };
   }
-  return { ok: true, sandboxId: result.sandboxId, resumed: result.resumed };
+
+  deps.recordMachineActivity({ machineKey: pageId, now: nowMs });
+  return { ok: true, sandboxId: result.sandboxId, resumed: result.resumed, pageId };
 }

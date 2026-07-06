@@ -106,6 +106,8 @@ function makeRunDeps(world: ReturnType<typeof makeSpriteWorld>, store: TerminalS
     now: () => NOW,
     secret: 'x'.repeat(32),
     checkFullEgressEnablement: passGate,
+    checkMachineRuntimeGuardrail: () => ({ allowed: true }),
+    recordMachineActivity: () => {},
   };
   return {
     isEnabled: () => true,

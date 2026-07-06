@@ -36,6 +36,8 @@ import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-
 import {
   acquireCodeExecutionSlot,
   releaseCodeExecutionSlot,
+  checkMachineRuntimeGuardrail,
+  recordMachineActivity,
 } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
@@ -48,6 +50,7 @@ import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxConte
 import { canActorViewPage } from './actor-permissions';
 import { pageAgentRepository, type MachineRef } from '@/lib/repositories/page-agent-repository';
 import type { ToolExecutionContext } from '../core/types';
+import { notifyTerminalAgentActivity } from '@/lib/websocket/socket-utils';
 
 // The session store and Sprites client are process-wide singletons: the store
 // reconnects to one DB pool and the client is stateless. Both are built lazily
@@ -124,6 +127,8 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
               adminGateEnabled: isCodeExecutionEnabled(),
               containment: isContainmentVerified() ? { contained: true } : null,
             }),
+          checkMachineRuntimeGuardrail,
+          recordMachineActivity,
         },
       }),
     reconnect: async (sandboxId) => (await getSandboxClient()).get({ sandboxId }),
@@ -133,6 +138,19 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
+    // Activity-visibility seam (Terminal Epic 1 T1.5): stream a successful bash
+    // run into the referenced Terminal's live PTY feed. Best-effort — errors are
+    // handled inside notifyTerminalAgentActivity itself (logged, never thrown).
+    notifyTerminalActivity: (input) =>
+      notifyTerminalAgentActivity({
+        tenantId: input.tenantId,
+        driveId: input.driveId,
+        pageId: input.pageId,
+        command: input.command,
+        output: input.output,
+        exitCode: input.exitCode,
+        agentLabel: input.agentLabel,
+      }),
     // Injection seam (DEFENSE-IN-DEPTH, fail-open): screen untrusted tool output
     // through the built-in heuristic classifier before it becomes a model message.
     // Annotates flagged content (never blocks); a classifier error fails open. A

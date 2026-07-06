@@ -53,6 +53,8 @@ import {
   broadcastAiMessageDeleted,
   broadcastAiUndoApplied,
   broadcastAiConversationAdded,
+  notifyTerminalAgentActivity,
+  type TerminalActivityEventPayload,
   type ChatUserMessagePayload,
   type ChatMessageEditedPayload,
   type ChatMessageDeletedPayload,
@@ -681,6 +683,41 @@ describe('socket-utils', () => {
         conversationId: 'conv-1',
         triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       })).resolves.not.toThrow();
+    });
+  });
+
+  describe('notifyTerminalAgentActivity', () => {
+    const payload: TerminalActivityEventPayload = {
+      tenantId: 'tenant-1',
+      driveId: 'drive-1',
+      pageId: 'terminal-page-1',
+      command: 'echo hi',
+      output: 'hi',
+      exitCode: 0,
+      agentLabel: 'Agent Bob',
+    };
+
+    it('given a valid payload, should POST it to /api/terminal-activity (not the broadcast endpoint)', async () => {
+      await notifyTerminalAgentActivity(payload);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe('http://localhost:3001/api/terminal-activity');
+      expect(JSON.parse(init.body)).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await notifyTerminalAgentActivity(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw (best-effort)', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(notifyTerminalAgentActivity(payload)).resolves.not.toThrow();
     });
   });
 

@@ -1249,6 +1249,53 @@ export async function broadcastActivityEvent(payload: ActivityEventPayload): Pro
 }
 
 // ============================================================================
+// Terminal Activity Feed (Terminal Epic 1 T1.5, activity visibility)
+// ============================================================================
+
+export interface TerminalActivityEventPayload {
+  tenantId: string;
+  driveId?: string;
+  pageId: string;
+  command: string;
+  output: string;
+  exitCode: number;
+  agentLabel: string;
+}
+
+/**
+ * Streams a successful agent bash run into the referenced Terminal's live
+ * PTY/output feed, via a dedicated (non-broadcast-room) realtime endpoint —
+ * the human viewer's live session is looked up by derived session key, not
+ * by Socket.IO room membership. Best-effort: a failure (or nobody watching)
+ * must never affect the tool call that already succeeded.
+ */
+export async function notifyTerminalAgentActivity(payload: TerminalActivityEventPayload): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify(payload);
+    await fetch(`${realtimeUrl}/api/terminal-activity`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error(
+      'Failed to notify terminal agent activity',
+      error instanceof Error ? error : undefined,
+      {
+        event: 'terminal_activity',
+        pageId: maskIdentifier(payload.pageId),
+      }
+    );
+  }
+}
+
+// ============================================================================
 // Permission Revocation (Kick API)
 // ============================================================================
 

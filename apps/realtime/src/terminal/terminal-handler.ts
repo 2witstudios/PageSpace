@@ -36,7 +36,7 @@ export type TerminalHandlers = {
   onDisconnect(): void;
 };
 
-function appendScrollback(session: Pick<TerminalSession, 'scrollback' | 'scrollbackBytes'>, data: string): void {
+export function appendScrollback(session: Pick<TerminalSession, 'scrollback' | 'scrollbackBytes'>, data: string): void {
   const bytes = Buffer.byteLength(data, 'utf8');
   session.scrollback.push(data);
   session.scrollbackBytes += bytes;
