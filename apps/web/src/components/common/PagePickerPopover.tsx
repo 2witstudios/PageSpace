@@ -20,6 +20,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useDebounce } from '@/hooks/useDebounce';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { PageType } from '@pagespace/lib/utils/enums';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { cn } from '@/lib/utils';
 
 interface PageSearchResult {
@@ -44,9 +45,15 @@ const pageFetcher = async (url: string): Promise<{ id: string; title: string | n
 };
 
 function SelectedPageLabel({ pageId }: { pageId: string }) {
+  // Mirrors TriggerPagePicker's PageLabel: pause background revalidation
+  // during document/form editing so a remote broadcast can't refetch and
+  // clobber the chip label mid-edit (this picker is used inside the
+  // publish-settings dialog while a canvas document may be actively edited).
+  const isAnyEditing = useEditingStore((s) => s.isAnyEditing());
   const hasLoadedRef = useRef(false);
   const { data, error } = useSWR(`/api/pages/${pageId}`, pageFetcher, {
     revalidateOnFocus: false,
+    isPaused: () => hasLoadedRef.current && isAnyEditing,
     onSuccess: () => {
       hasLoadedRef.current = true;
     },
@@ -141,14 +148,13 @@ export function PagePickerPopover({
                 .filter((r) => r.type === 'page')
                 .map((page) => {
                   const isSelected = page.id === value;
-                  const isImage = imageOnly && page.data?.mimeType?.startsWith('image/');
                   return (
                     <CommandItem
                       key={page.id}
                       value={page.id}
                       onSelect={() => handleSelect(page.id)}
                     >
-                      {isImage ? (
+                      {imageOnly ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={`/api/files/${page.id}/thumbnail`}

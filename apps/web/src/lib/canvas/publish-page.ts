@@ -526,8 +526,12 @@ export async function changePublishSubdomain(
 /**
  * Render a drive's custom 404 page (an author-chosen CANVAS page) through the
  * same asset/inter-page-link rewriting `publishCanvasPage` uses for a normal
- * publish — simplified: no `published_pages` row, no SEO-override merge,
- * always `robots: noindex` (a 404 document is never a real, indexable route).
+ * publish — simplified: no `published_pages` row, no per-page SEO override
+ * merge, always `robots: noindex` (a 404 document is never a real, indexable
+ * route). The drive's default share image and favicon are still applied
+ * (same precedence as a normal publish: the page's own tag wins) so a shared
+ * 404 page looks consistent with the rest of the site if its link is ever
+ * pasted somewhere.
  *
  * The acting user for asset-permission checks is the DRIVE OWNER, not whoever
  * triggered the regeneration (many callers — unpublish, home-page sync — have
@@ -543,9 +547,10 @@ async function renderNotFoundPageHtml(params: {
   subdomain: string;
   homePageId: string | null;
   publishFaviconUrl: string | null;
+  publishDefaultOgImageUrl: string | null;
   ownerId: string;
 }): Promise<string | null> {
-  const { driveId, pageId, subdomain, homePageId, publishFaviconUrl, ownerId } = params;
+  const { driveId, pageId, subdomain, homePageId, publishFaviconUrl, publishDefaultOgImageUrl, ownerId } = params;
   try {
     const page = await db.query.pages.findFirst({
       where: and(
@@ -577,6 +582,7 @@ async function renderNotFoundPageHtml(params: {
       assetBaseUrl: getPublishAssetBaseUrl(),
       faviconHref: favicon.faviconHref,
       faviconBaseUrl: favicon.faviconBaseUrl,
+      ogImageUrl: meta.ogImageUrl ?? publishDefaultOgImageUrl ?? undefined,
       description: meta.ogDescription,
       robots: 'noindex',
     });
@@ -603,6 +609,7 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
         homePageId: true,
         notFoundPageId: true,
         publishFaviconUrl: true,
+        publishDefaultOgImageUrl: true,
       },
     });
     const subdomain = drive?.publishSubdomain;
@@ -667,6 +674,7 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
           subdomain,
           homePageId: drive.homePageId,
           publishFaviconUrl: drive.publishFaviconUrl,
+          publishDefaultOgImageUrl: drive.publishDefaultOgImageUrl,
           ownerId: drive.ownerId,
         })
       : null;

@@ -191,7 +191,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     let ogImageUrl = parsedBody?.ogImageUrl;
     if (parsedBody?.ogImageFileId) {
-      const resolved = await resolveUploadedImageAssetUrl({ fileId: parsedBody.ogImageFileId, userId, db });
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: parsedBody.ogImageFileId, driveId: pageCheck.driveId, userId, db });
       if (!resolved) {
         return NextResponse.json({ error: 'Selected image is unavailable or not accessible' }, { status: 400 });
       }

@@ -320,7 +320,13 @@ function PublishSettingsDialog({ open, onOpenChange, initial, driveId, isBusy, o
         }
       }
     }
-    onSave({ ...form, ogImageFileId: pickedImageId ?? undefined });
+    // A picked file always wins over the (now-disabled) URL input. Clear the
+    // stale text here rather than just leaving it disabled: a leftover
+    // invalid/partial URL would otherwise still be sent to the server, which
+    // validates `ogImageUrl` before it even looks at `ogImageFileId` — failing
+    // the whole publish with a generic URL error despite a perfectly valid
+    // file selection.
+    onSave({ ...form, ogImageUrl: pickedImageId ? '' : form.ogImageUrl, ogImageFileId: pickedImageId ?? undefined });
   };
 
   return (

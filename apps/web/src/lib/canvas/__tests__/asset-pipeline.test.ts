@@ -564,7 +564,7 @@ describe('resolveUploadedImageAssetUrl', () => {
       extractionMetadata: null,
     });
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
 
     expect(url).toBe(`https://cdn.example.com/assets/${HASH_A}`);
     const { copyObjectToPublishBucket } = await import('../published-storage');
@@ -580,7 +580,7 @@ describe('resolveUploadedImageAssetUrl', () => {
   it('returns null when the page does not exist', async () => {
     mockDb.query.pages.findFirst.mockResolvedValue(undefined);
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'missing', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'missing', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
 
     expect(url).toBeNull();
   });
@@ -591,7 +591,7 @@ describe('resolveUploadedImageAssetUrl', () => {
     });
     canUserViewPage.mockResolvedValue(false);
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
 
     expect(url).toBeNull();
     const { copyObjectToPublishBucket } = await import('../published-storage');
@@ -603,7 +603,7 @@ describe('resolveUploadedImageAssetUrl', () => {
       id: 'file-1', driveId: 'drive-1', contentHash: null, mimeType: 'image/png', extractionMetadata: null,
     });
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
 
     expect(url).toBeNull();
   });
@@ -614,8 +614,36 @@ describe('resolveUploadedImageAssetUrl', () => {
     });
     canUserViewPage.mockRejectedValue(new Error('permission service down'));
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
 
     expect(url).toBeNull();
+  });
+
+  it('returns null when the file belongs to a different drive than the one being configured, even if the caller can view it', async () => {
+    // A user can have view access to a page shared with them individually in
+    // an unrelated drive (page-level permission) — that isn't consent to make
+    // it publicly served as another drive's OG image/favicon.
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'other-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
+    });
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+  });
+
+  it('excludes trashed pages from the lookup', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue(undefined); // simulates the isTrashed filter excluding the row
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+    expect(mockDb.query.pages.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { kind: 'and', conds: [expect.objectContaining({ val: 'file-1' }), expect.objectContaining({ val: false })] },
+      }),
+    );
   });
 });

@@ -194,7 +194,7 @@ export async function PATCH(
     // both are sent, the resolved file wins (it's the more specific action).
     let resolvedOgImageUrl = validatedBody.publishDefaultOgImageUrl;
     if (validatedBody.ogImageFileId) {
-      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.ogImageFileId, userId, db });
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.ogImageFileId, driveId, userId, db });
       if (!resolved) {
         return NextResponse.json({ error: 'Selected image is unavailable or not accessible' }, { status: 400 });
       }
@@ -203,7 +203,7 @@ export async function PATCH(
 
     let resolvedFaviconUrl = validatedBody.publishFaviconUrl;
     if (validatedBody.faviconFileId) {
-      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.faviconFileId, userId, db });
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.faviconFileId, driveId, userId, db });
       if (!resolved) {
         return NextResponse.json({ error: 'Selected favicon is unavailable or not accessible' }, { status: 400 });
       }
