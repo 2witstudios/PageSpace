@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, type ReactNode } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,14 +8,16 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon } from 'lucide-react';
+import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon, FileWarning } from 'lucide-react';
 import Link from 'next/link';
-import { useDriveStore } from '@/hooks/useDrive';
+import { useDriveStore, type Drive } from '@/hooks/useDrive';
 import { toast } from 'sonner';
 import { fetchWithAuth, del, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
 import { normalizeHostname, validateCustomDomain, buildDnsInstructions } from '@pagespace/lib/validators/custom-domain';
 import { selectPrimaryActiveDomain } from '@pagespace/lib/canvas/primary-host';
+import { PagePickerPopover } from '@/components/common/PagePickerPopover';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 interface CustomDomain {
   id: string;
@@ -49,9 +51,8 @@ export default function DomainsSettingsPage() {
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const updateDriveInStore = useDriveStore((state) => state.updateDrive);
 
-  const [ogImage, setOgImage] = useState('');
-  const [isSavingOgImage, setIsSavingOgImage] = useState(false);
-  const [previewError, setPreviewError] = useState(false);
+  const [notFoundPageId, setNotFoundPageId] = useState<string | null>(null);
+  const [isSavingNotFoundPage, setIsSavingNotFoundPage] = useState(false);
   const [newDomain, setNewDomain] = useState('');
   const [isAddingDomain, setIsAddingDomain] = useState(false);
   const [removingDomainId, setRemovingDomainId] = useState<string | null>(null);
@@ -70,28 +71,41 @@ export default function DomainsSettingsPage() {
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
 
   useEffect(() => {
-    if (drive) setOgImage(drive.publishDefaultOgImageUrl ?? '');
+    if (drive) setNotFoundPageId(drive.notFoundPageId ?? null);
   }, [drive]);
 
-  // A corrected URL must be able to recover the preview, so clear the error flag
-  // whenever the value changes (the keyed <img> below also remounts on change).
-  useEffect(() => {
-    setPreviewError(false);
-  }, [ogImage]);
+  const ogImageSetting = useUploadableImageSetting({
+    driveId,
+    urlField: 'publishDefaultOgImageUrl',
+    fileIdField: 'ogImageFileId',
+    currentValue: drive?.publishDefaultOgImageUrl ?? '',
+    label: 'Default share image',
+    updateDriveInStore,
+  });
 
-  const handleSaveOgImage = async (clear = false) => {
-    if (isSavingOgImage) return;
-    const next = clear ? '' : ogImage.trim();
-    setIsSavingOgImage(true);
+  const faviconSetting = useUploadableImageSetting({
+    driveId,
+    urlField: 'publishFaviconUrl',
+    fileIdField: 'faviconFileId',
+    currentValue: drive?.publishFaviconUrl ?? '',
+    label: 'Favicon',
+    updateDriveInStore,
+  });
+
+  const handleSetNotFoundPage = async (pageId: string | null) => {
+    if (isSavingNotFoundPage) return;
+    const previous = notFoundPageId;
+    setNotFoundPageId(pageId);
+    setIsSavingNotFoundPage(true);
     try {
-      await patch(`/api/drives/${driveId}`, { publishDefaultOgImageUrl: next });
-      updateDriveInStore(driveId, { publishDefaultOgImageUrl: next || null });
-      if (clear) setOgImage('');
-      toast.success(clear ? 'Default share image cleared' : 'Default share image saved');
+      await patch(`/api/drives/${driveId}`, { notFoundPageId: pageId });
+      updateDriveInStore(driveId, { notFoundPageId: pageId });
+      toast.success(pageId ? '404 page updated' : '404 page cleared');
     } catch {
-      toast.error('Failed to save default share image');
+      setNotFoundPageId(previous);
+      toast.error('Failed to update 404 page');
     } finally {
-      setIsSavingOgImage(false);
+      setIsSavingNotFoundPage(false);
     }
   };
 
@@ -337,57 +351,229 @@ export default function DomainsSettingsPage() {
         verifyReasons={verifyReasons}
       />
 
+      <UploadableImageSettingCard
+        driveId={driveId}
+        icon={<ImageIcon className="h-4 w-4" />}
+        title="Default Share Image"
+        description="The Open Graph image used when a published page has no image of its own. Recommended 1200×630."
+        inputId="default-og-image"
+        inputLabel="Image URL"
+        previewAlt="Default share image preview"
+        previewClassName="max-h-40 w-full rounded-md border object-contain bg-muted"
+        savedValue={drive.publishDefaultOgImageUrl ?? ''}
+        {...ogImageSetting}
+      />
+
+      <UploadableImageSettingCard
+        driveId={driveId}
+        icon={<ImageIcon className="h-4 w-4" />}
+        title="Favicon"
+        description={<>The icon shown in browser tabs for this site. Falls back to a page&apos;s own &lt;link rel=&quot;icon&quot;&gt; tag, then the PageSpace default.</>}
+        inputId="favicon-url"
+        inputLabel="Favicon URL"
+        previewAlt="Favicon preview"
+        previewClassName="h-10 w-10 rounded border object-contain bg-muted"
+        savedValue={drive.publishFaviconUrl ?? ''}
+        {...faviconSetting}
+      />
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <ImageIcon className="h-4 w-4" />
-            Default Share Image
+            <FileWarning className="h-4 w-4" />
+            Custom 404 Page
           </CardTitle>
           <CardDescription>
-            The Open Graph image used when a published page has no image of its own. Recommended 1200×630.
+            The Canvas page shown when a visitor requests a URL that doesn&apos;t exist on this
+            site. Falls back to a generic not-found page when unset.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="default-og-image">Image URL</Label>
-            <Input
-              id="default-og-image"
-              type="url"
-              value={ogImage}
-              onChange={(e) => setOgImage(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSaveOgImage()}
-              placeholder="https://…"
-            />
-          </div>
-          {ogImage.trim() && !previewError && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              key={ogImage.trim()}
-              src={ogImage.trim()}
-              alt="Default share image preview"
-              className="max-h-40 w-full rounded-md border object-contain bg-muted"
-              onError={() => setPreviewError(true)}
-            />
-          )}
-          <div className="flex gap-2">
-            <Button
-              onClick={() => handleSaveOgImage()}
-              disabled={isSavingOgImage || ogImage.trim() === (drive.publishDefaultOgImageUrl ?? '')}
-            >
-              {isSavingOgImage && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Save
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => handleSaveOgImage(true)}
-              disabled={isSavingOgImage || !(drive.publishDefaultOgImageUrl ?? '')}
-            >
-              Clear
-            </Button>
-          </div>
+        <CardContent>
+          <PagePickerPopover
+            driveId={driveId}
+            value={notFoundPageId}
+            onChange={handleSetNotFoundPage}
+            pageType={PageType.CANVAS}
+            placeholder="Select a Canvas page…"
+            disabled={isSavingNotFoundPage}
+          />
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ── Uploadable image setting (OG image / favicon) ───────────────────────────
+//
+// The Default Share Image and Favicon cards are the same shape: a pasted-URL
+// input with Save/Clear, plus a "browse uploaded files" alternative that
+// resolves through the same server-side pipeline. Shared here instead of
+// duplicated per field so a future fix (validation, preview handling) only
+// has to land once.
+
+interface UploadableImageSettingHook {
+  value: string;
+  setValue: (v: string) => void;
+  isSaving: boolean;
+  previewError: boolean;
+  setPreviewError: (v: boolean) => void;
+  onSave: (clear?: boolean) => void;
+  onPickFile: (fileId: string | null) => void;
+}
+
+function useUploadableImageSetting({
+  driveId,
+  urlField,
+  fileIdField,
+  currentValue,
+  label,
+  updateDriveInStore,
+}: {
+  driveId: string;
+  urlField: 'publishDefaultOgImageUrl' | 'publishFaviconUrl';
+  fileIdField: 'ogImageFileId' | 'faviconFileId';
+  currentValue: string;
+  label: string;
+  updateDriveInStore: (driveId: string, updates: Partial<Drive>) => void;
+}): UploadableImageSettingHook {
+  const [value, setValue] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [previewError, setPreviewError] = useState(false);
+
+  useEffect(() => {
+    setValue(currentValue);
+  }, [currentValue]);
+
+  // A corrected URL must be able to recover the preview, so clear the error
+  // flag whenever the value changes (the keyed <img> below also remounts on change).
+  useEffect(() => {
+    setPreviewError(false);
+  }, [value]);
+
+  const onSave = async (clear = false) => {
+    if (isSaving) return;
+    const next = clear ? '' : value.trim();
+    setIsSaving(true);
+    try {
+      await patch(`/api/drives/${driveId}`, { [urlField]: next });
+      updateDriveInStore(driveId, { [urlField]: next || null } as Partial<Drive>);
+      if (clear) setValue('');
+      toast.success(clear ? `${label} cleared` : `${label} saved`);
+    } catch {
+      toast.error(`Failed to save ${label.toLowerCase()}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Picking an uploaded file resolves it server-side to a durable public CDN
+  // URL (see resolveUploadedImageAssetUrl) — a pasted link to one of the user's
+  // own files would otherwise be an authenticated URL that fails for anonymous
+  // site visitors. Saves immediately; the URL input above still supports a
+  // pasted external link via the Save button.
+  const onPickFile = async (fileId: string | null) => {
+    if (!fileId || isSaving) return;
+    setIsSaving(true);
+    try {
+      const updated = await patch<Record<string, string | null | undefined>>(`/api/drives/${driveId}`, { [fileIdField]: fileId });
+      const resolved = updated[urlField] ?? '';
+      setValue(resolved);
+      updateDriveInStore(driveId, { [urlField]: resolved || null } as Partial<Drive>);
+      toast.success(`${label} saved`);
+    } catch {
+      toast.error(`Failed to save ${label.toLowerCase()}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return { value, setValue, isSaving, previewError, setPreviewError, onSave, onPickFile };
+}
+
+interface UploadableImageSettingCardProps extends UploadableImageSettingHook {
+  driveId: string;
+  icon: ReactNode;
+  title: string;
+  description: ReactNode;
+  inputId: string;
+  inputLabel: string;
+  previewAlt: string;
+  previewClassName: string;
+  savedValue: string;
+}
+
+function UploadableImageSettingCard({
+  driveId,
+  icon,
+  title,
+  description,
+  inputId,
+  inputLabel,
+  previewAlt,
+  previewClassName,
+  savedValue,
+  value,
+  setValue,
+  isSaving,
+  previewError,
+  setPreviewError,
+  onSave,
+  onPickFile,
+}: UploadableImageSettingCardProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          {icon}
+          {title}
+        </CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor={inputId}>{inputLabel}</Label>
+          <Input
+            id={inputId}
+            type="url"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && onSave()}
+            placeholder="https://…"
+          />
+        </div>
+        {value.trim() && !previewError && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            key={value.trim()}
+            src={value.trim()}
+            alt={previewAlt}
+            className={previewClassName}
+            onError={() => setPreviewError(true)}
+          />
+        )}
+        <div className="flex gap-2">
+          <Button onClick={() => onSave()} disabled={isSaving || value.trim() === savedValue}>
+            {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Save
+          </Button>
+          <Button variant="outline" onClick={() => onSave(true)} disabled={isSaving || !savedValue}>
+            Clear
+          </Button>
+        </div>
+        <div className="space-y-1.5 pt-2 border-t">
+          <Label>Or pick an uploaded image</Label>
+          <PagePickerPopover
+            driveId={driveId}
+            value={null}
+            onChange={onPickFile}
+            pageType={PageType.FILE}
+            imageOnly
+            placeholder="Browse uploaded images…"
+            disabled={isSaving}
+          />
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

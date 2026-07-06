@@ -23,7 +23,7 @@ import {
   getPublishAssetBaseUrl,
 } from './published-storage';
 import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMeta } from './asset-pipeline';
-import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml } from '@pagespace/lib/canvas/site-files';
+import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml, resolveFaviconTags } from '@pagespace/lib/canvas/site-files';
 import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { mirrorPublishedPageToHosts, mirror404ToHosts, getActiveDomainRecords } from './custom-domain-mirror';
 
@@ -148,7 +148,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // ------------------------------------------------------------------
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
-    columns: { id: true, slug: true, publishSubdomain: true, kind: true, homePageId: true, publishDefaultOgImageUrl: true },
+    columns: { id: true, slug: true, publishSubdomain: true, kind: true, homePageId: true, publishDefaultOgImageUrl: true, publishFaviconUrl: true },
   });
 
   if (!drive) {
@@ -261,6 +261,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     driveDefaultOgImageUrl: drive.publishDefaultOgImageUrl,
     body: bodyHtml,
   });
+  const favicon = resolveFaviconTags(meta.faviconHref, drive.publishFaviconUrl, FAVICON_BASE_URL);
   const formActionOrigin = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
   if (!formActionOrigin) {
     loggers.api.warn(
@@ -273,8 +274,8 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     html: bodyHtml,
     title: resolvedMeta.title,
     assetBaseUrl,
-    faviconHref: meta.faviconHref,
-    faviconBaseUrl: meta.faviconHref ? undefined : FAVICON_BASE_URL,
+    faviconHref: favicon.faviconHref,
+    faviconBaseUrl: favicon.faviconBaseUrl,
     pageUrl: canonicalUrl,
     ogImageUrl: resolvedMeta.ogImageUrl,
     ogDescription: resolvedMeta.description,
@@ -531,13 +532,98 @@ export async function changePublishSubdomain(
   return { oldSubdomain, newSubdomain: normalized };
 }
 
+/**
+ * Render a drive's custom 404 page (an author-chosen CANVAS page) through the
+ * same asset/inter-page-link rewriting `publishCanvasPage` uses for a normal
+ * publish — simplified: no `published_pages` row, no per-page SEO override
+ * merge, always `robots: noindex` (a 404 document is never a real, indexable
+ * route). The drive's default share image and favicon are still applied
+ * (same precedence as a normal publish: the page's own tag wins) so a shared
+ * 404 page looks consistent with the rest of the site if its link is ever
+ * pasted somewhere.
+ *
+ * The acting user for asset-permission checks is the DRIVE OWNER, not whoever
+ * triggered the regeneration (many callers — unpublish, home-page sync — have
+ * no natural "current user"). The owner can always view any page in their own
+ * drive, so this never under-resolves an asset the author is entitled to use.
+ *
+ * Returns null when the page is missing, trashed, not CANVAS, out of this
+ * drive, or rendering throws — callers must fall back to `buildNotFoundHtml`.
+ */
+async function renderNotFoundPageHtml(params: {
+  driveId: string;
+  pageId: string;
+  subdomain: string;
+  homePageId: string | null;
+  publishFaviconUrl: string | null;
+  publishDefaultOgImageUrl: string | null;
+  ownerId: string;
+}): Promise<string | null> {
+  const { driveId, pageId, subdomain, homePageId, publishFaviconUrl, publishDefaultOgImageUrl, ownerId } = params;
+  try {
+    const page = await db.query.pages.findFirst({
+      where: and(
+        eq(pages.id, pageId),
+        eq(pages.driveId, driveId),
+        eq(pages.isTrashed, false),
+        eq(pages.type, 'CANVAS'),
+      ),
+      columns: { title: true, content: true },
+    });
+    if (!page) return null;
+
+    const { html: assetHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId: ownerId, db });
+    const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
+      html: assetHtml,
+      driveId,
+      subdomain,
+      homePageId,
+      currentPageId: pageId,
+      currentPath: '',
+      db,
+    });
+    const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
+    const favicon = resolveFaviconTags(meta.faviconHref, publishFaviconUrl, FAVICON_BASE_URL);
+    const formActionOrigin = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
+
+    return renderPublishedPage({
+      html: bodyHtml,
+      // Same precedence as a normal publish (resolvePublishedMeta): the
+      // page's own og:title wins over its internal page title.
+      title: meta.ogTitle || page.title || 'Page not found',
+      assetBaseUrl: getPublishAssetBaseUrl(),
+      faviconHref: favicon.faviconHref,
+      faviconBaseUrl: favicon.faviconBaseUrl,
+      ogImageUrl: meta.ogImageUrl ?? publishDefaultOgImageUrl ?? undefined,
+      description: meta.ogDescription,
+      robots: 'noindex',
+      formActionOrigin,
+    });
+  } catch (err) {
+    loggers.api.warn('Failed to render custom 404 page; falling back to generic 404', {
+      driveId,
+      pageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 export async function regeneratePublishedSiteFiles(driveId: string): Promise<void> {
   try {
     if (!isPublishConfigured()) return;
 
     const drive = await db.query.drives.findFirst({
       where: eq(drives.id, driveId),
-      columns: { name: true, publishSubdomain: true, homePageId: true },
+      columns: {
+        name: true,
+        ownerId: true,
+        publishSubdomain: true,
+        homePageId: true,
+        notFoundPageId: true,
+        publishFaviconUrl: true,
+        publishDefaultOgImageUrl: true,
+      },
     });
     const subdomain = drive?.publishSubdomain;
     if (!subdomain) return;
@@ -594,7 +680,18 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
 
     const sitemapXml = buildSitemapXml(routes);
     const robotsTxt = buildRobotsTxt({ sitemapUrl: `${origin}/sitemap.xml` });
-    const notFoundHtml = buildNotFoundHtml({ siteName: drive.name ?? undefined });
+    const customNotFoundHtml = drive.notFoundPageId
+      ? await renderNotFoundPageHtml({
+          driveId,
+          pageId: drive.notFoundPageId,
+          subdomain,
+          homePageId: drive.homePageId,
+          publishFaviconUrl: drive.publishFaviconUrl,
+          publishDefaultOgImageUrl: drive.publishDefaultOgImageUrl,
+          ownerId: drive.ownerId,
+        })
+      : null;
+    const notFoundHtml = customNotFoundHtml ?? buildNotFoundHtml({ siteName: drive.name ?? undefined });
 
     await Promise.all([
       putPublishedSiteFile({ subdomain, file: 'robots.txt', body: robotsTxt }),

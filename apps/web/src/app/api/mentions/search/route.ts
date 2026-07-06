@@ -9,7 +9,7 @@ import { db } from '@pagespace/db/db'
 import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository'
 import { users } from '@pagespace/db/schema/auth'
-import { pages, drives } from '@pagespace/db/schema/core';
+import { pages, drives, pageType, type PageTypeEnum } from '@pagespace/db/schema/core';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { z } from 'zod';
@@ -144,8 +144,17 @@ export async function GET(request: Request) {
   const driveId = searchParams.get('driveId');
   const crossDrive = searchParams.get('crossDrive') === 'true'; // Flag for cross-drive search
   const typesParam = searchParams.get('types'); // Comma-separated types
-  
-  loggers.api.debug('[API] Search params', { query, driveId, crossDrive, types: typesParam });
+  // Narrow the 'page' results to a single pages.type value (e.g. 'CANVAS' for a
+  // 404-page picker, 'FILE' for an image picker). Optional — omitted entirely
+  // preserves today's all-types behavior for @mention autocomplete callers.
+  const rawPageType = searchParams.get('pageType');
+  const pageTypeParam: PageTypeEnum | null =
+    rawPageType && (pageType.enumValues as readonly string[]).includes(rawPageType) ? (rawPageType as PageTypeEnum) : null;
+  // Further restrict FILE results to image mime types — for image pickers
+  // (OG image, favicon) that only want to offer uploaded pictures.
+  const imageOnly = searchParams.get('imageOnly') === 'true';
+
+  loggers.api.debug('[API] Search params', { query, driveId, crossDrive, types: typesParam, pageType: pageTypeParam, imageOnly });
   
   // For within-drive searches, driveId is required
   // For cross-drive searches, driveId is optional (searches all accessible drives)
@@ -295,7 +304,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // Search pages (all page types)
+    // Search pages (all page types, unless narrowed by pageType/imageOnly)
     if (requestedTypes.includes('page')) {
       const searchCondition = buildMultiWordSearchCondition(query);
 
@@ -305,13 +314,16 @@ export async function GET(request: Request) {
         title: pages.title,
         type: pages.type,
         driveId: pages.driveId,
+        mimeType: pages.mimeType,
       })
       .from(pages)
       .where(
         and(
           inArray(pages.driveId, targetDriveIds),
           searchCondition, // undefined when empty query = no filter = all pages
-          eq(pages.isTrashed, false)
+          eq(pages.isTrashed, false),
+          pageTypeParam ? eq(pages.type, pageTypeParam) : undefined,
+          imageOnly ? ilike(pages.mimeType, 'image/%') : undefined
         )
       );
 
@@ -349,8 +361,9 @@ export async function GET(request: Request) {
           label: page.title,
           type: mentionType,
           data: {
-            pageType: page.type as 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'SHEET',
+            pageType: page.type,
             driveId: page.driveId,
+            mimeType: page.mimeType,
           },
           description,
         });

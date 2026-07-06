@@ -93,6 +93,8 @@ const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) =>
   publishSubdomain: null,
   homePageId: null,
   publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
 });
 
 // Helper to create mock drive member

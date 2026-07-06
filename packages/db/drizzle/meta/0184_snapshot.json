@@ -1,6 +1,6 @@
 {
-  "id": "eb0c7861-0dc3-49cc-9c9d-466022032f40",
-  "prevId": "8b0ee447-5602-45d5-8d45-f4d40a831ac4",
+  "id": "cd07758e-394c-4f50-9ae4-0e06c6a0fe50",
+  "prevId": "ab7ec046-15c3-479b-aa82-222d450c5c4a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1645,6 +1645,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "not_found_page_id": {
+          "name": "not_found_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_favicon_url": {
+          "name": "publish_favicon_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1721,6 +1733,19 @@
           "tableTo": "pages",
           "columnsFrom": [
             "homePageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "drives_not_found_page_id_pages_id_fk": {
+          "name": "drives_not_found_page_id_pages_id_fk",
+          "tableFrom": "drives",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "not_found_page_id"
           ],
           "columnsTo": [
             "id"
@@ -18496,6 +18521,12 @@
           "notNull": true,
           "default": "'sheet:append'"
         },
+        "canvas_page_id": {
+          "name": "canvas_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "fields": {
           "name": "fields",
           "type": "jsonb",
@@ -18563,21 +18594,6 @@
         }
       },
       "indexes": {
-        "form_targets_token_hash_idx": {
-          "name": "form_targets_token_hash_idx",
-          "columns": [
-            {
-              "expression": "token_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "form_targets_page_id_idx": {
           "name": "form_targets_page_id_idx",
           "columns": [
@@ -18622,6 +18638,37 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "form_targets_canvas_page_id_idx": {
+          "name": "form_targets_canvas_page_id_idx",
+          "columns": [
+            {
+              "expression": "canvas_page_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "form_targets_one_active_per_page_idx": {
+          "name": "form_targets_one_active_per_page_idx",
+          "columns": [
+            {
+              "expression": "page_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"form_targets\".\"status\" = 'active'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -18649,6 +18696,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "form_targets_canvas_page_id_pages_id_fk": {
+          "name": "form_targets_canvas_page_id_pages_id_fk",
+          "tableFrom": "form_targets",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "canvas_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "form_targets_created_by_users_id_fk": {
