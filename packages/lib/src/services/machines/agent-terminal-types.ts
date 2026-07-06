@@ -11,10 +11,22 @@
  * nothing that resolves a spec by type branches on which one it got.
  */
 
+/**
+ * `shell`'s `command` is the literal string `'shell'` — a SENTINEL, not a real
+ * binary — mirroring PurePoint's `default_agents()` (`crates/pu-core/src/
+ * types/config.rs`), which maps its `terminal` agent to the command `"shell"`
+ * and resolves it to `$SHELL` at spawn time (`parse_agent_command`,
+ * `crates/pu-engine/src/engine/helpers.rs`). A bare machine shell is just a
+ * machine-scope agent terminal of this type — not a separate concept.
+ * Resolving the sentinel to an actual shell binary is an IO concern (reading
+ * `process.env.SHELL`) that belongs to whichever layer actually spawns the
+ * PTY (the realtime bridge), not this pure module.
+ */
 export const AGENT_LAUNCH_SPECS = {
   'pagespace-cli': { command: 'pagespace-cli', args: [] },
   claude: { command: 'claude', args: [] },
   codex: { command: 'codex', args: [] },
+  shell: { command: 'shell', args: [] },
 } as const satisfies Record<string, { command: string; args: readonly string[] }>;
 
 export type AgentRuntimeType = keyof typeof AGENT_LAUNCH_SPECS;
@@ -43,4 +55,19 @@ export function isValidAgentTerminalName(name: string): boolean {
     return false;
   }
   return AGENT_TERMINAL_NAME_RE.test(name);
+}
+
+const MAX_AGENT_TERMINAL_COMMAND_LENGTH = 500;
+
+/**
+ * An optional per-terminal program override — an agent terminal can run an
+ * arbitrary command in its PTY instead of just the `agentType`'s default
+ * binary (mirrors PurePoint's `AgentEntry.command` / `SpawnParams.
+ * terminal_command`, `crates/pu-core/src/types/agent.rs`). Only rejects
+ * obviously-invalid input (empty, absurdly long) — interpreting the command
+ * string (splitting args, deciding whether to wrap it in `$SHELL -c` for
+ * metacharacters) is the launching layer's job, not this validator's.
+ */
+export function isValidAgentTerminalCommand(command: string): boolean {
+  return typeof command === 'string' && command.trim().length > 0 && command.length <= MAX_AGENT_TERMINAL_COMMAND_LENGTH;
 }

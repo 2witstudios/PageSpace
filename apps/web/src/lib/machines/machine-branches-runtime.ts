@@ -126,6 +126,7 @@ export function buildMachineBranchesDeps(): MachineBranchesDeps {
       list: async (terminalId, projectName) => (await getMachineBranchStore()).list(terminalId, projectName),
       findByName: async (terminalId, projectName, branchName) =>
         (await getMachineBranchStore()).findByName(terminalId, projectName, branchName),
+      findById: async (id) => (await getMachineBranchStore()).findById(id),
       create: async (input) => (await getMachineBranchStore()).create(input),
       updateSandboxId: async (input) => (await getMachineBranchStore()).updateSandboxId(input),
       remove: async (terminalId, projectName, branchName) =>
