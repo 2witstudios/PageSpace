@@ -39,6 +39,10 @@
       "types": "./dist/schema/machine-branches.d.ts",
       "default": "./dist/schema/machine-branches.js"
     },
+    "./schema/machine-agent-terminals": {
+      "types": "./dist/schema/machine-agent-terminals.d.ts",
+      "default": "./dist/schema/machine-agent-terminals.js"
+    },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
       "default": "./dist/schema/share-links.js"

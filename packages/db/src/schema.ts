@@ -52,6 +52,7 @@ export * from './schema/data-subject-requests';
 export * from './schema/oauth';
 export * from './schema/machine-projects';
 export * from './schema/machine-branches';
+export * from './schema/machine-agent-terminals';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -107,6 +108,7 @@ import * as dataSubjectRequests from './schema/data-subject-requests';
 import * as oauth from './schema/oauth';
 import * as machineProjects from './schema/machine-projects';
 import * as machineBranches from './schema/machine-branches';
+import * as machineAgentTerminals from './schema/machine-agent-terminals';
 
 export const schema = {
   ...auth,
@@ -163,4 +165,5 @@ export const schema = {
   ...oauth,
   ...machineProjects,
   ...machineBranches,
+  ...machineAgentTerminals,
 };

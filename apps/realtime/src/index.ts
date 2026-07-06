@@ -24,10 +24,18 @@ import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/l
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { buildTerminalHandlers, type CheckAuthResult, type SocketLike } from './terminal/terminal-handler';
+import {
+  buildAgentTerminalHandlers,
+  type AgentTerminalCheckAuthResult,
+} from './terminal/agent-terminal-handler';
 import { handleTerminalActivityRequest } from './terminal/terminal-activity';
 import { createTerminalSessionMap } from './terminal/terminal-session-map';
 import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
+import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
+import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
+import { resolveAgentTerminal } from '@pagespace/lib/services/machines/agent-terminals';
+import { resolveAgentLaunchSpec } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   validatePageId,
   validateDriveId,
@@ -46,9 +54,15 @@ import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 dotenv.config({ path: '../../.env' });
 
 const terminalSessionMap = createTerminalSessionMap();
+// Separate map for agent terminals (Terminal Epic 2, Runtime tier) — a
+// branch's Sprite can host several of these concurrently, each keyed by its
+// own (branch, name) sessionKey, independent of any human terminal session.
+const agentTerminalSessionMap = createTerminalSessionMap();
 
 // Cache the DB terminal session store promise at module level (created once, not per-connection).
 const dbTerminalSessionStorePromise = createDbTerminalSessionStore();
+const dbMachineBranchStorePromise = createDbMachineBranchStore();
+const dbMachineAgentTerminalStorePromise = createDbMachineAgentTerminalStore();
 
 async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageId: string }): Promise<CheckAuthResult> {
   const [pageRow] = await db
@@ -171,6 +185,113 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
   }).catch(() => {});
 
   return { ok: true, sandboxId, sessionKey: sandboxResult.sessionKey, sprite, releaseSlot, payerId: tenantId };
+}
+
+/**
+ * Auth for a named, pluggable-agent-typed terminal running INSIDE a branch's
+ * Sprite (Terminal Epic 2, Runtime tier) — access is governed by the OWNING
+ * Machine's Terminal page (`terminalId`), same edit-level bar as a human
+ * terminal, then resolved down to the specific branch + agent-terminal row.
+ * Does not provision anything: an unreserved (branch, name) is `not_found`
+ * (spawn it first via the Branches/Runtime API), and a vanished branch Sprite
+ * fails at the `getSprite` step below exactly like a human terminal's does.
+ */
+async function makeAgentTerminalCheckAuth({
+  userId,
+  terminalId,
+  projectName,
+  branchName,
+  name,
+}: {
+  userId: string;
+  terminalId: string;
+  projectName: string;
+  branchName: string;
+  name: string;
+}): Promise<AgentTerminalCheckAuthResult> {
+  const access = await getUserAccessLevel(userId, terminalId);
+  if (!access?.canEdit) {
+    loggers.realtime.warn('Agent terminal auth denied', { reason: 'no_edit_access', userId, terminalId });
+    return { ok: false, reason: 'no_edit_access' };
+  }
+
+  const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, terminalId)).limit(1);
+  if (!pageRow) {
+    loggers.realtime.warn('Agent terminal auth denied', { reason: 'page_not_found', userId, terminalId });
+    return { ok: false, reason: 'page_not_found' };
+  }
+
+  const codeAuth = await canRunCode({ userId, driveId: pageRow.driveId, requestOrigin: 'user' });
+  if (!codeAuth.ok) {
+    loggers.realtime.warn('Agent terminal auth denied', { reason: codeAuth.reason, userId, terminalId });
+    return { ok: false, reason: codeAuth.reason };
+  }
+
+  const [userRow] = await db.select({ subscriptionTier: users.subscriptionTier, email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+  const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
+  const actorEmail = userRow?.email ?? '';
+
+  const slotAcquired = acquireCodeExecutionSlot({ userId, tier });
+  if (!slotAcquired) {
+    loggers.realtime.warn('Agent terminal auth denied', { reason: 'concurrency_limit', userId, terminalId });
+    return { ok: false, reason: 'concurrency_limit' };
+  }
+  const releaseSlot = () => releaseCodeExecutionSlot({ userId });
+
+  const [branchStore, agentTerminalStore] = await Promise.all([dbMachineBranchStorePromise, dbMachineAgentTerminalStorePromise]);
+  const resolved = await resolveAgentTerminal({
+    terminalId,
+    projectName,
+    branchName,
+    name,
+    deps: { branchStore, store: agentTerminalStore },
+  });
+  if (!resolved.ok) {
+    releaseSlot();
+    loggers.realtime.warn('Agent terminal auth denied', { reason: resolved.reason, userId, terminalId, projectName, branchName, name });
+    return { ok: false, reason: resolved.reason };
+  }
+
+  const spec = resolveAgentLaunchSpec(resolved.agentType);
+
+  const sdk = await getRealtimeSpritesSdk();
+  let sprite;
+  try {
+    sprite = await sdk.getSprite(resolved.sandboxId);
+  } catch {
+    releaseSlot();
+    loggers.realtime.warn('Agent terminal sandbox lookup failed', { reason: 'provision_failed', userId, sandboxId: resolved.sandboxId });
+    return { ok: false, reason: 'provision_failed' };
+  }
+
+  // Write code execution audit record (agent terminal PTY session open) —
+  // mirrors the human terminal's audit write above, since this launches an
+  // arbitrary pluggable agent binary (spec.command) inside the Sprite.
+  writeCodeExecutionAudit({
+    input: {
+      userId,
+      actorEmail,
+      driveId: pageRow.driveId,
+      requestOrigin: 'user',
+      profile: 'pty',
+      code: `[Agent terminal session opened: ${spec.command}]`,
+      exitCode: null,
+      durationMs: 0,
+      timestamp: new Date(),
+    },
+  }).catch(() => {});
+
+  return {
+    ok: true,
+    agentTerminalId: resolved.agentTerminalId,
+    sandboxId: resolved.sandboxId,
+    sessionKey: `${resolved.sandboxId}:agent:${name}`,
+    sprite,
+    releaseSlot,
+    command: spec.command,
+    args: spec.args,
+    streamSessionId: resolved.streamSessionId,
+  };
 }
 
 /**
@@ -1089,8 +1210,39 @@ io.on('connection', (socket: AuthSocket) => {
   socket.on('terminal:resize', (payload) => terminalHandlers.onResize(payload));
   socket.on('terminal:disconnect', () => terminalHandlers.onDisconnect());
 
+  // Agent terminal PTY handlers (Terminal Epic 2, Runtime tier) — a named,
+  // pluggable-agent-typed session inside a branch's Sprite. No billing seam
+  // here: usage is attributed to the branch's Sprite as a whole (Epic 3's
+  // per-machine metering), not per agent-terminal session.
+  const agentTerminalHandlers = buildAgentTerminalHandlers({
+    sessionMap: agentTerminalSessionMap,
+    openShell: openPtyShell,
+    checkAuth: makeAgentTerminalCheckAuth,
+    socket: socket as unknown as SocketLike,
+    persistStreamSessionId: async ({ agentTerminalId, sessionId }) => {
+      const store = await dbMachineAgentTerminalStorePromise;
+      await store.updateStreamSessionId({ id: agentTerminalId, streamSessionId: sessionId, now: new Date() });
+    },
+  });
+
+  socket.on('agent-terminal:connect', (payload) => {
+    agentTerminalHandlers.onConnect(payload).then(() => {
+      const session = agentTerminalSessionMap.getBySocket(socket.id);
+      if (session) {
+        loggers.realtime.info('Agent terminal session opened', { userId: user?.id, sessionKey: session.sessionKey, sandboxId: session.sandboxId });
+      }
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'Internal error';
+      socket.emit('agent-terminal:error', { message: msg });
+    });
+  });
+  socket.on('agent-terminal:input', (payload) => agentTerminalHandlers.onInput(payload));
+  socket.on('agent-terminal:resize', (payload) => agentTerminalHandlers.onResize(payload));
+  socket.on('agent-terminal:disconnect', () => agentTerminalHandlers.onDisconnect());
+
   socket.on('disconnect', (reason) => {
     terminalHandlers.onDisconnect();
+    agentTerminalHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);
     for (const { pageId, driveId } of affectedPages) {
