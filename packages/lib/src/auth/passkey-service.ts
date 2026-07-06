@@ -22,7 +22,7 @@ import {
   type AuthenticatorTransportFuture,
 } from '@simplewebauthn/server';
 import { hashToken, generateToken } from './token-utils';
-import { userEmailMatch, prepareUserWrite } from './user-repository';
+import { decryptUserRow, userEmailMatch, prepareUserWrite } from './user-repository';
 import { PASSKEY_CHALLENGE_EXPIRY_MINUTES } from './passkey-client-constants';
 
 // Configuration
@@ -191,6 +191,8 @@ export async function generateRegistrationOptions(
     return { ok: false, error: { code: 'USER_SUSPENDED', userId } };
   }
 
+  const decryptedUser = await decryptUserRow(user);
+
   // Check passkey limit
   const existingPasskeys = await db.query.passkeys.findMany({
     where: eq(passkeys.userId, userId),
@@ -212,8 +214,8 @@ export async function generateRegistrationOptions(
   const rawOptions = await simpleGenerateRegistrationOptions({
     rpName: PASSKEY_CONFIG.rpName,
     rpID: PASSKEY_CONFIG.rpId,
-    userName: user.email,
-    userDisplayName: user.name,
+    userName: decryptedUser.email,
+    userDisplayName: decryptedUser.name,
     attestationType: 'none',
     excludeCredentials,
     authenticatorSelection: {

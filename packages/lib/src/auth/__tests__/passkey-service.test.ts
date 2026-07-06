@@ -84,6 +84,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
+import { encryptField } from '../../encryption/field-crypto';
 import {
   PASSKEY_CONFIG,
   generateRegistrationOptions,
@@ -192,6 +193,47 @@ describe('passkey-service', () => {
       const result = await generateRegistrationOptions({ userId: 'user-1' });
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.data.options.challenge).toBe('challenge123');
+    });
+
+    it('decrypts ciphertext email/name before passing them to WebAuthn options', async () => {
+      const encryptedEmail = await encryptField('real@example.com');
+      const encryptedName = await encryptField('Real Name');
+      mockDb.query.users.findFirst.mockResolvedValueOnce({
+        id: 'user-1', email: encryptedEmail, name: encryptedName, suspendedAt: null,
+      });
+      mockDb.query.passkeys.findMany.mockResolvedValueOnce([]);
+      mockGenRegOptions.mockResolvedValueOnce({ challenge: 'challenge123', rp: {} });
+      mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+
+      const result = await generateRegistrationOptions({ userId: 'user-1' });
+
+      expect(result.ok).toBe(true);
+      const simpleWebAuthnArgs = mockGenRegOptions.mock.calls[0]?.[0] as {
+        userName?: string;
+        userDisplayName?: string;
+      };
+      expect(simpleWebAuthnArgs.userName).toBe('real@example.com');
+      expect(simpleWebAuthnArgs.userDisplayName).toBe('Real Name');
+    });
+
+    it('passes through legacy plaintext email/name unchanged', async () => {
+      mockDb.query.users.findFirst.mockResolvedValueOnce({
+        id: 'user-1', email: 'legacy@example.com', name: 'Legacy Name', suspendedAt: null,
+      });
+      mockDb.query.passkeys.findMany.mockResolvedValueOnce([]);
+      mockGenRegOptions.mockResolvedValueOnce({ challenge: 'challenge123', rp: {} });
+      mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+
+      await generateRegistrationOptions({ userId: 'user-1' });
+
+      const simpleWebAuthnArgs = mockGenRegOptions.mock.calls[0]?.[0] as {
+        userName?: string;
+        userDisplayName?: string;
+      };
+      expect(simpleWebAuthnArgs.userName).toBe('legacy@example.com');
+      expect(simpleWebAuthnArgs.userDisplayName).toBe('Legacy Name');
     });
 
     // WebAuthn L3 hint — tells the browser to prefer the OS platform authenticator

@@ -3,6 +3,7 @@ import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, count, gte, lt, inArray } from '@pagespace/db/operators'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
@@ -232,8 +233,14 @@ export async function GET(request: Request) {
       resultCount: activities.length,
     } });
 
+    const decryptedActivities = await Promise.all(
+      activities.map(async (activity) =>
+        activity.user ? { ...activity, user: await decryptUserRow(activity.user) } : activity
+      )
+    );
+
     return NextResponse.json({
-      activities,
+      activities: decryptedActivities,
       pagination: {
         total,
         limit: params.limit,
