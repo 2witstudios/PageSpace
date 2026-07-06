@@ -1,37 +1,36 @@
 /**
  * Authenticated Forms settings API for a Canvas page — lets the Forms tab
- * (apps/web/.../canvas/CanvasFormsSettingsTab.tsx) create and manage the form
- * target embedded in this Canvas page, without going through the AI tool
- * (apps/web/src/lib/ai/tools/form-tools.ts). `pageId` here is the CANVAS
- * page's id, not the target Sheet's — the form target is looked up by its
- * `canvasPageId` column.
+ * (apps/web/.../canvas/CanvasFormsSettingsTab.tsx) wire an existing <form>
+ * tag on the page to a Sheet, and manage the resulting grant, without going
+ * through the AI tool (apps/web/src/lib/ai/tools/form-tools.ts). `pageId`
+ * here is the CANVAS page's id, not the target Sheet's — targets are looked
+ * up by their `canvasPageId` column, and a Canvas page can have more than one
+ * (a landing page routinely has several: waitlist, contact, feedback).
  *
+ * This route only manages the DB grant (Sheet header row + form_targets
+ * row). All HTML markup work — detecting tags, deriving fields from a tag's
+ * inputs, injecting the wiring, splicing it into page content, and deleting
+ * a tag on archive — happens client-side (parse-form-tags.ts,
+ * @pagespace/lib/forms/form-html's wireFormBlock, @pagespace/lib/forms/
+ * embed-html), since that's Canvas-document editing, not a server concern.
  * The raw submit token is only ever available at creation time (only its
- * hash is persisted — see packages/db/src/schema/form-targets.ts), so POST is
- * the only response that can include a complete, ready-to-embed `formHtml`.
- * PATCH's `add-field` instead returns a standalone field snippet for the user
- * to paste into their already-embedded form.
+ * hash is persisted — see packages/db/src/schema/form-targets.ts).
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { formFieldSchema, formFieldsSchema } from '@pagespace/lib/forms/field-schema';
-import { buildFormHtml, buildFieldMarkup } from '@pagespace/lib/forms/form-html';
+import { formFieldsSchema } from '@pagespace/lib/forms/field-schema';
 import type { FormTarget } from '@pagespace/db/schema/form-targets';
 import {
   createFormTarget,
-  getFormTargetByCanvasPageId,
-  updateFormTargetFields,
+  getFormTargetsByCanvasPageId,
+  getFormTargetById,
   updateFormTargetStatus,
   FormTargetPageNotSheetError,
   FormTargetAlreadyActiveError,
   FormTargetArchivedError,
-  FormTargetFieldLimitError,
-  FormTargetDuplicateFieldNameError,
-  FormTargetFieldIndexError,
-  type FormTargetFieldMutation,
 } from '@/services/api/form-target-service';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -55,25 +54,14 @@ const createBodySchema = z.object({
   fields: formFieldsSchema,
 });
 
-const patchBodySchema = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('add-field'), field: formFieldSchema }),
-  z.object({
-    op: z.literal('update-field'),
-    index: z.number().int().min(0),
-    patch: z.object({
-      label: z.string().optional(),
-      required: z.boolean().optional(),
-      type: z.enum(['text', 'email', 'textarea', 'checkbox']).optional(),
-    }),
-  }),
-  z.object({ op: z.literal('archive-field'), index: z.number().int().min(0) }),
-  z.object({ op: z.literal('unarchive-field'), index: z.number().int().min(0) }),
-  z.object({
-    op: z.literal('set-status'),
-    status: z.enum(['active', 'paused', 'archived']),
-    reason: z.string().optional(),
-  }),
-]);
+// Archiving goes through DELETE, not PATCH — it's a distinct, terminal
+// action (deletes the tag from the page too, client-side) with its own
+// audit event type, not a routine status toggle.
+const patchBodySchema = z.object({
+  formTargetId: z.string().min(1),
+  status: z.enum(['active', 'paused']),
+  reason: z.string().optional(),
+});
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
   const { pageId } = await params;
@@ -91,11 +79,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   try {
-    const formTarget = await getFormTargetByCanvasPageId(pageId);
-    return NextResponse.json({ formTarget: formTarget ? sanitizeFormTarget(formTarget) : null });
+    const formTargets = await getFormTargetsByCanvasPageId(pageId);
+    return NextResponse.json({ formTargets: formTargets.map(sanitizeFormTarget) });
   } catch (error) {
-    loggers.api.error('Error reading form target:', error as Error);
-    return NextResponse.json({ error: 'Failed to read form target' }, { status: 500 });
+    loggers.api.error('Error reading form targets:', error as Error);
+    return NextResponse.json({ error: 'Failed to read form targets' }, { status: 500 });
   }
 }
 
@@ -135,7 +123,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     });
 
     const submitUrl = `${webAppBaseUrl}/api/public/forms/${token}/submit`;
-    const formHtml = buildFormHtml({ fields: body.fields, submitUrl });
 
     auditRequest(req, {
       eventType: 'data.write',
@@ -145,7 +132,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       details: { operation: 'form-target-create', formTargetId: formTarget.id },
     });
 
-    return NextResponse.json({ formTargetId: formTarget.id, submitUrl, formHtml });
+    // formHtml is intentionally NOT built here — the client already has the
+    // original <form> tag it's wiring up and injects the honeypot/script
+    // into that (wireFormBlock), preserving the author's own markup instead
+    // of replacing it with a freshly generated one.
+    return NextResponse.json({ formTargetId: formTarget.id, submitUrl });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });
@@ -168,61 +159,42 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   const scopeError = await checkMCPPageScope(auth, pageId);
   if (scopeError) return scopeError;
 
-  const userId = auth.userId;
-
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You do not have permission to edit this page' }, { status: 403 });
   }
 
   try {
-    const existing = await getFormTargetByCanvasPageId(pageId);
-    if (!existing) {
-      return NextResponse.json({ error: 'No form target is set up on this page' }, { status: 404 });
-    }
-
     const body = patchBodySchema.parse(await req.json());
 
-    let updated: FormTarget;
-    let fieldSnippet: string | undefined;
-
-    if (body.op === 'set-status') {
-      updated = await updateFormTargetStatus({
-        formTargetId: existing.id,
-        status: body.status,
-        statusReason: body.reason,
-      });
-    } else {
-      const mutation = body as FormTargetFieldMutation;
-      updated = await updateFormTargetFields({
-        formTargetId: existing.id,
-        mutation,
-        mutationContext: { userId },
-      });
-      if (mutation.op === 'add-field') {
-        fieldSnippet = buildFieldMarkup(mutation.field);
-      }
+    // Scope the mutation to a target actually wired to THIS Canvas page —
+    // formTargetId alone isn't enough to prove that (a caller with edit
+    // access to some other page could otherwise pause/archive any target).
+    const existing = await getFormTargetById(body.formTargetId);
+    if (!existing || existing.canvasPageId !== pageId) {
+      return NextResponse.json({ error: 'No form target with that id is set up on this page' }, { status: 404 });
     }
+
+    const updated = await updateFormTargetStatus({
+      formTargetId: body.formTargetId,
+      status: body.status,
+      statusReason: body.reason,
+    });
 
     auditRequest(req, {
       eventType: 'data.write',
-      userId,
+      userId: auth.userId,
       resourceType: 'page',
       resourceId: pageId,
-      details: { operation: 'form-target-update', formTargetId: existing.id, op: body.op },
+      details: { operation: 'form-target-update', formTargetId: body.formTargetId, status: body.status },
     });
 
-    return NextResponse.json({ formTarget: sanitizeFormTarget(updated), fieldSnippet });
+    return NextResponse.json({ formTarget: sanitizeFormTarget(updated) });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }
-    if (
-      error instanceof FormTargetFieldLimitError ||
-      error instanceof FormTargetDuplicateFieldNameError ||
-      error instanceof FormTargetFieldIndexError ||
-      error instanceof FormTargetArchivedError
-    ) {
+    if (error instanceof FormTargetArchivedError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     loggers.api.error('Error updating form target:', error as Error);
@@ -240,31 +212,37 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
   const scopeError = await checkMCPPageScope(auth, pageId);
   if (scopeError) return scopeError;
 
-  const userId = auth.userId;
-
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
     return NextResponse.json({ error: 'You do not have permission to edit this page' }, { status: 403 });
   }
 
+  const formTargetId = new URL(req.url).searchParams.get('formTargetId');
+  if (!formTargetId) {
+    return NextResponse.json({ error: 'formTargetId query parameter is required' }, { status: 400 });
+  }
+
   try {
-    const existing = await getFormTargetByCanvasPageId(pageId);
-    if (!existing) {
-      return NextResponse.json({ error: 'No form target is set up on this page' }, { status: 404 });
+    const existing = await getFormTargetById(formTargetId);
+    if (!existing || existing.canvasPageId !== pageId) {
+      return NextResponse.json({ error: 'No form target with that id is set up on this page' }, { status: 404 });
     }
 
-    await updateFormTargetStatus({ formTargetId: existing.id, status: 'archived' });
+    await updateFormTargetStatus({ formTargetId, status: 'archived' });
 
     auditRequest(req, {
       eventType: 'data.delete',
-      userId,
+      userId: auth.userId,
       resourceType: 'page',
       resourceId: pageId,
-      details: { operation: 'form-target-archive', formTargetId: existing.id },
+      details: { operation: 'form-target-archive', formTargetId },
     });
 
     return NextResponse.json({ archived: true });
   } catch (error) {
+    if (error instanceof FormTargetArchivedError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     loggers.api.error('Error archiving form target:', error as Error);
     return NextResponse.json({ error: 'Failed to archive form target' }, { status: 500 });
   }

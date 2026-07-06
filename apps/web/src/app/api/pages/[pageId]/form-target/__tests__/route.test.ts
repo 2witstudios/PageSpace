@@ -6,16 +6,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  * Authenticated Forms settings API for a Canvas page (`pageId` here is the
  * CANVAS page's id, not the target Sheet's). Mirrors the auth pattern used by
  * the sibling publish route: authenticateRequestWithOptions -> MCP scope
- * check -> canPrincipalEditPage.
+ * check -> canPrincipalEditPage. This route only manages the DB grant — all
+ * HTML markup work (detecting/wiring/deleting <form> tags) happens
+ * client-side, so POST/PATCH/DELETE bodies don't carry any HTML.
  */
 
 const mockAuthenticate = vi.hoisted(() => vi.fn());
 const mockCheckMCPPageScope = vi.hoisted(() => vi.fn());
 const mockCanPrincipalEditPage = vi.hoisted(() => vi.fn());
 const mockAuditRequest = vi.hoisted(() => vi.fn());
-const mockGetFormTargetByCanvasPageId = vi.hoisted(() => vi.fn());
+const mockGetFormTargetsByCanvasPageId = vi.hoisted(() => vi.fn());
+const mockGetFormTargetById = vi.hoisted(() => vi.fn());
 const mockCreateFormTarget = vi.hoisted(() => vi.fn());
-const mockUpdateFormTargetFields = vi.hoisted(() => vi.fn());
 const mockUpdateFormTargetStatus = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/auth', () => ({
@@ -41,9 +43,9 @@ vi.mock('@/services/api/form-target-service', async () => {
   );
   return {
     ...actual,
-    getFormTargetByCanvasPageId: mockGetFormTargetByCanvasPageId,
+    getFormTargetsByCanvasPageId: mockGetFormTargetsByCanvasPageId,
+    getFormTargetById: mockGetFormTargetById,
     createFormTarget: mockCreateFormTarget,
-    updateFormTargetFields: mockUpdateFormTargetFields,
     updateFormTargetStatus: mockUpdateFormTargetStatus,
   };
 });
@@ -73,8 +75,8 @@ const storedFormTarget = {
 
 const params = () => ({ params: Promise.resolve({ pageId: 'canvas-1' }) });
 
-const createRequest = (method: string, body?: object) =>
-  new Request('http://localhost/api/pages/canvas-1/form-target', {
+const createRequest = (method: string, body?: object, search?: string) =>
+  new Request(`http://localhost/api/pages/canvas-1/form-target${search ?? ''}`, {
     method,
     ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
   });
@@ -96,23 +98,27 @@ describe('/api/pages/[pageId]/form-target', () => {
       expect(response.status).toBe(403);
     });
 
-    it('returns { formTarget: null } when no target is embedded in this Canvas page', async () => {
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(null);
+    it('returns an empty array when no target is wired to this Canvas page', async () => {
+      mockGetFormTargetsByCanvasPageId.mockResolvedValue([]);
 
       const response = await GET(createRequest('GET'), params());
       const body = await response.json();
-      expect(body).toEqual({ formTarget: null });
+      expect(body).toEqual({ formTargets: [] });
     });
 
-    it('returns the target with tokenHash/tokenPrefix stripped', async () => {
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(storedFormTarget);
+    it('returns every target wired to this page with tokenHash/tokenPrefix stripped', async () => {
+      mockGetFormTargetsByCanvasPageId.mockResolvedValue([
+        storedFormTarget,
+        { ...storedFormTarget, id: 'ft-2' },
+      ]);
 
       const response = await GET(createRequest('GET'), params());
       const body = await response.json();
 
-      expect(body.formTarget.id).toBe('ft-1');
-      expect(body.formTarget.tokenHash).toBeUndefined();
-      expect(body.formTarget.tokenPrefix).toBeUndefined();
+      expect(body.formTargets).toHaveLength(2);
+      expect(body.formTargets[0].id).toBe('ft-1');
+      expect(body.formTargets[0].tokenHash).toBeUndefined();
+      expect(body.formTargets[0].tokenPrefix).toBeUndefined();
     });
   });
 
@@ -129,7 +135,7 @@ describe('/api/pages/[pageId]/form-target', () => {
       expect(response.status).toBe(400);
     });
 
-    it('creates the form target scoped to this Canvas page and returns the embeddable HTML', async () => {
+    it('creates the form target scoped to this Canvas page and returns the submit URL (no formHtml)', async () => {
       mockCreateFormTarget.mockResolvedValue({
         token: 'pft_realtoken',
         formTarget: { ...storedFormTarget, id: 'ft-new' },
@@ -142,8 +148,8 @@ describe('/api/pages/[pageId]/form-target', () => {
         expect.objectContaining({ sheetPageId: 'sheet-1', fields, createdBy: 'user-1', canvasPageId: 'canvas-1' })
       );
       expect(body.formTargetId).toBe('ft-new');
-      expect(body.formHtml).toContain('name="name"');
       expect(body.submitUrl).toContain('pft_realtoken');
+      expect(body.formHtml).toBeUndefined();
     });
 
     it('returns 400 when the sheet already has an active form target', async () => {
@@ -165,22 +171,55 @@ describe('/api/pages/[pageId]/form-target', () => {
   });
 
   describe('PATCH', () => {
-    it('returns 404 when no form target exists for this Canvas page', async () => {
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(null);
+    it('returns 403 when the actor cannot edit the page', async () => {
+      mockCanPrincipalEditPage.mockResolvedValue(false);
 
       const response = await PATCH(
-        createRequest('PATCH', { op: 'set-status', status: 'paused' }),
+        createRequest('PATCH', { formTargetId: 'ft-1', status: 'paused' }),
+        params()
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it('returns 400 for a malformed body', async () => {
+      const response = await PATCH(createRequest('PATCH', { formTargetId: 'ft-1' }), params());
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects status "archived" — archiving must go through DELETE', async () => {
+      const response = await PATCH(
+        createRequest('PATCH', { formTargetId: 'ft-1', status: 'archived' }),
+        params()
+      );
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 404 when the target does not belong to this Canvas page', async () => {
+      mockGetFormTargetById.mockResolvedValue({ ...storedFormTarget, canvasPageId: 'some-other-canvas-page' });
+
+      const response = await PATCH(
+        createRequest('PATCH', { formTargetId: 'ft-1', status: 'paused' }),
         params()
       );
       expect(response.status).toBe(404);
     });
 
-    it('routes set-status to updateFormTargetStatus', async () => {
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(storedFormTarget);
+    it('returns 404 when the target does not exist', async () => {
+      mockGetFormTargetById.mockResolvedValue(null);
+
+      const response = await PATCH(
+        createRequest('PATCH', { formTargetId: 'missing', status: 'paused' }),
+        params()
+      );
+      expect(response.status).toBe(404);
+    });
+
+    it('updates the status of a target scoped to this Canvas page', async () => {
+      mockGetFormTargetById.mockResolvedValue(storedFormTarget);
       mockUpdateFormTargetStatus.mockResolvedValue({ ...storedFormTarget, status: 'paused' });
 
       const response = await PATCH(
-        createRequest('PATCH', { op: 'set-status', status: 'paused', reason: 'spam' }),
+        createRequest('PATCH', { formTargetId: 'ft-1', status: 'paused', reason: 'spam' }),
         params()
       );
 
@@ -193,55 +232,13 @@ describe('/api/pages/[pageId]/form-target', () => {
       expect(body.formTarget.status).toBe('paused');
     });
 
-    it('routes add-field to updateFormTargetFields and returns a standalone field snippet', async () => {
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(storedFormTarget);
-      const newField = { name: 'phone', label: 'Phone', type: 'text' as const, required: false };
-      mockUpdateFormTargetFields.mockResolvedValue({ ...storedFormTarget, fields: [...fields, newField] });
-
-      const response = await PATCH(createRequest('PATCH', { op: 'add-field', field: newField }), params());
-      const body = await response.json();
-
-      expect(mockUpdateFormTargetFields).toHaveBeenCalledWith({
-        formTargetId: 'ft-1',
-        mutation: { op: 'add-field', field: newField },
-        mutationContext: { userId: 'user-1' },
-      });
-      expect(body.fieldSnippet).toContain('name="phone"');
-    });
-
-    it('does not include a fieldSnippet for archive-field', async () => {
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(storedFormTarget);
-      mockUpdateFormTargetFields.mockResolvedValue(storedFormTarget);
-
-      const response = await PATCH(createRequest('PATCH', { op: 'archive-field', index: 0 }), params());
-      const body = await response.json();
-
-      expect(body.fieldSnippet).toBeUndefined();
-    });
-
-    it('returns 400 when the field-index is out of range', async () => {
-      const { FormTargetFieldIndexError } = await import('@/services/api/form-target-service');
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(storedFormTarget);
-      mockUpdateFormTargetFields.mockRejectedValue(new FormTargetFieldIndexError('no field at index'));
-
-      const response = await PATCH(createRequest('PATCH', { op: 'archive-field', index: 99 }), params());
-      expect(response.status).toBe(400);
-    });
-
-    it('returns 400 for a malformed body', async () => {
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(storedFormTarget);
-
-      const response = await PATCH(createRequest('PATCH', { op: 'not-a-real-op' }), params());
-      expect(response.status).toBe(400);
-    });
-
     it('returns 400 when reactivating an archived target', async () => {
       const { FormTargetArchivedError } = await import('@/services/api/form-target-service');
-      mockGetFormTargetByCanvasPageId.mockResolvedValue({ ...storedFormTarget, status: 'archived' });
+      mockGetFormTargetById.mockResolvedValue({ ...storedFormTarget, status: 'archived' });
       mockUpdateFormTargetStatus.mockRejectedValue(new FormTargetArchivedError('archived — cannot be reversed'));
 
       const response = await PATCH(
-        createRequest('PATCH', { op: 'set-status', status: 'active' }),
+        createRequest('PATCH', { formTargetId: 'ft-1', status: 'active' }),
         params()
       );
       expect(response.status).toBe(400);
@@ -249,18 +246,23 @@ describe('/api/pages/[pageId]/form-target', () => {
   });
 
   describe('DELETE', () => {
-    it('returns 404 when no form target exists for this Canvas page', async () => {
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(null);
-
+    it('returns 400 when formTargetId is missing', async () => {
       const response = await DELETE(createRequest('DELETE'), params());
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 404 when the target does not belong to this Canvas page', async () => {
+      mockGetFormTargetById.mockResolvedValue({ ...storedFormTarget, canvasPageId: 'some-other-canvas-page' });
+
+      const response = await DELETE(createRequest('DELETE', undefined, '?formTargetId=ft-1'), params());
       expect(response.status).toBe(404);
     });
 
-    it('archives the whole target', async () => {
-      mockGetFormTargetByCanvasPageId.mockResolvedValue(storedFormTarget);
+    it('archives the target', async () => {
+      mockGetFormTargetById.mockResolvedValue(storedFormTarget);
       mockUpdateFormTargetStatus.mockResolvedValue({ ...storedFormTarget, status: 'archived' });
 
-      const response = await DELETE(createRequest('DELETE'), params());
+      const response = await DELETE(createRequest('DELETE', undefined, '?formTargetId=ft-1'), params());
       const body = await response.json();
 
       expect(mockUpdateFormTargetStatus).toHaveBeenCalledWith({ formTargetId: 'ft-1', status: 'archived' });

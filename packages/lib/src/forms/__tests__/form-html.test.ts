@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildFormHtml } from '../form-html';
+import { buildFormHtml, wireFormBlock } from '../form-html';
 import { HONEYPOT_FIELD_NAME } from '../honeypot';
 import type { FormFieldDef } from '@pagespace/db/schema/form-targets';
 
@@ -66,17 +66,6 @@ describe('buildFormHtml', () => {
     expect(html).not.toContain('&amp;b=');
   });
 
-  it('omits an archived field from the rendered form', () => {
-    const withArchived: FormFieldDef[] = [
-      { name: 'name', label: 'Name', type: 'text', required: true },
-      { name: 'email', label: 'Email', type: 'email', required: true, archived: true },
-    ];
-    const html = buildFormHtml({ fields: withArchived, submitUrl: 'https://app.pagespace.ai/api/public/forms/tok/submit' });
-
-    expect(html).toContain('name="name"');
-    expect(html).not.toContain('name="email"');
-  });
-
   it('does not let a formId containing "</script>" break out of the inline script block', () => {
     const html = buildFormHtml({
       fields,
@@ -85,5 +74,76 @@ describe('buildFormHtml', () => {
     });
 
     expect(html).not.toContain('</script><script>alert(1)</script>');
+  });
+});
+
+describe('wireFormBlock', () => {
+  const submitUrl = 'https://app.pagespace.ai/api/public/forms/tok_abc/submit';
+
+  it('preserves the original inputs untouched', () => {
+    const result = wireFormBlock({
+      formOuterHtml: '<form class="hero"><input name="email" type="email" required></form>',
+      formTargetId: 'ft-1',
+      submitUrl,
+    });
+
+    expect(result).toContain('<input name="email" type="email" required>');
+    expect(result).toContain('class="hero"');
+  });
+
+  it('assigns a deterministic id derived from the form target id', () => {
+    const result = wireFormBlock({
+      formOuterHtml: '<form><input name="email"></form>',
+      formTargetId: 'ft-1',
+      submitUrl,
+    });
+
+    expect(result).toContain('id="pagespace-form-ft-1"');
+  });
+
+  it('replaces a pre-existing id rather than duplicating the attribute', () => {
+    const result = wireFormBlock({
+      formOuterHtml: '<form id="my-waitlist-form"><input name="email"></form>',
+      formTargetId: 'ft-1',
+      submitUrl,
+    });
+
+    expect(result).toContain('id="pagespace-form-ft-1"');
+    expect(result).not.toContain('my-waitlist-form');
+    expect(result.match(/\bid=/g)?.length).toBe(1);
+  });
+
+  it('injects a hidden honeypot input before the closing tag', () => {
+    const result = wireFormBlock({
+      formOuterHtml: '<form><input name="email"></form>',
+      formTargetId: 'ft-1',
+      submitUrl,
+    });
+    const honeypotMatch = result.match(new RegExp(`<input[^>]*name="${HONEYPOT_FIELD_NAME}"[^>]*>`))?.[0] ?? '';
+
+    expect(honeypotMatch).not.toBe('');
+    expect(result.indexOf(honeypotMatch)).toBeLessThan(result.indexOf('</form>'));
+  });
+
+  it('appends a submit script targeting the assigned id and the exact submit URL', () => {
+    const result = wireFormBlock({
+      formOuterHtml: '<form><input name="email"></form>',
+      formTargetId: 'ft-1',
+      submitUrl,
+    });
+
+    expect(result).toContain('<script>');
+    expect(result).toContain(JSON.stringify('pagespace-form-ft-1'));
+    expect(result).toContain(JSON.stringify(submitUrl));
+  });
+
+  it('guards status-element lookup since a hand-authored form has no [data-role="form-status"]', () => {
+    const result = wireFormBlock({
+      formOuterHtml: '<form><input name="email"></form>',
+      formTargetId: 'ft-1',
+      submitUrl,
+    });
+
+    expect(result).toContain('if (status)');
   });
 });

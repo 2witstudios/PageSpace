@@ -83,6 +83,12 @@ describe('provision_form_target', () => {
     expect(mockCreateFormTarget).toHaveBeenCalledWith(
       expect.objectContaining({ sheetPageId: 'sheet-1', fields, createdBy: 'user-1' })
     );
+    // Same `pagespace-form-{id}` convention the Forms settings tab looks for
+    // (see wireFormBlock/parse-form-tags.ts) — so a form provisioned via this
+    // tool is recognized as already-wired, not mistaken for a bare tag.
+    expect(mockBuildFormHtml).toHaveBeenCalledWith(
+      expect.objectContaining({ formId: 'pagespace-form-ft-1' })
+    );
   });
 
   it('rejects duplicate field names at the schema gate (FormData would silently drop one)', () => {

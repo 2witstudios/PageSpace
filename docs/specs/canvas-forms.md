@@ -1,72 +1,90 @@
 # Canvas Forms
 
 How a plain `<form>` on a published Canvas page can submit data that lands as
-a new row in a Sheet page. This is the human-facing reference for hand-editing
-a form already provisioned via the `provision_form_target` AI tool — the tool
-itself returns ready-to-embed HTML, so most authors never need this doc.
+a new row in a Sheet page. A Canvas page can have more than one — a landing
+page routinely has a waitlist form, a contact form, a feedback form, each
+wired independently.
 
-## Setting one up without an AI agent
+## Two ways to get a form onto the page
 
-A Canvas page has a **Forms** tab (next to View/Code) for creating and
-managing a form target directly: pick a target Sheet, define fields, and the
-generated HTML is embedded into the page automatically. It's backed by the
-same `form_targets` row and the same provisioning path as
-`provision_form_target` — an AI-tool-provisioned form appears in the tab too
-once it's linked to a Canvas page (`canvasPageId`), and a tab-provisioned form
-can be managed by an AI agent via `update_form_target_status`.
+1. **AI tool, from scratch.** Call `provision_form_target` with a target
+   Sheet page id and an ordered field list (`name`, `label`, `type`,
+   `required`). This writes the header row on the Sheet and returns a
+   `submitUrl` plus a ready-to-embed `formHtml` string — paste it verbatim
+   into the Canvas page.
+2. **Hand-authored (or agent-authored) tag, wired via the Forms tab.** Write
+   a plain `<form>` with real `<input name="...">`/`<textarea name="...">`
+   elements — no token, no honeypot, nothing special. Then open the Canvas
+   page's **Forms** tab (next to View/Code): it detects every `<form>` tag
+   already in the page's content and shows each as either **wired** (already
+   posting somewhere) or **unwired**. For an unwired tag, pick a target Sheet
+   and click "Wire this form" — the tab parses the field list straight from
+   the tag's own inputs (name → submission key, `input[type]`/`<textarea>` →
+   field type, the `required` attribute → required), provisions the grant,
+   and injects a hidden honeypot input plus a fetch-based submit script
+   directly into that tag. **The tab never generates a `<form>` from
+   scratch and never lets you type out a field list by hand** — the markup
+   you already wrote is the source of truth.
 
-Fields are **append-only** once a target exists — mirroring Google Forms:
-reordering or removing a field would misalign already-collected columns, so
-the tab only lets you append a new field, edit a label/type/required flag, or
-archive a field to retire it without losing its column's history. Adding a
-field after creation can't regenerate the full embedded `<form>` (the raw
-submit token is only ever available once, at creation), so the tab returns a
-standalone `<input>`/`<label>` snippet to paste into the already-embedded
-form instead.
+Either path produces the same `form_targets` row and the same wire format,
+so an AI-tool-provisioned form shows up in the tab (as "wired") once it's
+linked to a Canvas page, and a tab-wired form can be paused/archived by an AI
+agent via `update_form_target_status`.
+
+## Fields are fixed at wire time
+
+There is no "add a field later" or "archive a field" operation — once a
+`<form>` is wired, its field list (and therefore its Sheet column mapping,
+`fields[i]` → column `i`) never changes. If you need a different field set,
+edit the `<form>` tag's inputs *before* wiring it, or delete the wired form
+(below) and wire a fresh tag. This is a deliberate simplification: field-
+level append/archive machinery existed only to work around a UI that
+authored fields from scratch; since fields are now derived from markup you
+already control, editing the markup directly is the natural path.
 
 ## The convention
 
-1. **Provision first.** Call `provision_form_target` with the target Sheet's
-   page id and an ordered field list (`name`, `label`, `type`, `required`).
-   This writes the header row on the Sheet and returns a `submitUrl` plus a
-   ready-to-embed `formHtml` string. The token embedded in `submitUrl` is
-   public-safe: it authorizes ONLY appending rows to that one Sheet, nothing
-   else — see "Security model" below.
-2. **Field names are the contract.** Each `<input name="...">` /
-   `<textarea name="...">` must match a `name` from the provisioned field
-   list exactly. The submit endpoint validates against a strict schema built
-   from those exact names — unknown fields are rejected, not ignored.
-3. **The honeypot field is required.** Every generated form includes a hidden
+1. **Field names are the contract.** Each `<input name="...">` /
+   `<textarea name="...">` must match a wired field's `name` exactly. The
+   submit endpoint validates against a strict schema built from those exact
+   names — unknown fields are rejected, not ignored.
+2. **The honeypot field is required.** Every wired form includes a hidden
    input named `_hp` (see `HONEYPOT_FIELD_NAME` in
    `packages/lib/src/forms/honeypot.ts`), positioned off-screen via inline
    styles (not `display:none`, which some bots special-case). Do not remove
    it or give it a real label — a filled-in `_hp` causes the submission to be
    silently dropped (the caller still gets a 200, no error, no signal that
    spam was detected).
-4. **Submit via `fetch`, not a native form POST.** A native `<form action>`
-   submission would navigate the page to the JSON response. The generated
-   snippet intercepts `submit`, posts JSON to `submitUrl`, and shows a status
-   message in a `[data-role="form-status"]` element.
+3. **Submit via `fetch`, not a native form POST.** A native `<form action>`
+   submission would navigate the page to the JSON response. The injected
+   script intercepts `submit`, posts JSON to `submitUrl`, and (if present)
+   shows a status message in a `[data-role="form-status"]` element — a
+   hand-authored tag isn't required to have one.
+4. **Wiring assigns a deterministic DOM id**, `pagespace-form-{formTargetId}`
+   (replacing any id the tag already had), so the injected script can find
+   its own element and so the Forms tab can recognize an already-wired tag
+   on a later load (see `packages/lib/src/forms/form-html.ts`'s
+   `wireFormBlock`, and `apps/web/.../canvas/parse-form-tags.ts`). A wired
+   block is also wrapped in `<!-- pagespace:form:{id} start/end -->` markers.
 
 ## Managing a live form
 
-Call `update_form_target_status` with the `formTargetId` (returned by
-`provision_form_target`) to pause, resume, or archive it:
+Call `update_form_target_status` (or use the Forms tab) to pause, resume, or
+delete a wired form:
 
 - **paused** — submissions are rejected (identical to an unknown token — no
   oracle for whether a token exists), resumable later.
-- **archived** — permanent; cannot be reactivated. Enforced server-side (a
-  reactivation attempt is rejected, not silently accepted), and the Forms tab
-  disables the status control once archived. To replace an archived form,
-  use the tab's "Set up a new form" — it provisions a fresh target against
-  (optionally) a different Sheet and takes over the Canvas page's embed;
-  the archived target's history and Sheet data are untouched. The
-  replacement's HTML is embedded in the OLD form's position — the Canvas
-  content is marked with `<!-- pagespace:form:{id} start/end -->` comments
-  (see `packages/lib/src/forms/embed-html.ts`) so the tab can find and
-  replace that block in place rather than appending after content that may
-  have changed substantially since. If those markers were hand-edited away,
-  the replacement is appended at the end instead, same as a first-time create.
+- **archived, via delete** — permanent; cannot be reactivated (enforced
+  server-side — a reactivation attempt is rejected, not silently accepted).
+  Deleting a form via the Forms tab **removes its `<form>` tag (and injected
+  honeypot/script) from the Canvas page entirely** — see `deleteFormBlock` in
+  `packages/lib/src/forms/embed-html.ts` — so archiving never leaves a dead,
+  permanently-404ing tag behind on the published page. The underlying
+  `form_targets` row and its submission history/Sheet data are untouched;
+  only the embed is removed. If a form target is somehow still wired
+  server-side but its tag can no longer be found in content (hand-edited
+  away outside the tab), the Forms tab surfaces it separately so its grant
+  can still be archived.
 
 Both take effect on the very next submission — there is no cache or
 propagation delay, since the submit endpoint re-reads status on every request.
@@ -95,11 +113,19 @@ propagation delay, since the submit endpoint re-reads status on every request.
 - One destination type: append a row to a Sheet. Document-append is not
   supported.
 - One active form per Sheet — the header row is always written at row 1;
-  provisioning a second form against a Sheet that already has a header will
-  overwrite it.
+  wiring a second form against a Sheet that already has an active one is
+  rejected (a partial unique index enforces this in Postgres). A Canvas
+  page, in contrast, can have any number of wired forms, each against its
+  own Sheet.
 - No visual form builder — forms are hand-authored HTML (by a human or an AI
-  agent), never a drag-and-drop UI.
+  agent); the Forms tab wires up markup you wrote, it doesn't generate a
+  drag-and-drop UI's worth of it for you.
 - No header-drift detection — `fields[i]` maps to sheet column `i` fixed at
-  provisioning time and is never re-derived from the sheet's live header row.
-  If someone manually edits or reorders the header row afterward, submissions
+  wire time and is never re-derived from the sheet's live header row. If
+  someone manually edits or reorders the header row afterward, submissions
   keep writing to the original columns with no detection or warning.
+- Best-effort tag matching — wiring locates a bare `<form>` tag's exact text
+  via a DOM-parsed `outerHTML`, which is usually but not guaranteed to be
+  byte-identical to the original source (attribute-quoting/self-closing
+  normalization). A failed match aborts the wire attempt (and archives the
+  just-created grant) rather than silently duplicating or corrupting content.

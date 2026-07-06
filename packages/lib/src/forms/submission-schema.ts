@@ -29,15 +29,11 @@ export type SubmissionValues = Record<string, string | boolean>;
 /**
  * Builds a strict zod object schema from a form's stored field definitions —
  * unknown keys are rejected (no passthrough), so a submission can never smuggle
- * extra data past the fields the form was provisioned with. Archived fields
- * are excluded entirely, so a stale embedded form that still submits a
- * retired field's name gets a validation error rather than silently writing
- * to its column.
+ * extra data past the fields the form was provisioned with.
  */
 export function buildSubmissionSchema(fields: FormFieldDef[]): z.ZodType<SubmissionValues> {
   const shape: Record<string, z.ZodTypeAny> = {};
   for (const field of fields) {
-    if (field.archived) continue;
     shape[field.name] = buildFieldSchema(field);
   }
   return z.object(shape).strict() as unknown as z.ZodType<SubmissionValues>;

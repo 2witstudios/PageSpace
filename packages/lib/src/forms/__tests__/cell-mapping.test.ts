@@ -22,20 +22,6 @@ describe('buildHeaderRowUpdates', () => {
     const updates = buildHeaderRowUpdates(fields, 3);
     expect(updates.map((u) => u.address)).toEqual(['A3', 'B3', 'C3']);
   });
-
-  it('skips an archived field, leaving its column header untouched, without shifting later columns', () => {
-    const withArchived: FormFieldDef[] = [
-      { name: 'name', label: 'Name', type: 'text', required: true },
-      { name: 'email', label: 'Email', type: 'email', required: true, archived: true },
-      { name: 'subscribe', label: 'Subscribe?', type: 'checkbox', required: false },
-    ];
-
-    const updates = buildHeaderRowUpdates(withArchived, 1);
-    expect(updates).toEqual([
-      { address: 'A1', value: 'Name' },
-      { address: 'C1', value: 'Subscribe?' },
-    ]);
-  });
 });
 
 describe('buildSubmissionRowUpdates', () => {
@@ -79,26 +65,5 @@ describe('buildSubmissionRowUpdates', () => {
     });
 
     expect(updates.map((u) => u.address)).toEqual(['A100', 'B100']);
-  });
-
-  it('skips an archived field without shifting later fields off their column', () => {
-    const withArchived: FormFieldDef[] = [
-      { name: 'name', label: 'Name', type: 'text', required: true },
-      { name: 'email', label: 'Email', type: 'email', required: true, archived: true },
-      { name: 'subscribe', label: 'Subscribe?', type: 'checkbox', required: false },
-    ];
-
-    const updates = buildSubmissionRowUpdates(withArchived, 2, {
-      name: 'Ada',
-      email: 'ada@example.com',
-      subscribe: true,
-    });
-
-    // email (index 1 / column B) is dropped; subscribe stays at its original
-    // column C, not shifted left to B.
-    expect(updates).toEqual([
-      { address: 'A2', value: 'Ada' },
-      { address: 'C2', value: 'true' },
-    ]);
   });
 });

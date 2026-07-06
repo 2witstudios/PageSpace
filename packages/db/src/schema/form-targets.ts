@@ -13,10 +13,6 @@ export interface FormFieldDef {
   label: string;
   type: FormFieldType;
   required: boolean;
-  /** Soft-retired field: keeps its column position and historical data, but
-   *  is excluded from new form HTML, submission validation, and future sheet
-   *  writes. Mirrors Google Forms leaving a deleted question's column intact. */
-  archived?: boolean;
 }
 
 export type FormTargetStatus = 'active' | 'paused' | 'archived';
@@ -45,10 +41,11 @@ export const formTargets = pgTable('form_targets', {
   canvasPageId: text('canvas_page_id').references(() => pages.id, { onDelete: 'set null' }),
 
   // Ordered — fields[i] always maps to sheet column i, fixed at provisioning
-  // time. Never re-derived from the sheet's live header row, so manually
-  // editing/reordering the header row after provisioning silently desyncs it
-  // from this mapping — no drift detection exists (v1 limitation, see
-  // canvas-forms.md).
+  // time (parsed once from the <form> tag's inputs when it's wired to a
+  // Sheet) and never mutated afterward. Never re-derived from the sheet's
+  // live header row, so manually editing/reordering the header row after
+  // provisioning silently desyncs it from this mapping — no drift detection
+  // exists (v1 limitation, see canvas-forms.md).
   fields: jsonb('fields').notNull().$type<FormFieldDef[]>(),
 
   headerRow: integer('header_row').notNull().default(1),

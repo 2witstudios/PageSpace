@@ -9,8 +9,6 @@ import {
   parseSheetContent,
   serializeSheetContent,
   updateSheetCells,
-  encodeCellAddress,
-  type SheetCellUpdate,
 } from '@pagespace/lib/sheets/sheet';
 import { generateToken, hashToken } from '@pagespace/lib/auth/token-utils';
 import { buildHeaderRowUpdates, buildSubmissionRowUpdates } from '@pagespace/lib/forms/cell-mapping';
@@ -55,6 +53,10 @@ export interface CreateFormTargetResult {
  * error, connection drop, unique-hash collision) rolls back the header edit
  * too, instead of leaving an orphaned Sheet mutation with no grant.
  *
+ * A Canvas page can have more than one form wired to it (landing pages
+ * routinely have several — waitlist, contact, feedback), so canvasPageId is
+ * NOT unique — see getFormTargetsByCanvasPageId.
+ *
  * Throws FormTargetAlreadyActiveError if the sheet already has an active
  * form target (enforced by a partial unique index, not just app logic, so
  * two concurrent provisions can't both succeed and collide on `nextRow`).
@@ -91,18 +93,6 @@ export async function createFormTarget({
         context: mutationContext,
         tx,
       });
-
-      // Release any prior (necessarily archived — the Forms settings UI only
-      // offers "create a replacement" once the existing target is archived)
-      // target's claim on this Canvas page first, so at most one row ever
-      // matches canvasPageId — getFormTargetByCanvasPageId relies on that to
-      // stay unambiguous rather than picking arbitrarily among several.
-      if (canvasPageId) {
-        await tx
-          .update(formTargets)
-          .set({ canvasPageId: null })
-          .where(eq(formTargets.canvasPageId, canvasPageId));
-      }
 
       return tx
         .insert(formTargets)
@@ -147,24 +137,19 @@ export async function getFormTargetById(formTargetId: string): Promise<FormTarge
 }
 
 /**
- * Looks up the form target embedded in a given Canvas page, if any. Returns
- * any status (not just active), same as getFormTargetById — the Forms
- * settings UI must still show a paused/archived target so it can be viewed.
- *
- * Ordered by createdAt desc so that if a Canvas page ever has more than one
- * matching row (e.g. an archived target left behind after the settings UI
- * created a replacement — see createFormTarget's canvasPageId hand-off), the
- * most recently created one wins deterministically instead of an
- * unspecified Postgres row order.
+ * Looks up every form target wired to a given Canvas page — a page can have
+ * several (a landing page routinely has a waitlist form, a contact form, a
+ * feedback form, each wired independently). Returns any status (not just
+ * active), same as getFormTargetById — the Forms settings tab must still
+ * show a paused/archived target so it can be viewed. Ordered by createdAt
+ * for a stable, deterministic list.
  */
-export async function getFormTargetByCanvasPageId(canvasPageId: string): Promise<FormTarget | null> {
-  const [row] = await db
+export async function getFormTargetsByCanvasPageId(canvasPageId: string): Promise<FormTarget[]> {
+  return db
     .select()
     .from(formTargets)
     .where(eq(formTargets.canvasPageId, canvasPageId))
-    .orderBy(desc(formTargets.createdAt))
-    .limit(1);
-  return row ?? null;
+    .orderBy(desc(formTargets.createdAt));
 }
 
 /**
@@ -230,147 +215,6 @@ export async function updateFormTargetStatus({
   throw new FormTargetArchivedError(
     `Form target "${formTargetId}" is archived — archiving is permanent and cannot be reversed`
   );
-}
-
-const MAX_FIELDS = 20;
-
-export class FormTargetFieldLimitError extends Error {}
-export class FormTargetDuplicateFieldNameError extends Error {}
-export class FormTargetFieldIndexError extends Error {}
-
-/**
- * The only mutations a Forms settings UI may make to an existing target's
- * fields — reordering and true removal are deliberately absent, since
- * `fields[i]` is a fixed column position once written (see cell-mapping.ts).
- * This mirrors Google Forms: adding a question appends a new column,
- * deleting one retires it without touching history, and renaming only
- * updates cosmetic text.
- */
-export type FormTargetFieldMutation =
-  | { op: 'add-field'; field: FormFieldDef }
-  | { op: 'update-field'; index: number; patch: Partial<Pick<FormFieldDef, 'label' | 'required' | 'type'>> }
-  | { op: 'archive-field'; index: number }
-  | { op: 'unarchive-field'; index: number };
-
-export interface UpdateFormTargetFieldsInput {
-  formTargetId: string;
-  mutation: FormTargetFieldMutation;
-  mutationContext: PageMutationContext;
-}
-
-/**
- * Applies one field-level mutation to an existing form target. Only
- * `add-field` (and a label change on a non-archived field) touch the Sheet's
- * header row — archiving/unarchiving and non-label edits are metadata-only,
- * matching Google Forms leaving a retired question's header text alone.
- * Locks the form_targets row (`FOR UPDATE`) and retries on
- * `PageRevisionMismatchError` the same bounded number of times as
- * `appendFormSubmission`, since the header write rides the same
- * revision-checked page-mutation pipeline.
- */
-export async function updateFormTargetFields({
-  formTargetId,
-  mutation,
-  mutationContext,
-}: UpdateFormTargetFieldsInput): Promise<FormTarget> {
-  for (let attempt = 1; attempt <= MAX_APPEND_ATTEMPTS; attempt++) {
-    try {
-      return await db.transaction(async (tx) => {
-        const [formTarget] = await tx
-          .select()
-          .from(formTargets)
-          .where(eq(formTargets.id, formTargetId))
-          .for('update');
-
-        if (!formTarget) {
-          throw new Error(`Form target "${formTargetId}" not found`);
-        }
-
-        const fields = [...formTarget.fields];
-        let headerCellUpdate: SheetCellUpdate | null = null;
-
-        if (mutation.op === 'add-field') {
-          if (fields.length >= MAX_FIELDS) {
-            throw new FormTargetFieldLimitError(`Form target "${formTargetId}" already has the maximum of ${MAX_FIELDS} fields`);
-          }
-          // Uniqueness is checked against ALL fields, including archived ones —
-          // reusing a retired field's name would make two fields read the same
-          // submitted JSON key.
-          if (fields.some((field) => field.name === mutation.field.name)) {
-            throw new FormTargetDuplicateFieldNameError(
-              `Field name "${mutation.field.name}" is already used on this form target (including archived fields)`
-            );
-          }
-          const columnIndex = fields.length;
-          fields.push(mutation.field);
-          headerCellUpdate = {
-            address: encodeCellAddress(formTarget.headerRow - 1, columnIndex),
-            value: mutation.field.label,
-          };
-        } else {
-          const existing = fields[mutation.index];
-          if (!existing) {
-            throw new FormTargetFieldIndexError(`No field at index ${mutation.index} on form target "${formTargetId}"`);
-          }
-
-          if (mutation.op === 'update-field') {
-            const updatedField = { ...existing, ...mutation.patch };
-            fields[mutation.index] = updatedField;
-            if (
-              mutation.patch.label !== undefined &&
-              mutation.patch.label !== existing.label &&
-              !existing.archived
-            ) {
-              headerCellUpdate = {
-                address: encodeCellAddress(formTarget.headerRow - 1, mutation.index),
-                value: updatedField.label,
-              };
-            }
-          } else if (mutation.op === 'archive-field') {
-            fields[mutation.index] = { ...existing, archived: true };
-          } else {
-            fields[mutation.index] = { ...existing, archived: false };
-          }
-        }
-
-        if (headerCellUpdate) {
-          const [page] = await tx.select().from(pages).where(eq(pages.id, formTarget.pageId)).limit(1);
-          if (!page) {
-            throw new Error(`Page "${formTarget.pageId}" not found`);
-          }
-
-          const sheetData = parseSheetContent(page.content);
-          const updatedSheet = updateSheetCells(sheetData, [headerCellUpdate]);
-          const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
-
-          await applyPageMutation({
-            pageId: page.id,
-            operation: 'update',
-            updates: { content: newContent },
-            updatedFields: ['content'],
-            expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-            context: mutationContext,
-            tx,
-          });
-        }
-
-        await tx
-          .update(formTargets)
-          .set({ fields })
-          .where(eq(formTargets.id, formTargetId));
-
-        return { ...formTarget, fields };
-      });
-    } catch (error) {
-      if (error instanceof PageRevisionMismatchError && attempt < MAX_APPEND_ATTEMPTS) {
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  // Unreachable: the loop above always either returns or throws on its final attempt.
-  throw new Error(`Failed to update form target "${formTargetId}" after ${MAX_APPEND_ATTEMPTS} attempts`);
 }
 
 export interface AppendFormSubmissionInput {

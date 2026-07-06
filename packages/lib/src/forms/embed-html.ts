@@ -2,49 +2,62 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function markerBlock(formTargetId: string, html: string): string {
-  return `<!-- pagespace:form:${formTargetId} start -->\n${html}\n<!-- pagespace:form:${formTargetId} end -->`;
+function markerBlock(formTargetId: string, block: string): string {
+  return `<!-- pagespace:form:${formTargetId} start -->\n${block}\n<!-- pagespace:form:${formTargetId} end -->`;
 }
 
-export interface SpliceFormHtmlInput {
-  /** The Canvas page's current raw HTML content. */
+export interface EmbedWiredBlockInput {
   content: string;
-  /** The newly provisioned form's ready-to-embed HTML. */
-  html: string;
+  /** The original, un-wired <form>...</form> text exactly as it appears in
+   *  content (e.g. from parsing content and reading the element's outerHTML). */
+  originalFormHtml: string;
   formTargetId: string;
-  /** The form target this one is replacing (e.g. an archived target being
-   *  superseded via the Forms tab's "Set up a new form" action). Omitted for
-   *  a first-time create. */
-  replacesFormTargetId?: string;
+  /** The wired markup for this same form (see wireFormBlock in form-html.ts) —
+   *  NOT yet wrapped in marker comments; this function wraps it. */
+  wiredFormHtml: string;
 }
 
 /**
- * Splices a form's HTML into a Canvas page's content, wrapped in a marker
- * comment pair keyed by formTargetId (`<!-- pagespace:form:{id} start/end -->`).
+ * Replaces an original, un-wired <form> tag's exact text in a Canvas page's
+ * content with its wired equivalent, wrapped in
+ * `<!-- pagespace:form:{id} start/end -->` markers so it can later be found
+ * (to display status) or removed (see deleteFormBlock) as a unit.
  *
- * When replacesFormTargetId is given and its marker block is still present,
- * the new block replaces it IN PLACE — the replacement form lands exactly
- * where the old one was, instead of at the end of a page that may have been
- * substantially rearranged since. If the old markers aren't found (hand-
- * edited away, or this is a first-time create), the new block is appended.
+ * Requires originalFormHtml to appear verbatim in content. Returns null if it
+ * doesn't — this can happen if the DOM-parsed outerHTML the caller captured
+ * doesn't byte-for-byte match the source text (the browser's HTML parser can
+ * normalize attribute quoting, self-closing tags, etc.). Callers should
+ * surface that as a failure rather than silently doing nothing.
  */
-export function spliceFormHtml({
+export function embedWiredBlock({
   content,
-  html,
+  originalFormHtml,
   formTargetId,
-  replacesFormTargetId,
-}: SpliceFormHtmlInput): string {
-  const block = markerBlock(formTargetId, html);
-
-  if (replacesFormTargetId) {
-    const escapedId = escapeRegExp(replacesFormTargetId);
-    const oldBlockPattern = new RegExp(
-      `<!-- pagespace:form:${escapedId} start -->[\\s\\S]*?<!-- pagespace:form:${escapedId} end -->`
-    );
-    if (oldBlockPattern.test(content)) {
-      return content.replace(oldBlockPattern, block);
-    }
+  wiredFormHtml,
+}: EmbedWiredBlockInput): string | null {
+  if (!content.includes(originalFormHtml)) {
+    return null;
   }
+  return content.replace(originalFormHtml, markerBlock(formTargetId, wiredFormHtml));
+}
 
-  return content ? `${content}\n\n${block}\n` : `${block}\n`;
+export interface DeleteFormBlockInput {
+  content: string;
+  formTargetId: string;
+}
+
+/**
+ * Removes a wired form's entire marker-wrapped block — its <form> tag and
+ * injected honeypot/script — from a Canvas page's content. Used when
+ * archiving a form via the Forms tab, so the page doesn't end up with a
+ * dead, permanently-404ing form tag left behind. A no-op (returns content
+ * unchanged) if the markers aren't found — e.g. already removed, or hand-
+ * edited away.
+ */
+export function deleteFormBlock({ content, formTargetId }: DeleteFormBlockInput): string {
+  const escapedId = escapeRegExp(formTargetId);
+  const pattern = new RegExp(
+    `<!-- pagespace:form:${escapedId} start -->[\\s\\S]*?<!-- pagespace:form:${escapedId} end -->\\n*`
+  );
+  return content.replace(pattern, '');
 }

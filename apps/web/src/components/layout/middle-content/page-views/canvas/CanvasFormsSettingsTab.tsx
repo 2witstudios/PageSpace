@@ -1,32 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { ArrowDown, ArrowUp, Archive, ArchiveRestore, Copy, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { wireFormBlock } from '@pagespace/lib/forms/form-html';
+import { embedWiredBlock, deleteFormBlock } from '@pagespace/lib/forms/embed-html';
 import { TriggerPagePicker } from '@/components/layout/middle-content/page-views/task-list/TriggerPagePicker';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-
-type FormFieldType = 'text' | 'email' | 'textarea' | 'checkbox';
-
-interface FormFieldDef {
-  name: string;
-  label: string;
-  type: FormFieldType;
-  required: boolean;
-  archived?: boolean;
-}
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { detectFormTags, type DetectedFormTag, type FormFieldDef } from './parse-form-tags';
 
 interface FormTarget {
   id: string;
@@ -40,26 +25,12 @@ interface FormTarget {
 
 interface CanvasFormsSettingsTabProps {
   pageId: string;
-  /** Splices freshly-created form HTML into the Canvas page content and saves
-   *  it. `replacesFormTargetId` is set when this create is standing up a
-   *  replacement for an archived target — the embed lands in the old one's
-   *  marker position instead of just appending at the end. */
-  onEmbedFormHtml: (html: string, formTargetId: string, replacesFormTargetId?: string) => void;
-}
-
-const FIELD_TYPE_OPTIONS: { value: FormFieldType; label: string }[] = [
-  { value: 'text', label: 'Text' },
-  { value: 'email', label: 'Email' },
-  { value: 'textarea', label: 'Paragraph' },
-  { value: 'checkbox', label: 'Checkbox' },
-];
-
-const MAX_FIELDS = 20;
-
-let draftFieldSeq = 0;
-function newDraftField(): FormFieldDef & { draftKey: string } {
-  draftFieldSeq += 1;
-  return { draftKey: `draft-${draftFieldSeq}`, name: '', label: '', type: 'text', required: true };
+  /** The Canvas page's current raw HTML content, so this tab can detect
+   *  <form> tags directly rather than owning its own field-authoring UI. */
+  content: string;
+  /** Persists (and debounce-saves) an updated content string — used when
+   *  wiring a tag up or deleting one on archive. */
+  onContentChange: (value: string) => void;
 }
 
 const readError = async (res: Response): Promise<string> => {
@@ -93,42 +64,133 @@ function SheetTitle({ sheetPageId }: { sheetPageId: string }) {
   return <span className="font-medium">{title ?? 'Sheet'}</span>;
 }
 
-export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: CanvasFormsSettingsTabProps) {
+function UnwiredFormCard({
+  tag,
+  driveId,
+  isBusy,
+  onWire,
+}: {
+  tag: DetectedFormTag;
+  driveId: string | null;
+  isBusy: boolean;
+  onWire: (sheetPageId: string) => void;
+}) {
+  const [sheetPageId, setSheetPageId] = useState<string | null>(null);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Unwired form</CardTitle>
+        <CardDescription>
+          {tag.fields.length > 0
+            ? `Detected fields: ${tag.fields.map((f) => f.name).join(', ')}`
+            : 'No named inputs found in this <form> tag.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="space-y-1.5">
+          <Label>Target Sheet</Label>
+          {driveId ? (
+            <TriggerPagePicker
+              driveId={driveId}
+              mode="single"
+              value={sheetPageId}
+              onChange={setSheetPageId}
+              pageTypeFilter="SHEET"
+              placeholder="Select a Sheet page…"
+              disabled={isBusy}
+            />
+          ) : (
+            <span className="text-sm text-muted-foreground">Loading…</span>
+          )}
+        </div>
+        <Button
+          type="button"
+          disabled={isBusy || !sheetPageId || tag.fields.length === 0}
+          onClick={() => sheetPageId && onWire(sheetPageId)}
+        >
+          {isBusy ? 'Wiring…' : 'Wire this form'}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function WiredFormCard({
+  formTarget,
+  isBusy,
+  onSetStatus,
+  onDelete,
+}: {
+  formTarget: FormTarget;
+  isBusy: boolean;
+  onSetStatus: (status: 'active' | 'paused') => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Wired form</CardTitle>
+        <CardDescription>
+          Appends to <SheetTitle sheetPageId={formTarget.pageId} /> · {formTarget.submissionCount} submission
+          {formTarget.submissionCount === 1 ? '' : 's'}
+          {formTarget.lastSubmittedAt ? ` · last ${new Date(formTarget.lastSubmittedAt).toLocaleString()}` : ''}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex items-center gap-2">
+        <Label className="text-sm">Status</Label>
+        <Select
+          value={formTarget.status === 'archived' ? 'active' : formTarget.status}
+          onValueChange={(v: 'active' | 'paused') => onSetStatus(v)}
+          disabled={isBusy}
+        >
+          <SelectTrigger className="w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="paused">Paused</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={isBusy}
+          onClick={onDelete}
+          className="ml-auto gap-1 text-xs text-destructive"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Delete
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function CanvasFormsSettingsTab({ pageId, content, onContentChange }: CanvasFormsSettingsTabProps) {
   const [isLoading, setIsLoading] = useState(true);
-  const [isBusy, setIsBusy] = useState(false);
-  const [formTarget, setFormTarget] = useState<FormTarget | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [formTargets, setFormTargets] = useState<FormTarget[]>([]);
   const [driveId, setDriveId] = useState<string | null>(null);
-  // True while setting up a replacement for an archived target — the create
-  // form otherwise only renders when formTarget is null, which an archived
-  // target (a terminal but still-returned status) would never satisfy.
-  const [creatingNew, setCreatingNew] = useState(false);
 
-  // Draft state for a brand-new form target — only meaningful while formTarget is null.
-  const [draftSheetPageId, setDraftSheetPageId] = useState<string | null>(null);
-  const [draftFields, setDraftFields] = useState(() => [newDraftField()]);
-
-  // Draft state for appending one field to an existing target.
-  const [newField, setNewField] = useState<FormFieldDef>({ name: '', label: '', type: 'text', required: true });
-  const [lastFieldSnippet, setLastFieldSnippet] = useState<string | null>(null);
-
-  const loadFormTarget = useCallback(async () => {
+  const loadFormTargets = useCallback(async () => {
     setIsLoading(true);
     try {
       const res = await fetchWithAuth(`/api/pages/${pageId}/form-target`);
       if (res.ok) {
-        const data = (await res.json()) as { formTarget: FormTarget | null };
-        setFormTarget(data.formTarget);
+        const data = (await res.json()) as { formTargets: FormTarget[] };
+        setFormTargets(data.formTargets);
       }
     } catch {
-      // Leave formTarget as-is; the user can retry via the tab.
+      // Leave formTargets as-is; the user can retry via the tab.
     } finally {
       setIsLoading(false);
     }
   }, [pageId]);
 
   useEffect(() => {
-    loadFormTarget();
-  }, [loadFormTarget]);
+    loadFormTargets();
+  }, [loadFormTargets]);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,452 +207,171 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
     };
   }, [pageId]);
 
-  const handleCreate = useCallback(async () => {
-    if (!draftSheetPageId) {
-      toast.error('Pick a target Sheet page first');
-      return;
-    }
-    const fields = draftFields.map(({ name, label, type, required }) => ({
-      name: name.trim(),
-      label: label.trim(),
-      type,
-      required,
-    }));
-    if (fields.some((f) => !f.name || !f.label)) {
-      toast.error('Every field needs a name and a label');
-      return;
-    }
+  const detected = useMemo(() => detectFormTags(content), [content]);
+  const wiredById = useMemo(() => new Map(formTargets.map((ft) => [ft.id, ft])), [formTargets]);
+  const detectedIds = useMemo(
+    () => new Set(detected.map((tag) => tag.wiredFormTargetId).filter((id): id is string => !!id)),
+    [detected]
+  );
+  // form_targets rows linked to this Canvas page whose <form> tag can no
+  // longer be found in content — e.g. hand-edited/deleted outside the tab.
+  const orphaned = useMemo(
+    () => formTargets.filter((ft) => ft.status !== 'archived' && !detectedIds.has(ft.id)),
+    [formTargets, detectedIds]
+  );
 
-    setIsBusy(true);
-    try {
-      const res = await fetchWithAuth(`/api/pages/${pageId}/form-target`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sheetPageId: draftSheetPageId, fields }),
-      });
-      if (!res.ok) {
-        toast.error(await readError(res));
-        return;
+  const handleWire = useCallback(
+    async (tag: DetectedFormTag, sheetPageId: string) => {
+      setBusyKey(tag.outerHtml);
+      try {
+        const res = await fetchWithAuth(`/api/pages/${pageId}/form-target`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sheetPageId, fields: tag.fields }),
+        });
+        if (!res.ok) {
+          toast.error(await readError(res));
+          return;
+        }
+        const { formTargetId, submitUrl } = (await res.json()) as { formTargetId: string; submitUrl: string };
+
+        const wiredFormHtml = wireFormBlock({ formOuterHtml: tag.outerHtml, formTargetId, submitUrl });
+        const newContent = embedWiredBlock({ content, originalFormHtml: tag.outerHtml, formTargetId, wiredFormHtml });
+
+        if (newContent === null) {
+          // The tag we just provisioned against no longer matches content
+          // verbatim (edited concurrently, or the browser's HTML parser
+          // reformatted it on the way in) — don't leave a dangling, never-
+          // embedded active token behind.
+          await fetchWithAuth(`/api/pages/${pageId}/form-target?formTargetId=${formTargetId}`, { method: 'DELETE' });
+          toast.error("Couldn't find this form tag to wire it up — the page may have changed. Try again.");
+          return;
+        }
+
+        onContentChange(newContent);
+        toast.success('Form wired up');
+        await loadFormTargets();
+      } catch {
+        toast.error('Failed to wire the form');
+      } finally {
+        setBusyKey(null);
       }
-      const data = (await res.json()) as { formTargetId: string; formHtml: string };
-      // formTarget still holds the archived target being replaced here — it
-      // isn't cleared until loadFormTarget() re-fetches below.
-      const replacesFormTargetId = creatingNew ? formTarget?.id : undefined;
-      onEmbedFormHtml(data.formHtml, data.formTargetId, replacesFormTargetId);
-      toast.success('Form created and embedded into this Canvas page');
-      setCreatingNew(false);
-      await loadFormTarget();
-    } catch {
-      toast.error('Failed to create the form');
-    } finally {
-      setIsBusy(false);
-    }
-  }, [draftSheetPageId, draftFields, pageId, onEmbedFormHtml, loadFormTarget, creatingNew, formTarget]);
+    },
+    [pageId, content, onContentChange, loadFormTargets]
+  );
 
-  const patch = useCallback(
-    async (body: object) => {
-      setIsBusy(true);
+  const handleSetStatus = useCallback(
+    async (formTargetId: string, status: 'active' | 'paused') => {
+      setBusyKey(formTargetId);
       try {
         const res = await fetchWithAuth(`/api/pages/${pageId}/form-target`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ formTargetId, status }),
         });
         if (!res.ok) {
           toast.error(await readError(res));
-          return null;
+          return;
         }
-        return (await res.json()) as { formTarget: FormTarget; fieldSnippet?: string };
+        await loadFormTargets();
       } catch {
         toast.error('Request failed');
-        return null;
       } finally {
-        setIsBusy(false);
+        setBusyKey(null);
       }
     },
-    [pageId]
+    [pageId, loadFormTargets]
   );
 
-  const handleUpdateField = useCallback(
-    async (index: number, fieldPatch: Partial<Pick<FormFieldDef, 'label' | 'required' | 'type'>>) => {
-      const result = await patch({ op: 'update-field', index, patch: fieldPatch });
-      if (result) setFormTarget(result.formTarget);
+  const handleDelete = useCallback(
+    async (formTargetId: string) => {
+      setBusyKey(formTargetId);
+      try {
+        const res = await fetchWithAuth(`/api/pages/${pageId}/form-target?formTargetId=${formTargetId}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) {
+          toast.error(await readError(res));
+          return;
+        }
+        onContentChange(deleteFormBlock({ content, formTargetId }));
+        toast.success('Form deleted');
+        await loadFormTargets();
+      } catch {
+        toast.error('Failed to delete the form');
+      } finally {
+        setBusyKey(null);
+      }
     },
-    [patch]
+    [pageId, content, onContentChange, loadFormTargets]
   );
-
-  const handleArchiveField = useCallback(
-    async (index: number, archived: boolean) => {
-      const result = await patch({ op: archived ? 'archive-field' : 'unarchive-field', index });
-      if (result) setFormTarget(result.formTarget);
-    },
-    [patch]
-  );
-
-  const handleAddField = useCallback(async () => {
-    const trimmedField = { ...newField, name: newField.name.trim(), label: newField.label.trim() };
-    if (!trimmedField.name || !trimmedField.label) {
-      toast.error('The new field needs a name and a label');
-      return;
-    }
-    const result = await patch({ op: 'add-field', field: trimmedField });
-    if (result) {
-      setFormTarget(result.formTarget);
-      setLastFieldSnippet(result.fieldSnippet ?? null);
-      setNewField({ name: '', label: '', type: 'text', required: true });
-      toast.success('Field added — paste its snippet into the embedded form');
-    }
-  }, [newField, patch]);
-
-  const handleSetStatus = useCallback(
-    async (status: FormTarget['status']) => {
-      const result = await patch({ op: 'set-status', status });
-      if (result) setFormTarget(result.formTarget);
-    },
-    [patch]
-  );
-
-  const handleCopySnippet = useCallback(async (snippet: string) => {
-    try {
-      await navigator.clipboard.writeText(snippet);
-      toast.success('Snippet copied');
-    } catch {
-      toast.error('Failed to copy');
-    }
-  }, []);
 
   if (isLoading) {
     return <div className="p-4 text-sm text-muted-foreground">Loading…</div>;
   }
 
-  if (!formTarget || creatingNew) {
-    return (
-      <div className="p-4 max-w-2xl space-y-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Set up a form</CardTitle>
-            <CardDescription>
-              Pick a Sheet page and define the fields it should collect — public submissions will append
-              one row per submission.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {formTarget && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setCreatingNew(false)}>
-                ← Back to the archived form
-              </Button>
-            )}
-            <div className="space-y-1.5">
-              <Label>Target Sheet</Label>
-              {driveId ? (
-                <TriggerPagePicker
-                  driveId={driveId}
-                  mode="single"
-                  value={draftSheetPageId}
-                  onChange={setDraftSheetPageId}
-                  pageTypeFilter="SHEET"
-                  placeholder="Select a Sheet page…"
-                  disabled={isBusy}
-                />
-              ) : (
-                <span className="text-sm text-muted-foreground">Loading…</span>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label>Fields</Label>
-              {draftFields.map((field, index) => (
-                <div key={field.draftKey} className="flex items-start gap-2 rounded-md border p-2">
-                  <div className="flex flex-1 flex-wrap gap-2">
-                    <Input
-                      placeholder="name (e.g. email)"
-                      value={field.name}
-                      onChange={(e) =>
-                        setDraftFields((prev) =>
-                          prev.map((f, i) => (i === index ? { ...f, name: e.target.value } : f))
-                        )
-                      }
-                      className="w-40"
-                    />
-                    <Input
-                      placeholder="Label (e.g. Email)"
-                      value={field.label}
-                      onChange={(e) =>
-                        setDraftFields((prev) =>
-                          prev.map((f, i) => (i === index ? { ...f, label: e.target.value } : f))
-                        )
-                      }
-                      className="w-40"
-                    />
-                    <Select
-                      value={field.type}
-                      onValueChange={(value: FormFieldType) =>
-                        setDraftFields((prev) => prev.map((f, i) => (i === index ? { ...f, type: value } : f)))
-                      }
-                    >
-                      <SelectTrigger className="w-32">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {FIELD_TYPE_OPTIONS.map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <div className="flex items-center gap-1.5">
-                      <Switch
-                        checked={field.required}
-                        onCheckedChange={(checked) =>
-                          setDraftFields((prev) =>
-                            prev.map((f, i) => (i === index ? { ...f, required: checked } : f))
-                          )
-                        }
-                      />
-                      <span className="text-xs text-muted-foreground">Required</span>
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      disabled={index === 0}
-                      onClick={() =>
-                        setDraftFields((prev) => {
-                          const next = [...prev];
-                          [next[index - 1], next[index]] = [next[index], next[index - 1]];
-                          return next;
-                        })
-                      }
-                    >
-                      <ArrowUp className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      disabled={index === draftFields.length - 1}
-                      onClick={() =>
-                        setDraftFields((prev) => {
-                          const next = [...prev];
-                          [next[index], next[index + 1]] = [next[index + 1], next[index]];
-                          return next;
-                        })
-                      }
-                    >
-                      <ArrowDown className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      disabled={draftFields.length <= 1}
-                      onClick={() => setDraftFields((prev) => prev.filter((_, i) => i !== index))}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={draftFields.length >= MAX_FIELDS}
-                onClick={() => setDraftFields((prev) => [...prev, newDraftField()])}
-              >
-                + Add field
-              </Button>
-            </div>
-
-            <Button onClick={handleCreate} disabled={isBusy}>
-              {isBusy ? 'Creating…' : 'Create form'}
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="p-4 max-w-2xl space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Form settings</CardTitle>
-          <CardDescription>
-            Appends to <SheetTitle sheetPageId={formTarget.pageId} /> · {formTarget.submissionCount} submission
-            {formTarget.submissionCount === 1 ? '' : 's'}
-            {formTarget.lastSubmittedAt ? ` · last ${new Date(formTarget.lastSubmittedAt).toLocaleString()}` : ''}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Label className="text-sm">Status</Label>
-            <Select
-              value={formTarget.status}
-              onValueChange={(v: FormTarget['status']) => handleSetStatus(v)}
-              disabled={isBusy || formTarget.status === 'archived'}
-            >
-              <SelectTrigger className="w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="paused">Paused</SelectItem>
-                <SelectItem value="archived">Archived</SelectItem>
-              </SelectContent>
-            </Select>
-            {formTarget.status === 'archived' && (
-              <>
-                <span className="text-xs text-muted-foreground">Archiving is permanent</span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="ml-auto"
-                  onClick={() => setCreatingNew(true)}
-                >
-                  Set up a new form
-                </Button>
-              </>
-            )}
-          </div>
+      <p className="text-xs text-muted-foreground">
+        This tab detects every &lt;form&gt; tag already on this page — write one by hand or have an AI agent add
+        one, then wire it up to a Sheet here. Deleting a form removes its tag from the page; there&apos;s no way
+        to recover it, so start a fresh form (with a new Sheet or the same one) if you need it back.
+      </p>
 
-          <div className="space-y-2">
-            <Label>Fields</Label>
-            <p className="text-xs text-muted-foreground">
-              Column position is locked once a field exists — reordering or renaming a field&apos;s name
-              would misalign data already collected. Edit labels freely; archive a field to retire it
-              without losing its column&apos;s history.
+      {detected.length === 0 && orphaned.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No &lt;form&gt; tags found on this page yet. Add one in the Code tab (or ask an AI agent to), then come
+          back here to wire it up.
+        </p>
+      )}
+
+      {detected.map((tag, index) => {
+        const wired = tag.wiredFormTargetId ? wiredById.get(tag.wiredFormTargetId) : undefined;
+        if (tag.wiredFormTargetId && !wired) {
+          return (
+            <p key={index} className="text-sm text-destructive">
+              A wired form tag was found, but its form target couldn&apos;t be loaded.
             </p>
-            {formTarget.fields.map((field, index) => (
-              <div
-                key={field.name}
-                className={`flex flex-wrap items-center gap-2 rounded-md border p-2 ${field.archived ? 'opacity-50' : ''}`}
-              >
-                <span className="w-6 text-xs text-muted-foreground">{String.fromCharCode(65 + index)}</span>
-                <Input
-                  value={field.label}
-                  disabled={isBusy}
-                  onChange={(e) =>
-                    setFormTarget((prev) =>
-                      prev
-                        ? { ...prev, fields: prev.fields.map((f, i) => (i === index ? { ...f, label: e.target.value } : f)) }
-                        : prev
-                    )
-                  }
-                  onBlur={(e) => handleUpdateField(index, { label: e.target.value })}
-                  className="w-40"
-                />
-                <Select
-                  value={field.type}
-                  onValueChange={(value: FormFieldType) => handleUpdateField(index, { type: value })}
-                  disabled={isBusy}
-                >
-                  <SelectTrigger className="w-28">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {FIELD_TYPE_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <div className="flex items-center gap-1.5">
-                  <Switch
-                    checked={field.required}
-                    disabled={isBusy}
-                    onCheckedChange={(checked) => handleUpdateField(index, { required: checked })}
-                  />
-                  <span className="text-xs text-muted-foreground">Required</span>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={isBusy}
-                  onClick={() => handleArchiveField(index, !field.archived)}
-                  className="ml-auto gap-1 text-xs"
-                >
-                  {field.archived ? (
-                    <>
-                      <ArchiveRestore className="h-3.5 w-3.5" /> Restore
-                    </>
-                  ) : (
-                    <>
-                      <Archive className="h-3.5 w-3.5" /> Archive
-                    </>
-                  )}
-                </Button>
-              </div>
-            ))}
+          );
+        }
+        if (wired) {
+          return (
+            <WiredFormCard
+              key={wired.id}
+              formTarget={wired}
+              isBusy={busyKey === wired.id}
+              onSetStatus={(status) => handleSetStatus(wired.id, status)}
+              onDelete={() => handleDelete(wired.id)}
+            />
+          );
+        }
+        return (
+          <UnwiredFormCard
+            key={index}
+            tag={tag}
+            driveId={driveId}
+            isBusy={busyKey === tag.outerHtml}
+            onWire={(sheetPageId) => handleWire(tag, sheetPageId)}
+          />
+        );
+      })}
 
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed p-2">
-              <Input
-                placeholder="name"
-                value={newField.name}
-                onChange={(e) => setNewField((f) => ({ ...f, name: e.target.value }))}
-                className="w-32"
-                disabled={isBusy}
-              />
-              <Input
-                placeholder="Label"
-                value={newField.label}
-                onChange={(e) => setNewField((f) => ({ ...f, label: e.target.value }))}
-                className="w-32"
-                disabled={isBusy}
-              />
-              <Select
-                value={newField.type}
-                onValueChange={(value: FormFieldType) => setNewField((f) => ({ ...f, type: value }))}
-                disabled={isBusy}
-              >
-                <SelectTrigger className="w-28">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {FIELD_TYPE_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={isBusy || formTarget.fields.length >= MAX_FIELDS}
-                onClick={handleAddField}
-              >
-                + Add field
-              </Button>
-            </div>
-
-            {lastFieldSnippet && (
-              <div className="space-y-1.5 rounded-md border bg-muted/40 p-2">
-                <p className="text-xs text-muted-foreground">
-                  New field added — paste this into your embedded &lt;form&gt; (Code tab):
-                </p>
-                <pre className="overflow-x-auto rounded bg-background p-2 text-xs">{lastFieldSnippet}</pre>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="gap-1"
-                  onClick={() => handleCopySnippet(lastFieldSnippet)}
-                >
-                  <Copy className="h-3.5 w-3.5" /> Copy snippet
-                </Button>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      {orphaned.length > 0 && (
+        <div className="space-y-2 border-t pt-4">
+          <p className="text-xs text-muted-foreground">
+            Wired to this page but no matching &lt;form&gt; tag was found in its content:
+          </p>
+          {orphaned.map((ft) => (
+            <WiredFormCard
+              key={ft.id}
+              formTarget={ft}
+              isBusy={busyKey === ft.id}
+              onSetStatus={(status) => handleSetStatus(ft.id, status)}
+              onDelete={() => handleDelete(ft.id)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

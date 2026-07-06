@@ -65,23 +65,4 @@ describe('buildSubmissionSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a payload for an archived field (no passthrough, same as an unknown field)', () => {
-    const withArchived: FormFieldDef[] = [
-      { name: 'name', label: 'Name', type: 'text', required: true },
-      { name: 'email', label: 'Email', type: 'email', required: true, archived: true },
-    ];
-    const schema = buildSubmissionSchema(withArchived);
-    const result = schema.safeParse({ name: 'Ada', email: 'ada@example.com' });
-    expect(result.success).toBe(false);
-  });
-
-  it('does not require a value for an archived field', () => {
-    const withArchived: FormFieldDef[] = [
-      { name: 'name', label: 'Name', type: 'text', required: true },
-      { name: 'email', label: 'Email', type: 'email', required: true, archived: true },
-    ];
-    const schema = buildSubmissionSchema(withArchived);
-    const result = schema.safeParse({ name: 'Ada' });
-    expect(result.success).toBe(true);
-  });
 });

@@ -11,7 +11,6 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { useFindStore } from '@/stores/useFindStore';
-import { spliceFormHtml } from '@pagespace/lib/forms/embed-html';
 import CanvasPublishControls from './CanvasPublishControls';
 import CanvasFormsSettingsTab from './CanvasFormsSettingsTab';
 
@@ -149,18 +148,14 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     saveWithDebounce(value);
   }, [updateContent, saveWithDebounce]);
 
-  // Splices a freshly-created form's HTML into the Canvas content (wrapped in
-  // a marker comment) and saves it — the Forms tab only ever needs to do this
-  // once, at creation, since that's the only moment the raw submit token
-  // (and therefore a complete formHtml) is available at all. When
-  // replacesFormTargetId is given (setting up a replacement for an archived
-  // target), the new block lands in the old one's marker position instead of
-  // just appending after whatever the page has grown to since.
-  const handleEmbedFormHtml = useCallback((html: string, formTargetId: string, replacesFormTargetId?: string) => {
-    const value = spliceFormHtml({ content, html, formTargetId, replacesFormTargetId });
+  // Generic content read/write for the Forms tab, which owns all the <form>
+  // tag detection/wiring/deletion logic itself (parse-form-tags.ts,
+  // @pagespace/lib/forms/form-html + embed-html) — CanvasPageView just needs
+  // to persist whatever the tab decides the new content should be.
+  const handleFormsTabContentChange = useCallback((value: string) => {
     updateContent(value);
     saveWithDebounce(value);
-  }, [content, updateContent, saveWithDebounce]);
+  }, [updateContent, saveWithDebounce]);
 
   // Cleanup on unmount - auto-save any unsaved changes
   useEffect(() => {
@@ -214,7 +209,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
       )}
       {activeTab === 'forms' && (
         <div className="flex-1 min-h-0 overflow-y-auto">
-          <CanvasFormsSettingsTab pageId={pageId} onEmbedFormHtml={handleEmbedFormHtml} />
+          <CanvasFormsSettingsTab pageId={pageId} content={content} onContentChange={handleFormsTabContentChange} />
         </div>
       )}
 

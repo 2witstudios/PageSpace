@@ -64,7 +64,11 @@ export const formTools = {
         });
 
         const submitUrl = `${getWebAppUrl()}/api/public/forms/${token}/submit`;
-        const formHtml = buildFormHtml({ fields, submitUrl });
+        // Same `pagespace-form-{id}` convention wireFormBlock assigns when the
+        // Forms settings tab wires up a hand-authored tag — so the tab can
+        // recognize a form provisioned this way as already-wired too, instead
+        // of mistaking it for a bare, unwired <form>.
+        const formHtml = buildFormHtml({ fields, submitUrl, formId: `pagespace-form-${formTarget.id}` });
 
         return {
           success: true,
