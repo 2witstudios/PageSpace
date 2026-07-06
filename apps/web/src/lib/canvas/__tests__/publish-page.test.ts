@@ -65,7 +65,7 @@ vi.mock('../asset-pipeline', () => ({
   rewriteCanvasAssets: vi.fn(async ({ html }: { html: string }) => ({ html })),
   rewriteInterPageLinksForDrive: vi.fn(async ({ html }: { html: string }) => ({ html })),
   extractAndStripOgMeta: vi.fn((html: string) => ({
-    meta: { faviconHref: null, ogImageUrl: null, ogDescription: null },
+    meta: { ogTitle: null, faviconHref: null, ogImageUrl: null, ogDescription: null },
     html,
   })),
 }));
@@ -403,7 +403,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     vi.mocked(db.query.publishedPages.findMany).mockResolvedValue([]);
     vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
     vi.mocked(extractAndStripOgMeta).mockReturnValue({
-      meta: { faviconHref: undefined, ogImageUrl: undefined, ogDescription: undefined },
+      meta: { ogTitle: undefined, faviconHref: undefined, ogImageUrl: undefined, ogDescription: undefined },
       html: '<div>hi</div>',
     });
     valuesSpy = vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) }));
@@ -474,6 +474,36 @@ describe('publishCanvasPage — SEO overrides', () => {
     const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
     expect(renderInput?.title).toBe('Custom Title');
     expect(renderInput?.robots).toBe('noindex');
+  });
+
+  it('uses the canvas-authored og:title when no title override is set', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+    vi.mocked(extractAndStripOgMeta).mockReturnValueOnce({
+      meta: { ogTitle: 'Author OG Title', faviconHref: undefined, ogImageUrl: undefined, ogDescription: undefined },
+      html: '<div>hi</div>',
+    });
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.title).toBe('Author OG Title');
+  });
+
+  it('prefers an explicit title override over the canvas-authored og:title', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+    vi.mocked(extractAndStripOgMeta).mockReturnValueOnce({
+      meta: { ogTitle: 'Author OG Title', faviconHref: undefined, ogImageUrl: undefined, ogDescription: undefined },
+      html: '<div>hi</div>',
+    });
+
+    await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', title: 'Custom Title',
+    });
+
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.title).toBe('Custom Title');
   });
 
   it('falls back to the drive default OG image when neither override nor canvas set one', async () => {

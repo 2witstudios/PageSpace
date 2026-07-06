@@ -34,6 +34,7 @@ const referenceKey = ({ id, kind, driveId }: FileReference): string =>
   driveId ? `dashboard:${driveId}:${id}:${kind}` : `api:${id}:${kind}`;
 
 export interface OgMeta {
+  ogTitle?: string;
   ogImageUrl?: string;
   ogDescription?: string;
   faviconHref?: string;
@@ -44,6 +45,7 @@ export interface OgMeta {
  * tags from the body so they can be hoisted into <head> by renderCanvasDocument.
  *
  * Reads standard HTML semantics the author placed directly in the canvas:
+ *   <meta property="og:title"       content="…">  → ogTitle
  *   <meta property="og:image"       content="…">  → ogImageUrl
  *   <meta property="og:description" content="…">  → ogDescription
  *   <link rel="icon" href="…">                    → faviconHref
@@ -53,26 +55,39 @@ export interface OgMeta {
  *
  * Pure function: no I/O, no env reads.
  */
+/**
+ * Strip every `<meta property="{property}" content="…">` tag (either attribute
+ * order) from `html`, invoking `assign` with each match's `content`. Shared by
+ * the og:image/og:title/og:description extractions below, which differ only in
+ * the property name and where the captured content is stored.
+ */
+function stripMetaProperty(html: string, property: string, assign: (content: string) => void): string {
+  const propertyFirst = new RegExp(`<meta\\b[^>]+property="${property}"[^>]+content="([^"]*)"[^>]*/?>`, 'gi');
+  const contentFirst = new RegExp(`<meta\\b[^>]+content="([^"]*)"[^>]+property="${property}"[^>]*/?>`, 'gi');
+  return html
+    .replace(propertyFirst, (_, content: string) => {
+      assign(content);
+      return '';
+    })
+    .replace(contentFirst, (_, content: string) => {
+      assign(content);
+      return '';
+    });
+}
+
 export function extractAndStripOgMeta(html: string): { meta: OgMeta; html: string } {
   const meta: OgMeta = {};
 
-  const result = html
-    .replace(/<meta\b[^>]+property="og:image"[^>]+content="([^"]*)"[^>]*\/?>/gi, (_, content: string) => {
-      meta.ogImageUrl ??= content || undefined;
-      return '';
-    })
-    .replace(/<meta\b[^>]+content="([^"]*)"[^>]+property="og:image"[^>]*\/?>/gi, (_, content: string) => {
-      meta.ogImageUrl ??= content || undefined;
-      return '';
-    })
-    .replace(/<meta\b[^>]+property="og:description"[^>]+content="([^"]*)"[^>]*\/?>/gi, (_, content: string) => {
-      meta.ogDescription ??= content || undefined;
-      return '';
-    })
-    .replace(/<meta\b[^>]+content="([^"]*)"[^>]+property="og:description"[^>]*\/?>/gi, (_, content: string) => {
-      meta.ogDescription ??= content || undefined;
-      return '';
-    })
+  let result = stripMetaProperty(html, 'og:image', (content) => {
+    meta.ogImageUrl ??= content || undefined;
+  });
+  result = stripMetaProperty(result, 'og:title', (content) => {
+    meta.ogTitle ??= content || undefined;
+  });
+  result = stripMetaProperty(result, 'og:description', (content) => {
+    meta.ogDescription ??= content || undefined;
+  });
+  result = result
     .replace(/<link\b[^>]+rel="icon"[^>]+href="([^"]*)"[^>]*\/?>/gi, (_, href: string) => {
       meta.faviconHref ??= href || undefined;
       return '';
