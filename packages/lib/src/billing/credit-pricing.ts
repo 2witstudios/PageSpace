@@ -27,6 +27,14 @@ function envBool(name: string, fallback: boolean): boolean {
   return fallback; // unrecognized value -> safe default
 }
 
+/** Parse a non-negative float env override; fall back to `fallback` on absence/garbage. */
+function envFloat(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 /** Markup applied to real provider cost, in basis points. 15000 = 1.5×. */
 export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
 
@@ -131,6 +139,38 @@ export const TERMINAL_HOLD_ESTIMATE_CENTS = envInt('TERMINAL_HOLD_ESTIMATE_CENTS
  * use. Default 4.
  */
 export const TERMINAL_MAX_INFLIGHT = envInt('TERMINAL_MAX_INFLIGHT', 4);
+
+/**
+ * Published Sprites rates, in USD per resource-hour (tasks/terminal.md: active
+ * CPU-hour $0.07 + mem GB-hour $0.04375). Lives here (not terminal-pricing.ts) so
+ * every terminal-billing constant is env-overridable from one place, matching
+ * every other pricing table in this file.
+ */
+export const TERMINAL_RATES = {
+  usdPerCpuHour: envFloat('TERMINAL_USD_PER_CPU_HOUR', 0.07),
+  usdPerMemGbHour: envFloat('TERMINAL_USD_PER_MEM_GB_HOUR', 0.04375),
+};
+
+/**
+ * Assumed default machine shape (vCPUs / RAM in GB) used to price active runtime,
+ * since no per-run resource allocation is read back from Sprites (see
+ * sandbox-options.ts's `SandboxResourceCaps`: `ramMB`/`cpus` are both optional,
+ * unset -> provider default). Env-overridable so this can track Sprites' real
+ * default shape without a deploy.
+ */
+export const TERMINAL_ASSUMED_CPUS = envFloat('TERMINAL_ASSUMED_CPUS', 1);
+export const TERMINAL_ASSUMED_MEMORY_GB = envFloat('TERMINAL_ASSUMED_MEMORY_GB', 0.25);
+
+/**
+ * Assumed persistent-storage rate, in USD per GB-month, for a Machine's persistent
+ * filesystem (the thing that survives hibernation — see sandbox-options.ts's
+ * `storageGB`). Unlike CPU/mem, Sprites' persistent volume is NOT free while
+ * hibernating, so a Machine left idle-but-not-destroyed still accrues this cost —
+ * consumed by the separate idle-storage cron (Epic 3), not by the active-runtime
+ * charge in terminal-pricing.ts. Placeholder pending Sprites' published storage
+ * rate; tune via env once confirmed.
+ */
+export const TERMINAL_STORAGE_USD_PER_GB_MONTH = envFloat('TERMINAL_STORAGE_USD_PER_GB_MONTH', 0.15);
 
 /**
  * How long a hold lives before the reconcile cron may sweep it. Must exceed the
