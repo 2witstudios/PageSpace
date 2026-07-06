@@ -47,7 +47,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   was on hand. That direct-POST path let a script or agent with shell access mint itself a new
   token unattended; it's gone. The resulting credential is stored locally under a named profile
   (`--save-as-profile`, defaulting to the drive id) rather than printed, so it isn't a source for a
-  portable secret — mint one of those from **Settings → MCP** instead.
+  portable secret — mint one of those from **Settings → MCP** instead. As a consequence, `tokens
+  create` no longer supports `--json` output — there's no portable token left to emit, and the
+  command now blocks on an interactive browser consent screen either way — while `tokens list
+  --json` and `tokens revoke` are unaffected.
 - **BREAKING: `pagespace mcp` no longer falls back to your personal login.** Previously, running
   `pagespace mcp` with no `--token`/`PAGESPACE_TOKEN`/`--profile` silently authenticated as
   whichever profile `pagespace login` had stored — so an MCP client config missing its intended

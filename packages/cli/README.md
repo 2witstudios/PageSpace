@@ -90,7 +90,10 @@ Every command follows `pagespace <resource> <verb> [args] [flags]`.
 | `tokens` | `create --drive <id> --role member\|admin\|<roleId> [--save-as-profile <name>] [--yes]`, `list`, `revoke <tokenId> [--yes]` |
 
 Every command supports `--json` (machine-readable output on stdout, nothing else) and `--host
-<url>` / `--token <token>` (override the resolved config for that one call).
+<url>` / `--token <token>` (override the resolved config for that one call) — except `tokens
+create`, which always prints its human-readable consent-flow status; `--json` is silently ignored
+there, since minting now blocks on an interactive browser consent screen and never prints a
+portable token to parse in the first place.
 
 ## `pagespace mcp`
 
