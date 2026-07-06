@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createSandboxGitTools } from '../sandbox-git-tools';
+import { createSandboxGitTools, SANDBOX_GIT_TOOL_NAMES } from '../sandbox-git-tools';
 import type { GitSandboxToolsDeps } from '../sandbox-git-tools';
 
 const mockRun = vi.fn();
@@ -934,6 +934,12 @@ describe('createSandboxGitTools', () => {
     const deps = makeDeps();
     const tools = createSandboxGitTools(deps);
     expect(Object.keys(tools)).toHaveLength(35);
+  });
+
+  it('SANDBOX_GIT_TOOL_NAMES stays in sync with the factory output', () => {
+    const deps = makeDeps();
+    const tools = createSandboxGitTools(deps);
+    expect([...SANDBOX_GIT_TOOL_NAMES].sort()).toEqual(Object.keys(tools).sort());
   });
 
   it('no tool passes sh or -c as the cmd or first arg', async () => {

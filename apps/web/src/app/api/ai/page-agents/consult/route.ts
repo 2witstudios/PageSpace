@@ -411,6 +411,7 @@ export async function POST(request: Request) {
         agentId,
         userId,
         driveId: agent.driveId,
+        currentTools: availableTools,
       });
       integrationToolCount = Object.keys(integrationTools).length;
       if (integrationToolCount > 0) {

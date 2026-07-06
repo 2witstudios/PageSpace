@@ -5,6 +5,9 @@
  * toggles that filter out specific tools based on user settings.
  */
 
+import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
+import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
+
 // Tools that modify content (excluded in read-only mode; also used by elision to protect side-effectful results)
 export const WRITE_TOOLS = new Set([
   // Page write operations
@@ -99,27 +102,20 @@ export const WRITE_TOOLS = new Set([
 // Web search tools (excluded when web search is disabled)
 const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
 
-// All sandbox git/GitHub tool names (createSandboxGitTools). Their presence in
-// a request's tool set means the agent already has a full git/gh CLI toolkit —
-// used to detect overlap with the GitHub OAuth integration tools below.
-const SANDBOX_GIT_TOOL_NAMES = new Set([
-  'git_clone', 'git_init', 'git_config', 'git_remote_add', 'git_status', 'git_diff',
-  'git_add', 'git_reset', 'git_stash', 'git_commit', 'git_log', 'git_merge', 'git_rebase',
-  'git_checkout', 'git_branch', 'git_fetch', 'git_pull', 'git_push',
-  'gh_pr_create', 'gh_pr_list', 'gh_pr_view', 'gh_pr_diff', 'gh_pr_checks', 'gh_pr_merge',
-  'gh_pr_checkout', 'gh_pr_review', 'gh_pr_review_comment', 'gh_pr_close', 'gh_pr_reopen',
-  'gh_pr_ready', 'gh_run_list', 'gh_run_view', 'gh_issue_create', 'gh_issue_list', 'gh_issue_view',
-]);
-
-// Namespace prefix for integration tools resolved from the GitHub OAuth connection
-// (see buildIntegrationToolName in @pagespace/lib/integrations/converter/ai-sdk).
-const GITHUB_INTEGRATION_TOOL_PREFIX = 'int__github__';
+// Presence of any of these in a request's tool set means the agent already has
+// a full git/gh CLI toolkit — used to detect overlap with the GitHub OAuth
+// integration tools below. Sourced from sandbox-git-tools.ts (single source of
+// truth, sync-checked by that file's own test suite).
+const SANDBOX_GIT_TOOL_NAME_SET = new Set(SANDBOX_GIT_TOOL_NAMES);
 
 /**
- * Whether any sandbox git/GitHub tool is present in a resolved tool set.
+ * Whether the sandbox git/gh CLI toolkit is active — i.e. any of its tool
+ * names appear in a resolved tool set. Must be checked against the tool set
+ * BEFORE per-agent tool-exposure-mode deferral (search mode moves non-core
+ * tools behind execute_tool, hiding these names from a top-level key scan).
  */
 export function hasSandboxGitTools(tools: Record<string, unknown>): boolean {
-  return Object.keys(tools).some((name) => SANDBOX_GIT_TOOL_NAMES.has(name));
+  return Object.keys(tools).some((name) => SANDBOX_GIT_TOOL_NAME_SET.has(name));
 }
 
 /**
@@ -135,7 +131,7 @@ export function suppressGithubIntegrationTools<T>(
 ): Record<string, T> {
   if (!hasSandboxGitTools(currentTools)) return integrationTools;
   return Object.fromEntries(
-    Object.entries(integrationTools).filter(([name]) => !name.startsWith(GITHUB_INTEGRATION_TOOL_PREFIX))
+    Object.entries(integrationTools).filter(([name]) => parseIntegrationToolName(name)?.providerSlug !== 'github')
   );
 }
 

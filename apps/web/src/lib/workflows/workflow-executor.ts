@@ -269,6 +269,7 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
         agentId: agent.id,
         userId: input.createdBy,
         driveId: input.driveId,
+        currentTools: availableTools,
       });
 
       if (Object.keys(integrationTools).length > 0) {

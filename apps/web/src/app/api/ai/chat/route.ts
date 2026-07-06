@@ -53,7 +53,7 @@ import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/sys
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
-import { filterToolsForReadOnly, filterToolsForMcpScope, suppressGithubIntegrationTools } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
@@ -679,6 +679,11 @@ export async function POST(request: Request) {
     // correctly included in search mode where non-core tools become callable via execute_tool
     // and disappear from filteredTools.
     const allowedToolNames = Object.keys(filteredTools);
+    // Captured before exposure-mode transforms filteredTools below — 'search' mode
+    // moves non-core tools (including all sandbox git/gh tools) behind execute_tool,
+    // hiding their names from a top-level key scan. Integration-tool suppression
+    // needs the pre-exposure set to correctly detect an active sandbox toolkit.
+    const preExposureTools = filteredTools;
     const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
     filteredTools = exposure.tools;
     const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -695,15 +700,12 @@ export async function POST(request: Request) {
     // INTEGRATION TOOLS: Resolve and merge integration tools for this agent
     try {
       const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
-      const resolvedIntegrationTools = await resolvePageAgentIntegrationTools({
+      const integrationTools = await resolvePageAgentIntegrationTools({
         agentId: chatId,
         userId,
         driveId: page.driveId,
+        currentTools: preExposureTools,
       });
-      // The sandbox git/gh CLI toolkit and the GitHub OAuth integration tools
-      // overlap in capability — suppress the latter when the former is already
-      // in this agent's tool set to avoid offering two redundant GitHub surfaces.
-      const integrationTools = suppressGithubIntegrationTools(resolvedIntegrationTools, filteredTools);
       if (Object.keys(integrationTools).length > 0) {
         filteredTools = mergeToolSets(filteredTools, integrationTools);
         loggers.ai.info('AI Chat API: Merged integration tools', {

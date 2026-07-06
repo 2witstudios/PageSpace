@@ -50,6 +50,19 @@ function isDeleteRefspec(refspec: string): boolean {
   return spec.includes(':') && spec.slice(0, spec.lastIndexOf(':')).trim() === '';
 }
 
+// Tool names returned by createSandboxGitTools, kept next to the factory so a
+// new tool is one glance away from being added here too. Consumed by
+// tool-filtering.ts to detect whether the sandbox git/gh toolkit is active —
+// checked against the factory's return keys in this file's own test suite.
+export const SANDBOX_GIT_TOOL_NAMES: readonly string[] = [
+  'git_clone', 'git_init', 'git_config', 'git_remote_add', 'git_status', 'git_diff',
+  'git_add', 'git_reset', 'git_stash', 'git_commit', 'git_log', 'git_merge', 'git_rebase',
+  'git_checkout', 'git_branch', 'git_fetch', 'git_pull', 'git_push',
+  'gh_pr_create', 'gh_pr_list', 'gh_pr_view', 'gh_pr_diff', 'gh_pr_checks', 'gh_pr_merge',
+  'gh_pr_checkout', 'gh_pr_review', 'gh_pr_review_comment', 'gh_pr_close', 'gh_pr_reopen',
+  'gh_pr_ready', 'gh_run_list', 'gh_run_view', 'gh_issue_create', 'gh_issue_list', 'gh_issue_view',
+];
+
 export interface GitSandboxToolsDeps {
   gitRunDeps: GitSandboxRunDeps;
   resolveContext: ResolveSandboxContext;
@@ -719,17 +732,25 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       if (!body) {
         return { success: false as const, error: 'body is required' };
       }
-      const fields: string[] = ['-f', `body=${body}`];
-      if (path !== undefined) fields.push('-f', `path=${path}`);
-      if (line !== undefined) fields.push('-F', `line=${line}`);
-      if (side) fields.push('-f', `side=${side}`);
-      if (commit_id !== undefined) fields.push('-f', `commit_id=${commit_id}`);
-      if (start_line !== undefined) fields.push('-F', `start_line=${start_line}`);
-      if (start_side) fields.push('-f', `start_side=${start_side}`);
-      if (in_reply_to !== undefined) fields.push('-F', `in_reply_to=${in_reply_to}`);
-      if (subject_type) fields.push('-f', `subject_type=${subject_type}`);
       return withToken(options, (ctx, token) =>
-        gitR('gh', ['api', `repos/{owner}/{repo}/pulls/${number}/comments`, ...fields], ctx, token, cwd),
+        gitR(
+          'gh',
+          [
+            'api', `repos/{owner}/{repo}/pulls/${number}/comments`,
+            '-f', `body=${body}`,
+            ...(path !== undefined ? ['-f', `path=${path}`] : []),
+            ...(line !== undefined ? ['-F', `line=${line}`] : []),
+            ...(side ? ['-f', `side=${side}`] : []),
+            ...(commit_id !== undefined ? ['-f', `commit_id=${commit_id}`] : []),
+            ...(start_line !== undefined ? ['-F', `start_line=${start_line}`] : []),
+            ...(start_side ? ['-f', `start_side=${start_side}`] : []),
+            ...(in_reply_to !== undefined ? ['-F', `in_reply_to=${in_reply_to}`] : []),
+            ...(subject_type ? ['-f', `subject_type=${subject_type}`] : []),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
       );
     },
   });
