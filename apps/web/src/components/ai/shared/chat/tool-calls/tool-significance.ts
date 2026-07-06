@@ -1,8 +1,14 @@
 import { toTitleCase } from '@/lib/utils/formatters';
 import { SPECIAL_HANDLED_TOOLS } from './registry';
 import { resolveIntegrationToolLabel } from './tool-call-dispatch';
-import type { RunStatus } from './useAutoCollapseOnComplete';
 import type { ProcessedToolPart } from '../message-types';
+
+/**
+ * Aggregate status of a tool-call run, derived from its members' individual
+ * states. Drives the run header's icon/state — the run itself never
+ * auto-expands or auto-collapses based on this (see ToolRunGroup.tsx).
+ */
+export type RunStatus = 'running' | 'error' | 'complete';
 
 /**
  * Tools that always render as their own standalone card and are never folded

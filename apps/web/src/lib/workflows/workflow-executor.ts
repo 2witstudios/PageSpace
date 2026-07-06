@@ -12,6 +12,7 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
+import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskAssignees, taskStatusConfigs } from '@pagespace/db/schema/tasks'
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs'
@@ -269,6 +270,7 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
         agentId: agent.id,
         userId: input.createdBy,
         driveId: input.driveId,
+        currentTools: availableTools,
       });
 
       if (Object.keys(integrationTools).length > 0) {
@@ -487,7 +489,10 @@ async function buildTaskContext(taskItemId: string, triggerType: 'due_date' | 'c
     .where(eq(taskAssignees.taskId, taskItemId));
 
   if (assignees.length > 0) {
-    const names = assignees.map(a => a.userName || a.agentTitle || 'Unknown assignee');
+    // Decrypt PII at the edge (GDPR #965) so assignee names in the prompt are plaintext.
+    const names = await Promise.all(
+      assignees.map(async a => (await decryptField(a.userName)) || a.agentTitle || 'Unknown assignee'),
+    );
     parts.push(`Assignees: ${names.join(', ')}`);
   }
 

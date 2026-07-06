@@ -1,9 +1,9 @@
 import { createId } from '@paralleldrive/cuid2';
 import React from 'react';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
 import { users, verificationTokens } from '@pagespace/db/schema/auth';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
+import { userEmailMatch, prepareUserWrite } from '@pagespace/lib/auth/user-repository';
 import { sendEmail, resolveAppUrl } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -26,17 +26,18 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
       // to '' and `??` only catches null/undefined — fall back with `||` so a
       // pathological email never produces a NOT NULL violation.
       const localPart = email.split('@')[0];
+      const newUser: typeof users.$inferInsert = {
+        id,
+        name: localPart || 'New User',
+        email,
+        provider: 'email',
+        role: 'user',
+        tokenVersion: 1,
+        tosAcceptedAt,
+      };
       const [created] = await db
         .insert(users)
-        .values({
-          id,
-          name: localPart || 'New User',
-          email,
-          provider: 'email',
-          role: 'user',
-          tokenVersion: 1,
-          tosAcceptedAt,
-        })
+        .values(await prepareUserWrite(newUser))
         .returning({ id: users.id });
       return { id: created.id };
     } catch (error: unknown) {
@@ -49,7 +50,7 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
       const [existing] = await db
         .select({ id: users.id })
         .from(users)
-        .where(eq(users.email, email));
+        .where(userEmailMatch(email));
       if (!existing) throw error;
       return { id: existing.id };
     }

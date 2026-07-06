@@ -20,7 +20,7 @@ import { resolveGrantAuthority } from '../oauth-grant-authority';
 import type { ScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 
 function scopeSet(drives: Array<[string, ScopeSet['drives'] extends ReadonlyMap<string, infer V> ? V : never]>): ScopeSet {
-  return { account: false, offlineAccess: false, drives: new Map(drives) };
+  return { account: false, offlineAccess: false, drives: new Map(drives), manageKeys: false };
 }
 
 const USER_ID = 'user-1';

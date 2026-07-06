@@ -385,9 +385,10 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
             );
           } else if (isToolRunGroupPart(group)) {
             return (
-              <div key={`${message.id}-toolrun-${index}`} className="mt-1">
+              <div key={`${message.id}-toolrun-${group.runKey}`} className="mt-1">
                 <CompactToolRunGroup
                   parts={group.parts}
+                  runKey={group.runKey}
                   getToolCallOpen={getToolCallOpen}
                   setToolCallOpen={setToolCallOpen}
                 />

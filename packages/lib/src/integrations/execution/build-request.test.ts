@@ -14,7 +14,7 @@ describe('interpolatePath', () => {
     const template = '/repos/{owner}/{repo}/issues';
     const input = { owner: 'acme', repo: 'webapp' };
 
-    const result = interpolatePath(template, input);
+    const result = interpolatePath({ template, input });
 
     expect(result).toBe('/repos/acme/webapp/issues');
   });
@@ -23,7 +23,7 @@ describe('interpolatePath', () => {
     const template = '/user/repos';
     const input = {};
 
-    const result = interpolatePath(template, input);
+    const result = interpolatePath({ template, input });
 
     expect(result).toBe('/user/repos');
   });
@@ -32,7 +32,7 @@ describe('interpolatePath', () => {
     const template = '/repos/{owner}/{repo}';
     const input = { owner: 'acme' };
 
-    const result = interpolatePath(template, input);
+    const result = interpolatePath({ template, input });
 
     expect(result).toBe('/repos/acme/');
   });
@@ -41,9 +41,117 @@ describe('interpolatePath', () => {
     const template = '/issues/{issueNumber}';
     const input = { issueNumber: 123 };
 
-    const result = interpolatePath(template, input);
+    const result = interpolatePath({ template, input });
 
     expect(result).toBe('/issues/123');
+  });
+
+  it('given a plain identifier param containing "..", should throw rather than build a traversing path', () => {
+    const template = '/repos/{owner}/{repo}/issues';
+    const input = { owner: '..', repo: 'webapp' };
+
+    expect(() => interpolatePath({ template, input })).toThrow(/owner/);
+  });
+
+  it('given a plain identifier param containing a literal slash, should throw', () => {
+    const template = '/repos/{owner}/{repo}/issues';
+    const input = { owner: 'acme/evil', repo: 'webapp' };
+
+    expect(() => interpolatePath({ template, input })).toThrow(/owner/);
+  });
+
+  it('given a rawPathParams value containing ".." segments, should throw rather than escape the base path', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = {
+      owner: 'acme',
+      repo: 'webapp',
+      path: '../../other-org/other-repo/contents/secret.txt',
+    };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a rawPathParams value with legitimate nested slashes, should preserve them literally', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: 'src/components/Foo.tsx' };
+
+    const result = interpolatePath({ template, input, rawPathParams: ['path'] });
+
+    expect(result).toBe('/repos/acme/webapp/contents/src/components/Foo.tsx');
+  });
+
+  it('given a rawPathParams value that is exactly "..", should throw', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: '..' };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a rawPathParams value with percent-encoded ".." segments, should throw', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = {
+      owner: 'acme',
+      repo: 'webapp',
+      path: '%2e%2e/%2e%2e/other-org/other-repo/contents/secret.txt',
+    };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a rawPathParams value with mixed-case percent-encoded ".." segments, should throw', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: '%2E%2e/other-org/other-repo/contents/x' };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a rawPathParams value mixing a literal dot with a percent-encoded dot (".%2e"), should throw', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: '.%2e/other-org/other-repo/contents/x' };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a rawPathParams value containing a backslash, should throw rather than let it act as a path separator', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: '..\\..\\other-org\\other-repo\\contents\\x' };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a plain identifier param with a percent-encoded ".." value, should throw', () => {
+    const template = '/repos/{owner}/{repo}';
+    const input = { owner: '%2e%2e', repo: 'webapp' };
+
+    expect(() => interpolatePath({ template, input })).toThrow(/owner/);
+  });
+
+  it('given a plain identifier param containing a backslash, should throw', () => {
+    const template = '/repos/{owner}/{repo}';
+    const input = { owner: 'acme\\evil', repo: 'webapp' };
+
+    expect(() => interpolatePath({ template, input })).toThrow(/owner/);
+  });
+
+  it('given a rawPathParams value with a legitimate dotted segment (".github"), should preserve it', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: '.github/workflows/ci.yml' };
+
+    const result = interpolatePath({ template, input, rawPathParams: ['path'] });
+
+    expect(result).toBe('/repos/acme/webapp/contents/.github/workflows/ci.yml');
   });
 });
 
@@ -360,5 +468,57 @@ describe('buildHttpRequest', () => {
     const result = buildHttpRequest(config, {}, 'https://api.example.com');
 
     expect(result.url).toBe('https://api.example.com/items');
+  });
+
+  it('given a "path" value containing "../" and no rawPathParams declared, should throw rather than build an escaping URL', () => {
+    const config: HttpExecutionConfig = {
+      method: 'PUT',
+      pathTemplate: '/repos/{owner}/{repo}/contents/{path}',
+      bodyTemplate: { message: { $param: 'message' } },
+    };
+    const input = {
+      owner: 'acme',
+      repo: 'webapp',
+      path: '../../other-org/other-repo/contents/secret.txt',
+      message: 'evil commit',
+    };
+
+    expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
+  });
+
+  it('given a "path" value containing "../" with rawPathParams declared, should still throw', () => {
+    const config: HttpExecutionConfig = {
+      method: 'PUT',
+      pathTemplate: '/repos/{owner}/{repo}/contents/{path}',
+      rawPathParams: ['path'],
+      bodyTemplate: { message: { $param: 'message' } },
+    };
+    const input = {
+      owner: 'acme',
+      repo: 'webapp',
+      path: '../../other-org/other-repo/contents/secret.txt',
+      message: 'evil commit',
+    };
+
+    expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
+  });
+
+  it('given a legitimate nested "path" value with rawPathParams declared, should build the correct URL', () => {
+    const config: HttpExecutionConfig = {
+      method: 'PUT',
+      pathTemplate: '/repos/{owner}/{repo}/contents/{path}',
+      rawPathParams: ['path'],
+      bodyTemplate: { message: { $param: 'message' } },
+    };
+    const input = {
+      owner: 'acme',
+      repo: 'webapp',
+      path: 'src/components/Foo.tsx',
+      message: 'update Foo',
+    };
+
+    const result = buildHttpRequest(config, input, 'https://api.github.com');
+
+    expect(result.url).toBe('https://api.github.com/repos/acme/webapp/contents/src/components/Foo.tsx');
   });
 });

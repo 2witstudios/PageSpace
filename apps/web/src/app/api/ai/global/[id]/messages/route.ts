@@ -45,6 +45,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, desc, gt, lt } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
@@ -815,6 +816,10 @@ MENTION PROCESSING:
         userId,
         driveId: currentDriveId,
         userDriveRole,
+        // filteredAllTools (not finalTools) carries raw tool names as top-level
+        // keys — finalTools is always { ...coreTools, tool_search, execute_tool },
+        // which never contains sandbox git/gh tool names directly.
+        currentTools: filteredAllTools,
       });
       if (Object.keys(integrationTools).length > 0) {
         finalTools = mergeToolSets(finalTools, integrationTools);
@@ -987,7 +992,9 @@ MENTION PROCESSING:
         .where(eq(userProfiles.userId, userId))
         .limit(1),
     ]);
-    const authUserName = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
+    // Decrypt PII at the edge (GDPR #965) so the sender display name is plaintext.
+    const authUserNameRaw = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
+    const authUserName = await decryptField(authUserNameRaw);
     const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
     const displayName = profileDisplayName ?? authUserName ?? 'Someone';
 

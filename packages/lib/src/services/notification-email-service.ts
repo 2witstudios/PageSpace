@@ -17,6 +17,8 @@ import { PermissionUpdatedEmail } from '../email-templates/PermissionUpdatedEmai
 import { DriveJoinedEmail } from '../email-templates/DriveJoinedEmail';
 import { DriveRoleChangedEmail } from '../email-templates/DriveRoleChangedEmail';
 import { hashToken, getTokenPrefix } from '../auth/token-utils';
+import { decryptUserRow } from '../auth/user-repository';
+import { decryptField } from '../encryption/field-crypto';
 import { randomBytes } from 'crypto';
 import type { ReactElement } from 'react';
 
@@ -372,14 +374,17 @@ export async function sendNotificationEmail(data: NotificationEmailData): Promis
       return; // User opted out
     }
 
-    // Get user details
-    const user = await db.query.users.findFirst({
+    // Get user details. Decrypt PII at the edge (GDPR #965): `user.email` is the
+    // actual send-to address (ciphertext would break delivery) and `user.name`
+    // greets the recipient. Legacy plaintext passes through unchanged.
+    const userRow = await db.query.users.findFirst({
       where: eq(users.id, data.userId),
       columns: {
         name: true,
         email: true,
       },
     });
+    const user = userRow ? await decryptUserRow(userRow) : undefined;
 
     if (!user?.email) {
       console.warn('Cannot send email notification: user %s has no email', String(data.userId).replace(/[\x00-\x1f\x7f-\x9f\n\r]/g, '').slice(0, 100));
@@ -418,12 +423,13 @@ export async function sendNotificationEmail(data: NotificationEmailData): Promis
       where: eq(users.id, data.userId),
       columns: { email: true },
     });
+    const recipientEmail = userEmail ? await decryptField(userEmail.email) : undefined;
 
     await logEmailNotification(
       data.userId,
       data.notificationId,
       data.type,
-      userEmail?.email || 'unknown',
+      recipientEmail || 'unknown',
       false,
       error instanceof Error ? error.message : 'Unknown error'
     );

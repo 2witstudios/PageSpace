@@ -21,6 +21,8 @@ export function describeScopeForConsent(scope: ParsedScope, ctx: ConsentNarratio
       return 'Full access to your PageSpace account — everything you can see and do, in every drive, now and in the future.';
     case 'offline_access':
       return 'Stay connected until you revoke access (issues a long-lived refresh credential).';
+    case 'manage_keys':
+      return 'Create and manage access keys on your behalf — cannot read or write any of your content directly.';
     case 'drive': {
       const driveName = ctx.driveName ?? scope.driveId;
       switch (scope.role.kind) {

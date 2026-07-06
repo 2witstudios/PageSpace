@@ -43,6 +43,13 @@ describe('describeScopeForConsent', () => {
     expect(text).toMatch(/Marketing/);
   });
 
+  it('describes manage_keys as key-management access with no content access', () => {
+    const text = describeScopeForConsent({ kind: 'manage_keys' }, {});
+    expect(text).toMatch(/manage/i);
+    expect(text).toMatch(/keys/i);
+    expect(text).toMatch(/cannot read or write/i);
+  });
+
   it('describes a custom-role drive scope by resolved role name + summary', () => {
     const scope: ParsedScope = { kind: 'drive', driveId: 'drv123', role: { kind: 'custom', customRoleId: 'role1' } };
     const text = describeScopeForConsent(scope, {

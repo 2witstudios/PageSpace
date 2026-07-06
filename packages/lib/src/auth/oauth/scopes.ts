@@ -14,6 +14,7 @@ const RESOURCE_ID_RE = /^[a-z0-9]{1,32}$/;
 export type ParsedScope =
   | { kind: 'account' }
   | { kind: 'offline_access' }
+  | { kind: 'manage_keys' }
   | {
       kind: 'drive';
       driveId: string;
@@ -24,6 +25,11 @@ export type ScopeSet = {
   account: boolean;
   offlineAccess: boolean;
   drives: ReadonlyMap<string, ParsedScope & { kind: 'drive' }>;
+  // Grants key-management access with zero content access. Mutually exclusive
+  // with `account` and any `drive:*` scope (see the manage_keys_conflict
+  // check below); downstream fail-closed checks live in
+  // apps/web/src/lib/auth/index.ts.
+  manageKeys: boolean;
 };
 
 export type ScopeError =
@@ -31,6 +37,7 @@ export type ScopeError =
   | { code: 'unknown_scope'; scope: string }
   | { code: 'empty_scope' }
   | { code: 'account_drive_conflict' }
+  | { code: 'manage_keys_conflict' }
   | { code: 'duplicate_drive'; driveId: string }
   | { code: 'offline_access_alone' };
 
@@ -86,6 +93,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
 
   let account = false;
   let offlineAccess = false;
+  let manageKeys = false;
   const drives = new Map<string, ParsedScope & { kind: 'drive' }>();
 
   for (const token of tokens) {
@@ -95,6 +103,10 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     }
     if (token === 'offline_access') {
       offlineAccess = true;
+      continue;
+    }
+    if (token === 'manage_keys') {
+      manageKeys = true;
       continue;
     }
     if (token.startsWith('drive:')) {
@@ -115,15 +127,24 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     return { ok: false, error: { code: 'account_drive_conflict' } };
   }
 
+  // manage_keys grants key-management access with zero content access — mixing
+  // it with any content-access scope (account or drive:*) is ambiguous,
+  // mirroring the account/drive exclusion above.
+  if (manageKeys && (account || drives.size > 0)) {
+    return { ok: false, error: { code: 'manage_keys_conflict' } };
+  }
+
   // Rule 10: offline_access alone has no principal shape (Decision 2) — a
   // refresh token minted for it could only ever mint access tokens with no
   // access scope. Reject rather than grant a token that is structurally
-  // useless (fail closed, Codex #1754).
-  if (offlineAccess && !account && drives.size === 0) {
+  // useless (fail closed, Codex #1754). manage_keys is its own principal
+  // shape, so offline_access + manage_keys is a valid, expected combination
+  // (a long-lived key-management session).
+  if (offlineAccess && !account && !manageKeys && drives.size === 0) {
     return { ok: false, error: { code: 'offline_access_alone' } };
   }
 
-  return { ok: true, scopes: { account, offlineAccess, drives } };
+  return { ok: true, scopes: { account, offlineAccess, drives, manageKeys } };
 }
 
 function formatDriveScope(scope: ParsedScope & { kind: 'drive' }): string {
@@ -143,6 +164,7 @@ function formatDriveScope(scope: ParsedScope & { kind: 'drive' }): string {
 export function formatScopeSet(scopes: ScopeSet): string {
   const tokens: string[] = [];
   if (scopes.account) tokens.push('account');
+  if (scopes.manageKeys) tokens.push('manage_keys');
   if (scopes.offlineAccess) tokens.push('offline_access');
 
   const sortedDriveIds = [...scopes.drives.keys()].sort();
@@ -172,6 +194,10 @@ function roleEquals(
  */
 export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
   if (requested.offlineAccess && !granted.offlineAccess) return false;
+  // manage_keys is never combined with account or drive:* (parse-time exclusion),
+  // so it never reaches the account/drive narrowing checks below — its own
+  // granted-bit check is the whole story.
+  if (requested.manageKeys && !granted.manageKeys) return false;
 
   if (requested.account) {
     return granted.account;

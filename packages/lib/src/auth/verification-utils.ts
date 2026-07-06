@@ -4,6 +4,7 @@ import { verificationTokens, users } from '@pagespace/db/schema/auth';
 import { createId } from '@paralleldrive/cuid2';
 import { randomBytes } from 'crypto';
 import { hashToken, getTokenPrefix } from './token-utils';
+import { userEmailMatch } from './user-repository';
 
 export type VerificationType = 'email_verification' | 'magic_link' | 'webauthn_signup';
 
@@ -128,7 +129,7 @@ export async function markEmailVerifiedForAddress(
   const updated = await db
     .update(users)
     .set({ emailVerified: new Date() })
-    .where(and(eq(users.id, userId), eq(users.email, email.toLowerCase())))
+    .where(and(eq(users.id, userId), userEmailMatch(email.toLowerCase())))
     .returning({ id: users.id });
 
   return updated.length > 0;

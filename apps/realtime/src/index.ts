@@ -33,6 +33,7 @@ import {
   emitValidationError,
 } from './validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
@@ -46,6 +47,18 @@ const terminalSessionMap = createTerminalSessionMap();
 
 // Cache the DB terminal session store promise at module level (created once, not per-connection).
 const dbTerminalSessionStorePromise = createDbTerminalSessionStore();
+
+/**
+ * Decrypt PII at the edge (GDPR #965): actorEmail is denormalized into a
+ * plaintext activity-log/audit snapshot downstream (writeCodeExecutionAudit),
+ * not an encrypted column, so a ciphertext users.email must never reach it.
+ * Extracted as a pure helper (rather than inlined in makeTerminalCheckAuth) so
+ * it's directly unit-testable without mocking the rest of the terminal-auth
+ * pipeline (sandbox provisioning, sprites SDK, audit sink).
+ */
+export async function resolveActorEmail(rawEmail: string | null | undefined): Promise<string> {
+  return rawEmail ? await decryptField(rawEmail) : '';
+}
 
 async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageId: string }): Promise<CheckAuthResult> {
   const [pageRow] = await db
@@ -82,7 +95,7 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
   }
   const tenantId = driveRow.ownerId;
   const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
-  const actorEmail = userRow?.email ?? '';
+  const actorEmail = await resolveActorEmail(userRow?.email);
 
   // Acquire a concurrency slot; deny if the user is at their per-tier limit.
   const slotAcquired = acquireCodeExecutionSlot({ userId, tier });
@@ -527,7 +540,14 @@ async function populateUserMetadata(socket: AuthSocket): Promise<void> {
       db.select({ displayName: userProfiles.displayName, avatarUrl: userProfiles.avatarUrl }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1),
     ]);
 
-    const name = profileResult[0]?.displayName || userResult[0]?.name || 'Unknown';
+    // Decrypt PII at the edge (GDPR #965): users.name may be ciphertext;
+    // userProfiles.displayName is never encrypted and takes precedence anyway,
+    // so only decrypt when it's actually needed — a decrypt failure on a
+    // stale/corrupt users.name must not discard an otherwise-valid displayName.
+    const rawName = userResult[0]?.name;
+    const displayName = profileResult[0]?.displayName;
+    const decryptedName = !displayName && rawName ? await decryptField(rawName) : undefined;
+    const name = displayName || decryptedName || 'Unknown';
     const avatarUrl = profileResult[0]?.avatarUrl || userResult[0]?.image || null;
 
     socket.data.user = { id: userId, name, avatarUrl };

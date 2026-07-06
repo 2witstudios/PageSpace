@@ -87,12 +87,22 @@ export interface CommandExecutionPart {
 }
 
 /**
- * A run of 2+ consecutive non-diff tool calls, collapsed into one summary
- * card. Diff-producing tool calls (see tool-calls/tool-significance.ts)
+ * A run of 1+ consecutive non-diff tool calls, rendered through one
+ * persistent component (ToolRunGroup/CompactToolRunGroup) regardless of
+ * length. Diff-producing tool calls (see tool-calls/tool-significance.ts)
  * always break a run and render standalone instead.
  */
 export interface ToolRunGroupPart {
   type: 'tool-run-group';
+  /**
+   * Derived from the first call's toolCallId inside useGroupedParts. Stays
+   * identical for as long as this is "the same run" (parts.length may grow
+   * from 1 to N across re-renders as more calls stream in) and changes only
+   * when a new run starts (e.g. a standalone/diff tool split it). Consumers
+   * must use this — not array index — as the React key AND as the
+   * useToolCallOpenState lookup key for the run's own header open state.
+   */
+  runKey: string;
   parts: ProcessedToolPart[];
 }
 

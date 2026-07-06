@@ -36,6 +36,8 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
+  // The encryption-aware lookup edge composes a dual blind-index/raw-email match.
+  or: vi.fn((...args: unknown[]) => ({ op: 'or', args })),
   isNull: vi.fn((a) => ({ op: 'isNull', a })),
   lt: vi.fn((a, b) => ({ op: 'lt', a, b })),
   sql: vi.fn(),
@@ -48,9 +50,10 @@ vi.mock('@pagespace/db/schema/auth', () => ({
     lastUsedAt: 'passkeys.lastUsedAt', createdAt: 'passkeys.createdAt',
   },
   users: {
-    id: 'users.id', email: 'users.email', name: 'users.name', suspendedAt: 'users.suspendedAt',
-    provider: 'users.provider', role: 'users.role', tokenVersion: 'users.tokenVersion',
-    emailVerified: 'users.emailVerified', tosAcceptedAt: 'users.tosAcceptedAt',
+    id: 'users.id', email: 'users.email', emailBidx: 'users.emailBidx', name: 'users.name',
+    suspendedAt: 'users.suspendedAt', provider: 'users.provider', role: 'users.role',
+    tokenVersion: 'users.tokenVersion', emailVerified: 'users.emailVerified',
+    tosAcceptedAt: 'users.tosAcceptedAt',
   },
   verificationTokens: {
     id: 'vt.id', userId: 'vt.userId', tokenHash: 'vt.tokenHash', tokenPrefix: 'vt.tokenPrefix',

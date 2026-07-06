@@ -73,6 +73,9 @@ export async function POST(req: NextRequest) {
     if (parsed.scopes.offlineAccess) {
       scopeDescriptions.push(describeScopeForConsent({ kind: 'offline_access' }, {}));
     }
+    if (parsed.scopes.manageKeys) {
+      scopeDescriptions.push(describeScopeForConsent({ kind: 'manage_keys' }, {}));
+    }
 
     const driveIds = [...parsed.scopes.drives.keys()];
     const drives = driveIds.length > 0 ? await sessionRepository.findDrivesByIds(driveIds) : [];

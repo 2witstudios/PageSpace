@@ -28,7 +28,7 @@ import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { renderToolContent } from './registry';
 import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
 
-interface ToolPart {
+export interface ToolPart {
   type: string;
   toolName?: string;
   toolCallId?: string;
@@ -103,22 +103,15 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   'list_trash': 'List Trash'
 };
 
-// Internal renderer component with hooks
-const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; expanded?: boolean; onExpandedChange?: (expanded: boolean) => void }> = memo(function CompactToolCallRendererInternal({ part, toolName, expanded: expandedProp, onExpandedChange }) {
-  // Decide controlled-ness once, based on whether onExpandedChange is
-  // provided at all (not on expandedProp's value): useControllableState
-  // treats `prop === undefined` as "uncontrolled" and warns the moment it
-  // flips to a boolean for the same instance. When a caller opts into
-  // control, `prop` must be a boolean from the very first render — never
-  // undefined — so this instance never actually switches modes. See the
-  // identical fix in ToolCallRenderer.tsx's collapsibleProps.
-  const [isExpanded, setIsExpanded] = useControllableState({
-    prop: onExpandedChange ? (expandedProp ?? false) : undefined,
-    defaultProp: false,
-    onChange: onExpandedChange,
-  });
-  const toggleExpanded = () => setIsExpanded(!isExpanded);
-
+/**
+ * Computes everything CompactToolCallRendererInternal needs to render a
+ * tool call's icon/title/summary/expanded-content, extracted so
+ * CompactToolRunGroup can render a length-1 run identically to a standalone
+ * row without duplicating this logic. `isExpanded` is taken as an external
+ * parameter (rather than owned internally) so a run's own expand state can
+ * drive it directly.
+ */
+export function useCompactToolCallDisplay(part: ToolPart, toolName: string, isExpanded: boolean) {
   const state = part.state;
   const input = part.input;
   const output = part.output;
@@ -330,6 +323,27 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       </div>
     );
   }, [isExpanded, toolName, parsedInput, parsedOutput, output, error, state]);
+
+  return { state, toolIcon, statusIcon, descriptiveTitle, compactSummary, expandedDetails };
+}
+
+// Internal renderer component with hooks
+const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; expanded?: boolean; onExpandedChange?: (expanded: boolean) => void }> = memo(function CompactToolCallRendererInternal({ part, toolName, expanded: expandedProp, onExpandedChange }) {
+  // Decide controlled-ness once, based on whether onExpandedChange is
+  // provided at all (not on expandedProp's value): useControllableState
+  // treats `prop === undefined` as "uncontrolled" and warns the moment it
+  // flips to a boolean for the same instance. When a caller opts into
+  // control, `prop` must be a boolean from the very first render — never
+  // undefined — so this instance never actually switches modes. See the
+  // identical fix in ToolCallRenderer.tsx's collapsibleProps.
+  const [isExpanded, setIsExpanded] = useControllableState({
+    prop: onExpandedChange ? (expandedProp ?? false) : undefined,
+    defaultProp: false,
+    onChange: onExpandedChange,
+  });
+  const toggleExpanded = () => setIsExpanded(!isExpanded);
+
+  const { toolIcon, statusIcon, descriptiveTitle, compactSummary, expandedDetails } = useCompactToolCallDisplay(part, toolName, Boolean(isExpanded));
 
   return (
     <div className="py-0.5 text-[11px] max-w-full">

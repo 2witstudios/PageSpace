@@ -29,6 +29,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   isScopedOAuthAuth: vi.fn(),
+  isManageKeysOnly: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
@@ -64,7 +65,7 @@ vi.mock('@pagespace/lib/auth/step-up-service', () => ({
 
 import { DELETE, PATCH } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth, isManageKeysOnly } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
@@ -112,6 +113,7 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
       (result: unknown) => result != null && typeof result === 'object' && 'error' in result
     );
     mockIsScopedOAuthAuth();
+    vi.mocked(isManageKeysOnly).mockReturnValue(false);
 
     vi.mocked(getActorInfo).mockResolvedValue({ actorEmail: 'test@example.com' } as never);
 
@@ -240,6 +242,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
     } as never);
     vi.mocked(isAuthError).mockReturnValue(false);
     mockIsScopedOAuthAuth();
+    vi.mocked(isManageKeysOnly).mockReturnValue(false);
     vi.mocked(sessionRepository.findMcpTokenByIdAndUser).mockResolvedValue({
       id: 'token-123',
       name: 'My Token',

@@ -13,7 +13,7 @@ function drives(...entries: Array<[string, ScopeSet['drives'] extends ReadonlyMa
 }
 
 function emptySet(overrides: Partial<ScopeSet> = {}): ScopeSet {
-  return { account: false, offlineAccess: false, drives: new Map(), ...overrides };
+  return { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, ...overrides };
 }
 
 describe('parseScopeList', () => {
@@ -90,6 +90,16 @@ describe('parseScopeList', () => {
       const id = 'a'.repeat(32);
       const result = parseScopeList(`drive:${id}`);
       expect(result.ok).toBe(true);
+    });
+
+    it('parses "manage_keys" alone', () => {
+      const result = parseScopeList('manage_keys');
+      expect(result).toEqual({ ok: true, scopes: emptySet({ manageKeys: true }) });
+    });
+
+    it('parses "manage_keys offline_access" together — a long-lived key-management session', () => {
+      const result = parseScopeList('manage_keys offline_access');
+      expect(result).toEqual({ ok: true, scopes: emptySet({ manageKeys: true, offlineAccess: true }) });
     });
   });
 
@@ -207,6 +217,25 @@ describe('parseScopeList', () => {
         error: { code: 'offline_access_alone' },
       });
     });
+
+    it('rejects "manage_keys" mixed with "account" (manage_keys_conflict)', () => {
+      expect(parseScopeList('manage_keys account')).toEqual({
+        ok: false,
+        error: { code: 'manage_keys_conflict' },
+      });
+    });
+
+    it('rejects "manage_keys" mixed with any drive:* scope, regardless of order (manage_keys_conflict)', () => {
+      expect(parseScopeList('drive:abc manage_keys')).toEqual({
+        ok: false,
+        error: { code: 'manage_keys_conflict' },
+      });
+    });
+
+    it('does not reject "manage_keys offline_access" as offline_access_alone — manage_keys is its own principal shape', () => {
+      const result = parseScopeList('manage_keys offline_access');
+      expect(result.ok).toBe(true);
+    });
   });
 
   it('is total: never throws, even on garbage input', () => {
@@ -228,6 +257,14 @@ describe('formatScopeSet (canonical serialization, rule 9)', () => {
 
   it('orders account before offline_access regardless of construction order', () => {
     expect(formatScopeSet(emptySet({ account: true, offlineAccess: true }))).toBe('account offline_access');
+  });
+
+  it('formats manage_keys alone', () => {
+    expect(formatScopeSet(emptySet({ manageKeys: true }))).toBe('manage_keys');
+  });
+
+  it('orders manage_keys before offline_access regardless of construction order', () => {
+    expect(formatScopeSet(emptySet({ manageKeys: true, offlineAccess: true }))).toBe('manage_keys offline_access');
   });
 
   it('orders drive scopes by drive id ascending, independent of Map insertion order', () => {
@@ -274,6 +311,13 @@ describe('formatScopeSet (canonical serialization, rule 9)', () => {
     const original = emptySet({ account: true, offlineAccess: true });
     const reparsed = parseScopeList(formatScopeSet(original));
     expect(reparsed).toEqual({ ok: true, scopes: original });
+  });
+
+  it('round-trips "manage_keys offline_access" back to the same string (rule 9)', () => {
+    const formatted = formatScopeSet(emptySet({ manageKeys: true, offlineAccess: true }));
+    expect(formatted).toBe('manage_keys offline_access');
+    const reparsed = parseScopeList(formatted);
+    expect(reparsed).toEqual({ ok: true, scopes: emptySet({ manageKeys: true, offlineAccess: true }) });
   });
 
   it('formatting is idempotent: format(parse(format(s))) === format(s)', () => {
@@ -366,6 +410,18 @@ describe('isScopeSubset (narrowing, rule 8 / F5) — escalation must be structur
 
   it('not requesting offline_access is always fine, even if granted has it', () => {
     expect(isScopeSubset(emptySet(), emptySet({ offlineAccess: true }))).toBe(true);
+  });
+
+  it('manage_keys is a subset of manage_keys', () => {
+    expect(isScopeSubset(emptySet({ manageKeys: true }), emptySet({ manageKeys: true }))).toBe(true);
+  });
+
+  it('manage_keys requested but not granted is rejected', () => {
+    expect(isScopeSubset(emptySet({ manageKeys: true }), emptySet())).toBe(false);
+  });
+
+  it('not requesting manage_keys is always fine, even if granted has it', () => {
+    expect(isScopeSubset(emptySet(), emptySet({ manageKeys: true }))).toBe(true);
   });
 });
 

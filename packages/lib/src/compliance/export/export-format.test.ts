@@ -31,6 +31,9 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
     messages: [{ id: 'm1', source: 'channel', content: 'hi', createdAt: D1 }],
     files: [],
     activity: [],
+    systemLogs: [],
+    apiMetrics: [],
+    errorLogs: [],
     aiUsage: [],
     tasks: [],
     sessions: [],
@@ -64,6 +67,9 @@ describe('buildNativeExportFiles', () => {
     expect(byName['drives.json']).toBe(1);
     expect(byName['messages.json']).toBe(1);
     expect(byName['files-metadata.json']).toBe(0);
+    expect(byName['system-logs.json']).toBe(0);
+    expect(byName['api-metrics.json']).toBe(0);
+    expect(byName['error-logs.json']).toBe(0);
   });
 
   it('given_nullPersonalization_omitsItFromInventory', () => {
@@ -190,6 +196,9 @@ describe('toPortableExport', () => {
     const full = makeData({
       files: [{ id: 'f1', driveId: 'd1', sizeBytes: 1, mimeType: null, storagePath: null, createdAt: D1 }],
       activity: [{ id: 'a1', operation: 'create', resourceType: 'page', resourceId: 'p1', timestamp: D1, metadata: null }],
+      systemLogs: [{ id: 'sl1', timestamp: D1, level: 'error', message: 'boom', category: null, endpoint: '/api/foo', method: null, duration: null }],
+      apiMetrics: [{ id: 'am1', timestamp: D1, endpoint: '/api/foo', method: 'GET', statusCode: 200, duration: 42, requestSize: null, responseSize: null }],
+      errorLogs: [{ id: 'el1', timestamp: D1, name: 'TypeError', message: 'oops', endpoint: null, method: null, file: null, line: null, column: null, resolved: null }],
       aiUsage: [{ id: 'ai1', provider: 'openrouter', model: 'm', inputTokens: 1, outputTokens: 2, cost: 0.1, timestamp: D1 }],
       tasks: [{ listId: 'l1', listTitle: 'L', items: [] }],
       sessions: [{ id: 's1', type: 'session', deviceId: null, scopes: [], createdByIp: null, lastUsedAt: null, lastUsedIp: null, expiresAt: D2, revokedAt: null, revokedReason: null, createdAt: D1 }],
@@ -208,10 +217,13 @@ describe('toPortableExport', () => {
     // everything else carried verbatim under additionalProperty
     const props = portable.additionalProperty as Array<{ name: string; value: unknown }>;
     const byName = Object.fromEntries(props.map((p) => [p.name, p.value]));
-    for (const key of ['activity', 'aiUsage', 'tasks', 'sessions', 'notifications', 'displayPreferences', 'personalization']) {
+    for (const key of ['activity', 'systemLogs', 'apiMetrics', 'errorLogs', 'aiUsage', 'tasks', 'sessions', 'notifications', 'displayPreferences', 'personalization']) {
       expect(byName).toHaveProperty(key);
     }
     expect((byName.activity as unknown[]).length).toBe(1);
+    expect((byName.systemLogs as unknown[]).length).toBe(1);
+    expect((byName.apiMetrics as unknown[]).length).toBe(1);
+    expect((byName.errorLogs as unknown[]).length).toBe(1);
     expect((byName.sessions as unknown[]).length).toBe(1);
     expect(byName.personalization).not.toBeNull();
   });

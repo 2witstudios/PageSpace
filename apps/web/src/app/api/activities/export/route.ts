@@ -5,6 +5,7 @@ import { eq, and, desc, gte, lt, inArray } from '@pagespace/db/operators'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
 import { format } from 'date-fns';
 
@@ -241,7 +242,16 @@ export async function GET(request: Request) {
               offset,
             });
 
-            for (const activity of batch) {
+            // Decrypt PII at the edge (GDPR #965) so the joined actor name/email
+            // fallback is plaintext in the export (legacy plaintext passes through).
+            const decryptedBatch = await Promise.all(
+              batch.map(async (a) => ({
+                ...a,
+                user: a.user ? await decryptUserRow(a.user) : a.user,
+              })),
+            );
+
+            for (const activity of decryptedBatch) {
               const row = [
                 format(new Date(activity.timestamp), 'yyyy-MM-dd HH:mm:ss'),
                 activity.actorDisplayName || activity.user?.name || '',

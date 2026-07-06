@@ -21,12 +21,15 @@ vi.mock('@pagespace/db/schema/auth', () => ({
   users: {
     id: 'id',
     email: 'email',
+    emailBidx: 'emailBidx',
     failedLoginAttempts: 'failedLoginAttempts',
     lockedUntil: 'lockedUntil',
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ field, value })),
+  // The encryption-aware lookup edge composes a dual blind-index/raw-email match.
+  or: vi.fn((...args: unknown[]) => ({ op: 'or', args })),
 }));
 
 // Mock the logger
