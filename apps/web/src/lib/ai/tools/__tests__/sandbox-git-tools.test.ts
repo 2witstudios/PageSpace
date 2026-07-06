@@ -700,6 +700,89 @@ describe('gh_pr_review', () => {
   });
 });
 
+// ── gh_pr_review_comment ────────────────────────────────────────────────────
+
+describe('gh_pr_review_comment', () => {
+  it('builds the correct gh api call for an inline comment', async () => {
+    const deps = makeDeps();
+    const { gh_pr_review_comment } = createSandboxGitTools(deps);
+    await gh_pr_review_comment.execute!(
+      { number: 42, body: 'Off-by-one here', path: 'src/index.ts', line: 10, side: 'RIGHT', commit_id: 'abc123' },
+      {} as never,
+    );
+    const calls = getRunCalls(deps);
+    expect(calls[0].cmd).toBe('gh');
+    expect(calls[0].args[0]).toBe('api');
+    expect(calls[0].args[1]).toBe('repos/{owner}/{repo}/pulls/42/comments');
+    expect(calls[0].args).toContain('-f');
+    expect(calls[0].args).toContain('body=Off-by-one here');
+    expect(calls[0].args).toContain('path=src/index.ts');
+    expect(calls[0].args).toContain('side=RIGHT');
+    expect(calls[0].args).toContain('commit_id=abc123');
+    expect(calls[0].args).toContain('-F');
+    expect(calls[0].args).toContain('line=10');
+  });
+
+  it('includes start_line/start_side for a multi-line comment', async () => {
+    const deps = makeDeps();
+    const { gh_pr_review_comment } = createSandboxGitTools(deps);
+    await gh_pr_review_comment.execute!(
+      {
+        number: 42,
+        body: 'Refactor this block',
+        path: 'src/index.ts',
+        line: 20,
+        start_line: 10,
+        start_side: 'RIGHT',
+        commit_id: 'abc123',
+      },
+      {} as never,
+    );
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('start_line=10');
+    expect(calls[0].args).toContain('start_side=RIGHT');
+  });
+
+  it('includes subject_type for a file-level comment', async () => {
+    const deps = makeDeps();
+    const { gh_pr_review_comment } = createSandboxGitTools(deps);
+    await gh_pr_review_comment.execute!(
+      { number: 42, body: 'Consider splitting this file', path: 'src/index.ts', commit_id: 'abc123', subject_type: 'file' },
+      {} as never,
+    );
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('subject_type=file');
+  });
+
+  it('builds a reply with only in_reply_to and body', async () => {
+    const deps = makeDeps();
+    const { gh_pr_review_comment } = createSandboxGitTools(deps);
+    await gh_pr_review_comment.execute!(
+      { number: 42, body: 'Fixed in latest push', in_reply_to: 999 },
+      {} as never,
+    );
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toContain('in_reply_to=999');
+    expect(calls[0].args).not.toContain('path=undefined');
+  });
+
+  it('rejects empty body', async () => {
+    const deps = makeDeps();
+    const { gh_pr_review_comment } = createSandboxGitTools(deps);
+    const result = await gh_pr_review_comment.execute!({ number: 42, body: '' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('returns no-connection error when token is null', async () => {
+    const deps = makeDeps(null);
+    const { gh_pr_review_comment } = createSandboxGitTools(deps);
+    const result = await gh_pr_review_comment.execute!({ number: 42, body: 'LGTM' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
 // ── gh_pr_close ────────────────────────────────────────────────────────────
 
 describe('gh_pr_close', () => {
@@ -847,10 +930,10 @@ describe('schema strictness', () => {
 // ── tool count ─────────────────────────────────────────────────────────────
 
 describe('createSandboxGitTools', () => {
-  it('exports exactly 34 tools', () => {
+  it('exports exactly 35 tools', () => {
     const deps = makeDeps();
     const tools = createSandboxGitTools(deps);
-    expect(Object.keys(tools)).toHaveLength(34);
+    expect(Object.keys(tools)).toHaveLength(35);
   });
 
   it('no tool passes sh or -c as the cmd or first arg', async () => {

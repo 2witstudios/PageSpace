@@ -34,7 +34,7 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { filterToolsForReadOnly, filterToolsForWebSearch } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForWebSearch, suppressGithubIntegrationTools } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
@@ -811,11 +811,15 @@ MENTION PROCESSING:
           userDriveRole = access.role;
         }
       }
-      const integrationTools = await resolveGlobalAssistantIntegrationTools({
+      const resolvedIntegrationTools = await resolveGlobalAssistantIntegrationTools({
         userId,
         driveId: currentDriveId,
         userDriveRole,
       });
+      // The sandbox git/gh CLI toolkit and the GitHub OAuth integration tools
+      // overlap in capability — suppress the latter when the former is already
+      // in this agent's tool set to avoid offering two redundant GitHub surfaces.
+      const integrationTools = suppressGithubIntegrationTools(resolvedIntegrationTools, finalTools);
       if (Object.keys(integrationTools).length > 0) {
         finalTools = mergeToolSets(finalTools, integrationTools);
         loggers.api.info('Global Assistant: Merged integration tools', {

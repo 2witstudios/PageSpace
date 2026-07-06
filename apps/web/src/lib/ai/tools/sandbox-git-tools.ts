@@ -1,5 +1,5 @@
 /**
- * Agent git/GitHub tools: all 34 tools running inside a sandbox.
+ * Agent git/GitHub tools: all 35 tools running inside a sandbox.
  *
  * Pure factory — no DB imports, no Sprites SDK. Production wiring lives in
  * `sandbox-git-tools-runtime.ts`. Each tool's execute handler:
@@ -695,6 +695,45 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       ),
   });
 
+  const ghPrReviewComment = tool({
+    description:
+      'Add a review comment on a pull request. For inline comments: provide path, commit_id, and line. For file-level comments: provide path, commit_id, and subject_type "file". For replies: provide in_reply_to (comment ID) and body only. Use head sha from gh_pr_view for commit_id. Requires a connected GitHub account.',
+    inputSchema: z.object({
+      number: z.number().int().positive(),
+      body: z.string().min(1),
+      path: z.string().optional(),
+      line: z.number().int().positive().optional(),
+      side: z.enum(['LEFT', 'RIGHT']).optional(),
+      commit_id: z.string().optional(),
+      start_line: z.number().int().positive().optional(),
+      start_side: z.enum(['LEFT', 'RIGHT']).optional(),
+      in_reply_to: z.number().int().positive().optional(),
+      subject_type: z.enum(['line', 'file']).optional(),
+      cwd: cwdField,
+    })
+      .strict(),
+    execute: async (
+      { number, body, path, line, side, commit_id, start_line, start_side, in_reply_to, subject_type, cwd },
+      options,
+    ) => {
+      if (!body) {
+        return { success: false as const, error: 'body is required' };
+      }
+      const fields: string[] = ['-f', `body=${body}`];
+      if (path !== undefined) fields.push('-f', `path=${path}`);
+      if (line !== undefined) fields.push('-F', `line=${line}`);
+      if (side) fields.push('-f', `side=${side}`);
+      if (commit_id !== undefined) fields.push('-f', `commit_id=${commit_id}`);
+      if (start_line !== undefined) fields.push('-F', `start_line=${start_line}`);
+      if (start_side) fields.push('-f', `start_side=${start_side}`);
+      if (in_reply_to !== undefined) fields.push('-F', `in_reply_to=${in_reply_to}`);
+      if (subject_type) fields.push('-f', `subject_type=${subject_type}`);
+      return withToken(options, (ctx, token) =>
+        gitR('gh', ['api', `repos/{owner}/{repo}/pulls/${number}/comments`, ...fields], ctx, token, cwd),
+      );
+    },
+  });
+
   const ghPrClose = tool({
     description: 'Close a pull request with an optional comment. Requires a connected GitHub account.',
     inputSchema: z
@@ -900,6 +939,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     gh_pr_merge: ghPrMerge,
     gh_pr_checkout: ghPrCheckout,
     gh_pr_review: ghPrReview,
+    gh_pr_review_comment: ghPrReviewComment,
     gh_pr_close: ghPrClose,
     gh_pr_reopen: ghPrReopen,
     gh_pr_ready: ghPrReady,

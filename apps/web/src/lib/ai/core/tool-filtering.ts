@@ -89,6 +89,7 @@ export const WRITE_TOOLS = new Set([
   'gh_pr_merge',
   'gh_pr_checkout',
   'gh_pr_review',
+  'gh_pr_review_comment',
   'gh_pr_close',
   'gh_pr_reopen',
   'gh_pr_ready',
@@ -97,6 +98,46 @@ export const WRITE_TOOLS = new Set([
 
 // Web search tools (excluded when web search is disabled)
 const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
+
+// All sandbox git/GitHub tool names (createSandboxGitTools). Their presence in
+// a request's tool set means the agent already has a full git/gh CLI toolkit —
+// used to detect overlap with the GitHub OAuth integration tools below.
+const SANDBOX_GIT_TOOL_NAMES = new Set([
+  'git_clone', 'git_init', 'git_config', 'git_remote_add', 'git_status', 'git_diff',
+  'git_add', 'git_reset', 'git_stash', 'git_commit', 'git_log', 'git_merge', 'git_rebase',
+  'git_checkout', 'git_branch', 'git_fetch', 'git_pull', 'git_push',
+  'gh_pr_create', 'gh_pr_list', 'gh_pr_view', 'gh_pr_diff', 'gh_pr_checks', 'gh_pr_merge',
+  'gh_pr_checkout', 'gh_pr_review', 'gh_pr_review_comment', 'gh_pr_close', 'gh_pr_reopen',
+  'gh_pr_ready', 'gh_run_list', 'gh_run_view', 'gh_issue_create', 'gh_issue_list', 'gh_issue_view',
+]);
+
+// Namespace prefix for integration tools resolved from the GitHub OAuth connection
+// (see buildIntegrationToolName in @pagespace/lib/integrations/converter/ai-sdk).
+const GITHUB_INTEGRATION_TOOL_PREFIX = 'int__github__';
+
+/**
+ * Whether any sandbox git/GitHub tool is present in a resolved tool set.
+ */
+export function hasSandboxGitTools(tools: Record<string, unknown>): boolean {
+  return Object.keys(tools).some((name) => SANDBOX_GIT_TOOL_NAMES.has(name));
+}
+
+/**
+ * Suppress GitHub OAuth integration tools when the sandbox git/gh CLI toolkit is
+ * already registered in the current tool set — the two overlap in capability
+ * (browsing repos, reviewing PRs, filing issues), and offering both surfaces for
+ * the same GitHub account is redundant and confuses tool selection. Other
+ * providers' integration tools (Slack, etc.) are untouched.
+ */
+export function suppressGithubIntegrationTools<T>(
+  integrationTools: Record<string, T>,
+  currentTools: Record<string, unknown>
+): Record<string, T> {
+  if (!hasSandboxGitTools(currentTools)) return integrationTools;
+  return Object.fromEntries(
+    Object.entries(integrationTools).filter(([name]) => !name.startsWith(GITHUB_INTEGRATION_TOOL_PREFIX))
+  );
+}
 
 // Tools that require account-level (unscoped) access — excluded entirely from
 // a drive-scoped MCP token's tool list, mirroring the isMcpScoped() call-time
