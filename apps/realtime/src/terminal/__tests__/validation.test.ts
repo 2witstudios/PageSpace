@@ -116,7 +116,7 @@ describe('validateAgentTerminalConnectPayload', () => {
     if (!result.ok) expect(result.error).toBe('invalid payload');
   });
 
-  for (const field of ['terminalId', 'projectName', 'branchName', 'name']) {
+  for (const field of ['terminalId', 'name']) {
     it(`given ${field} is missing, should return ok:false`, () => {
       const { [field]: _omit, ...rest } = valid;
       const result = validateAgentTerminalConnectPayload(rest);
@@ -130,6 +130,26 @@ describe('validateAgentTerminalConnectPayload', () => {
       if (!result.ok) expect(result.error).toBe(`invalid ${field}`);
     });
   }
+
+  for (const field of ['projectName', 'branchName']) {
+    it(`given ${field} is an empty string, should return ok:false`, () => {
+      const result = validateAgentTerminalConnectPayload({ ...valid, [field]: '' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toBe(`invalid ${field}`);
+    });
+  }
+
+  it('given neither projectName nor branchName (machine scope), should return ok:true with both undefined', () => {
+    const { projectName: _p, branchName: _b, ...machineScoped } = valid;
+    const result = validateAgentTerminalConnectPayload(machineScoped);
+    expect(result).toEqual({ ok: true, value: { ...machineScoped, projectName: undefined, branchName: undefined } });
+  });
+
+  it('given only projectName (project scope), should return ok:true with branchName undefined', () => {
+    const { branchName: _b, ...projectScoped } = valid;
+    const result = validateAgentTerminalConnectPayload(projectScoped);
+    expect(result).toEqual({ ok: true, value: { ...projectScoped, branchName: undefined } });
+  });
 
   it('given cols is invalid, should return ok:false', () => {
     const result = validateAgentTerminalConnectPayload({ ...valid, cols: -1 });

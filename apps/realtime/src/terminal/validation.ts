@@ -23,8 +23,9 @@ export function validateTerminalConnectPayload(payload: unknown): Result {
 
 export type AgentTerminalConnectPayload = {
   terminalId: string;
-  projectName: string;
-  branchName: string;
+  /** Neither set → machine scope, projectName alone → project scope, both → branch scope (see `agent-terminals.ts`). */
+  projectName?: string;
+  branchName?: string;
   name: string;
   cols: number;
   rows: number;
@@ -40,6 +41,15 @@ function requireNonEmptyString(value: unknown, field: string): { ok: true; value
   return { ok: true, value };
 }
 
+/** Same as `requireNonEmptyString`, but a missing/null value is a valid "scope not targeted" signal rather than an error. */
+function optionalNonEmptyString(value: unknown, field: string): { ok: true; value: string | undefined } | { ok: false; error: string } {
+  if (value === undefined || value === null) return { ok: true, value: undefined };
+  if (typeof value !== 'string' || value.length === 0) {
+    return { ok: false, error: `invalid ${field}` };
+  }
+  return { ok: true, value };
+}
+
 export function validateAgentTerminalConnectPayload(payload: unknown): AgentResult {
   if (payload === null || typeof payload !== 'object') {
     return { ok: false, error: 'invalid payload' };
@@ -48,9 +58,9 @@ export function validateAgentTerminalConnectPayload(payload: unknown): AgentResu
 
   const terminalId = requireNonEmptyString(p.terminalId, 'terminalId');
   if (!terminalId.ok) return terminalId;
-  const projectName = requireNonEmptyString(p.projectName, 'projectName');
+  const projectName = optionalNonEmptyString(p.projectName, 'projectName');
   if (!projectName.ok) return projectName;
-  const branchName = requireNonEmptyString(p.branchName, 'branchName');
+  const branchName = optionalNonEmptyString(p.branchName, 'branchName');
   if (!branchName.ok) return branchName;
   const name = requireNonEmptyString(p.name, 'name');
   if (!name.ok) return name;

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { Socket } from 'socket.io-client';
+import { useCSRFToken } from '@/hooks/useCSRFToken';
 
 interface XtermTerminalProps {
   socket: Socket;
@@ -10,8 +11,18 @@ interface XtermTerminalProps {
   onError?(message: string): void;
 }
 
+/**
+ * A plain machine shell IS a machine-scope agent terminal of `agentType:
+ * 'shell'` (Terminal — universal scope reshape) — this conventional name is
+ * what the realtime agent-terminal-activity feed (apps/realtime/src/
+ * terminal/terminal-activity.ts) also assumes when injecting agent bash runs
+ * into this same live PTY feed.
+ */
+const SHELL_TERMINAL_NAME = 'shell';
+
 export default function XtermTerminal({ socket, pageId, onReady, onError }: XtermTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { refreshToken } = useCSRFToken();
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -34,7 +45,7 @@ export default function XtermTerminal({ socket, pageId, onReady, onError }: Xter
         terminal.open(containerRef.current);
         fitAddon.fit();
 
-        const onData = terminal.onData((data) => socket.emit('terminal:input', { data }));
+        const onData = terminal.onData((data) => socket.emit('agent-terminal:input', { data }));
 
         const handleOutput = ({ data }: { data: string }) => terminal.write(data);
         const handleReady = ({ scrollback }: { scrollback?: string } = {}) => {
@@ -48,30 +59,53 @@ export default function XtermTerminal({ socket, pageId, onReady, onError }: Xter
           onError?.(message);
         };
 
-        // Register listeners BEFORE emitting terminal:connect so we don't miss
-        // early terminal:ready / terminal:output events from the server.
-        socket.on('terminal:output', handleOutput);
-        socket.on('terminal:ready', handleReady);
-        socket.on('terminal:closed', handleClosed);
-        socket.on('terminal:error', handleError);
+        // Register listeners BEFORE spawning/connecting so we don't miss early
+        // agent-terminal:ready / agent-terminal:output events from the server.
+        socket.on('agent-terminal:output', handleOutput);
+        socket.on('agent-terminal:ready', handleReady);
+        socket.on('agent-terminal:closed', handleClosed);
+        socket.on('agent-terminal:error', handleError);
 
-        socket.emit('terminal:connect', { pageId, cols: terminal.cols, rows: terminal.rows });
-
-        const ro = new ResizeObserver(() => {
-          fitAddon.fit();
-          socket.emit('terminal:resize', { cols: terminal.cols, rows: terminal.rows });
-        });
-        ro.observe(containerRef.current!);
-
+        const resize: { observer?: ResizeObserver } = {};
         teardown = () => {
-          ro.disconnect();
+          resize.observer?.disconnect();
           onData.dispose();
-          socket.off('terminal:output', handleOutput);
-          socket.off('terminal:ready', handleReady);
-          socket.off('terminal:closed', handleClosed);
-          socket.off('terminal:error', handleError);
+          socket.off('agent-terminal:output', handleOutput);
+          socket.off('agent-terminal:ready', handleReady);
+          socket.off('agent-terminal:closed', handleClosed);
+          socket.off('agent-terminal:error', handleError);
           terminal.dispose();
         };
+
+        // Reserve the (machine-scope, 'shell') tracking row — idempotent, so a
+        // repeat mount/reconnect just resumes it — before opening the PTY
+        // connection, mirroring "spawn reserves the row, PTY opens lazily on
+        // connect" (agent-terminals.ts).
+        const csrfToken = await refreshToken();
+        if (!csrfToken) throw new Error('Failed to obtain a CSRF token');
+        const spawnResponse = await fetch('/api/machines/agent-terminals', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'content-type': 'application/json', 'x-csrf-token': csrfToken },
+          body: JSON.stringify({ terminalId: pageId, name: SHELL_TERMINAL_NAME, agentType: SHELL_TERMINAL_NAME }),
+        });
+        if (cancelled) { teardown(); return; }
+        if (!spawnResponse.ok) {
+          const errorBody: unknown = await spawnResponse.json().catch(() => null);
+          const message =
+            typeof errorBody === 'object' && errorBody !== null && 'error' in errorBody && typeof (errorBody as { error: unknown }).error === 'string'
+              ? (errorBody as { error: string }).error
+              : 'Failed to open machine shell';
+          throw new Error(message);
+        }
+
+        socket.emit('agent-terminal:connect', { terminalId: pageId, name: SHELL_TERMINAL_NAME, cols: terminal.cols, rows: terminal.rows });
+
+        resize.observer = new ResizeObserver(() => {
+          fitAddon.fit();
+          socket.emit('agent-terminal:resize', { cols: terminal.cols, rows: terminal.rows });
+        });
+        resize.observer.observe(containerRef.current!);
 
         if (cancelled) teardown();
       } catch (err) {

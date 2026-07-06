@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildAgentTerminalHandlers, MAX_INPUT_BYTES } from '../agent-terminal-handler';
+import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, resolveAgentTerminalCommand } from '../agent-terminal-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { AgentTerminalCheckAuthFn, OpenShellFn, SocketLike } from '../agent-terminal-handler';
 import type { PtyShell } from '../sprites-shell';
 import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
+import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 
 function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: ReturnType<typeof vi.fn> } {
   return { id, data: { user: { id: userId } }, emit: vi.fn() };
@@ -32,21 +33,79 @@ function makeAuthSuccess(over: Partial<{
   sessions: Array<{ id: string; command: string; isActive: boolean; tty: boolean }>;
   command: string;
   args: string[];
+  commandOverride: string | null;
+  cwd: string;
+  payerId: string;
 }> = {}) {
   return {
     ok: true as const,
     agentTerminalId: 'agent-terminal-1',
     sandboxId: 'sbx1',
+    cwd: over.cwd ?? BRANCH_REPO_PATH,
     sessionKey: over.sessionKey ?? 'branch1:agent:cli',
     sprite: makeSprite(over.sessions ?? []),
     releaseSlot: vi.fn(),
     command: over.command ?? 'pagespace-cli',
     args: over.args ?? [],
+    commandOverride: over.commandOverride ?? null,
     streamSessionId: over.streamSessionId ?? null,
+    payerId: over.payerId ?? 'owner-1',
+  };
+}
+
+function makeBilling(over: Partial<{
+  gate: ReturnType<typeof vi.fn>;
+  trackUsage: ReturnType<typeof vi.fn>;
+  releaseHold: ReturnType<typeof vi.fn>;
+}> = {}) {
+  return {
+    gate: vi.fn().mockResolvedValue({ allowed: true, holdId: 'hold-1' }),
+    trackUsage: vi.fn().mockResolvedValue(undefined),
+    releaseHold: vi.fn().mockResolvedValue(undefined),
+    ...over,
   };
 }
 
 const validPayload = { terminalId: 't1', projectName: 'repo', branchName: 'feature-x', name: 'cli', cols: 80, rows: 24 };
+
+describe('resolveAgentTerminalCommand', () => {
+  const ORIGINAL_SHELL = process.env.SHELL;
+
+  afterEach(() => {
+    process.env.SHELL = ORIGINAL_SHELL;
+  });
+
+  it('given a non-shell agentType with no override, should pass command/args through unchanged', () => {
+    expect(resolveAgentTerminalCommand({ command: 'claude', args: ['--foo'], commandOverride: null })).toEqual({
+      command: 'claude',
+      args: ['--foo'],
+    });
+  });
+
+  it('given the shell sentinel with no override, should resolve to $SHELL with no args', () => {
+    process.env.SHELL = '/bin/zsh';
+    expect(resolveAgentTerminalCommand({ command: 'shell', args: [], commandOverride: null })).toEqual({
+      command: '/bin/zsh',
+      args: [],
+    });
+  });
+
+  it('given the shell sentinel with $SHELL unset, should fall back to bash', () => {
+    delete process.env.SHELL;
+    expect(resolveAgentTerminalCommand({ command: 'shell', args: [], commandOverride: null })).toEqual({
+      command: 'bash',
+      args: [],
+    });
+  });
+
+  it('given a command override, should wrap it as `$SHELL -c override` regardless of agentType', () => {
+    process.env.SHELL = '/bin/zsh';
+    expect(resolveAgentTerminalCommand({ command: 'pagespace-cli', args: [], commandOverride: 'htop' })).toEqual({
+      command: '/bin/zsh',
+      args: ['-c', 'htop'],
+    });
+  });
+});
 
 describe('buildAgentTerminalHandlers', () => {
   let sessionMap: ReturnType<typeof createTerminalSessionMap>;
@@ -81,11 +140,27 @@ describe('buildAgentTerminalHandlers', () => {
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', {});
     });
 
-    it('given a fresh session, should launch inside the branch\'s cloned repo, not the bare sandbox root', async () => {
+    it('given a branch-scoped agent terminal, should launch inside the branch\'s cloned repo cwd resolved by checkAuth', async () => {
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ cwd: BRANCH_REPO_PATH }));
+    });
+
+    it('given a machine-scoped agent terminal, should launch inside the resolved SANDBOX_ROOT cwd', async () => {
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ cwd: SANDBOX_ROOT })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect({ terminalId: 't1', name: 'cli', cols: 80, rows: 24 });
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ cwd: SANDBOX_ROOT }));
+    });
+
+    it('given a project-scoped agent terminal, should launch inside the resolved project path cwd', async () => {
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ cwd: '/workspace/projects/my-repo' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect({ terminalId: 't1', projectName: 'repo', name: 'cli', cols: 80, rows: 24 });
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/workspace/projects/my-repo' }));
     });
 
     it('given a claude agent terminal, should launch claude instead of pagespace-cli', async () => {
@@ -95,6 +170,28 @@ describe('buildAgentTerminalHandlers', () => {
       await onConnect(validPayload);
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ command: 'claude', args: ['--dangerously-skip-permissions'] }));
+    });
+
+    it('given a machine-scope shell agent terminal, should resolve the shell sentinel to $SHELL', async () => {
+      const originalShell = process.env.SHELL;
+      process.env.SHELL = '/bin/zsh';
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ command: 'shell', args: [], cwd: SANDBOX_ROOT })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect({ terminalId: 't1', name: 'shell', cols: 80, rows: 24 });
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ command: '/bin/zsh', args: [] }));
+      process.env.SHELL = originalShell;
+    });
+
+    it('given a command override, should wrap it as `$SHELL -c override` instead of the agentType default', async () => {
+      const originalShell = process.env.SHELL;
+      process.env.SHELL = '/bin/zsh';
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ command: 'shell', commandOverride: 'htop' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ command: '/bin/zsh', args: ['-c', 'htop'] }));
+      process.env.SHELL = originalShell;
     });
 
     it('given valid payload and auth succeeds, should store the session under a key unique to this (branch, name)', async () => {
@@ -137,6 +234,15 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:error', expect.objectContaining({ message: expect.any(String) }));
       expect(checkAuth).not.toHaveBeenCalled();
+    });
+
+    it('given a payload with neither projectName nor branchName (machine scope), should call checkAuth with both undefined', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect({ terminalId: 't1', name: 'shell', cols: 80, rows: 24 });
+
+      expect(checkAuth).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalId: 't1', projectName: undefined, branchName: undefined, name: 'shell' }),
+      );
     });
 
     it('given openShell throws, should emit agent-terminal:error, release the slot, and not store session', async () => {
@@ -201,6 +307,38 @@ describe('buildAgentTerminalHandlers', () => {
       expect(openShell).toHaveBeenCalledTimes(1);
       expect(reconnectSocket.emit).toHaveBeenCalledWith('agent-terminal:ready', expect.objectContaining({ scrollback: expect.any(String) }));
     });
+
+    it('given a successful connect, should set up a re-auth interval on the session', async () => {
+      const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
+      const session = sessionMap.getByKey('branch1:agent:cli');
+      expect(session?.reAuthInterval).toBeDefined();
+    });
+
+    it('given re-auth fires and checkAuth still succeeds, should not kill the shell', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('given re-auth fires and checkAuth now fails, should kill shell, remove session, and emit agent-terminal:closed with exitCode -2', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).toHaveBeenCalledWith();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2 });
+    });
   });
 
   describe('onInput', () => {
@@ -254,6 +392,108 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(shell.kill).toHaveBeenCalled();
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+    });
+  });
+
+  describe('machine billing (Terminal Epic 3)', () => {
+    it('given no billing dep, connects unmetered (no gate, no settle)', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('places a hold for the resolved payerId BEFORE opening the shell', async () => {
+      const billing = makeBilling();
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+
+      expect(billing.gate).toHaveBeenCalledWith({ payerId: 'owner-1' });
+      expect(openShell).toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ holdId: 'hold-1', payerId: 'owner-1' });
+    });
+
+    it('given the gate denies, emits agent-terminal:error, releases the slot, and never opens a shell', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth.mockResolvedValue(auth);
+      const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'insufficient_balance' }) });
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+
+      expect(openShell).not.toHaveBeenCalled();
+      expect(auth.releaseSlot).toHaveBeenCalled();
+      expect(sessionMap.getBySocket('sock1')).toBeUndefined();
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:error', expect.objectContaining({ message: expect.any(String) }));
+    });
+
+    it('given openShell throws AFTER the hold was placed, releases the hold (safety net)', async () => {
+      const billing = makeBilling();
+      openShell = vi.fn().mockImplementation(() => { throw new Error('sprite unreachable'); }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+
+      expect(billing.releaseHold).toHaveBeenCalledWith('hold-1');
+      expect(billing.trackUsage).not.toHaveBeenCalled();
+    });
+
+    it('on natural shell exit, settles the hold to the real connected-window seconds and never releases it separately', async () => {
+      const billing = makeBilling();
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+      await vi.advanceTimersByTimeAsync(7_000);
+      onExitArg(0);
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      const call = billing.trackUsage.mock.calls[0][0];
+      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1', pageId: 't1' });
+      expect(call.activeSeconds).toBeCloseTo(7, 0);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+    });
+
+    it('on idle-timeout reap after disconnect, settles the hold to the real active-window seconds', async () => {
+      const billing = makeBilling();
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+
+      onDisconnect();
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      const call = billing.trackUsage.mock.calls[0][0];
+      expect(call.payerId).toBe('owner-1');
+      expect(call.holdId).toBe('hold-1');
+      expect(call.pageId).toBe('t1');
+      expect(call.activeSeconds).toBeCloseTo(DETACHED_IDLE_MS / 1000, 0);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+    });
+
+    it('on a re-auth failure kill, settles the hold rather than leaking it', async () => {
+      const billing = makeBilling();
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+    });
+
+    it('reattaching to a live session does NOT place a second hold', async () => {
+      const billing = makeBilling();
+      const { onConnect: connect1 } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await connect1(validPayload);
+      expect(billing.gate).toHaveBeenCalledTimes(1);
+
+      const socket2 = makeSocket('sock2');
+      checkAuth.mockResolvedValue(makeAuthSuccess());
+      const { onConnect: connect2 } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId, billing });
+      await connect2(validPayload);
+
+      expect(billing.gate).toHaveBeenCalledTimes(1);
     });
   });
 });

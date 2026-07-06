@@ -15,18 +15,23 @@ import {
   decideFullEgressEnablement,
   isContainmentVerified,
 } from '@pagespace/lib/services/sandbox/containment';
-import { getSandboxSessionSecret, acquireTerminalSandbox, createDbTerminalSessionStore, deriveTerminalSessionKey } from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import {
+  getSandboxSessionSecret,
+  acquireTerminalSandbox,
+  createDbTerminalSessionStore,
+  deriveTerminalSessionKey,
+} from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
+import { checkMachineRuntimeGuardrail, recordMachineActivity, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
 import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
-import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
-import { buildTerminalHandlers, type CheckAuthResult, type SocketLike } from './terminal/terminal-handler';
 import {
   buildAgentTerminalHandlers,
   type AgentTerminalCheckAuthResult,
+  type SocketLike,
 } from './terminal/agent-terminal-handler';
 import { handleTerminalActivityRequest } from './terminal/terminal-activity';
 import { createTerminalSessionMap } from './terminal/terminal-session-map';
@@ -34,7 +39,12 @@ import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
-import { resolveAgentTerminal } from '@pagespace/lib/services/machines/agent-terminals';
+import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
+import {
+  resolveAgentTerminal,
+  type AgentTerminalMachineSandbox,
+  type AgentTerminalMachineSandboxResult,
+} from '@pagespace/lib/services/machines/agent-terminals';
 import { resolveAgentLaunchSpec } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   validatePageId,
@@ -53,148 +63,94 @@ import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 
 dotenv.config({ path: '../../.env' });
 
-const terminalSessionMap = createTerminalSessionMap();
-// Separate map for agent terminals (Terminal Epic 2, Runtime tier) — a
-// branch's Sprite can host several of these concurrently, each keyed by its
-// own (branch, name) sessionKey, independent of any human terminal session.
+// One map for every agent terminal (Terminal — universal scope reshape): a
+// Sprite (the owning Machine's own persistent one, for machine/project scope,
+// or a branch's isolated one) can host several of these concurrently, each
+// keyed by its own (scope, name) sessionKey — this REPLACES the retired
+// human-only `terminal:*` family (a plain shell is now a machine-scope agent
+// terminal of `agentType: 'shell'` on this same map).
 const agentTerminalSessionMap = createTerminalSessionMap();
 
 // Cache the DB terminal session store promise at module level (created once, not per-connection).
 const dbTerminalSessionStorePromise = createDbTerminalSessionStore();
 const dbMachineBranchStorePromise = createDbMachineBranchStore();
 const dbMachineAgentTerminalStorePromise = createDbMachineAgentTerminalStore();
+const dbMachineProjectStorePromise = createDbMachineProjectStore();
 
-async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageId: string }): Promise<CheckAuthResult> {
-  const [pageRow] = await db
-    .select({ driveId: pages.driveId })
-    .from(pages)
-    .where(eq(pages.id, pageId))
-    .limit(1);
-  if (!pageRow) {
-    loggers.realtime.warn('Terminal auth denied', { reason: 'page_not_found', userId, pageId });
-    return { ok: false, reason: 'page_not_found' };
-  }
-  const { driveId } = pageRow;
+/** The conventional name for a machine's plain shell — a machine-scope agent terminal of `agentType: 'shell'` (see `agent-terminal-types.ts`), the retired human `terminal:*` family's replacement. */
+const SHELL_AGENT_TERMINAL_NAME = 'shell';
 
-  const access = await getUserAccessLevel(userId, pageId);
-  if (!access?.canEdit) {
-    loggers.realtime.warn('Terminal auth denied', { reason: 'no_edit_access', userId, pageId });
-    return { ok: false, reason: 'no_edit_access' };
-  }
+/**
+ * Acquires the OWNING Machine's persistent Sprite for `AgentTerminalMachineSandbox`
+ * (machine/project scope share this one Sprite — see `agent-terminals.ts`),
+ * re-authorizing `actorUserId` (resume re-authz) on every call, waking a
+ * resumed (possibly hibernated) Sprite before handing its id back so a fresh
+ * PTY spawn never races a cold Sprite. Mirrors the acquisition the retired
+ * human terminal's `makeTerminalCheckAuth` used to perform inline.
+ */
+function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
+  return {
+    acquire: async (terminalId): Promise<AgentTerminalMachineSandboxResult> => {
+      const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, terminalId)).limit(1);
+      if (!pageRow) return { ok: false, reason: 'page_not_found' };
+      const [driveRow] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1);
+      if (!driveRow) return { ok: false, reason: 'drive_not_found' };
 
-  const codeAuth = await canRunCode({ userId, driveId, requestOrigin: 'user' });
-  if (!codeAuth.ok) {
-    loggers.realtime.warn('Terminal auth denied', { reason: codeAuth.reason, userId, pageId });
-    return { ok: false, reason: codeAuth.reason };
-  }
+      const nowMs = Date.now();
+      const guardrail = checkMachineRuntimeGuardrail({ machineKey: terminalId, now: nowMs });
+      if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
 
-  const [driveRow, userRow] = await Promise.all([
-    db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1).then((r) => r[0]),
-    db.select({ subscriptionTier: users.subscriptionTier, email: users.email }).from(users).where(eq(users.id, userId)).limit(1).then((r) => r[0]),
-  ]);
+      const [store, sdk] = await Promise.all([dbTerminalSessionStorePromise, getRealtimeSpritesSdk()]);
+      const rawClient = createSpritesSandboxClient({ sdk });
+      const host = createSpriteMachineHost({ sdk, client: rawClient });
+      const client = createExecClientFromMachineHost(host, { kind: 'sprite' });
 
-  if (!driveRow) {
-    loggers.realtime.warn('Terminal auth denied', { reason: 'drive_not_found', userId, pageId });
-    return { ok: false, reason: 'drive_not_found' };
-  }
-  const tenantId = driveRow.ownerId;
-  const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
-  const actorEmail = userRow?.email ?? '';
+      const result = await acquireTerminalSandbox({
+        pageId: terminalId,
+        driveId: pageRow.driveId,
+        tenantId: driveRow.ownerId,
+        userId: actorUserId,
+        // Already authorized by the caller's access + canRunCode checks before
+        // resolveAgentTerminal ever reaches this acquire.
+        canRun: true,
+        deps: {
+          store,
+          client,
+          now: () => new Date(),
+          secret: getSandboxSessionSecret(),
+          checkFullEgressEnablement: async () =>
+            decideFullEgressEnablement({
+              adminGateEnabled: isCodeExecutionEnabled(),
+              containment: isContainmentVerified() ? { contained: true } : null,
+            }),
+        },
+      });
+      if (!result.ok) return { ok: false, reason: result.reason };
 
-  // Acquire a concurrency slot; deny if the user is at their per-tier limit.
-  const slotAcquired = acquireCodeExecutionSlot({ userId, tier });
-  if (!slotAcquired) {
-    loggers.realtime.warn('Terminal auth denied', { reason: 'concurrency_limit', userId, pageId });
-    return { ok: false, reason: 'concurrency_limit' };
-  }
-  const releaseSlot = () => releaseCodeExecutionSlot({ userId });
+      if (result.resumed) {
+        try {
+          const sprite = await sdk.getSprite(result.sandboxId);
+          await ensureSpriteAwake(sprite);
+        } catch {
+          return { ok: false, reason: 'provision_failed' };
+        }
+      }
 
-  const [store, sdk] = await Promise.all([dbTerminalSessionStorePromise, getRealtimeSpritesSdk()]);
-  // Route through the MachineHost seam (Terminal Epic 2, T2.1) rather than
-  // handing the raw Sprite client straight to acquireTerminalSandbox — the
-  // adapter re-expresses it as the same ExecSandboxClient shape used below,
-  // so nothing past this point (or the raw `sdk` used for the PTY bridge) changes.
-  const rawClient = createSpritesSandboxClient({ sdk });
-  const host = createSpriteMachineHost({ sdk, client: rawClient });
-  const client = createExecClientFromMachineHost(host, { kind: 'sprite' });
-
-  const sandboxResult = await acquireTerminalSandbox({
-    pageId,
-    driveId,
-    tenantId,
-    userId,
-    canRun: true,
-    deps: {
-      store,
-      client,
-      now: () => new Date(),
-      secret: getSandboxSessionSecret(),
-      // Full-egress containment G-gate: the terminal runs OPEN egress, so refuse to
-      // provision unless containment is verified (SANDBOX_CONTAINMENT_VERIFIED=true).
-      checkFullEgressEnablement: async () =>
-        decideFullEgressEnablement({
-          adminGateEnabled: isCodeExecutionEnabled(),
-          containment: isContainmentVerified() ? { contained: true } : null,
-        }),
+      recordMachineActivity({ machineKey: terminalId, now: nowMs });
+      return { ok: true, sandboxId: result.sandboxId };
     },
-  });
-
-  if (!sandboxResult.ok) {
-    releaseSlot();
-    loggers.realtime.warn('Terminal auth denied', { reason: sandboxResult.reason, userId, pageId });
-    return { ok: false, reason: sandboxResult.reason };
-  }
-
-  const sandboxId = sandboxResult.sandboxId;
-
-  // Wake a resumed (possibly hibernated) Sprite before opening the PTY. The
-  // interactive `bash` spawn in openPtyShell is NOT wrapped in the cold-start
-  // wake retry, so a dropped first wake would leave the terminal stuck
-  // connecting. A fresh create was just warmed by the acquire's mkdir, so only
-  // resumes need this extra wake.
-  //
-  // Both the getSprite handle lookup and the wake can throw (SDK error, or a
-  // resumed Sprite exhausting its wake retries). The concurrency slot is already
-  // held at this point, so release it on any throw — otherwise the in-process
-  // semaphore leaks a slot and later requests hit avoidable concurrency denials.
-  let sprite: Awaited<ReturnType<typeof sdk.getSprite>>;
-  try {
-    sprite = await sdk.getSprite(sandboxResult.sandboxId);
-    if (sandboxResult.resumed) {
-      await ensureSpriteAwake(sprite);
-    }
-  } catch {
-    releaseSlot();
-    loggers.realtime.warn('Terminal sandbox wake failed', { reason: 'provision_failed', userId, pageId });
-    return { ok: false, reason: 'provision_failed' };
-  }
-
-  // Write code execution audit record (PTY session open).
-  writeCodeExecutionAudit({
-    input: {
-      userId,
-      actorEmail,
-      driveId,
-      requestOrigin: 'user',
-      profile: 'pty',
-      code: '[PTY session opened]',
-      exitCode: null,
-      durationMs: 0,
-      timestamp: new Date(),
-    },
-  }).catch(() => {});
-
-  return { ok: true, sandboxId, sessionKey: sandboxResult.sessionKey, sprite, releaseSlot, payerId: tenantId };
+  };
 }
 
 /**
- * Auth for a named, pluggable-agent-typed terminal running INSIDE a branch's
- * Sprite (Terminal Epic 2, Runtime tier) — access is governed by the OWNING
- * Machine's Terminal page (`terminalId`), same edit-level bar as a human
- * terminal, then resolved down to the specific branch + agent-terminal row.
- * Does not provision anything: an unreserved (branch, name) is `not_found`
- * (spawn it first via the Branches/Runtime API), and a vanished branch Sprite
- * fails at the `getSprite` step below exactly like a human terminal's does.
+ * Auth for a named, pluggable-agent-typed terminal at one of the three
+ * universal Terminal scopes (`agent-terminals.ts`) — access is governed by
+ * the OWNING Machine's Terminal page (`terminalId`), same edit-level bar the
+ * retired human terminal used, then resolved down to the specific
+ * machine/project/branch target + agent-terminal row. Does not provision an
+ * agent-terminal row itself: an unreserved (scope, name) is `not_found`
+ * (spawn it first via the Runtime API), and a vanished Sprite fails at the
+ * `getSprite` step below.
  */
 async function makeAgentTerminalCheckAuth({
   userId,
@@ -205,8 +161,8 @@ async function makeAgentTerminalCheckAuth({
 }: {
   userId: string;
   terminalId: string;
-  projectName: string;
-  branchName: string;
+  projectName?: string;
+  branchName?: string;
   name: string;
 }): Promise<AgentTerminalCheckAuthResult> {
   const access = await getUserAccessLevel(userId, terminalId);
@@ -227,7 +183,15 @@ async function makeAgentTerminalCheckAuth({
     return { ok: false, reason: codeAuth.reason };
   }
 
-  const [userRow] = await db.select({ subscriptionTier: users.subscriptionTier, email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+  const [driveRow, userRow] = await Promise.all([
+    db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1).then((r) => r[0]),
+    db.select({ subscriptionTier: users.subscriptionTier, email: users.email }).from(users).where(eq(users.id, userId)).limit(1).then((r) => r[0]),
+  ]);
+  if (!driveRow) {
+    loggers.realtime.warn('Agent terminal auth denied', { reason: 'drive_not_found', userId, terminalId });
+    return { ok: false, reason: 'drive_not_found' };
+  }
+  const payerId = driveRow.ownerId;
   const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
   const actorEmail = userRow?.email ?? '';
 
@@ -238,13 +202,22 @@ async function makeAgentTerminalCheckAuth({
   }
   const releaseSlot = () => releaseCodeExecutionSlot({ userId });
 
-  const [branchStore, agentTerminalStore] = await Promise.all([dbMachineBranchStorePromise, dbMachineAgentTerminalStorePromise]);
+  const [branchStore, agentTerminalStore, projectStore] = await Promise.all([
+    dbMachineBranchStorePromise,
+    dbMachineAgentTerminalStorePromise,
+    dbMachineProjectStorePromise,
+  ]);
   const resolved = await resolveAgentTerminal({
     terminalId,
     projectName,
     branchName,
     name,
-    deps: { branchStore, store: agentTerminalStore },
+    deps: {
+      branchStore,
+      store: agentTerminalStore,
+      projectStore: { findByName: (tId, pName) => projectStore.findByName(tId, pName) },
+      machineSandbox: buildMachineSandbox(userId),
+    },
   });
   if (!resolved.ok) {
     releaseSlot();
@@ -265,8 +238,8 @@ async function makeAgentTerminalCheckAuth({
   }
 
   // Write code execution audit record (agent terminal PTY session open) —
-  // mirrors the human terminal's audit write above, since this launches an
-  // arbitrary pluggable agent binary (spec.command) inside the Sprite.
+  // this launches an arbitrary pluggable agent binary (spec.command, or a
+  // per-terminal command override) inside the Sprite.
   writeCodeExecutionAudit({
     input: {
       userId,
@@ -274,7 +247,7 @@ async function makeAgentTerminalCheckAuth({
       driveId: pageRow.driveId,
       requestOrigin: 'user',
       profile: 'pty',
-      code: `[Agent terminal session opened: ${spec.command}]`,
+      code: `[Agent terminal session opened: ${resolved.command ?? spec.command}]`,
       exitCode: null,
       durationMs: 0,
       timestamp: new Date(),
@@ -285,12 +258,15 @@ async function makeAgentTerminalCheckAuth({
     ok: true,
     agentTerminalId: resolved.agentTerminalId,
     sandboxId: resolved.sandboxId,
+    cwd: resolved.cwd,
     sessionKey: `${resolved.sandboxId}:agent:${name}`,
     sprite,
     releaseSlot,
     command: spec.command,
     args: spec.args,
+    commandOverride: resolved.command,
     streamSessionId: resolved.streamSessionId,
+    payerId,
   };
 }
 
@@ -617,16 +593,27 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 return;
             }
 
-            const result = handleTerminalActivityRequest(
+            handleTerminalActivityRequest(
                 {
-                    sessionMap: terminalSessionMap,
-                    deriveSessionKey: ({ tenantId, driveId, pageId }) =>
-                        deriveTerminalSessionKey({ tenantId, driveId, pageId, secret: getSandboxSessionSecret() }),
+                    sessionMap: agentTerminalSessionMap,
+                    // The machine's conventional 'shell' agent terminal (the retired
+                    // human `terminal:*` family's replacement) lives under the SAME
+                    // sandboxId a fresh/resumed acquireTerminalSandbox call for this
+                    // (tenant, drive, page) would resolve to — look that sandboxId up
+                    // from the persisted terminal_sessions record (no provisioning) and
+                    // rebuild the exact in-memory sessionKey agent-terminal-handler.ts uses.
+                    resolveSessionKey: async ({ tenantId, driveId, pageId }) => {
+                        const store = await dbTerminalSessionStorePromise;
+                        const key = deriveTerminalSessionKey({ tenantId, driveId, pageId, secret: getSandboxSessionSecret() });
+                        const record = await store.findBySessionKey(key);
+                        return record ? `${record.sandboxId}:agent:${SHELL_AGENT_TERMINAL_NAME}` : null;
+                    },
                 },
                 body,
-            );
-            res.writeHead(result.status, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result.body));
+            ).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            });
         });
     } else if (req.method === 'POST' && req.url === '/api/kick') {
         // Kick API: Remove user from rooms on permission revocation
@@ -1184,36 +1171,13 @@ io.on('connection', (socket: AuthSocket) => {
     pageIdExtractor: (payload: unknown) => (payload as { pageId?: string })?.pageId,
   }));
 
-  // Terminal PTY handlers
-  const terminalHandlers = buildTerminalHandlers({
-    sessionMap: terminalSessionMap,
-    openShell: openPtyShell,
-    checkAuth: makeTerminalCheckAuth,
-    socket: socket as unknown as SocketLike,
-    // Terminal Epic 3: meter this PTY session's active-runtime cost against the
-    // machine's payer (the drive owner by default — see resolveTerminalPayerId).
-    billing: defaultSandboxBillingDeps,
-  });
-
-  socket.on('terminal:connect', (payload) => {
-    terminalHandlers.onConnect(payload).then(() => {
-      const session = terminalSessionMap.getBySocket(socket.id);
-      if (session) {
-        loggers.realtime.info('Terminal session opened', { userId: user?.id, sessionKey: session.sessionKey, sandboxId: session.sandboxId });
-      }
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : 'Internal error';
-      socket.emit('terminal:error', { message: msg });
-    });
-  });
-  socket.on('terminal:input', (payload) => terminalHandlers.onInput(payload));
-  socket.on('terminal:resize', (payload) => terminalHandlers.onResize(payload));
-  socket.on('terminal:disconnect', () => terminalHandlers.onDisconnect());
-
-  // Agent terminal PTY handlers (Terminal Epic 2, Runtime tier) — a named,
-  // pluggable-agent-typed session inside a branch's Sprite. No billing seam
-  // here: usage is attributed to the branch's Sprite as a whole (Epic 3's
-  // per-machine metering), not per agent-terminal session.
+  // Agent terminal PTY handlers (Terminal — universal scope reshape) — a
+  // named, pluggable-agent-typed session at machine/project/branch scope. A
+  // plain machine shell is just a machine-scope agent terminal of
+  // `agentType: 'shell'` on this SAME path — the retired human-only
+  // `terminal:*` family's replacement — so billing (Terminal Epic 3) meters
+  // every agent-terminal connection's active-runtime cost against the
+  // machine's payer uniformly, not only the human-shell case.
   const agentTerminalHandlers = buildAgentTerminalHandlers({
     sessionMap: agentTerminalSessionMap,
     openShell: openPtyShell,
@@ -1223,6 +1187,7 @@ io.on('connection', (socket: AuthSocket) => {
       const store = await dbMachineAgentTerminalStorePromise;
       await store.updateStreamSessionId({ id: agentTerminalId, streamSessionId: sessionId, now: new Date() });
     },
+    billing: defaultSandboxBillingDeps,
   });
 
   socket.on('agent-terminal:connect', (payload) => {
@@ -1241,7 +1206,6 @@ io.on('connection', (socket: AuthSocket) => {
   socket.on('agent-terminal:disconnect', () => agentTerminalHandlers.onDisconnect());
 
   socket.on('disconnect', (reason) => {
-    terminalHandlers.onDisconnect();
     agentTerminalHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);
