@@ -477,6 +477,21 @@
       "import": "./dist/services/machines/machine-projects.js",
       "require": "./dist/services/machines/machine-projects.js"
     },
+    "./services/machines/branch-session": {
+      "types": "./dist/services/machines/branch-session.d.ts",
+      "import": "./dist/services/machines/branch-session.js",
+      "require": "./dist/services/machines/branch-session.js"
+    },
+    "./services/machines/machine-branches-store": {
+      "types": "./dist/services/machines/machine-branches-store.d.ts",
+      "import": "./dist/services/machines/machine-branches-store.js",
+      "require": "./dist/services/machines/machine-branches-store.js"
+    },
+    "./services/machines/machine-branches": {
+      "types": "./dist/services/machines/machine-branches.d.ts",
+      "import": "./dist/services/machines/machine-branches.js",
+      "require": "./dist/services/machines/machine-branches.js"
+    },
     "./services/sandbox/tool-gate": {
       "types": "./dist/services/sandbox/tool-gate.d.ts",
       "import": "./dist/services/sandbox/tool-gate.js",
@@ -1481,6 +1496,15 @@
       ],
       "services/machines/machine-projects": [
         "./dist/services/machines/machine-projects.d.ts"
+      ],
+      "services/machines/branch-session": [
+        "./dist/services/machines/branch-session.d.ts"
+      ],
+      "services/machines/machine-branches-store": [
+        "./dist/services/machines/machine-branches-store.d.ts"
+      ],
+      "services/machines/machine-branches": [
+        "./dist/services/machines/machine-branches.d.ts"
       ],
       "services/sandbox/sandbox-client/types": [
         "./dist/services/sandbox/sandbox-client/types.d.ts"

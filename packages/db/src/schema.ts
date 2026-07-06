@@ -51,6 +51,7 @@ export * from './schema/incidents';
 export * from './schema/data-subject-requests';
 export * from './schema/oauth';
 export * from './schema/machine-projects';
+export * from './schema/machine-branches';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -105,6 +106,7 @@ import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
 import * as oauth from './schema/oauth';
 import * as machineProjects from './schema/machine-projects';
+import * as machineBranches from './schema/machine-branches';
 
 export const schema = {
   ...auth,
@@ -160,4 +162,5 @@ export const schema = {
   ...dataSubjectRequests,
   ...oauth,
   ...machineProjects,
+  ...machineBranches,
 };

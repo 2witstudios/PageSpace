@@ -1,0 +1,165 @@
+/**
+ * Production wiring for Machine Branches (Terminal — Workspace, Branches tier).
+ *
+ * Binds the provider-agnostic orchestration (`@pagespace/lib/services/machines/
+ * machine-branches`) to the real implementations. Unlike Projects (which clone
+ * onto the OWNING Machine's own persistent Sprite session), a branch-terminal
+ * is its OWN, SEPARATE Sprite — provisioned directly through the `MachineHost`
+ * seam (`createProductionMachineHost`, `apps/web/src/lib/sandbox/sprites-client.ts`),
+ * never through `acquireTerminalSandbox`/`terminal_sessions`. Real isolation
+ * between two branches of one project comes from two distinct Sprites, which
+ * requires never routing through the single page-keyed session Projects share.
+ *
+ * Every operation re-checks page access for the CURRENT actor (resume
+ * re-authz, the same invariant the Terminal sandbox lifecycle enforces).
+ */
+
+import { eq } from '@pagespace/db/operators';
+import { db } from '@pagespace/db/db';
+import { pages } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { decideFullEgressEnablement, isContainmentVerified } from '@pagespace/lib/services/sandbox/containment';
+import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
+import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
+import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
+import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
+import { defaultBuildEnv } from '@pagespace/lib/services/sandbox/tool-runners';
+import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
+import { isTerminalPage } from '@pagespace/lib/content/page-types.config';
+import type { PageType } from '@pagespace/lib/utils/enums';
+import type { MachineHost } from '@pagespace/lib/services/sandbox/machine-host';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
+import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
+import type { MachineActorContext, MachineBranchesDeps } from '@pagespace/lib/services/machines/machine-branches';
+
+// The Fly Sprites driver is loaded via a DYNAMIC import, never a static one —
+// @fly/sprites is ESM-only and @pagespace/lib compiles to CJS. Mirrors the
+// same guard as machine-projects-runtime.ts / sandbox-tools-runtime.ts.
+const MIN_SANDBOX_NODE_MAJOR = 24;
+
+function assertSandboxRuntime(): void {
+  const major = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
+  if (Number.isNaN(major) || major < MIN_SANDBOX_NODE_MAJOR) {
+    throw new Error(
+      `Machine sandbox access requires Node.js >= ${MIN_SANDBOX_NODE_MAJOR} ` +
+        `(the @fly/sprites SDK is Node ${MIN_SANDBOX_NODE_MAJOR}+ / ESM-only); ` +
+        `this process is Node ${process.versions.node}.`,
+    );
+  }
+}
+
+let machineHostPromise: Promise<MachineHost> | null = null;
+function getMachineHost(): Promise<MachineHost> {
+  machineHostPromise ??= (async () => {
+    assertSandboxRuntime();
+    const { createProductionMachineHost } = await import('@/lib/sandbox/sprites-client');
+    return createProductionMachineHost();
+  })().catch((error) => {
+    machineHostPromise = null;
+    throw error;
+  });
+  return machineHostPromise;
+}
+
+let branchStorePromise: ReturnType<typeof createDbMachineBranchStore> | null = null;
+function getMachineBranchStore() {
+  branchStorePromise ??= createDbMachineBranchStore();
+  return branchStorePromise;
+}
+
+let projectStorePromise: ReturnType<typeof createDbMachineProjectStore> | null = null;
+function getMachineProjectStore() {
+  projectStorePromise ??= createDbMachineProjectStore();
+  return projectStorePromise;
+}
+
+const VALID_TIERS: ReadonlySet<string> = new Set(['free', 'pro', 'founder', 'business']);
+function toTier(value: string | null | undefined): SubscriptionTier {
+  return value && VALID_TIERS.has(value) ? (value as SubscriptionTier) : 'free';
+}
+
+export async function resolveMachineActorContext(userId: string): Promise<MachineActorContext> {
+  const [user, actorInfo] = await Promise.all([
+    db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
+    getActorInfo(userId),
+  ]);
+  return {
+    userId,
+    tenantId: userId,
+    actorEmail: actorInfo.actorEmail,
+    actorDisplayName: actorInfo.actorDisplayName,
+    tier: toTier(user?.subscriptionTier),
+  };
+}
+
+async function findTerminalPage(terminalId: string) {
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, terminalId),
+    columns: { type: true, driveId: true },
+  });
+  if (!page || !isTerminalPage(page.type as PageType)) return null;
+  return page;
+}
+
+/** Edit-level access (spawn/kill) — re-checked on every acquire, not cached. */
+export async function canAccessMachine(actorUserId: string, terminalId: string): Promise<boolean> {
+  const page = await findTerminalPage(terminalId);
+  if (!page) return false;
+  return canUserEditPage(actorUserId, terminalId);
+}
+
+/** View-level access (list/attach) — looser than edit-level. */
+export async function canViewMachine(actorUserId: string, terminalId: string): Promise<boolean> {
+  const page = await findTerminalPage(terminalId);
+  if (!page) return false;
+  return canUserViewPage(actorUserId, terminalId);
+}
+
+export function buildMachineBranchesDeps(): MachineBranchesDeps {
+  return {
+    store: {
+      list: async (terminalId, projectName) => (await getMachineBranchStore()).list(terminalId, projectName),
+      findByName: async (terminalId, projectName, branchName) =>
+        (await getMachineBranchStore()).findByName(terminalId, projectName, branchName),
+      create: async (input) => (await getMachineBranchStore()).create(input),
+      updateSandboxId: async (input) => (await getMachineBranchStore()).updateSandboxId(input),
+      remove: async (terminalId, projectName, branchName) =>
+        (await getMachineBranchStore()).remove(terminalId, projectName, branchName),
+    },
+    projectStore: {
+      findByName: async (terminalId, name) => (await getMachineProjectStore()).findByName(terminalId, name),
+    },
+    isEnabled: isCodeExecutionEnabled,
+    now: () => new Date(),
+    host: {
+      provision: async (args) => (await getMachineHost()).provision(args),
+      attach: async (args) => (await getMachineHost()).attach(args),
+      kill: async (args) => (await getMachineHost()).kill(args),
+    },
+    substrate: { kind: 'sprite' },
+    options: resolveSandboxNetworkOptions({ surface: 'terminal', egressIpTag: getConfiguredEgressIpTag() }),
+    secret: getSandboxSessionSecret(),
+    checkFullEgressEnablement: async () =>
+      decideFullEgressEnablement({
+        adminGateEnabled: isCodeExecutionEnabled(),
+        containment: isContainmentVerified() ? { contained: true } : null,
+      }),
+    resolveGitHubToken: (userId) => resolveGitHubTokenForSandbox({ userId, db }),
+    quota: {
+      acquireSlot: acquireCodeExecutionSlot,
+      releaseSlot: releaseCodeExecutionSlot,
+    },
+    buildEnv: defaultBuildEnv,
+    audit: (input) => writeCodeExecutionAudit({ input }),
+  };
+}
+
+/** The raw `MachineHost`, for `attachBranch`/`killBranch` which don't need the full spawn deps. */
+export async function getMachineHostForBranches(): Promise<MachineHost> {
+  return getMachineHost();
+}
