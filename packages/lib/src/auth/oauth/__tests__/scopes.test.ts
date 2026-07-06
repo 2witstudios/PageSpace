@@ -13,7 +13,7 @@ function drives(...entries: Array<[string, ScopeSet['drives'] extends ReadonlyMa
 }
 
 function emptySet(overrides: Partial<ScopeSet> = {}): ScopeSet {
-  return { account: false, offlineAccess: false, drives: new Map(), ...overrides };
+  return { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, ...overrides };
 }
 
 describe('parseScopeList', () => {

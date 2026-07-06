@@ -82,10 +82,12 @@ import {
   checkMCPCreateScope,
   filterDrivesByMCPScope,
   getAllowedDriveIds,
+  isManageKeysOnly,
   type MCPAuthResult,
   type SessionAuthResult,
   type OAuthAuthResult,
 } from '../index';
+import { manageKeysScopedAuthResult } from './manage-keys-fixture';
 
 describe('MCP Scope Enforcement', () => {
   beforeEach(() => {
@@ -485,6 +487,70 @@ describe('MCP Scope Enforcement', () => {
       // Scope check confirms filter result
       expect(checkMCPDriveScope(auth, 'drive-1')).toBeNull();
       expect(checkMCPDriveScope(auth, 'drive-3')).not.toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // 7. MANAGE-KEYS-ONLY CREDENTIAL (future zero-content-scope OAuth token)
+  // ===========================================================================
+  //
+  // No scope parser can produce scopes.manageKeys: true today. These tests
+  // exist to pin down that once one does, every helper below already denies
+  // content access instead of applying the empty-driveScopes-means-full-access
+  // convention every other credential relies on.
+
+  describe('manage-keys-only credential', () => {
+    it('isManageKeysOnly identifies a manage-keys-scoped OAuth credential', () => {
+      expect(isManageKeysOnly(manageKeysScopedAuthResult())).toBe(true);
+    });
+
+    it('isManageKeysOnly is false for every credential kind that exists today', () => {
+      expect(isManageKeysOnly(createSessionAuth())).toBe(false);
+      expect(isManageKeysOnly(createUnscopedMCPAuth())).toBe(false);
+      expect(isManageKeysOnly(createScopedMCPAuth(['drive-1']))).toBe(false);
+      expect(isManageKeysOnly(createAccountScopedOAuthAuth())).toBe(false);
+      expect(isManageKeysOnly(createScopedOAuthAuth(['drive-1']))).toBe(false);
+    });
+
+    it('getAllowedDriveIds never returns an empty array (which would mean full access)', () => {
+      const result = getAllowedDriveIds(manageKeysScopedAuthResult());
+
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    it('checkMCPDriveScope denies access to any drive', () => {
+      const result = checkMCPDriveScope(manageKeysScopedAuthResult(), 'any-drive');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('checkMCPPageScope denies access to any page without a DB lookup', async () => {
+      const result = await checkMCPPageScope(manageKeysScopedAuthResult(), 'any-page');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+      expect(mockPageFindFirst).not.toHaveBeenCalled();
+    });
+
+    it('filterDrivesByMCPScope filters every drive out', () => {
+      const result = filterDrivesByMCPScope(manageKeysScopedAuthResult(), ['drive-1', 'drive-2']);
+
+      expect(result).toEqual([]);
+    });
+
+    it('checkMCPCreateScope denies creating a new drive', () => {
+      const result = checkMCPCreateScope(manageKeysScopedAuthResult(), null);
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('checkMCPCreateScope denies creating a resource in any existing drive', () => {
+      const result = checkMCPCreateScope(manageKeysScopedAuthResult(), 'any-drive');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
     });
   });
 });

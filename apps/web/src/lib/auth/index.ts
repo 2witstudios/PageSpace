@@ -559,13 +559,42 @@ export async function authenticateWithEnforcedContext(
 // These helpers enforce drive-level access restrictions for scoped MCP tokens.
 // Policy: If allowedDriveIds is empty, the token has full access to all user's drives.
 //         If allowedDriveIds is non-empty, only those specific drives are accessible.
+// Exception: a manage-keys-only OAuth credential (auth.scopes.manageKeys) has no
+//            content access at all, so it must never benefit from the "empty means
+//            full access" convention below — every helper here fails it closed.
 // ============================================================================
+
+/**
+ * True iff this credential can only manage keys and must never resolve to
+ * content access. No scope parser sets this today (see ScopeSet.manageKeys),
+ * so this is always false for every credential that exists in production.
+ */
+export function isManageKeysOnly(auth: AuthResult): boolean {
+  return isOAuthAuthResult(auth) && auth.scopes.manageKeys === true;
+}
+
+function manageKeysOnlyDeniedResponse(): NextResponse {
+  return NextResponse.json(
+    { error: 'This credential is management-only and has no drive content access' },
+    { status: 403 }
+  );
+}
+
+// Never equals a real drive id (cuid2 ids are lowercase alphanumeric only).
+// Lets a manage-keys-only credential resolve through the same allowedDriveIds
+// contract as every other scoped credential, so any caller that reads
+// `allowedDriveIds.length` directly — not just the helpers below — also sees
+// "no drives" rather than the empty-array-means-full-access default.
+const manageKeysNoDriveAccess: readonly string[] = ['MANAGE_KEYS_ONLY_NO_DRIVE_ACCESS'];
 
 /**
  * Get allowed drive IDs from an authentication result.
  * Returns empty array for session auth (full access) or unscoped MCP tokens.
  */
 export function getAllowedDriveIds(auth: AuthResult): string[] {
+  if (isManageKeysOnly(auth)) {
+    return [...manageKeysNoDriveAccess];
+  }
   if (isMCPAuthResult(auth)) {
     return auth.allowedDriveIds;
   }
@@ -587,6 +616,10 @@ export function checkMCPDriveScope(
   auth: AuthResult,
   driveId: string
 ): NextResponse | null {
+  if (isManageKeysOnly(auth)) {
+    return manageKeysOnlyDeniedResponse();
+  }
+
   const allowedDriveIds = getAllowedDriveIds(auth);
 
   // Empty allowedDriveIds means full access (unscoped token or session auth)
@@ -618,6 +651,10 @@ export async function checkMCPPageScope(
   auth: AuthResult,
   pageId: string
 ): Promise<NextResponse | null> {
+  if (isManageKeysOnly(auth)) {
+    return manageKeysOnlyDeniedResponse();
+  }
+
   const allowedDriveIds = getAllowedDriveIds(auth);
 
   // Empty allowedDriveIds means full access
@@ -659,6 +696,10 @@ export function filterDrivesByMCPScope(
   auth: AuthResult,
   driveIds: string[]
 ): string[] {
+  if (isManageKeysOnly(auth)) {
+    return [];
+  }
+
   const allowedDriveIds = getAllowedDriveIds(auth);
 
   // Empty allowedDriveIds means full access
@@ -684,6 +725,10 @@ export function checkMCPCreateScope(
   auth: AuthResult,
   targetDriveId: string | null
 ): NextResponse | null {
+  if (isManageKeysOnly(auth)) {
+    return manageKeysOnlyDeniedResponse();
+  }
+
   const allowedDriveIds = getAllowedDriveIds(auth);
 
   // Unscoped tokens can create anywhere

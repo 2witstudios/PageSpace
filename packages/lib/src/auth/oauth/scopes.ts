@@ -24,6 +24,11 @@ export type ScopeSet = {
   account: boolean;
   offlineAccess: boolean;
   drives: ReadonlyMap<string, ParsedScope & { kind: 'drive' }>;
+  // Grants key-management access with zero content access. Optional and always
+  // false/absent today — no scope token in the grammar below can set this yet.
+  // It exists so downstream drive-scope checks (apps/web/src/lib/auth/index.ts)
+  // have a concrete signal to fail closed on once a `manage_keys` scope ships.
+  manageKeys?: boolean;
 };
 
 export type ScopeError =
@@ -123,7 +128,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     return { ok: false, error: { code: 'offline_access_alone' } };
   }
 
-  return { ok: true, scopes: { account, offlineAccess, drives } };
+  return { ok: true, scopes: { account, offlineAccess, drives, manageKeys: false } };
 }
 
 function formatDriveScope(scope: ParsedScope & { kind: 'drive' }): string {
