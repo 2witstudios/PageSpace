@@ -199,6 +199,57 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
+  it('given a successful run and a resolved machine pageId, should notify the terminal activity feed', async () => {
+    const notified: unknown[] = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      notifyTerminalActivity: async (input) => {
+        notified.push(input);
+      },
+    });
+    const result = await runBashInSandbox({
+      command: 'echo hi',
+      ctx: makeCtx({ actorDisplayName: 'Agent Bob' }),
+      deps,
+    });
+    expect(result).toMatchObject({ success: true });
+    expect(notified).toEqual([
+      {
+        pageId: 'terminal-page-1',
+        driveId: 'd1',
+        tenantId: 't1',
+        command: 'echo hi',
+        output: 'ok',
+        exitCode: 0,
+        agentLabel: 'Agent Bob',
+      },
+    ]);
+  });
+
+  it('given no resolved machine pageId, should never call the terminal activity feed', async () => {
+    const notified: unknown[] = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      notifyTerminalActivity: async (input) => {
+        notified.push(input);
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(notified).toEqual([]);
+  });
+
+  it('given a throwing terminal activity feed, should still return the successful result', async () => {
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      notifyTerminalActivity: async () => {
+        throw new Error('feed down');
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toEqual({ success: true, stdout: 'ok', stderr: '', exitCode: 0, truncated: false });
+  });
+
   it('given output over the cap, should truncate and flag it', async () => {
     const big = 'x'.repeat(300 * 1024);
     const { deps } = makeDeps({

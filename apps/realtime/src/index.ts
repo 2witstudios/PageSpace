@@ -15,12 +15,13 @@ import {
   decideFullEgressEnablement,
   isContainmentVerified,
 } from '@pagespace/lib/services/sandbox/containment';
-import { getSandboxSessionSecret, acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import { getSandboxSessionSecret, acquireTerminalSandbox, createDbTerminalSessionStore, deriveTerminalSessionKey } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { buildTerminalHandlers, type CheckAuthResult, type SocketLike } from './terminal/terminal-handler';
+import { handleTerminalActivityRequest } from './terminal/terminal-activity';
 import { createTerminalSessionMap } from './terminal/terminal-session-map';
 import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
@@ -469,6 +470,33 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Invalid JSON' }));
             }
+        });
+    } else if (req.method === 'POST' && req.url === '/api/terminal-activity') {
+        // Streams an agent's bash run into a live Terminal's PTY/output feed
+        // (Terminal Epic 1 T1.5, activity visibility). Best-effort: a live
+        // session may not exist (nobody watching), which is not an error.
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', () => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            const result = handleTerminalActivityRequest(
+                {
+                    sessionMap: terminalSessionMap,
+                    deriveSessionKey: ({ tenantId, driveId, pageId }) =>
+                        deriveTerminalSessionKey({ tenantId, driveId, pageId, secret: getSandboxSessionSecret() }),
+                },
+                body,
+            );
+            res.writeHead(result.status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result.body));
         });
     } else if (req.method === 'POST' && req.url === '/api/kick') {
         // Kick API: Remove user from rooms on permission revocation

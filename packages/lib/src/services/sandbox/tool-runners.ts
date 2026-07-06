@@ -63,6 +63,23 @@ export interface SandboxQuotaDeps {
   releaseSlot: (args: { userId: string }) => void;
 }
 
+/**
+ * A single bash command + its output, for streaming into the referenced
+ * Terminal's live PTY/output feed (Terminal Epic 1 T1.5 activity visibility) —
+ * so a human watching a Terminal page sees the agent's work as it happens.
+ */
+export interface TerminalActivityNotification {
+  /** The machine's identifying page (resolveMachinePageId's output). */
+  pageId: string;
+  driveId?: string;
+  tenantId: string;
+  command: string;
+  output: string;
+  exitCode: number;
+  /** Human-facing label for who ran this (actor display name or email). */
+  agentLabel: string;
+}
+
 export interface SandboxRunDeps {
   isEnabled: () => boolean;
   /** Pre-bound `acquireMachineSandbox` (lifecycle deps already injected). */
@@ -80,6 +97,14 @@ export interface SandboxRunDeps {
    * unchanged (seam disabled).
    */
   screenOutput?: (text: string) => Promise<string>;
+  /**
+   * Optional activity-visibility seam (Terminal Epic 1 T1.5): streams a
+   * successful bash run's command + output into the referenced Terminal's
+   * live feed. Best-effort — a failure here must never affect the tool
+   * result, and omitting it simply disables the feed (no Terminal epic
+   * consumer wired yet, or the machine has no live watcher).
+   */
+  notifyTerminalActivity?: (input: TerminalActivityNotification) => Promise<void>;
   now: () => Date;
   logger?: {
     warn?: (message: string, metadata?: Record<string, unknown>) => void;
@@ -112,6 +137,7 @@ function safeLogWarn(
 // vs infra failures that are genuinely unexpected (error-level).
 const AUTHZ_DENY_REASONS = new Set([
   'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
+  'machine_runtime_exceeded',
 ]);
 
 
@@ -122,6 +148,7 @@ export type SandboxToolDenialReason =
   | 'insufficient_role'
   | 'no_agent_access'
   | 'no_machine'
+  | 'machine_runtime_exceeded'
   | 'concurrency_limit'
   | 'empty_command'
   | 'command_too_large'
@@ -159,6 +186,8 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
   no_machine: 'No machine is configured for this run.',
+  machine_runtime_exceeded:
+    'This machine has been running continuously for too long. Wait for it to go idle, or switch to a different machine.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
   empty_command: 'No command was provided.',
   command_too_large: 'The command is too large.',
@@ -226,6 +255,20 @@ async function safeAudit(
   }
 }
 
+// Best-effort, fire-and-forget: a failing/missing activity feed must never
+// affect the bash tool's result — it is a visibility nicety, not a safety gate.
+async function safeNotifyTerminalActivity(
+  deps: SandboxRunDeps,
+  input: TerminalActivityNotification,
+): Promise<void> {
+  if (!deps.notifyTerminalActivity) return;
+  try {
+    await deps.notifyTerminalActivity(input);
+  } catch {
+    // Intentionally swallowed.
+  }
+}
+
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
 function reasonFromAcquire(result: Extract<AcquireMachineSandboxResult, { ok: false }>): SandboxToolDenialReason {
   switch (result.reason) {
@@ -235,6 +278,7 @@ function reasonFromAcquire(result: Extract<AcquireMachineSandboxResult, { ok: fa
     case 'no_agent_access':
     case 'no_machine':
     case 'provision_failed':
+    case 'machine_runtime_exceeded':
       return result.reason;
     case 'kill_switch_off':
       return 'kill_switch_off';
@@ -260,7 +304,7 @@ async function openSession(
   ctx: SandboxActorContext,
   deps: SandboxRunDeps,
 ): Promise<
-  | { ok: true; sandbox: ExecutableSandbox; release: () => void }
+  | { ok: true; sandbox: ExecutableSandbox; release: () => void; pageId?: string }
   | { ok: false; reason: SandboxToolDenialReason }
 > {
   if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
@@ -291,7 +335,12 @@ async function openSession(
       });
       return { ok: false, reason: 'provision_failed' };
     }
-    return { ok: true, sandbox, release: () => deps.quota.releaseSlot({ userId: ctx.userId }) };
+    return {
+      ok: true,
+      sandbox,
+      release: () => deps.quota.releaseSlot({ userId: ctx.userId }),
+      pageId: acquired.pageId,
+    };
   } catch (error) {
     safeLogError(
       deps.logger,
@@ -406,6 +455,17 @@ export async function runBashInSandbox({
       durationMs,
       anomaly: anomalyForExit(run.exitCode),
     });
+    if (session.pageId) {
+      await safeNotifyTerminalActivity(deps, {
+        pageId: session.pageId,
+        driveId: ctx.driveId,
+        tenantId: ctx.tenantId,
+        command,
+        output: stdout.text || stderr.text,
+        exitCode: run.exitCode,
+        agentLabel: ctx.actorDisplayName ?? ctx.actorEmail,
+      });
+    }
     return {
       success: true,
       stdout: stdout.text,

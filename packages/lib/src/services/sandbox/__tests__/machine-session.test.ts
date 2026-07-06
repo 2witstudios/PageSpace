@@ -6,6 +6,7 @@ import {
 } from '../machine-session';
 import type { SandboxClient } from '../terminal-session-manager';
 import type { TerminalSessionStore, TerminalSessionRecord } from '../terminal-session-manager';
+import type { MachineRuntimeGuardrailDecision } from '../quota';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 const passGate = async (): Promise<{ ok: true }> => ({ ok: true });
@@ -79,6 +80,8 @@ function makeDeps(over: Partial<AcquireMachineSandboxDeps> = {}): AcquireMachine
     now: () => NOW,
     secret: 'x'.repeat(32),
     checkFullEgressEnablement: passGate,
+    checkMachineRuntimeGuardrail: (): MachineRuntimeGuardrailDecision => ({ allowed: true }),
+    recordMachineActivity: () => {},
     ...over,
   };
 }
@@ -114,7 +117,7 @@ describe('acquireMachineSandbox', () => {
       activeMachine: { kind: 'own' },
       deps: makeDeps({ store, client }),
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'agent-1' });
     expect(storeCalls.save).toBe(1);
     expect(calls.getOrCreate).toHaveLength(1);
   });
@@ -128,7 +131,12 @@ describe('acquireMachineSandbox', () => {
     const second = await acquireMachineSandbox({ ...base, activeMachine: { kind: 'own' }, deps });
 
     expect(first.ok).toBe(true);
-    expect(second).toEqual({ ok: true, sandboxId: first.ok ? first.sandboxId : undefined, resumed: true });
+    expect(second).toEqual({
+      ok: true,
+      sandboxId: first.ok ? first.sandboxId : undefined,
+      resumed: true,
+      pageId: 'agent-1',
+    });
   });
 
   it('given an "existing" machine, should key the persistent session by the Terminal page id, not the agent\'s own page', async () => {
@@ -139,7 +147,7 @@ describe('acquireMachineSandbox', () => {
       activeMachine: { kind: 'existing', terminalId: 'terminal-page-1' },
       deps: makeDeps({ store, client }),
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' });
     expect(storeCalls.save).toBe(1);
 
     // A DIFFERENT agentPageId sharing the same "existing" terminal reconnects to
@@ -153,14 +161,14 @@ describe('acquireMachineSandbox', () => {
       activeMachine: { kind: 'existing', terminalId: 'terminal-page-1' },
       deps: makeDeps({ store, client }),
     });
-    expect(second).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true });
+    expect(second).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, pageId: 'terminal-page-1' });
   });
 
   it('given no activeMachine set (undefined), should default to the "own" machine', async () => {
     const { store } = makeStore();
     const { client, calls } = makeClient();
     const result = await acquireMachineSandbox({ ...base, deps: makeDeps({ store, client }) });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'agent-1' });
     expect(calls.getOrCreate).toHaveLength(1);
   });
 
@@ -224,5 +232,69 @@ describe('acquireMachineSandbox', () => {
       deps: makeDeps({ client }),
     });
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause });
+  });
+
+  it('given the machine runtime guardrail refuses, should deny machine_runtime_exceeded and never provision', async () => {
+    const { client, calls } = makeClient();
+    const result = await acquireMachineSandbox({
+      ...base,
+      activeMachine: { kind: 'own' },
+      deps: makeDeps({
+        client,
+        checkMachineRuntimeGuardrail: () => ({ allowed: false, reason: 'machine_runtime_exceeded' }),
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'machine_runtime_exceeded' });
+    expect(calls.getOrCreate).toEqual([]);
+  });
+
+  it('given the runtime guardrail refuses for an UNAUTHORIZED actor, should surface the authz denial first', async () => {
+    const { client, calls } = makeClient();
+    const result = await acquireMachineSandbox({
+      ...base,
+      activeMachine: { kind: 'own' },
+      deps: makeDeps({
+        client,
+        authorize: async () => ({ ok: false, reason: 'insufficient_role' }),
+        checkMachineRuntimeGuardrail: () => ({ allowed: false, reason: 'machine_runtime_exceeded' }),
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
+    expect(calls.getOrCreate).toEqual([]);
+  });
+
+  it('given a successful acquisition, should key the guardrail by the resolved machine pageId and record activity after provisioning', async () => {
+    const seenCheck: Array<{ machineKey: string; now: number }> = [];
+    const seenRecord: Array<{ machineKey: string; now: number }> = [];
+    const result = await acquireMachineSandbox({
+      ...base,
+      activeMachine: { kind: 'existing', terminalId: 'terminal-page-1' },
+      deps: makeDeps({
+        checkMachineRuntimeGuardrail: (input) => {
+          seenCheck.push(input);
+          return { allowed: true };
+        },
+        recordMachineActivity: (input) => {
+          seenRecord.push(input);
+        },
+      }),
+    });
+    expect(result.ok).toBe(true);
+    expect(seenCheck).toEqual([{ machineKey: 'terminal-page-1', now: NOW.getTime() }]);
+    expect(seenRecord).toEqual([{ machineKey: 'terminal-page-1', now: NOW.getTime() }]);
+  });
+
+  it('given the runtime guardrail refuses, should never record activity', async () => {
+    const seenRecord: unknown[] = [];
+    const result = await acquireMachineSandbox({
+      ...base,
+      activeMachine: { kind: 'own' },
+      deps: makeDeps({
+        checkMachineRuntimeGuardrail: () => ({ allowed: false, reason: 'machine_runtime_exceeded' }),
+        recordMachineActivity: (input) => seenRecord.push(input),
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'machine_runtime_exceeded' });
+    expect(seenRecord).toEqual([]);
   });
 });
