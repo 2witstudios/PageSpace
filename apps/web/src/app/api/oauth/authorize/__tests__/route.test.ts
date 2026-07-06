@@ -38,10 +38,16 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/auth/step-up-service', () => ({
+  consumeStepUpGrant: vi.fn(),
+}));
+
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createAuthorizationCode } from '@/lib/repositories/oauth-repository';
+import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { nextConfig } from '../../../../../../next.config';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
@@ -77,6 +83,7 @@ function getRequest(overrides: Record<string, string | undefined> = {}): Request
 beforeEach(() => {
   vi.clearAllMocks();
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
+  vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
 });
 
 describe('GET /api/oauth/authorize — per-IP rate limiting', () => {
@@ -313,6 +320,7 @@ const approvalBody = {
   scope: 'account',
   state: 'xyz123',
   action: 'approve',
+  stepUpToken: 'ps_stepup_test',
 };
 
 describe('POST /api/oauth/authorize — consent CSRF', () => {
@@ -425,5 +433,115 @@ describe('POST /api/oauth/authorize — approve', () => {
     const res = await POST(postRequest({ ...approvalBody, redirectUri: 'http://evil.example.com/callback' }) as never);
     expect(res.status).toBe(400);
     expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth minting escalation fix)', () => {
+  beforeEach(() => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      tokenType: 'session',
+      userId: 'user-1',
+      role: 'user',
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      sessionId: 'sess-1',
+    } as never);
+  });
+
+  it('returns 401 when stepUpToken is missing, never minting a code', async () => {
+    const { stepUpToken: _omit, ...withoutStepUp } = approvalBody;
+    const res = await POST(postRequest(withoutStepUp) as never);
+
+    expect(res.status).toBe(401);
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+
+  it('reports an empty-string stepUpToken with the exact same error shape as a missing one — no validation oracle', async () => {
+    const { stepUpToken: _omit, ...withoutStepUp } = approvalBody;
+    const missingRes = await POST(postRequest(withoutStepUp) as never);
+    const emptyRes = await POST(postRequest({ ...withoutStepUp, stepUpToken: '' }) as never);
+
+    expect(emptyRes.status).toBe(missingRes.status);
+    expect(emptyRes.status).toBe(401);
+    expect(await emptyRes.json()).toEqual(await missingRes.json());
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the step-up grant fails to consume, never minting a code', async () => {
+    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: false, error: { code: 'STEP_UP_REQUIRED' } } as never);
+
+    const res = await POST(postRequest(approvalBody) as never);
+
+    expect(res.status).toBe(401);
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+
+  it('consumes the step-up grant bound to client_id + redirect_uri + scope + state', async () => {
+    await POST(postRequest(approvalBody) as never);
+
+    expect(consumeStepUpGrant).toHaveBeenCalledWith({
+      userId: 'user-1',
+      token: 'ps_stepup_test',
+      actionBinding: {
+        clientId: 'pagespace-cli',
+        redirectUri: REDIRECT_URI,
+        scope: 'account',
+        state: 'xyz123',
+      },
+    });
+  });
+
+  it('denial never requires a step-up token', async () => {
+    const { stepUpToken: _omit, ...withoutStepUp } = approvalBody;
+    const res = await POST(postRequest({ ...withoutStepUp, action: 'deny' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
+  });
+
+  it('rejects a scope-cap failure before burning the step-up grant, so a corrected retry with the same token still succeeds', async () => {
+    // Default drive-service mock grants OWNER on every drive; override it
+    // once so this particular request has no access to the requested drive,
+    // driving checkGrantAuthority's 'no_access' branch (a real scope-cap
+    // rejection, not a request-syntax one — the scope itself is well-formed).
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: false, isMember: false, role: null });
+
+    const overPrivilegedBody = { ...approvalBody, scope: 'drive:testdrive1' };
+    const res = await POST(postRequest(overPrivilegedBody) as never);
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    const location = new URL(json.redirectUri);
+    expect(location.searchParams.get('error')).toBe('invalid_scope');
+    expect(location.searchParams.get('state')).toBe('xyz123');
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+
+    // Core assertion: the scope-cap rejection must short-circuit before the
+    // step-up grant is ever consumed/burned — the user shouldn't have to
+    // redo biometrics/email just because of an unrelated authorization
+    // failure.
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
+
+    // Bonus: prove the grant is genuinely still alive (not just "not yet
+    // called" by coincidence) by retrying with a corrected, in-authority
+    // scope and the exact same stepUpToken value — it must still work.
+    const retryRes = await POST(postRequest(approvalBody) as never);
+    expect(retryRes.status).toBe(200);
+    const retryJson = await retryRes.json();
+    const retryLocation = new URL(retryJson.redirectUri);
+    expect(retryLocation.searchParams.get('code')).toBeTruthy();
+    expect(consumeStepUpGrant).toHaveBeenCalledTimes(1);
+    expect(consumeStepUpGrant).toHaveBeenCalledWith({
+      userId: 'user-1',
+      token: 'ps_stepup_test',
+      actionBinding: {
+        clientId: 'pagespace-cli',
+        redirectUri: REDIRECT_URI,
+        scope: 'account',
+        state: 'xyz123',
+      },
+    });
+    expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
   });
 });

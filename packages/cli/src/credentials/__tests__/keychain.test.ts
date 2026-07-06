@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createNativeKeychainAdapter, type KeyringModule } from '../keychain.js';
+import { createNativeKeychainAdapter, keychainAccountKey, parseKeychainAccountKey, type KeyringModule } from '../keychain.js';
 
 function fakeKeyringModule(overrides: Partial<{ passwords: Map<string, string> }> = {}) {
   const passwords = overrides.passwords ?? new Map<string, string>();
@@ -55,6 +55,60 @@ describe('createNativeKeychainAdapter — lazy load', () => {
 
     await adapter.deleteSecret('pagespace.ai');
     expect(await adapter.getSecret('pagespace.ai')).toBeNull();
+  });
+});
+
+describe('keychainAccountKey / parseKeychainAccountKey — per-profile namespacing', () => {
+  it('the "default" profile keeps the plain host as its account key (backward compatible with existing keychain entries)', () => {
+    expect(keychainAccountKey('https://pagespace.ai')).toBe('https://pagespace.ai');
+    expect(keychainAccountKey('https://pagespace.ai', 'default')).toBe('https://pagespace.ai');
+  });
+
+  it('a named, non-default profile gets a distinct account key that still contains the host', () => {
+    const account = keychainAccountKey('https://pagespace.ai', 'work');
+    expect(account).not.toBe('https://pagespace.ai');
+    expect(account).toContain('https://pagespace.ai');
+  });
+
+  it('different profiles for the same host never collide', () => {
+    const a = keychainAccountKey('https://pagespace.ai', 'work');
+    const b = keychainAccountKey('https://pagespace.ai', 'personal');
+    expect(a).not.toBe(b);
+  });
+
+  it('round-trips host + profile through parseKeychainAccountKey', () => {
+    expect(parseKeychainAccountKey(keychainAccountKey('https://pagespace.ai'))).toEqual({
+      host: 'https://pagespace.ai',
+      profile: 'default',
+    });
+    expect(parseKeychainAccountKey(keychainAccountKey('https://pagespace.ai', 'work'))).toEqual({
+      host: 'https://pagespace.ai',
+      profile: 'work',
+    });
+  });
+
+  it('a host containing a colon (e.g. self-hosted with an explicit port) still round-trips correctly for a named profile', () => {
+    const account = keychainAccountKey('https://self-hosted.example:8443', 'work');
+    expect(parseKeychainAccountKey(account)).toEqual({ host: 'https://self-hosted.example:8443', profile: 'work' });
+  });
+
+  it('a bare host with no encoded profile parses as the "default" profile', () => {
+    expect(parseKeychainAccountKey('https://pagespace.ai')).toEqual({ host: 'https://pagespace.ai', profile: 'default' });
+  });
+
+  it('rejects a host containing an embedded NUL byte, since it could collide with an unrelated host/profile pair', () => {
+    expect(() => keychainAccountKey('A\u0000B', 'C')).toThrow(/NUL/);
+  });
+
+  it('rejects a profile containing an embedded NUL byte, since it could collide with an unrelated host/profile pair', () => {
+    expect(() => keychainAccountKey('A', 'B\u0000C')).toThrow(/NUL/);
+  });
+
+  it('a previously-colliding pair is now rejected outright instead of one silently overwriting the other', () => {
+    // Before the boundary check, both of these encoded to the identical account key 'A\u0000B\u0000C',
+    // so setting one pair's credential would silently clobber the other's keychain entry.
+    expect(() => keychainAccountKey('A\u0000B', 'C')).toThrow(/NUL/);
+    expect(() => keychainAccountKey('A', 'B\u0000C')).toThrow(/NUL/);
   });
 });
 

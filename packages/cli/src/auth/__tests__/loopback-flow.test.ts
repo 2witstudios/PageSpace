@@ -150,7 +150,7 @@ describe('runLoopbackLogin — happy path', () => {
       },
     });
 
-    expect(result).toEqual({ outcome: 'success', identity: IDENTITY });
+    expect(result).toEqual({ outcome: 'success', identity: IDENTITY, scope: TOKENS.scope });
     expect(store.get('https://pagespace.ai')).toEqual({
       refreshToken: TOKENS.refreshToken,
       clientId: 'pagespace-cli',
@@ -167,6 +167,55 @@ describe('runLoopbackLogin — happy path', () => {
     expect(authorizeUrl.searchParams.get('client_id')).toBe('pagespace-cli');
     expect(authorizeUrl.searchParams.get('code_challenge_method')).toBe('S256');
     expect(authorizeUrl.searchParams.get('redirect_uri')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
+  });
+
+  it('persists the credential under deps.profile when given, defaulting to "default" when omitted', async () => {
+    const setCalls: Array<{ host: string; profile: string | undefined }> = [];
+    const { deps } = baseDeps({
+      credentialStore: {
+        set: async (host, _credential, profile) => {
+          setCalls.push({ host, profile });
+        },
+      },
+    });
+    const fake = createFakeServer();
+
+    await runLoopbackLogin({
+      ...deps,
+      profile: 'work',
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(setCalls).toEqual([{ host: 'https://pagespace.ai', profile: 'work' }]);
+  });
+
+  it('persists the credential under the "default" profile when no profile is given', async () => {
+    const setCalls: Array<{ host: string; profile: string | undefined }> = [];
+    const { deps } = baseDeps({
+      credentialStore: {
+        set: async (host, _credential, profile) => {
+          setCalls.push({ host, profile });
+        },
+      },
+    });
+    const fake = createFakeServer();
+
+    await runLoopbackLogin({
+      ...deps,
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(setCalls).toEqual([{ host: 'https://pagespace.ai', profile: 'default' }]);
   });
 
   it('never exposes the access or refresh token anywhere in the returned result', async () => {
@@ -205,7 +254,7 @@ describe('runLoopbackLogin — happy path', () => {
       },
     });
 
-    expect(result).toEqual({ outcome: 'success', identity: null });
+    expect(result).toEqual({ outcome: 'success', identity: null, scope: TOKENS.scope });
     expect(store.get('https://pagespace.ai')?.refreshToken).toBe(TOKENS.refreshToken);
   });
 

@@ -962,6 +962,16 @@
       "import": "./dist/auth/oauth/consent.js",
       "require": "./dist/auth/oauth/consent.js"
     },
+    "./auth/oauth/grant-ownership": {
+      "types": "./dist/auth/oauth/grant-ownership.d.ts",
+      "import": "./dist/auth/oauth/grant-ownership.js",
+      "require": "./dist/auth/oauth/grant-ownership.js"
+    },
+    "./auth/oauth/grant-scope-summary": {
+      "types": "./dist/auth/oauth/grant-scope-summary.d.ts",
+      "import": "./dist/auth/oauth/grant-scope-summary.js",
+      "require": "./dist/auth/oauth/grant-scope-summary.js"
+    },
     "./auth/oauth/code-lifecycle": {
       "types": "./dist/auth/oauth/code-lifecycle.d.ts",
       "import": "./dist/auth/oauth/code-lifecycle.js",
@@ -1066,6 +1076,21 @@
       "types": "./dist/auth/passkey-client-constants.d.ts",
       "import": "./dist/auth/passkey-client-constants.js",
       "default": "./dist/auth/passkey-client-constants.js"
+    },
+    "./auth/step-up-service": {
+      "types": "./dist/auth/step-up-service.d.ts",
+      "import": "./dist/auth/step-up-service.js",
+      "require": "./dist/auth/step-up-service.js"
+    },
+    "./auth/step-up-decisions": {
+      "types": "./dist/auth/step-up-decisions.d.ts",
+      "import": "./dist/auth/step-up-decisions.js",
+      "require": "./dist/auth/step-up-decisions.js"
+    },
+    "./auth/step-up-constants": {
+      "types": "./dist/auth/step-up-constants.d.ts",
+      "import": "./dist/auth/step-up-constants.js",
+      "default": "./dist/auth/step-up-constants.js"
     },
     "./permissions/permissions": {
       "types": "./dist/permissions/permissions.d.ts",

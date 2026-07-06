@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CLI_VERSION, EXIT_SUCCESS, EXIT_USAGE_ERROR, run } from '@pagespace/cli';
-import type { RunDependencies } from '@pagespace/cli';
+import type { HostCredential, RunDependencies } from '@pagespace/cli';
 import { createFakeCredentialStore, createRecordingSink } from './fake-context.js';
 
 function makeDeps(argv: string[], env: Record<string, string | undefined> = {}): RunDependencies & {
@@ -96,6 +96,129 @@ describe('run', () => {
     const code = await run(deps);
     expect(code).not.toBe(EXIT_SUCCESS);
     expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
+  });
+
+  describe('"mcp" with a stored default profile but no explicit credential (Phase 8 task 4)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('never touches the personal credential at all: no discovery/refresh network call, no rotation', async () => {
+      let networkCalls = 0;
+      vi.stubGlobal(
+        'fetch',
+        (async () => {
+          networkCalls += 1;
+          throw new Error('run() must never make a network call for mcp with no explicit credential');
+        }) as unknown as typeof fetch,
+      );
+
+      const store = createFakeCredentialStore();
+      const personalCredential: HostCredential = {
+        refreshToken: 'ps_rt_personal_secret',
+        clientId: 'cli',
+        scopes: ['full'],
+        createdAt: new Date(0).toISOString(),
+      };
+      await store.set('https://pagespace.ai', personalCredential, 'default');
+
+      const deps = { ...makeDeps(['mcp']), credentialStore: store };
+      const code = await run(deps);
+
+      expect(code).not.toBe(EXIT_SUCCESS);
+      expect(deps.stderr.lines.join('')).toContain('tokens create');
+      expect(networkCalls).toBe(0);
+
+      const stillStored = await store.get('https://pagespace.ai', 'default');
+      expect(stillStored?.refreshToken).toBe('ps_rt_personal_secret');
+    });
+  });
+
+  describe('"tokens create" is auth-exempt: it mints via its own browser-consent flow, never the ambient credential (Phase 8)', () => {
+    // The real handler's consent flow is covered by its own unit tests
+    // (commands/tokens/__tests__/create.test.ts); driving it through run()
+    // here would touch the real OS keychain. What only run() can prove is
+    // dispatch: with zero stored credentials the handler's own argument
+    // validation must be reached, instead of enforceAuth failing first on
+    // the missing ambient credential and rotating/refreshing anything.
+    it('reaches the handler with zero stored credentials instead of failing ambient-auth enforcement', async () => {
+      const deps = makeDeps(['tokens', 'create']);
+      const code = await run(deps);
+      expect(code).toBe(EXIT_USAGE_ERROR);
+      expect(deps.stderr.lines.join('')).toContain('--drive');
+      expect(deps.stderr.lines.join('')).not.toContain('pagespace login');
+    });
+
+    it('never reads or refreshes the ambient stored profile as a side effect', async () => {
+      let networkCalls = 0;
+      vi.stubGlobal(
+        'fetch',
+        (async () => {
+          networkCalls += 1;
+          throw new Error('tokens create must never touch the ambient credential');
+        }) as unknown as typeof fetch,
+      );
+      try {
+        const store = createFakeCredentialStore();
+        await store.set('https://pagespace.ai', {
+          refreshToken: 'ps_rt_personal_secret',
+          clientId: 'cli',
+          scopes: ['full'],
+          createdAt: new Date(0).toISOString(),
+        }, 'default');
+
+        const deps = { ...makeDeps(['tokens', 'create']), credentialStore: store };
+        const code = await run(deps);
+
+        expect(code).toBe(EXIT_USAGE_ERROR);
+        expect(networkCalls).toBe(0);
+        expect((await store.get('https://pagespace.ai', 'default'))?.refreshToken).toBe('ps_rt_personal_secret');
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
+  it('resolves the profile from --profile and looks up the credential store under that profile name', async () => {
+    const profilesSeen: Array<string | undefined> = [];
+    const store = {
+      ...createFakeCredentialStore(),
+      async get(host: string, profile?: string) {
+        profilesSeen.push(profile);
+        return null;
+      },
+    };
+    const deps = { ...makeDeps(['whoami', '--profile', 'work']), credentialStore: store };
+    await run(deps);
+    expect(profilesSeen).toEqual(['work']);
+  });
+
+  it('PAGESPACE_PROFILE env selects the profile when --profile is absent', async () => {
+    const profilesSeen: Array<string | undefined> = [];
+    const store = {
+      ...createFakeCredentialStore(),
+      async get(host: string, profile?: string) {
+        profilesSeen.push(profile);
+        return null;
+      },
+    };
+    const deps = { ...makeDeps(['whoami'], { PAGESPACE_PROFILE: 'work' }), credentialStore: store };
+    await run(deps);
+    expect(profilesSeen).toEqual(['work']);
+  });
+
+  it('defaults to the "default" profile when neither --profile nor PAGESPACE_PROFILE is given', async () => {
+    const profilesSeen: Array<string | undefined> = [];
+    const store = {
+      ...createFakeCredentialStore(),
+      async get(host: string, profile?: string) {
+        profilesSeen.push(profile);
+        return null;
+      },
+    };
+    const deps = { ...makeDeps(['whoami']), credentialStore: store };
+    await run(deps);
+    expect(profilesSeen).toEqual(['default']);
   });
 
   it('folds the legacy PAGESPACE_AUTH_TOKEN env var into the single auth-resolution path with a deprecation notice, never echoing the token', async () => {

@@ -176,4 +176,46 @@ describe('FileCredentialStore', () => {
     const dirStat = await fs.stat(join(root, 'nested'));
     expect(mode(dirStat)).toBe(0o700);
   });
+
+  describe('named profiles', () => {
+    it('stores a second, named profile alongside "default" for the same host without clobbering it', async () => {
+      const store = new FileCredentialStore({ path: credentialsPath });
+      await store.set('pagespace.ai', CRED_A);
+      await store.set('pagespace.ai', CRED_B, 'work');
+
+      expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+      expect(await store.get('pagespace.ai', 'default')).toEqual(CRED_A);
+      expect(await store.get('pagespace.ai', 'work')).toEqual(CRED_B);
+    });
+
+    it('get() for a profile that was never stored returns null', async () => {
+      const store = new FileCredentialStore({ path: credentialsPath });
+      await store.set('pagespace.ai', CRED_A);
+      expect(await store.get('pagespace.ai', 'work')).toBeNull();
+    });
+
+    it('delete() removes only the named profile, leaving sibling profiles intact', async () => {
+      const store = new FileCredentialStore({ path: credentialsPath });
+      await store.set('pagespace.ai', CRED_A);
+      await store.set('pagespace.ai', CRED_B, 'work');
+
+      await store.delete('pagespace.ai', 'work');
+
+      expect(await store.get('pagespace.ai', 'work')).toBeNull();
+      expect(await store.get('pagespace.ai', 'default')).toEqual(CRED_A);
+    });
+
+    it('list(profile) only reports hosts that have that profile stored', async () => {
+      const store = new FileCredentialStore({ path: credentialsPath });
+      await store.set('pagespace.ai', CRED_A);
+      await store.set('pagespace.ai', CRED_B, 'work');
+      await store.set('self-hosted.example', CRED_B);
+
+      const defaults = await store.list();
+      expect(defaults.map((entry) => entry.host).sort()).toEqual(['pagespace.ai', 'self-hosted.example']);
+
+      const work = await store.list('work');
+      expect(work).toEqual([{ host: 'pagespace.ai', tokenPrefix: CRED_B.refreshToken.slice(0, 12) }]);
+    });
+  });
 });

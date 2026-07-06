@@ -14,10 +14,12 @@
  * accumulation, expiry, denial, local timeout) is a plain data-in/data-out
  * assertion with no fake server required.
  *
- * `DeviceLoginResult`'s `success` case deliberately carries only `identity`,
- * never the access/refresh tokens — same discipline as `LoopbackLoginResult`.
+ * `DeviceLoginResult`'s `success` case deliberately carries only `identity`
+ * and the server's granted `scope`, never the access/refresh tokens — same
+ * discipline as `LoopbackLoginResult`.
  */
 import type { CredentialStore } from '../credentials/store.js';
+import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
 import type { ConfirmIdentity, DiscoverMetadata, DiscoveredMetadata, ExchangedTokens, Identity, WaitMs } from './loopback-flow.js';
 
 export interface DeviceAuthorization {
@@ -127,10 +129,12 @@ export interface DeviceLoginDeps {
   readonly confirmIdentity: ConfirmIdentity;
   /** Polled between waits/polls; true once the user has hit Ctrl-C. Never an event emitter — keeps this module I/O-free. */
   readonly isInterrupted: () => boolean;
+  /** Which named profile to store the credential under. Defaults to `"default"`, mirroring `loopback-flow.ts`. */
+  readonly profile?: string;
 }
 
 export type DeviceLoginResult =
-  | { readonly outcome: 'success'; readonly identity: Identity | null }
+  | { readonly outcome: 'success'; readonly identity: Identity | null; readonly scope: string }
   | { readonly outcome: 'access_denied' }
   | { readonly outcome: 'expired_token' }
   | { readonly outcome: 'timeout' }
@@ -197,12 +201,16 @@ export async function runDeviceLogin(deps: DeviceLoginDeps): Promise<DeviceLogin
 
     switch (decision.outcome.kind) {
       case 'success': {
-        await deps.credentialStore.set(deps.host, {
-          refreshToken: decision.outcome.tokens.refreshToken,
-          clientId: deps.clientId,
-          scopes: decision.outcome.tokens.scope.split(' ').filter(Boolean),
-          createdAt: new Date(deps.now()).toISOString(),
-        });
+        await deps.credentialStore.set(
+          deps.host,
+          {
+            refreshToken: decision.outcome.tokens.refreshToken,
+            clientId: deps.clientId,
+            scopes: decision.outcome.tokens.scope.split(' ').filter(Boolean),
+            createdAt: new Date(deps.now()).toISOString(),
+          },
+          deps.profile ?? DEFAULT_PROFILE_NAME,
+        );
 
         let identity: Identity | null;
         try {
@@ -211,7 +219,7 @@ export async function runDeviceLogin(deps: DeviceLoginDeps): Promise<DeviceLogin
           identity = null;
         }
 
-        return { outcome: 'success', identity };
+        return { outcome: 'success', identity, scope: decision.outcome.tokens.scope };
       }
       case 'access_denied':
         return { outcome: 'access_denied' };

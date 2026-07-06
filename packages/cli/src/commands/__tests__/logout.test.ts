@@ -157,6 +157,77 @@ describe('createLogoutHandler', () => {
   });
 });
 
+describe('createLogoutHandler — named profiles', () => {
+  function profileAwareStore(): CredentialStore & { readonly calls: Array<{ op: string; host: string; profile: string | undefined }> } {
+    const hosts = new Map<string, Map<string, HostCredential>>();
+    const calls: Array<{ op: string; host: string; profile: string | undefined }> = [];
+    return {
+      calls,
+      get: async (host, profile = 'default') => {
+        calls.push({ op: 'get', host, profile });
+        return hosts.get(host)?.get(profile) ?? null;
+      },
+      set: async (host, credential, profile = 'default') => {
+        const profiles = hosts.get(host) ?? new Map<string, HostCredential>();
+        profiles.set(profile, credential);
+        hosts.set(host, profiles);
+      },
+      delete: async (host, profile = 'default') => {
+        calls.push({ op: 'delete', host, profile });
+        hosts.get(host)?.delete(profile);
+      },
+      list: async (profile = 'default') =>
+        [...hosts.entries()]
+          .filter(([, profiles]) => profiles.has(profile))
+          .map(([host, profiles]) => ({ host, tokenPrefix: profiles.get(profile)!.refreshToken.slice(0, 12) })),
+    };
+  }
+
+  it('--profile logs out only the named profile, leaving "default" for the same host untouched', async () => {
+    const store = profileAwareStore();
+    await store.set('https://pagespace.ai', CREDENTIAL, 'default');
+    await store.set('https://pagespace.ai', { ...CREDENTIAL, refreshToken: 'ps_rt_work' }, 'work');
+    const revokeToken: RevokeToken = async () => ({ outcome: 'revoked' });
+    const handler = createLogoutHandler({ createCredentialStore: () => store, revokeToken });
+
+    const ctx = createFakeContext({ env: {} });
+    const code = await handler(ctx, commandIntent(['logout', '--profile', 'work']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(await store.get('https://pagespace.ai', 'work')).toBeNull();
+    expect(await store.get('https://pagespace.ai', 'default')).not.toBeNull();
+  });
+
+  it('PAGESPACE_PROFILE env selects the profile when --profile is absent', async () => {
+    const store = profileAwareStore();
+    await store.set('https://pagespace.ai', CREDENTIAL, 'work');
+    const revokeToken: RevokeToken = async () => ({ outcome: 'revoked' });
+    const handler = createLogoutHandler({ createCredentialStore: () => store, revokeToken });
+
+    const ctx = createFakeContext({ env: { PAGESPACE_PROFILE: 'work' } });
+    const code = await handler(ctx, commandIntent(['logout']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(await store.get('https://pagespace.ai', 'work')).toBeNull();
+  });
+
+  it('--all with --profile only iterates hosts that have that named profile stored', async () => {
+    const store = profileAwareStore();
+    await store.set('https://pagespace.ai', CREDENTIAL, 'work');
+    await store.set('https://self-hosted.example', CREDENTIAL, 'default');
+    const revokeToken: RevokeToken = async () => ({ outcome: 'revoked' });
+    const handler = createLogoutHandler({ createCredentialStore: () => store, revokeToken });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+    const code = await handler(ctx, commandIntent(['logout', '--all', '--profile', 'work']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(stdout.lines.join('')).toContain('pagespace.ai');
+    expect(stdout.lines.join('')).not.toContain('self-hosted.example');
+  });
+});
+
 describe('formatLogoutLine (pure)', () => {
   it('formats each outcome kind distinctly', () => {
     expect(formatLogoutLine({ host: 'h', kind: 'not_logged_in' })).toMatch(/not logged in/i);

@@ -132,7 +132,7 @@ describe('runDeviceLogin — happy path', () => {
 
     const result = await runDeviceLogin(deps);
 
-    expect(result).toEqual({ outcome: 'success', identity: IDENTITY });
+    expect(result).toEqual({ outcome: 'success', identity: IDENTITY, scope: TOKENS.scope });
     expect(printed).toEqual([AUTHORIZATION]);
     expect(store.get('https://pagespace.ai')).toEqual({
       refreshToken: TOKENS.refreshToken,
@@ -140,6 +140,37 @@ describe('runDeviceLogin — happy path', () => {
       scopes: ['account', 'offline_access'],
       createdAt: new Date(NOW).toISOString(),
     });
+  });
+
+  it('persists the credential under deps.profile when given, defaulting to "default" when omitted', async () => {
+    const setCalls: Array<{ host: string; profile: string | undefined }> = [];
+    const { deps } = baseDeps({
+      profile: 'work',
+      credentialStore: {
+        set: async (host, _credential, profile) => {
+          setCalls.push({ host, profile });
+        },
+      },
+    });
+
+    await runDeviceLogin(deps);
+
+    expect(setCalls).toEqual([{ host: 'https://pagespace.ai', profile: 'work' }]);
+  });
+
+  it('persists the credential under the "default" profile when no profile is given', async () => {
+    const setCalls: Array<{ host: string; profile: string | undefined }> = [];
+    const { deps } = baseDeps({
+      credentialStore: {
+        set: async (host, _credential, profile) => {
+          setCalls.push({ host, profile });
+        },
+      },
+    });
+
+    await runDeviceLogin(deps);
+
+    expect(setCalls).toEqual([{ host: 'https://pagespace.ai', profile: 'default' }]);
   });
 
   it('keeps polling through authorization_pending and slow_down before succeeding, honoring the accumulated backoff', async () => {
@@ -183,7 +214,7 @@ describe('runDeviceLogin — happy path', () => {
 
     const result = await runDeviceLogin(deps);
 
-    expect(result).toEqual({ outcome: 'success', identity: null });
+    expect(result).toEqual({ outcome: 'success', identity: null, scope: TOKENS.scope });
     expect(store.get('https://pagespace.ai')?.refreshToken).toBe(TOKENS.refreshToken);
   });
 });

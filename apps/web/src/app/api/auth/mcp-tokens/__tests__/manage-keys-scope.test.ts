@@ -1,11 +1,21 @@
 /**
- * Red-team test: a manage-keys-only OAuth credential (Phase 9, mintable today
- * via the manage_keys scope token — see ScopeSet.manageKeys) must be able to
- * reach mcp-tokens (that is exactly what the scope grants), while a
- * drive-scoped OAuth credential must still be rejected exactly as before.
- * Uses the REAL rejectScopedOAuth/isScopedOAuthAuth/isManageKeysOnly
- * implementations (not mocked) so this fails if the carve-out regresses
+ * Red-team test for the manage_keys-only OAuth carve-out (Phase 9 — see
+ * ScopeSet.manageKeys) against mcp-tokens.
+ *
+ * GET is read-only and reachable by a manage_keys credential exactly as
+ * designed, while a drive-scoped OAuth credential is still rejected — this
+ * uses the REAL rejectScopedOAuth/isScopedOAuthAuth/isManageKeysOnly
+ * implementations (not mocked) so it fails if that carve-out regresses
  * either direction.
+ *
+ * POST is credential *minting*, which Phase 8's step-up gate requires for
+ * every caller regardless of credential shape — a manage_keys OAuth bearer
+ * token is itself an ambient secret, so it gets no exception. Minting via a
+ * manage_keys credential goes through the same session + step-up
+ * browser-consent flow (`pagespace tokens create`) as everyone else, not a
+ * direct bearer POST; AUTH_OPTIONS_WRITE only allows 'session' here, so an
+ * oauth-shaped auth object (however it arrived) is stopped by the step-up
+ * gate before any scope check runs.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -94,7 +104,7 @@ describe('mcp-tokens routes — manage_keys-only vs drive-scoped OAuth (real isS
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
-    it('lets a manage_keys-only OAuth credential mint an unscoped mcp token', async () => {
+    it('does not exempt a manage_keys-only OAuth credential from the step-up gate — no stepUpToken means 401, never a mint', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(manageKeysScopedAuthResult());
 
       const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
@@ -104,12 +114,14 @@ describe('mcp-tokens routes — manage_keys-only vs drive-scoped OAuth (real isS
       });
 
       const response = await POST(request);
+      const body = await response.json();
 
-      expect(response.status).toBe(200);
-      expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalled();
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('step_up_required');
+      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
     });
 
-    it('still rejects a drive-scoped OAuth credential, never reaching the repository', async () => {
+    it('still rejects a drive-scoped OAuth credential the same way — step-up gate fires before any scope check, never reaching the repository', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(DRIVE_SCOPED_OAUTH as never);
 
       const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
@@ -119,8 +131,10 @@ describe('mcp-tokens routes — manage_keys-only vs drive-scoped OAuth (real isS
       });
 
       const response = await POST(request);
+      const body = await response.json();
 
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('step_up_required');
       expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
     });
   });

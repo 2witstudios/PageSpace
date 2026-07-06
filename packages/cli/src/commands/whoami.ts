@@ -20,6 +20,7 @@ import type { CommandHandler } from '../router/router.js';
 import { confirmIdentity } from '../auth/confirm-identity.js';
 import { createDiscoverMetadata } from '../auth/discover.js';
 import type { ConfirmIdentity, DiscoverMetadata } from '../auth/loopback-flow.js';
+import { resolveProfileName } from '../auth/resolve.js';
 import { createRefreshAccessToken } from '../auth/silent-refresh.js';
 import type { RefreshAccessToken } from '@pagespace/sdk';
 
@@ -38,9 +39,13 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
       env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
       profile: null,
     });
+    const profileName = resolveProfileName(
+      { profile: intent.flags.profile },
+      { PAGESPACE_PROFILE: ctx.env.PAGESPACE_PROFILE },
+    );
 
     const store = deps.createCredentialStore();
-    const credential = await store.get(host);
+    const credential = await store.get(host, profileName);
     if (!credential) {
       ctx.stderr.write(`Not logged in to ${host}. Run "pagespace login".\n`);
       return EXIT_RUNTIME_ERROR;
@@ -69,12 +74,16 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
     // since the credential was last stored. Fall back to the stored scopes
     // only if the transport didn't capture one.
     const scopes = tokens.scope !== undefined ? tokens.scope.split(' ').filter(Boolean) : credential.scopes;
-    await store.set(host, {
-      refreshToken: tokens.refreshToken,
-      clientId: credential.clientId,
-      scopes,
-      createdAt: new Date(deps.now()).toISOString(),
-    });
+    await store.set(
+      host,
+      {
+        refreshToken: tokens.refreshToken,
+        clientId: credential.clientId,
+        scopes,
+        createdAt: new Date(deps.now()).toISOString(),
+      },
+      profileName,
+    );
 
     let identity;
     try {
