@@ -456,6 +456,7 @@ export default function MCPSettingsView() {
   };
 
   const createToken = async () => {
+    if (creating || createStepUpStatus !== 'idle') return;
     if (!newTokenName.trim()) {
       toast.error('Please enter a name for the token');
       return;

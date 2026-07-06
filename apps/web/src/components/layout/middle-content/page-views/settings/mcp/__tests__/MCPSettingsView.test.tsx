@@ -486,6 +486,59 @@ describe('MCPSettingsView — create token step-up', () => {
     );
     expect(sessionStorage.getItem('pagespace:pendingMcpTokenMint')).toBeNull();
   });
+
+  it('does not start a second step-up ceremony when Enter is pressed again while one is already in flight', async () => {
+    let resolveOptions!: (value: { options: { challenge: string }; challengeId: string }) => void;
+    const optionsPromise = new Promise<{ options: { challenge: string }; challengeId: string }>((resolve) => {
+      resolveOptions = resolve;
+    });
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') return optionsPromise;
+      throw new Error(`unexpected post to ${url}`);
+    });
+    await renderView([]);
+
+    const dialog = await openCreateDialog();
+    const nameInput = within(dialog).getByLabelText('Token Name');
+    await userEvent.type(nameInput, 'My New Token');
+
+    // First Enter starts the ceremony; it hangs on the unresolved options call.
+    await userEvent.type(nameInput, '{Enter}');
+    // A second Enter while that ceremony is still in flight must be a no-op,
+    // not start a second concurrent WebAuthn ceremony/mint request.
+    await userEvent.type(nameInput, '{Enter}');
+
+    expect(postMock).toHaveBeenCalledTimes(1);
+
+    resolveOptions({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+    await waitFor(() => expect(startAuthentication).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not leave the dialog stuck on "Confirming…" after a generic WebAuthn ceremony cancellation, and retries a fresh ceremony on the next click', async () => {
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    vi.mocked(startAuthentication).mockRejectedValue(new Error('NotAllowedError: user cancelled'));
+    await renderView([]);
+
+    const dialog = await openCreateDialog();
+    await userEvent.type(within(dialog).getByLabelText('Token Name'), 'My New Token');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^create token$/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /confirming/i })).not.toBeInTheDocument();
+    const createButton = within(dialog).getByRole('button', { name: /^create token$/i });
+    expect(createButton).not.toBeDisabled();
+    expect(startAuthentication).toHaveBeenCalledTimes(1);
+
+    // Clicking again must start a genuinely fresh ceremony, not skip it
+    // because stale creating/step-up state was left behind.
+    await userEvent.click(createButton);
+    await waitFor(() => expect(startAuthentication).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe('MCPSettingsView — edit token step-up fallback and resume', () => {
@@ -538,6 +591,32 @@ describe('MCPSettingsView — edit token step-up fallback and resume', () => {
       }),
     );
     expect(sessionStorage.getItem('pagespace:pendingMcpTokenUpdate')).toBeNull();
+  });
+
+  it('does not leave the edit dialog stuck on "Confirming…" after a generic WebAuthn ceremony cancellation, and retries a fresh ceremony on the next click', async () => {
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    vi.mocked(startAuthentication).mockRejectedValue(new Error('NotAllowedError: user cancelled'));
+    await renderView();
+
+    await userEvent.click(within(getCardFor('Token A')).getByRole('button', { name: /edit token scopes/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit token drive scopes/i });
+    await userEvent.click(within(dialog).getByLabelText('Drive Two'));
+    await userEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /confirming/i })).not.toBeInTheDocument();
+    const saveButton = within(dialog).getByRole('button', { name: /save changes/i });
+    expect(saveButton).not.toBeDisabled();
+    expect(patchMock).not.toHaveBeenCalled();
+    expect(startAuthentication).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(saveButton);
+    await waitFor(() => expect(startAuthentication).toHaveBeenCalledTimes(2));
   });
 });
 
