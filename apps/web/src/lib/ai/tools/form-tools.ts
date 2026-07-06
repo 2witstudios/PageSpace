@@ -34,7 +34,8 @@ export const formTools = {
       'then embed the returned formHtml verbatim into the Canvas page body — do not modify the ' +
       'hidden honeypot field or the fetch() call, those are required for spam protection. Returns ' +
       'a public submit token embedded in formHtml — safe to publish, it authorizes ONLY appending ' +
-      'rows to this one sheet, nothing else.',
+      'rows to this one sheet, nothing else. If a plain <form> already exists on the page instead, ' +
+      'tell the user to open the Forms tab to wire it up — there is no tool for that step.',
     inputSchema: z.object({
       sheetPageId: z.string().describe('The target SHEET page that will receive one new row per submission'),
       fields: formFieldsSchema,
