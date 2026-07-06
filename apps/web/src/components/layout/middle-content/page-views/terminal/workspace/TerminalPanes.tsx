@@ -6,24 +6,16 @@ import type { Socket } from 'socket.io-client';
 import { SquareSplitHorizontal, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { useTerminalWorkspaceStore, selectWorkspace, type OpenTerminalScope, type TerminalPaneState } from '@/stores/terminal-workspace/useTerminalWorkspaceStore';
 import EmptyState from './EmptyState';
-import type { OpenTerminalScope } from './Navigator';
 
 const XtermTerminal = dynamic(() => import('../XtermTerminal'), { ssr: false });
 
-export interface TerminalPaneState {
-  id: string;
-  scope: OpenTerminalScope | null;
-}
+export type { TerminalPaneState };
 
 interface TerminalPanesProps {
   terminalId: string;
   socket: Socket | null | undefined;
-  panes: TerminalPaneState[];
-  activePaneId: string;
-  onSelectPane(id: string): void;
-  onSplit(): void;
-  onClosePane(id: string): void;
 }
 
 function scopeLabel(scope: OpenTerminalScope): string {
@@ -34,11 +26,27 @@ function paneSessionId(terminalId: string, scope: OpenTerminalScope): string {
   return `agent-terminal:${terminalId}:${scope.projectName ?? ''}:${scope.branchName ?? ''}:${scope.name}`;
 }
 
-export default function TerminalPanes({ terminalId, socket, panes, activePaneId, onSelectPane, onSplit, onClosePane }: TerminalPanesProps) {
+export default function TerminalPanes({ terminalId, socket }: TerminalPanesProps) {
+  const workspace = useTerminalWorkspaceStore(selectWorkspace(terminalId));
+  const split = useTerminalWorkspaceStore((state) => state.split);
+  const closePane = useTerminalWorkspaceStore((state) => state.closePane);
+  const selectPane = useTerminalWorkspaceStore((state) => state.selectPane);
+
+  // Briefly undefined between this component's first render and the
+  // mounting TerminalWorkspace's ensureWorkspace effect committing.
+  if (!workspace) return null;
+
+  const { panes, activePaneId } = workspace;
+
   return (
     <div className="flex h-full flex-col bg-black">
       <div className="flex items-center justify-end gap-1 border-b border-white/10 px-2 py-1">
-        <Button variant="ghost" size="sm" onClick={onSplit} className="h-6 gap-1 px-2 text-xs text-white/70 hover:text-white">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => split(terminalId)}
+          className="h-6 gap-1 px-2 text-xs text-white/70 hover:text-white"
+        >
           <SquareSplitHorizontal className="size-3.5" />
           Split
         </Button>
@@ -54,8 +62,8 @@ export default function TerminalPanes({ terminalId, socket, panes, activePaneId,
                 pane={pane}
                 isActive={pane.id === activePaneId}
                 canClose={panes.length > 1}
-                onSelect={() => onSelectPane(pane.id)}
-                onClose={() => onClosePane(pane.id)}
+                onSelect={() => selectPane(terminalId, pane.id)}
+                onClose={() => closePane(terminalId, pane.id)}
               />
             </ResizablePanel>
           </Fragment>
