@@ -1,19 +1,22 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, and, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
+import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { isMachineRefArray } from '@/lib/repositories/page-agent-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const MAX_MACHINES = 20;
 
 /**
  * GET - Get Page AI agent configuration
@@ -74,6 +77,23 @@ export async function GET(
       // Continue without drive prompt on error
     }
 
+    // Terminal pages in this drive the requesting user can see, for the
+    // "use existing machine" picker. Scoped to this page's own drive —
+    // additional agent drives are a separate follow-up.
+    let availableTerminals: Array<{ id: string; title: string }> = [];
+    try {
+      const accessiblePageIds = await getUserAccessiblePagesInDrive(userId, page.driveId);
+      if (accessiblePageIds.length > 0) {
+        availableTerminals = await db
+          .select({ id: pages.id, title: pages.title })
+          .from(pages)
+          .where(and(inArray(pages.id, accessiblePageIds), eq(pages.type, 'TERMINAL'), eq(pages.isTrashed, false)));
+      }
+    } catch (error) {
+      loggers.api.error('Error fetching available terminals:', error as Error);
+      // Continue with an empty list on error
+    }
+
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'agent_config', resourceId: pageId, details: { action: 'get_agent_config' } });
 
     return NextResponse.json({
@@ -90,6 +110,9 @@ export async function GET(
       includePageTree: page.includePageTree ?? false,
       pageTreeScope: page.pageTreeScope ?? 'children',
       toolExposureMode: page.toolExposureMode ?? 'upfront',
+      terminalAccess: page.terminalAccess ?? false,
+      machines: isMachineRefArray(page.machines) ? page.machines : [],
+      availableTerminals,
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -125,6 +148,8 @@ export async function PATCH(
       includePageTree,
       pageTreeScope,
       toolExposureMode,
+      terminalAccess,
+      machines,
       expectedRevision,
     } = body;
 
@@ -166,6 +191,38 @@ export async function PATCH(
       }
     }
 
+    // Validate machines: shape-check each entry (MachineRef contract), cap the
+    // array length, then verify every "existing" terminalId points to a
+    // non-trashed TERMINAL page the requesting user can access — mirrors the
+    // GET availableTerminals scoping, so a caller can't attach a Terminal
+    // outside their access via a direct API call.
+    if (machines !== undefined) {
+      if (!isMachineRefArray(machines) || machines.length > MAX_MACHINES) {
+        return NextResponse.json(
+          { error: `machines must be an array of MachineRef objects (max ${MAX_MACHINES})` },
+          { status: 400 }
+        );
+      }
+      const terminalIds = machines
+        .filter((m): m is { kind: 'existing'; terminalId: string } => m.kind === 'existing')
+        .map((m) => m.terminalId);
+      if (terminalIds.length > 0) {
+        const accessiblePageIds = new Set(await getUserAccessiblePagesInDrive(userId, page.driveId));
+        const validTerminals = await db
+          .select({ id: pages.id })
+          .from(pages)
+          .where(and(inArray(pages.id, terminalIds), eq(pages.type, 'TERMINAL'), eq(pages.isTrashed, false)));
+        const validIds = new Set(validTerminals.filter((t) => accessiblePageIds.has(t.id)).map((t) => t.id));
+        const invalidIds = terminalIds.filter((id) => !validIds.has(id));
+        if (invalidIds.length > 0) {
+          return NextResponse.json(
+            { error: `Invalid terminal reference(s): ${invalidIds.join(', ')}` },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
     // Validate the model selection against the real catalog (anti-hallucination).
     // Fall back to the stored provider/model so a bad aiModel is caught even when
     // only one of the two fields is sent.
@@ -180,20 +237,20 @@ export async function PATCH(
 
     // Update page configuration
     const updateData: Partial<typeof page> = {};
-    
+
     if (systemPrompt !== undefined) {
       updateData.systemPrompt = systemPrompt.trim() || null;
     }
-    
+
     if (enabledTools !== undefined) {
       // Preserve empty arrays - don't convert to null
       updateData.enabledTools = Array.isArray(enabledTools) ? enabledTools : null;
     }
-    
+
     if (aiProvider !== undefined) {
       updateData.aiProvider = aiProvider.trim() || null;
     }
-    
+
     if (aiModel !== undefined) {
       updateData.aiModel = aiModel.trim() || null;
     }
@@ -226,6 +283,15 @@ export async function PATCH(
       if (toolExposureMode === 'upfront' || toolExposureMode === 'search') {
         updateData.toolExposureMode = toolExposureMode;
       }
+    }
+
+    if (terminalAccess !== undefined) {
+      updateData.terminalAccess = Boolean(terminalAccess);
+    }
+
+    if (machines !== undefined) {
+      // Already validated above as MachineRef[]
+      updateData.machines = machines;
     }
 
     // Only update if there are changes
@@ -298,6 +364,8 @@ export async function PATCH(
       visibleToGlobalAssistant: responsePage.visibleToGlobalAssistant ?? true,
       includePageTree: responsePage.includePageTree ?? false,
       pageTreeScope: responsePage.pageTreeScope ?? 'children',
+      terminalAccess: responsePage.terminalAccess ?? false,
+      machines: isMachineRefArray(responsePage.machines) ? responsePage.machines : [],
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

@@ -137,6 +137,11 @@
       "import": "./dist/billing/automation-preferences.js",
       "require": "./dist/billing/automation-preferences.js"
     },
+    "./billing/terminal-payer": {
+      "types": "./dist/billing/terminal-payer.d.ts",
+      "import": "./dist/billing/terminal-payer.js",
+      "require": "./dist/billing/terminal-payer.js"
+    },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
       "import": "./dist/logging/siem-error-hook.js",
@@ -342,11 +347,6 @@
       "import": "./dist/services/sandbox/audit.js",
       "require": "./dist/services/sandbox/audit.js"
     },
-    "./services/sandbox/session-key": {
-      "types": "./dist/services/sandbox/session-key.d.ts",
-      "import": "./dist/services/sandbox/session-key.js",
-      "require": "./dist/services/sandbox/session-key.js"
-    },
     "./services/sandbox/lifecycle": {
       "types": "./dist/services/sandbox/lifecycle.d.ts",
       "import": "./dist/services/sandbox/lifecycle.js",
@@ -382,20 +382,30 @@
       "import": "./dist/services/sandbox/egress-ip.js",
       "require": "./dist/services/sandbox/egress-ip.js"
     },
-    "./services/sandbox/session-store": {
-      "types": "./dist/services/sandbox/session-store.d.ts",
-      "import": "./dist/services/sandbox/session-store.js",
-      "require": "./dist/services/sandbox/session-store.js"
-    },
-    "./services/sandbox/session-manager": {
-      "types": "./dist/services/sandbox/session-manager.d.ts",
-      "import": "./dist/services/sandbox/session-manager.js",
-      "require": "./dist/services/sandbox/session-manager.js"
-    },
     "./services/sandbox/terminal-session-manager": {
       "types": "./dist/services/sandbox/terminal-session-manager.d.ts",
       "import": "./dist/services/sandbox/terminal-session-manager.js",
       "require": "./dist/services/sandbox/terminal-session-manager.js"
+    },
+    "./services/sandbox/machine-session": {
+      "types": "./dist/services/sandbox/machine-session.d.ts",
+      "import": "./dist/services/sandbox/machine-session.js",
+      "require": "./dist/services/sandbox/machine-session.js"
+    },
+    "./services/sandbox/machine-billing": {
+      "types": "./dist/services/sandbox/machine-billing.d.ts",
+      "import": "./dist/services/sandbox/machine-billing.js",
+      "require": "./dist/services/sandbox/machine-billing.js"
+    },
+    "./services/sandbox/terminal-storage-reconcile": {
+      "types": "./dist/services/sandbox/terminal-storage-reconcile.d.ts",
+      "import": "./dist/services/sandbox/terminal-storage-reconcile.js",
+      "require": "./dist/services/sandbox/terminal-storage-reconcile.js"
+    },
+    "./services/sandbox/terminal-storage-billing": {
+      "types": "./dist/services/sandbox/terminal-storage-billing.d.ts",
+      "import": "./dist/services/sandbox/terminal-storage-billing.js",
+      "require": "./dist/services/sandbox/terminal-storage-billing.js"
     },
     "./services/sandbox/command-policy": {
       "types": "./dist/services/sandbox/command-policy.d.ts",
@@ -427,6 +437,21 @@
       "import": "./dist/services/sandbox/sandbox-client/sprites.js",
       "require": "./dist/services/sandbox/sandbox-client/sprites.js"
     },
+    "./services/sandbox/sandbox-client/sprite-machine-host": {
+      "types": "./dist/services/sandbox/sandbox-client/sprite-machine-host.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sprite-machine-host.js",
+      "require": "./dist/services/sandbox/sandbox-client/sprite-machine-host.js"
+    },
+    "./services/sandbox/sandbox-client/machine-host-adapter": {
+      "types": "./dist/services/sandbox/sandbox-client/machine-host-adapter.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/machine-host-adapter.js",
+      "require": "./dist/services/sandbox/sandbox-client/machine-host-adapter.js"
+    },
+    "./services/sandbox/machine-host": {
+      "types": "./dist/services/sandbox/machine-host.d.ts",
+      "import": "./dist/services/sandbox/machine-host.js",
+      "require": "./dist/services/sandbox/machine-host.js"
+    },
     "./services/sandbox/tool-runners": {
       "types": "./dist/services/sandbox/tool-runners.d.ts",
       "import": "./dist/services/sandbox/tool-runners.js",
@@ -441,6 +466,51 @@
       "types": "./dist/services/sandbox/github-token.d.ts",
       "import": "./dist/services/sandbox/github-token.js",
       "require": "./dist/services/sandbox/github-token.js"
+    },
+    "./services/machines/project-paths": {
+      "types": "./dist/services/machines/project-paths.d.ts",
+      "import": "./dist/services/machines/project-paths.js",
+      "require": "./dist/services/machines/project-paths.js"
+    },
+    "./services/machines/machine-projects-store": {
+      "types": "./dist/services/machines/machine-projects-store.d.ts",
+      "import": "./dist/services/machines/machine-projects-store.js",
+      "require": "./dist/services/machines/machine-projects-store.js"
+    },
+    "./services/machines/machine-projects": {
+      "types": "./dist/services/machines/machine-projects.d.ts",
+      "import": "./dist/services/machines/machine-projects.js",
+      "require": "./dist/services/machines/machine-projects.js"
+    },
+    "./services/machines/branch-session": {
+      "types": "./dist/services/machines/branch-session.d.ts",
+      "import": "./dist/services/machines/branch-session.js",
+      "require": "./dist/services/machines/branch-session.js"
+    },
+    "./services/machines/machine-branches-store": {
+      "types": "./dist/services/machines/machine-branches-store.d.ts",
+      "import": "./dist/services/machines/machine-branches-store.js",
+      "require": "./dist/services/machines/machine-branches-store.js"
+    },
+    "./services/machines/machine-branches": {
+      "types": "./dist/services/machines/machine-branches.d.ts",
+      "import": "./dist/services/machines/machine-branches.js",
+      "require": "./dist/services/machines/machine-branches.js"
+    },
+    "./services/machines/agent-terminal-types": {
+      "types": "./dist/services/machines/agent-terminal-types.d.ts",
+      "import": "./dist/services/machines/agent-terminal-types.js",
+      "require": "./dist/services/machines/agent-terminal-types.js"
+    },
+    "./services/machines/agent-terminals-store": {
+      "types": "./dist/services/machines/agent-terminals-store.d.ts",
+      "import": "./dist/services/machines/agent-terminals-store.js",
+      "require": "./dist/services/machines/agent-terminals-store.js"
+    },
+    "./services/machines/agent-terminals": {
+      "types": "./dist/services/machines/agent-terminals.d.ts",
+      "import": "./dist/services/machines/agent-terminals.js",
+      "require": "./dist/services/machines/agent-terminals.js"
     },
     "./services/sandbox/tool-gate": {
       "types": "./dist/services/sandbox/tool-gate.d.ts",
@@ -1459,23 +1529,20 @@
       "services/sandbox/audit": [
         "./dist/services/sandbox/audit.d.ts"
       ],
-      "services/sandbox/session-key": [
-        "./dist/services/sandbox/session-key.d.ts"
-      ],
       "services/sandbox/lifecycle": [
         "./dist/services/sandbox/lifecycle.d.ts"
       ],
       "services/sandbox/sandbox-options": [
         "./dist/services/sandbox/sandbox-options.d.ts"
       ],
-      "services/sandbox/session-store": [
-        "./dist/services/sandbox/session-store.d.ts"
-      ],
-      "services/sandbox/session-manager": [
-        "./dist/services/sandbox/session-manager.d.ts"
-      ],
       "services/sandbox/terminal-session-manager": [
         "./dist/services/sandbox/terminal-session-manager.d.ts"
+      ],
+      "services/sandbox/machine-session": [
+        "./dist/services/sandbox/machine-session.d.ts"
+      ],
+      "services/sandbox/machine-billing": [
+        "./dist/services/sandbox/machine-billing.d.ts"
       ],
       "services/sandbox/command-policy": [
         "./dist/services/sandbox/command-policy.d.ts"
@@ -1501,11 +1568,47 @@
       "services/sandbox/github-token": [
         "./dist/services/sandbox/github-token.d.ts"
       ],
+      "services/machines/project-paths": [
+        "./dist/services/machines/project-paths.d.ts"
+      ],
+      "services/machines/machine-projects-store": [
+        "./dist/services/machines/machine-projects-store.d.ts"
+      ],
+      "services/machines/machine-projects": [
+        "./dist/services/machines/machine-projects.d.ts"
+      ],
+      "services/machines/branch-session": [
+        "./dist/services/machines/branch-session.d.ts"
+      ],
+      "services/machines/machine-branches-store": [
+        "./dist/services/machines/machine-branches-store.d.ts"
+      ],
+      "services/machines/machine-branches": [
+        "./dist/services/machines/machine-branches.d.ts"
+      ],
+      "services/machines/agent-terminal-types": [
+        "./dist/services/machines/agent-terminal-types.d.ts"
+      ],
+      "services/machines/agent-terminals-store": [
+        "./dist/services/machines/agent-terminals-store.d.ts"
+      ],
+      "services/machines/agent-terminals": [
+        "./dist/services/machines/agent-terminals.d.ts"
+      ],
       "services/sandbox/sandbox-client/types": [
         "./dist/services/sandbox/sandbox-client/types.d.ts"
       ],
       "services/sandbox/sandbox-client/sprites": [
         "./dist/services/sandbox/sandbox-client/sprites.d.ts"
+      ],
+      "services/sandbox/sandbox-client/sprite-machine-host": [
+        "./dist/services/sandbox/sandbox-client/sprite-machine-host.d.ts"
+      ],
+      "services/sandbox/sandbox-client/machine-host-adapter": [
+        "./dist/services/sandbox/sandbox-client/machine-host-adapter.d.ts"
+      ],
+      "services/sandbox/machine-host": [
+        "./dist/services/sandbox/machine-host.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"

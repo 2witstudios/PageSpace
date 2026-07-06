@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTerminalSessionMap, type TerminalSession } from '../terminal-session-map';
+import { createTerminalSessionMap, appendScrollback, MAX_SCROLLBACK_BYTES, type TerminalSession } from '../terminal-session-map';
 
 function fakeSession(sessionKey = 'key1', sandboxId = 'sbx1'): TerminalSession {
   return {
@@ -133,5 +133,32 @@ describe('createTerminalSessionMap', () => {
       expect(map.getByKey('key2')).toBe(b);
       expect(map.getBySocket('sock2')).toBe(b);
     });
+  });
+});
+
+describe('appendScrollback', () => {
+  it('given small chunks, should accumulate them in order', () => {
+    const session = { scrollback: [] as string[], scrollbackBytes: 0 };
+    appendScrollback(session, 'hello ');
+    appendScrollback(session, 'world');
+    expect(session.scrollback).toEqual(['hello ', 'world']);
+    expect(session.scrollbackBytes).toBe(Buffer.byteLength('hello world', 'utf8'));
+  });
+
+  it('given accumulated bytes over the cap, should drop the oldest chunks until back under the cap', () => {
+    const session = { scrollback: [] as string[], scrollbackBytes: 0 };
+    const chunk = 'x'.repeat(MAX_SCROLLBACK_BYTES / 2 + 1);
+    appendScrollback(session, chunk);
+    appendScrollback(session, chunk);
+    appendScrollback(session, chunk);
+    expect(session.scrollbackBytes).toBeLessThanOrEqual(MAX_SCROLLBACK_BYTES);
+    expect(session.scrollback.length).toBe(1);
+  });
+
+  it('given multi-byte UTF-8 chunks, should track byte length, not char length', () => {
+    const session = { scrollback: [] as string[], scrollbackBytes: 0 };
+    const emoji = '🚀'; // 4 bytes in UTF-8, 2 UTF-16 code units
+    appendScrollback(session, emoji);
+    expect(session.scrollbackBytes).toBe(4);
   });
 });

@@ -149,6 +149,8 @@ const createPageFixture = (overrides: Partial<{
   pageTreeScope: 'children' as const,
   toolExposureMode: 'upfront' as const,
   userScopedAccess: false,
+  terminalAccess: false,
+  machines: null,
   fileSize: null,
   mimeType: null,
   originalFileName: null,

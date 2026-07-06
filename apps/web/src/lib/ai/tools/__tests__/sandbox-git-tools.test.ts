@@ -34,6 +34,11 @@ function makeDeps(token: string | null = 'ghp_test'): GitSandboxToolsDeps {
       actorEmail: 'u@test.com', tier: 'pro',
     }),
     gate: vi.fn().mockResolvedValue({ ok: true }),
+    machines: {
+      listMachines: vi.fn().mockResolvedValue([{ kind: 'own' }]),
+      describeMachine: vi.fn().mockResolvedValue({ name: 'My Machine' }),
+      isMachineAccessible: vi.fn().mockResolvedValue(true),
+    },
     _runCommandCalls: runCommandCalls,
   } as unknown as GitSandboxToolsDeps & { _runCommandCalls: typeof runCommandCalls };
 }
@@ -1457,6 +1462,54 @@ describe('cwd threading', () => {
     await git_status.execute!({}, {} as never);
     const calls = getRunCalls(deps);
     expect((calls[0] as unknown as { cwd: string }).cwd).toBe('/workspace');
+  });
+});
+
+// ── active machine access ───────────────────────────────────────────────────
+
+describe('active machine access', () => {
+  it('git_status: given the resolved active machine is no longer accessible, should deny without acquiring a sandbox', async () => {
+    const deps = makeDeps();
+    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', terminalId: 't1' }]);
+    deps.machines.isMachineAccessible = vi.fn().mockResolvedValue(false);
+    const { git_status } = createSandboxGitTools(deps);
+    const result = await git_status.execute!({}, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('git_status: given no configured machines (terminalAccess off), should deny instead of falling back to the own machine', async () => {
+    const deps = makeDeps();
+    // createMachineDirectory.listMachines returns [] exactly when terminalAccess
+    // is off — this must deny the call, not silently resolve to { kind: 'own' }
+    // (which used to key an implicit persistent machine off the agent's own
+    // page, bypassing the terminalAccess gate entirely).
+    deps.machines.listMachines = vi.fn().mockResolvedValue([]);
+    const { git_status } = createSandboxGitTools(deps);
+    const result = await git_status.execute!({}, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('git_status: given machines has no resolveDriveId/resolveTenantId, should use the ambient ctx.driveId/tenantId unchanged', async () => {
+    const deps = makeDeps();
+    const { git_status } = createSandboxGitTools(deps);
+    await git_status.execute!({}, {} as never);
+    expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ driveId: 'd1', tenantId: 't1' }),
+    );
+  });
+
+  it('git_status: given machines provides resolveDriveId/resolveTenantId (existing machine in another drive), should override both — mirroring sandbox-tools.ts so git tools attach to the same session as bash/file tools', async () => {
+    const deps = makeDeps();
+    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', terminalId: 't1' }]);
+    deps.machines.resolveDriveId = vi.fn().mockResolvedValue('home-drive-1');
+    deps.machines.resolveTenantId = vi.fn().mockResolvedValue('real-drive-owner');
+    const { git_status } = createSandboxGitTools(deps);
+    await git_status.execute!({}, {} as never);
+    expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ driveId: 'home-drive-1', tenantId: 'real-drive-owner' }),
+    );
   });
 });
 

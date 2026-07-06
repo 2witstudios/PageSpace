@@ -54,6 +54,8 @@ export const pages = pgTable('pages', {
   pageTreeScope: text('pageTreeScope', { enum: ['children', 'drive'] }).default('children'), // Scope of page tree to include
   toolExposureMode: text('toolExposureMode', { enum: ['upfront', 'search'] }).default('upfront').notNull(), // How tools are exposed to AI_CHAT agents: all schemas upfront, or core tools + tool_search/execute_tool
   userScopedAccess: boolean('userScopedAccess').default(false).notNull(), // AI_CHAT agents only, owner-toggled: when true, actor-permission helpers fall back to the invoking user's own access instead of this agent's drive memberships
+  terminalAccess: boolean('terminalAccess').default(false).notNull(), // AI_CHAT agents only: whether this agent may use terminal/machine tools
+  machines: jsonb('machines'), // MachineRef[]; configured machines for this agent, machines[0] is the default active machine
   // File-specific fields
   fileSize: real('fileSize'),
   mimeType: text('mimeType'),

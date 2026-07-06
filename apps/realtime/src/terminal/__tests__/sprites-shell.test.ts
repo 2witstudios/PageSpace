@@ -77,6 +77,30 @@ describe('openPtyShell', () => {
     });
   });
 
+  it('given a command/args (pluggable agent terminal), should create a session launching that command instead of bash', () => {
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+
+    openPtyShell({ sprite, cols: 80, rows: 24, command: 'claude', args: ['--dangerously-skip-permissions'], onOutput: vi.fn(), onExit: vi.fn() });
+
+    expect(sprite.createSession).toHaveBeenCalledWith('claude', ['--dangerously-skip-permissions'], {
+      tty: true,
+      cols: 80,
+      rows: 24,
+      cwd: '/workspace',
+      env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
+    });
+  });
+
+  it('given a custom cwd, should create the session there instead of the default sandbox root', () => {
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+
+    openPtyShell({ sprite, cols: 80, rows: 24, command: 'pagespace-cli', cwd: '/workspace/repo', onOutput: vi.fn(), onExit: vi.fn() });
+
+    expect(sprite.createSession).toHaveBeenCalledWith('pagespace-cli', [], expect.objectContaining({ cwd: '/workspace/repo' }));
+  });
+
   it('given a sessionId, should attach to the existing session instead of creating one', () => {
     const cmd = buildFakeCommand();
     const sprite = buildFakeSprite(cmd);
