@@ -81,7 +81,7 @@ describe('GET /api/auth/step-up/magic-link/verify', () => {
     expect(res.status).toBe(400);
   });
 
-  it('redirects to a safe next path with the step-up token attached on success', async () => {
+  it('redirects to a safe next path with the step-up token in the URL fragment, never the query string', async () => {
     verifyMagicLinkToken.mockResolvedValue({
       ok: true,
       data: { userId: 'user-1', isNewUser: false, metadata: JSON.stringify({ purpose: 'step_up' }) },
@@ -93,9 +93,29 @@ describe('GET /api/auth/step-up/magic-link/verify', () => {
     const res = await GET(verifyReq('ps_magic_x') as never);
 
     expect(res.status).toBe(302);
-    const location = res.headers.get('location') ?? '';
-    expect(location).toContain('/oauth/consent');
-    expect(location).toContain('step_up_token=ps_stepup_abc');
+    const location = new URL(res.headers.get('location') ?? '');
+    expect(location.pathname).toBe('/oauth/consent');
+    expect(location.searchParams.get('client_id')).toBe('x');
+    // Fragments never leave the browser, so the bearer-like single-use token
+    // can't land in server/proxy access logs the way a query param would.
+    expect(location.hash).toBe('#step_up_token=ps_stepup_abc');
+    expect(location.search).not.toContain('step_up_token');
+    expect(res.headers.get('cache-control')).toContain('no-store');
+  });
+
+  it('marks every response no-store — success page, failure page, and redirect alike', async () => {
+    verifyMagicLinkToken.mockResolvedValue({ ok: false, error: { code: 'TOKEN_EXPIRED' } });
+    const failure = await GET(verifyReq('ps_magic_x') as never);
+    expect(failure.headers.get('cache-control')).toContain('no-store');
+
+    verifyMagicLinkToken.mockResolvedValue({
+      ok: true,
+      data: { userId: 'user-1', isNewUser: false, metadata: JSON.stringify({ purpose: 'step_up' }) },
+    });
+    completeMagicLinkStepUp.mockResolvedValue({ ok: true, data: { stepUpToken: 'ps_stepup_abc' } });
+    vi.mocked(parseMagicLinkStepUpNext).mockReturnValue(null);
+    const success = await GET(verifyReq('ps_magic_x') as never);
+    expect(success.headers.get('cache-control')).toContain('no-store');
   });
 
   it('renders a plain success page (no redirect) when next is missing or unsafe', async () => {

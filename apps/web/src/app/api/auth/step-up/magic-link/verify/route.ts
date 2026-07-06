@@ -5,8 +5,10 @@
  * `/api/auth/magic-link/verify`, success here never creates a session — it
  * only mints a step-up grant (via `completeMagicLinkStepUp`) and, when the
  * link carried a safe `next` path, redirects there with the grant attached
- * so the page that triggered the step-up (e.g. the OAuth consent screen) can
- * pick it up and complete its own mint request.
+ * in the URL *fragment* so the page that triggered the step-up (e.g. the
+ * OAuth consent screen) can pick it up and complete its own mint request —
+ * fragments never leave the browser, so the bearer-like single-use token
+ * can't be captured by server/proxy access logs the way a query param would.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod/v4';
@@ -28,7 +30,13 @@ function renderResultPage({ success }: { success: boolean }): NextResponse {
     : 'This confirmation link is invalid, expired, or already used. Please try again from where you started.';
   return new NextResponse(
     `<!doctype html><html><head><title>PageSpace</title></head><body><h1>${heading}</h1><p>${body}</p></body></html>`,
-    { status: success ? 200 : 400, headers: { 'content-type': 'text/html; charset=utf-8' } },
+    {
+      status: success ? 200 : 400,
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      },
+    },
   );
 }
 
@@ -86,6 +94,9 @@ export async function GET(req: NextRequest) {
   }
 
   const redirectUrl = new URL(safeNext, resolveAppUrl());
-  redirectUrl.searchParams.set('step_up_token', stepUpResult.data.stepUpToken);
-  return NextResponse.redirect(redirectUrl, 302);
+  redirectUrl.hash = new URLSearchParams({ step_up_token: stepUpResult.data.stepUpToken }).toString();
+  return NextResponse.redirect(redirectUrl, {
+    status: 302,
+    headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+  });
 }

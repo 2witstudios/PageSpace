@@ -5,8 +5,8 @@ import { startAuthentication } from '@simplewebauthn/browser';
 import { post } from '@/lib/auth/auth-fetch';
 import {
   buildConsentActionBinding,
-  readStepUpTokenFromSearch,
-  stripStepUpTokenFromSearch,
+  readStepUpTokenFromHash,
+  stripStepUpTokenFromHash,
   isNoPasskeyError,
 } from './consent-step-up';
 
@@ -44,14 +44,15 @@ export function ConsentActions(props: ConsentActionsProps) {
   const actionBinding = buildConsentActionBinding(props);
 
   // A step-up magic link redirects back to this same consent URL with the
-  // grant attached — pick it up on load and scrub it from the visible URL.
+  // grant attached in the fragment (never the query string, which would hit
+  // server logs) — pick it up on load and scrub it from the visible URL.
   useEffect(() => {
-    const tokenFromEmail = readStepUpTokenFromSearch(window.location.search);
+    const tokenFromEmail = readStepUpTokenFromHash(window.location.hash);
     if (!tokenFromEmail) return;
     setStepUpToken(tokenFromEmail);
     setStepUpStatus('ready');
-    const cleanedSearch = stripStepUpTokenFromSearch(window.location.search);
-    window.history.replaceState(null, '', `${window.location.pathname}${cleanedSearch}`);
+    const cleanedHash = stripStepUpTokenFromHash(window.location.hash);
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${cleanedHash}`);
   }, []);
 
   async function runWebauthnStepUp(): Promise<string> {

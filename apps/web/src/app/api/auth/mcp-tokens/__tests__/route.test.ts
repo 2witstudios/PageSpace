@@ -210,6 +210,27 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(consumeStepUpGrant).not.toHaveBeenCalled();
       });
 
+      it('reports an empty-string stepUpToken with the exact same error shape as a missing one — no validation oracle', async () => {
+        const missingRequest = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Token' }),
+        });
+        const emptyRequest = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Token', stepUpToken: '' }),
+        });
+
+        const missingResponse = await POST(missingRequest);
+        const emptyResponse = await POST(emptyRequest);
+
+        expect(emptyResponse.status).toBe(missingResponse.status);
+        expect(emptyResponse.status).toBe(401);
+        expect(await emptyResponse.json()).toEqual(await missingResponse.json());
+        expect(consumeStepUpGrant).not.toHaveBeenCalled();
+      });
+
       it('returns 401 when the step-up grant fails to consume, never reaching the repository', async () => {
         vi.mocked(consumeStepUpGrant).mockResolvedValue({
           ok: false,

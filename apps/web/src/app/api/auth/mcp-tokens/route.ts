@@ -34,11 +34,12 @@ const createTokenSchema = z.object({
     role: z.enum(['ADMIN', 'MEMBER']).nullish(),
     customRoleId: z.string().optional(),
   })).optional(),
-  // Required at runtime (checked explicitly below, not via zod) so a request
-  // missing only this field still reports the SAME name/drives validation
-  // errors it always has — no separate error shape leaks whether a caller
-  // forgot the step-up token specifically.
-  stepUpToken: z.string().min(1).optional(),
+  // Required at runtime (checked explicitly below, not via zod — no .min(1)
+  // either, so an empty string fails the same falsy check a missing field
+  // does) so a request missing or blanking only this field still reports the
+  // SAME error shape as any other step-up failure — no separate error shape
+  // leaks whether a caller forgot the step-up token specifically.
+  stepUpToken: z.string().optional(),
 }).refine(d => !(d.drives && d.driveIds), { message: 'Provide drives or driveIds, not both' });
 
 // POST: Create a new MCP token

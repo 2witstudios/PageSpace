@@ -32,15 +32,23 @@ export const buildConsentActionBinding = ({
 
 const STEP_UP_TOKEN_PARAM = 'step_up_token';
 
-export const readStepUpTokenFromSearch = (search: string): string | null =>
-  new URLSearchParams(search).get(STEP_UP_TOKEN_PARAM);
+/**
+ * The magic-link verify route hands the grant back in the URL *fragment*
+ * (`#step_up_token=...`), not the query string — fragments never leave the
+ * browser, so the token can't be captured by server/proxy access logs.
+ */
+const parseHashParams = (hash: string): URLSearchParams =>
+  new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
 
-/** Builds the query string with `step_up_token` removed, so it doesn't linger in history/referrers. */
-export const stripStepUpTokenFromSearch = (search: string): string => {
-  const params = new URLSearchParams(search);
+export const readStepUpTokenFromHash = (hash: string): string | null =>
+  parseHashParams(hash).get(STEP_UP_TOKEN_PARAM);
+
+/** Builds the fragment with `step_up_token` removed, so it doesn't linger in history. */
+export const stripStepUpTokenFromHash = (hash: string): string => {
+  const params = parseHashParams(hash);
   params.delete(STEP_UP_TOKEN_PARAM);
   const remaining = params.toString();
-  return remaining ? `?${remaining}` : '';
+  return remaining ? `#${remaining}` : '';
 };
 
 /** The `webauthn/options` route's signal that this user has no registered passkey. */

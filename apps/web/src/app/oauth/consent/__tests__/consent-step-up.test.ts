@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildConsentActionBinding,
-  readStepUpTokenFromSearch,
-  stripStepUpTokenFromSearch,
+  readStepUpTokenFromHash,
+  stripStepUpTokenFromHash,
   isNoPasskeyError,
 } from '../consent-step-up';
 
@@ -20,29 +20,39 @@ describe('buildConsentActionBinding', () => {
   });
 });
 
-describe('readStepUpTokenFromSearch', () => {
-  it('returns null when step_up_token is absent', () => {
-    expect(readStepUpTokenFromSearch('?client_id=x')).toBeNull();
+describe('readStepUpTokenFromHash', () => {
+  it('returns null when the fragment is empty', () => {
+    expect(readStepUpTokenFromHash('')).toBeNull();
+  });
+
+  it('returns null when step_up_token is absent from the fragment', () => {
+    expect(readStepUpTokenFromHash('#other=x')).toBeNull();
   });
 
   it('returns the token when present', () => {
-    expect(readStepUpTokenFromSearch('?client_id=x&step_up_token=ps_stepup_abc')).toBe('ps_stepup_abc');
+    expect(readStepUpTokenFromHash('#step_up_token=ps_stepup_abc')).toBe('ps_stepup_abc');
+  });
+
+  it('reads the token alongside other fragment params', () => {
+    expect(readStepUpTokenFromHash('#other=x&step_up_token=ps_stepup_abc')).toBe('ps_stepup_abc');
   });
 });
 
-describe('stripStepUpTokenFromSearch', () => {
-  it('removes step_up_token but keeps other params', () => {
-    expect(stripStepUpTokenFromSearch('?client_id=x&step_up_token=ps_stepup_abc&scope=account')).toBe(
-      '?client_id=x&scope=account',
-    );
+describe('stripStepUpTokenFromHash', () => {
+  it('removes step_up_token but keeps other fragment params', () => {
+    expect(stripStepUpTokenFromHash('#other=x&step_up_token=ps_stepup_abc')).toBe('#other=x');
   });
 
-  it('returns an empty string when step_up_token was the only param', () => {
-    expect(stripStepUpTokenFromSearch('?step_up_token=ps_stepup_abc')).toBe('');
+  it('returns an empty string when step_up_token was the only fragment param', () => {
+    expect(stripStepUpTokenFromHash('#step_up_token=ps_stepup_abc')).toBe('');
   });
 
-  it('is a no-op when step_up_token is absent', () => {
-    expect(stripStepUpTokenFromSearch('?client_id=x')).toBe('?client_id=x');
+  it('is a no-op on a fragment without the token', () => {
+    expect(stripStepUpTokenFromHash('#other=x')).toBe('#other=x');
+  });
+
+  it('returns an empty string for an empty fragment', () => {
+    expect(stripStepUpTokenFromHash('')).toBe('');
   });
 });
 
