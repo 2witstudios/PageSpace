@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     const result = await reconcileTerminalStorage(defaultReconcileTerminalStorageDeps);
 
     console.log(
-      `[Cron] Terminal storage reconcile: processed ${result.processed}, charged ${result.charged}, skipped ${result.skipped}, total $${result.totalCostDollars.toFixed(6)}`,
+      `[Cron] Terminal storage reconcile: processed ${result.processed}, charged ${result.charged}, skipped ${result.skipped}, failed ${result.failed}, total $${result.totalCostDollars.toFixed(6)}`,
     );
 
     audit({
@@ -40,6 +40,7 @@ export async function GET(request: Request) {
         processed: result.processed,
         charged: result.charged,
         skipped: result.skipped,
+        failed: result.failed,
         totalCostDollars: result.totalCostDollars,
       },
     });

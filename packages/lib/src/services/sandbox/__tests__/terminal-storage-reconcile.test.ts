@@ -127,6 +127,25 @@ describe('reconcileTerminalStorage', () => {
     expect(advanceCalls).toEqual([]);
   });
 
+  it('isolates a per-machine failure: one row throwing does not abort the rest of the batch', async () => {
+    const { deps, chargeCalls, advanceCalls } = makeDeps({
+      listMachines: async () => [
+        machine({ pageId: 'boom' }),
+        machine({ pageId: 'fine' }),
+      ],
+      chargeStorage: async (input) => {
+        if (input.pageId === 'boom') throw new Error('ledger write failed');
+        chargeCalls.push(input);
+      },
+    });
+
+    const result = await reconcileTerminalStorage(deps);
+
+    expect(result).toMatchObject({ processed: 2, charged: 1, skipped: 0, failed: 1 });
+    expect(chargeCalls).toEqual([expect.objectContaining({ pageId: 'fine' })]);
+    expect(advanceCalls).toEqual([expect.objectContaining({ pageId: 'fine' })]);
+  });
+
   it('processes multiple machines independently, summing total cost', async () => {
     const { deps } = makeDeps({
       listMachines: async () => [

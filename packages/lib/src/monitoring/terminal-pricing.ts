@@ -22,8 +22,17 @@
  * defaults to 15000 bps (1.5x), which is the floor the founder has set for
  * substrate runtime: the charge must never fall below 1.5x actual substrate
  * cost, regardless of which substrate (Sprites today, Modal/GPU later) produced
- * that cost. `calculateTerminalChargeCents` mirrors that exact formula so the
- * rule is independently pure-tested here, substrate-neutral and env-overridable.
+ * that cost.
+ *
+ * `calculateTerminalChargeCents` mirrors that same formula for pure unit-test
+ * coverage of the arithmetic, but it is NOT itself in the real settle path —
+ * `machine-billing.ts` hands `calculateTerminalCostDollars` (pre-markup) to
+ * `AIMonitoring.trackUsage`, which applies `MARKUP_BPS` generically for every
+ * source, terminal included. The "1.5x floor" holds today only because
+ * `MARKUP_BPS` itself defaults to 15000 bps for every surface — there is no
+ * terminal-specific enforcement independent of that shared, global constant.
+ * If `MARKUP_BPS` is ever split per-source, this function's result would
+ * silently stop matching what terminal is actually billed at.
  */
 
 import { markupCents } from '../billing/credit-core';
@@ -56,11 +65,12 @@ export function calculateTerminalCostDollars(quantity: TerminalUsageQuantity): n
 }
 
 /**
- * Customer-facing charge (whole cents) for one machine run: real substrate cost
- * marked up by `MARKUP_BPS` — the same formula `consumeCredits` applies at
- * settle, reused here so the "at minimum 1.5x actual substrate cost" rule is
- * pinned and pure-tested independent of the shared billing pipeline. Returns 0
- * for a missing/invalid/zero-duration window (nothing to charge).
+ * Reference calculation (whole cents) of what a machine run's real substrate
+ * cost marked up by `MARKUP_BPS` comes to — the same formula `consumeCredits`
+ * applies at settle, reused here for arithmetic unit-test coverage. NOT called
+ * by the real settle path (see module doc): the actual charge is computed by
+ * `consumeCredits` from `calculateTerminalCostDollars`'s pre-markup output, not
+ * by this function. Returns 0 for a missing/invalid/zero-duration window.
  */
 export function calculateTerminalChargeCents(quantity: TerminalUsageQuantity): number {
   return markupCents(calculateTerminalCostDollars(quantity), MARKUP_BPS);
