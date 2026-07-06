@@ -10,7 +10,12 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
-  activityLogs: { userId: 'userId', actorEmail: 'actorEmail', actorDisplayName: 'actorDisplayName' },
+  activityLogs: {
+    userId: 'userId',
+    actorEmail: 'actorEmail',
+    actorDisplayName: 'actorDisplayName',
+    resourceTitle: 'resourceTitle',
+  },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a, _b) => 'eq'),
@@ -58,6 +63,7 @@ describe('activityLogRepository.anonymizeForUser', () => {
     expect(setFn).toHaveBeenCalledWith({
       actorEmail: 'anon@anonymized.invalid',
       actorDisplayName: 'Deleted User',
+      resourceTitle: null,
     });
   });
 
