@@ -7,6 +7,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **21 new sandbox git/GitHub tools** — agents with code execution can now edit PR titles and
+  descriptions (`gh_pr_edit`), leave top-level PR and issue comments, edit/close/reopen issues,
+  discover repositories (`gh_repo_view`/`gh_repo_list`), search GitHub code/issues/PRs/repos
+  (`gh_search`), list repo labels, inspect commits (`git_show`, `git_blame`), revert a commit,
+  recover from conflicted merges/rebases (`action: abort/continue`), re-run failed CI
+  (`gh_run_rerun`), list and dispatch workflows, list and resolve PR review threads, and fork or
+  create repositories.
+- **12 new GitHub integration tools** — agents without code execution get a full write path to
+  code: create branches, commit and delete files, open/update/merge pull requests, plus CI
+  visibility (check runs, workflow runs), commit listing, branch comparison, issue search, and
+  label listing. A new **Contributor** tool bundle covers the branch → commit → PR → merge flow.
+- The GitHub connection now requests the `workflow` scope so agents can commit changes to GitHub
+  Actions workflow files. Existing connections keep working; reconnect GitHub in Settings >
+  Integrations to pick up the new permission.
+
 - **`pagespace` CLI** — install `@pagespace/cli`, run `pagespace login`, and use verbs like
   `pagespace drives list`, `pagespace pages read`, `pagespace search text`, and `pagespace tasks
   create` without hand-minting a token first.

@@ -16,9 +16,13 @@ vi.mock('@pagespace/lib/integrations/resolution/resolve-agent-integrations', () 
   resolveAgentIntegrations: vi.fn(),
   resolveGlobalAssistantIntegrations: vi.fn(),
 }));
-vi.mock('@pagespace/lib/integrations/converter/ai-sdk', () => ({
-  convertIntegrationToolsToAISDK: vi.fn(),
-}));
+vi.mock('@pagespace/lib/integrations/converter/ai-sdk', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/integrations/converter/ai-sdk')>();
+  return {
+    ...actual,
+    convertIntegrationToolsToAISDK: vi.fn(),
+  };
+});
 vi.mock('@pagespace/lib/integrations/saga/execute-tool', () => ({
   createToolExecutor: vi.fn(),
 }));
@@ -65,6 +69,7 @@ describe('resolvePageAgentIntegrationTools', () => {
       agentId: 'agent-1',
       userId: 'user-1',
       driveId: 'drive-1',
+      currentTools: {},
     });
 
     expect(result).toEqual({});
@@ -109,6 +114,7 @@ describe('resolvePageAgentIntegrationTools', () => {
       agentId: 'agent-1',
       userId: 'user-1',
       driveId: 'drive-1',
+      currentTools: {},
     });
 
     expect(Object.keys(result)).toHaveLength(1);
@@ -118,6 +124,44 @@ describe('resolvePageAgentIntegrationTools', () => {
       { userId: 'user-1', agentId: 'agent-1', driveId: 'drive-1' },
       mockExecutor
     );
+  });
+
+  it('given sandbox git tools active in currentTools, suppresses GitHub integration tools', async () => {
+    const mockGrants = [{ id: 'grant-1' }] as unknown as GrantWithConnectionAndProvider[];
+    mockResolveAgentIntegrations.mockResolvedValue(mockGrants);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    mockConvert.mockReturnValue({
+      'int__github__list_repos': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+      'int__slack__send_message': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+    });
+
+    const result = await resolvePageAgentIntegrationTools({
+      agentId: 'agent-1',
+      userId: 'user-1',
+      driveId: 'drive-1',
+      currentTools: { git_clone: {} },
+    });
+
+    expect(result).not.toHaveProperty('int__github__list_repos');
+    expect(result).toHaveProperty('int__slack__send_message');
+  });
+
+  it('given no sandbox git tools in currentTools, keeps GitHub integration tools', async () => {
+    const mockGrants = [{ id: 'grant-1' }] as unknown as GrantWithConnectionAndProvider[];
+    mockResolveAgentIntegrations.mockResolvedValue(mockGrants);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    mockConvert.mockReturnValue({
+      'int__github__list_repos': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+    });
+
+    const result = await resolvePageAgentIntegrationTools({
+      agentId: 'agent-1',
+      userId: 'user-1',
+      driveId: 'drive-1',
+      currentTools: { read_page: {} },
+    });
+
+    expect(result).toHaveProperty('int__github__list_repos');
   });
 });
 
@@ -133,9 +177,29 @@ describe('resolveGlobalAssistantIntegrationTools', () => {
       userId: 'user-1',
       driveId: null,
       userDriveRole: null,
+      currentTools: {},
     });
 
     expect(result).toEqual({});
+  });
+
+  it('given sandbox git tools active in currentTools, suppresses GitHub integration tools', async () => {
+    mockResolveGlobalIntegrations.mockResolvedValue([{ id: 'grant-1' }] as never);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    mockConvert.mockReturnValue({
+      'int__github__list_repos': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+      'int__slack__send_message': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+    });
+
+    const result = await resolveGlobalAssistantIntegrationTools({
+      userId: 'user-1',
+      driveId: null,
+      userDriveRole: null,
+      currentTools: { gh_pr_view: {} },
+    });
+
+    expect(result).not.toHaveProperty('int__github__list_repos');
+    expect(result).toHaveProperty('int__slack__send_message');
   });
 });
 
@@ -160,9 +224,9 @@ describe('integration tool key order determinism', () => {
     // only from the sort step (not from mockConvert itself).
     mockConvert.mockReturnValue(unorderedTools);
 
-    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd' });
+    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd', currentTools: {} });
     mockConvert.mockReturnValue(unorderedTools);
-    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd' });
+    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd', currentTools: {} });
 
     expect(JSON.stringify(Object.keys(build1))).toBe(JSON.stringify(Object.keys(build2)));
     // Keys must be alphabetically sorted
@@ -176,9 +240,9 @@ describe('integration tool key order determinism', () => {
     mockResolveAgentIntegrations.mockResolvedValue([{} as never]);
     mockCreateExecutor.mockReturnValue(vi.fn());
     mockConvert.mockReturnValue(tools);
-    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd' });
+    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd', currentTools: {} });
     mockConvert.mockReturnValue(tools);
-    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd' });
+    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd', currentTools: {} });
 
     // Both serializations must be byte-identical
     expect(JSON.stringify(build1)).toBe(JSON.stringify(build2));

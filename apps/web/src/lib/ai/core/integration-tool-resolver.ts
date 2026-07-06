@@ -29,6 +29,7 @@ import { logAuditEntry } from '@pagespace/lib/integrations/repositories/audit-re
 import { listGrantsByAgent } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConfig } from '@pagespace/lib/integrations/repositories/config-repository';
 import { type DriveRole, type GlobalAssistantConfigData } from '@pagespace/lib/integrations/types';
+import { suppressGithubIntegrationTools } from './tool-filtering';
 
 /** The connection type expected by the tool executor's loadConnection dependency. */
 type LoadConnectionResult = ExecuteToolDependencies['loadConnection'] extends
@@ -83,14 +84,20 @@ function createConfiguredExecutor(userId: string, agentId: string | null, driveI
  * @param params.agentId - The page ID of the AI_CHAT agent
  * @param params.userId - The authenticated user's ID
  * @param params.driveId - The drive containing the agent
+ * @param params.currentTools - The agent's already-resolved tool set (before
+ *   these integration tools are merged in), used to suppress GitHub OAuth
+ *   integration tools when the sandbox git/gh CLI toolkit is already present.
+ *   Callers must pass the pre-tool-exposure-mode set — search mode defers
+ *   non-core tools behind execute_tool, hiding their names from a key scan.
  * @returns AI SDK tool objects ready for merging into the tool set
  */
 export async function resolvePageAgentIntegrationTools(params: {
   agentId: string;
   userId: string;
   driveId: string;
+  currentTools: Record<string, unknown>;
 }): Promise<Record<string, CoreTool>> {
-  const { agentId, userId, driveId } = params;
+  const { agentId, userId, driveId, currentTools } = params;
   const deps = createResolutionDeps();
 
   const grants = await resolveAgentIntegrations(deps, agentId);
@@ -99,10 +106,9 @@ export async function resolvePageAgentIntegrationTools(params: {
 
   const executor = createConfiguredExecutor(userId, agentId, driveId);
 
-  const tools = convertIntegrationToolsToAISDK(
-    grants,
-    { userId, agentId, driveId },
-    executor
+  const tools = suppressGithubIntegrationTools(
+    convertIntegrationToolsToAISDK(grants, { userId, agentId, driveId }, executor),
+    currentTools
   );
   // Sort keys so tool array order is deterministic across requests (only real config
   // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
@@ -119,14 +125,21 @@ export async function resolvePageAgentIntegrationTools(params: {
  * @param params.userId - The authenticated user's ID
  * @param params.driveId - The current drive context (null when in dashboard)
  * @param params.userDriveRole - The user's role in the current drive
+ * @param params.currentTools - The assistant's already-resolved tool set
+ *   (before these integration tools are merged in), used to suppress GitHub
+ *   OAuth integration tools when the sandbox git/gh CLI toolkit is already
+ *   present. Pass the full pre-core/non-core-split filtered tool set — the
+ *   Global Assistant's final tool set never carries raw tool names as
+ *   top-level keys (core tools + tool_search/execute_tool only).
  * @returns AI SDK tool objects ready for merging into the tool set
  */
 export async function resolveGlobalAssistantIntegrationTools(params: {
   userId: string;
   driveId: string | null;
   userDriveRole: DriveRole | null;
+  currentTools: Record<string, unknown>;
 }): Promise<Record<string, CoreTool>> {
-  const { userId, driveId, userDriveRole } = params;
+  const { userId, driveId, userDriveRole, currentTools } = params;
   const deps = createResolutionDeps();
 
   const grants = await resolveGlobalAssistantIntegrations(
@@ -140,10 +153,9 @@ export async function resolveGlobalAssistantIntegrationTools(params: {
 
   const executor = createConfiguredExecutor(userId, null, driveId);
 
-  const tools = convertIntegrationToolsToAISDK(
-    grants,
-    { userId, agentId: null, driveId },
-    executor
+  const tools = suppressGithubIntegrationTools(
+    convertIntegrationToolsToAISDK(grants, { userId, agentId: null, driveId }, executor),
+    currentTools
   );
   // Sort keys so tool array order is deterministic across requests (only real config
   // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).

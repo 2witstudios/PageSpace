@@ -7,6 +7,8 @@ import {
   isWebSearchTool,
   isWriteTool,
   isAccountLevelOnlyTool,
+  hasSandboxGitTools,
+  suppressGithubIntegrationTools,
 } from '../tool-filtering';
 
 const baseline = {
@@ -231,9 +233,22 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
       'git_commit',
       'git_push',
       'git_checkout',
+      'git_revert',
       'gh_pr_create',
       'gh_pr_merge',
+      'gh_pr_comment',
+      'gh_pr_edit',
+      'gh_pr_update_branch',
+      'gh_pr_thread_resolve',
+      'gh_run_rerun',
+      'gh_workflow_run',
       'gh_issue_create',
+      'gh_issue_comment',
+      'gh_issue_edit',
+      'gh_issue_close',
+      'gh_issue_reopen',
+      'gh_repo_fork',
+      'gh_repo_create',
     ]) {
       expect(isWriteTool(name)).toBe(true);
     }
@@ -245,10 +260,18 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
       'git_status',
       'git_diff',
       'git_log',
+      'git_show',
+      'git_blame',
       'gh_pr_list',
       'gh_pr_view',
+      'gh_pr_thread_list',
+      'gh_workflow_list',
       'gh_issue_list',
       'gh_issue_view',
+      'gh_repo_view',
+      'gh_repo_list',
+      'gh_search',
+      'gh_label_list',
     ]) {
       expect(isWriteTool(name)).toBe(false);
     }
@@ -274,5 +297,48 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
     expect(filtered).toHaveProperty('readFile');
     expect(filtered).toHaveProperty('git_status');
     expect(filtered).toHaveProperty('gh_pr_view');
+  });
+});
+
+describe('hasSandboxGitTools', () => {
+  it('returns true when a sandbox git tool is present', () => {
+    expect(hasSandboxGitTools({ git_status: 'x', read_page: 'x' })).toBe(true);
+  });
+
+  it('returns true when only a gh_ tool is present', () => {
+    expect(hasSandboxGitTools({ gh_pr_create: 'x' })).toBe(true);
+  });
+
+  it('returns false when no sandbox git tool is present', () => {
+    expect(hasSandboxGitTools({ read_page: 'x', bash: 'x' })).toBe(false);
+  });
+
+  it('returns false for an empty tool set', () => {
+    expect(hasSandboxGitTools({})).toBe(false);
+  });
+});
+
+describe('suppressGithubIntegrationTools', () => {
+  const integrationTools = {
+    int__github__list_repos: 'x',
+    int__github__create_pr_review_comment: 'x',
+    int__slack__send_message: 'x',
+  };
+
+  it('strips int__github__* tools when sandbox git tools are registered', () => {
+    const result = suppressGithubIntegrationTools(integrationTools, { git_clone: 'x' });
+    expect(result).not.toHaveProperty('int__github__list_repos');
+    expect(result).not.toHaveProperty('int__github__create_pr_review_comment');
+    expect(result).toHaveProperty('int__slack__send_message');
+  });
+
+  it('leaves integration tools untouched when no sandbox git tools are registered', () => {
+    const result = suppressGithubIntegrationTools(integrationTools, { read_page: 'x' });
+    expect(result).toEqual(integrationTools);
+  });
+
+  it('leaves integration tools untouched against an empty current tool set', () => {
+    const result = suppressGithubIntegrationTools(integrationTools, {});
+    expect(result).toEqual(integrationTools);
   });
 });

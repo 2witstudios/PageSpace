@@ -5,6 +5,9 @@
  * toggles that filter out specific tools based on user settings.
  */
 
+import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
+import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
+
 // Tools that modify content (excluded in read-only mode; also used by elision to protect side-effectful results)
 export const WRITE_TOOLS = new Set([
   // Page write operations
@@ -64,9 +67,10 @@ export const WRITE_TOOLS = new Set([
   // Sandbox / code-execution operations — all mutate the persistent sandbox
   // filesystem or a remote. bash can run arbitrary mutations, so it is excluded
   // in read-only mode too. Read-only sandbox tools (readFile, git_status,
-  // git_diff, git_log, gh_pr_list, gh_pr_view, gh_pr_diff, gh_pr_checks,
-  // gh_run_list, gh_run_view, gh_issue_list, gh_issue_view) are
-  // intentionally NOT listed and remain available.
+  // git_diff, git_log, git_show, git_blame, gh_pr_list, gh_pr_view, gh_pr_diff,
+  // gh_pr_checks, gh_pr_thread_list, gh_run_list, gh_run_view, gh_workflow_list,
+  // gh_issue_list, gh_issue_view, gh_repo_view, gh_repo_list, gh_search,
+  // gh_label_list) are intentionally NOT listed and remain available.
   'bash',
   'writeFile',
   'editFile',
@@ -80,6 +84,7 @@ export const WRITE_TOOLS = new Set([
   'git_commit',
   'git_merge',
   'git_rebase',
+  'git_revert',
   'git_checkout',
   'git_branch',
   'git_fetch',
@@ -89,14 +94,60 @@ export const WRITE_TOOLS = new Set([
   'gh_pr_merge',
   'gh_pr_checkout',
   'gh_pr_review',
+  'gh_pr_review_comment',
+  'gh_pr_comment',
+  'gh_pr_edit',
+  'gh_pr_update_branch',
+  'gh_pr_thread_resolve',
   'gh_pr_close',
   'gh_pr_reopen',
   'gh_pr_ready',
+  'gh_run_rerun',
+  'gh_workflow_run',
   'gh_issue_create',
+  'gh_issue_comment',
+  'gh_issue_edit',
+  'gh_issue_close',
+  'gh_issue_reopen',
+  'gh_repo_fork',
+  'gh_repo_create',
 ]);
 
 // Web search tools (excluded when web search is disabled)
 const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
+
+// Presence of any of these in a request's tool set means the agent already has
+// a full git/gh CLI toolkit — used to detect overlap with the GitHub OAuth
+// integration tools below. Sourced from sandbox-git-tools.ts (single source of
+// truth, sync-checked by that file's own test suite).
+const SANDBOX_GIT_TOOL_NAME_SET = new Set(SANDBOX_GIT_TOOL_NAMES);
+
+/**
+ * Whether the sandbox git/gh CLI toolkit is active — i.e. any of its tool
+ * names appear in a resolved tool set. Must be checked against the tool set
+ * BEFORE per-agent tool-exposure-mode deferral (search mode moves non-core
+ * tools behind execute_tool, hiding these names from a top-level key scan).
+ */
+export function hasSandboxGitTools(tools: Record<string, unknown>): boolean {
+  return Object.keys(tools).some((name) => SANDBOX_GIT_TOOL_NAME_SET.has(name));
+}
+
+/**
+ * Suppress GitHub OAuth integration tools when the sandbox git/gh CLI toolkit is
+ * already registered in the current tool set — the two overlap in capability
+ * (browsing repos, reviewing PRs, filing issues), and offering both surfaces for
+ * the same GitHub account is redundant and confuses tool selection. Other
+ * providers' integration tools (Slack, etc.) are untouched.
+ */
+export function suppressGithubIntegrationTools<T>(
+  integrationTools: Record<string, T>,
+  currentTools: Record<string, unknown>
+): Record<string, T> {
+  if (!hasSandboxGitTools(currentTools)) return integrationTools;
+  return Object.fromEntries(
+    Object.entries(integrationTools).filter(([name]) => parseIntegrationToolName(name)?.providerSlug !== 'github')
+  );
+}
 
 // Tools that require account-level (unscoped) access — excluded entirely from
 // a drive-scoped MCP token's tool list, mirroring the isMcpScoped() call-time

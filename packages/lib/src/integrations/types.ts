@@ -68,6 +68,8 @@ export interface ParameterRef {
 export interface HttpExecutionConfig {
   method: HttpMethod;
   pathTemplate: string;
+  /** Param names allowed to contain literal "/" segments (e.g. a nested file path); still rejects "." and ".." segments. */
+  rawPathParams?: string[];
   queryParams?: Record<string, string | ParameterRef>;
   headers?: Record<string, string | ParameterRef>;
   bodyTemplate?: Record<string, unknown> | string;

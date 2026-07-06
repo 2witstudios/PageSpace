@@ -279,6 +279,7 @@ describe('executeWorkflow', () => {
       agentId: 'agent_1',
       userId: 'user_123',
       driveId: 'drive_abc',
+      currentTools: {},
     });
 
     const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;

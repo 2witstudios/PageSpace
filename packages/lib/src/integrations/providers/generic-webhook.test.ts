@@ -190,6 +190,22 @@ describe('genericWebhookProvider', () => {
 
       expect(result.url).toBe('https://hooks.example.com/api/v2/events');
     });
+
+    it('given a path containing "../" segments, should throw rather than escape the webhook host path', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+
+      expect(() =>
+        buildHttpRequest(config, { path: '../../admin/reset' }, 'https://hooks.example.com')
+      ).toThrow();
+    });
+
+    it('given a path containing percent-encoded "../" segments, should throw rather than escape the webhook host path', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+
+      expect(() =>
+        buildHttpRequest(config, { path: '%2e%2e/%2e%2e/admin/reset' }, 'https://hooks.example.com')
+      ).toThrow();
+    });
   });
 
   describe('send_form_webhook tool', () => {
@@ -216,6 +232,17 @@ describe('genericWebhookProvider', () => {
       expect(result.method).toBe('POST');
       expect(result.url).toBe('https://hooks.example.com/notify');
       expect(result.body).toBe('channel=%23general&text=hello');
+    });
+  });
+
+  describe('path parameter traversal wiring', () => {
+    it('given send_webhook, send_get_webhook, and send_form_webhook, should each declare rawPathParams: ["path"]', () => {
+      const pathTools = ['send_webhook', 'send_get_webhook', 'send_form_webhook'];
+      for (const id of pathTools) {
+        const tool = genericWebhookProvider.tools.find((t) => t.id === id)!;
+        const config = (tool.execution as { config: HttpExecutionConfig }).config;
+        expect(config.rawPathParams).toEqual(['path']);
+      }
     });
   });
 
