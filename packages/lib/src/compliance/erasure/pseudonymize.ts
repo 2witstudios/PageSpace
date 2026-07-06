@@ -58,6 +58,7 @@ export const SECURITY_AUDIT_HASHED_FIELDS: ReadonlySet<string> = new Set([
 export interface ActivityLogPseudonymPatch {
   actorEmail: string;
   actorDisplayName: null;
+  resourceTitle: null;
 }
 
 export interface SecurityAuditPseudonymPatch {
@@ -68,7 +69,10 @@ export interface SecurityAuditPseudonymPatch {
 }
 
 export function buildActivityLogPseudonymizationPatch(): ActivityLogPseudonymPatch {
-  return { actorEmail: PSEUDONYM_EMAIL, actorDisplayName: null };
+  // resourceTitle can also carry the subject's own PII (e.g. their email on an
+  // account_delete row — #541) and, like actorEmail/actorDisplayName, is a
+  // denormalized non-hash-input column, so it's safe and necessary to clear here too.
+  return { actorEmail: PSEUDONYM_EMAIL, actorDisplayName: null, resourceTitle: null };
 }
 
 export function buildSecurityAuditPseudonymizationPatch(): SecurityAuditPseudonymPatch {

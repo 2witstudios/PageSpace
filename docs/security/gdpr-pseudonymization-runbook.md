@@ -25,7 +25,7 @@ PII **without** deleting rows or disturbing the hash chain.
 
 | Table | Overwritten | Never touched |
 |-------|-------------|---------------|
-| `activity_logs` | `actorEmail` → `erased@pseudonymized`, `actorDisplayName` → `null` | hash inputs (`operation`, `resourceType`, `resourceId`, `driveId`, `pageId`, `contentSnapshot`, `previousValues`, `newValues`, `metadata`, `timestamp`, `id`), chain columns (`logHash`, `previousLogHash`, `chainSeed`, `chainSeq`) |
+| `activity_logs` | `actorEmail` → `erased@pseudonymized`, `actorDisplayName` → `null`, `resourceTitle` → `null` (can carry the subject's own PII, e.g. their email on an `account_delete` row — #541) | hash inputs (`operation`, `resourceType`, `resourceId`, `driveId`, `pageId`, `contentSnapshot`, `previousValues`, `newValues`, `metadata`, `timestamp`, `id`), chain columns (`logHash`, `previousLogHash`, `chainSeed`, `chainSeq`) |
 | `security_audit_log` | `ipAddress`, `userAgent`, `geoLocation`, `sessionId` → `null` | hash inputs (`eventType`, `serviceId`, `resourceType`, `resourceId`, `details`, `riskScore`, `anomalyFlags`, `timestamp`), chain columns (`eventHash`, `previousHash`, `chainSeq`) |
 
 `userId` on both tables is `onDelete: 'set null'`, so it drops automatically when
