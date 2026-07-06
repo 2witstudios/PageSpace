@@ -190,6 +190,21 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
     const decision = await gate(ctx);
     if (!decision.ok) return { ok: false, error: gateDenial(decision) };
     const activeMachine = await resolveActiveMachine(rawContext, machines);
+    // Re-verify page-view access to the resolved machine on EVERY call — not
+    // just at switch_machine time. A machine's page permissions (or the
+    // Terminal page itself) can change between calls, and this is the actual
+    // execution boundary: routing a command to a machine the actor can no
+    // longer view would be a silent access-control bypass (OWASP A01).
+    const accessible = await machines.isMachineAccessible(rawContext, activeMachine);
+    if (!accessible) {
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: `You no longer have access to the active machine ("${machineRefId(activeMachine)}"). Call list_machines to see the available options.`,
+        },
+      };
+    }
     return { ok: true, ctx: { ...ctx, activeMachine } };
   };
 
