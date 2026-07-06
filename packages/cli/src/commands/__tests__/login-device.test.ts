@@ -78,6 +78,27 @@ describe('createLoginDeviceHandler', () => {
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
   });
 
+  it('prints the scope the server actually granted, not just the requested scope, when the server narrows it', async () => {
+    const store = fakeStore();
+    const handler = createLoginDeviceHandler({
+      ...baseHandlerDeps(store),
+      pollDeviceToken: async (): Promise<DeviceTokenResult> => ({
+        kind: 'success',
+        tokens: { ...FIXED_TOKENS, scope: 'account' },
+      }),
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    const code = await handler(ctx, commandIntent(['login', '--device']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const output = stdout.lines.join('');
+    expect(output).toContain('Scope: account —');
+    expect(output).not.toContain('offline_access');
+  });
+
   it('never writes the access or refresh token to stdout/stderr even on a poll failure', async () => {
     const store = fakeStore();
     const handler = createLoginDeviceHandler({

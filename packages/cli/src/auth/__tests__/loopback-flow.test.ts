@@ -150,7 +150,7 @@ describe('runLoopbackLogin — happy path', () => {
       },
     });
 
-    expect(result).toEqual({ outcome: 'success', identity: IDENTITY });
+    expect(result).toEqual({ outcome: 'success', identity: IDENTITY, scope: TOKENS.scope });
     expect(store.get('https://pagespace.ai')).toEqual({
       refreshToken: TOKENS.refreshToken,
       clientId: 'pagespace-cli',
@@ -254,7 +254,7 @@ describe('runLoopbackLogin — happy path', () => {
       },
     });
 
-    expect(result).toEqual({ outcome: 'success', identity: null });
+    expect(result).toEqual({ outcome: 'success', identity: null, scope: TOKENS.scope });
     expect(store.get('https://pagespace.ai')?.refreshToken).toBe(TOKENS.refreshToken);
   });
 

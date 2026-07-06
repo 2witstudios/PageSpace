@@ -81,7 +81,7 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
             ? `Logged in as ${result.identity.name ?? result.identity.email} <${result.identity.email}> on ${host}.\n`
             : `Logged in to ${host}.\n`,
         );
-        ctx.stdout.write(`Scope: ${DEFAULT_LOGIN_SCOPE} — this is your full personal account access.\n`);
+        ctx.stdout.write(`Scope: ${result.scope} — this is your full personal account access.\n`);
         return EXIT_SUCCESS;
       case 'access_denied':
         ctx.stderr.write('Login was denied.\n');

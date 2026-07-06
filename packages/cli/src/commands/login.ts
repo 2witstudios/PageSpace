@@ -105,7 +105,7 @@ export function createLoginHandler(deps: LoginHandlerDeps): CommandHandler {
             ? `Logged in as ${result.identity.name ?? result.identity.email} <${result.identity.email}> on ${host}.\n`
             : `Logged in to ${host}.\n`,
         );
-        ctx.stdout.write(`Scope: ${DEFAULT_LOGIN_SCOPE} — this is your full personal account access.\n`);
+        ctx.stdout.write(`Scope: ${result.scope} — this is your full personal account access.\n`);
         return EXIT_SUCCESS;
       case 'timeout':
         ctx.stderr.write('Login timed out waiting for the browser redirect. Run "pagespace login" again.\n');

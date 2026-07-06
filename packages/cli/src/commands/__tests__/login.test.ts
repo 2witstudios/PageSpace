@@ -124,6 +124,31 @@ describe('createLoginHandler', () => {
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
   });
 
+  it('prints the scope the server actually granted, not just the requested scope, when the server narrows it', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createLoginHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      exchangeCode: async () => ({ ...FIXED_TOKENS, scope: 'account' }),
+      openBrowser: async (url) => {
+        const state = new URL(url).searchParams.get('state')!;
+        queueMicrotask(() => fake.deliver({ code: 'auth-code', state }));
+        return true;
+      },
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    const code = await handler(ctx, commandIntent(['login']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const output = stdout.lines.join('');
+    expect(output).toContain('Scope: account —');
+    expect(output).not.toContain('offline_access');
+  });
+
   it('never writes the access or refresh token to stdout/stderr even on a token-exchange failure', async () => {
     const store = fakeStore();
     const fake = fakeServer();

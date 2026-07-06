@@ -14,8 +14,9 @@
  * accumulation, expiry, denial, local timeout) is a plain data-in/data-out
  * assertion with no fake server required.
  *
- * `DeviceLoginResult`'s `success` case deliberately carries only `identity`,
- * never the access/refresh tokens — same discipline as `LoopbackLoginResult`.
+ * `DeviceLoginResult`'s `success` case deliberately carries only `identity`
+ * and the server's granted `scope`, never the access/refresh tokens — same
+ * discipline as `LoopbackLoginResult`.
  */
 import type { CredentialStore } from '../credentials/store.js';
 import type { ConfirmIdentity, DiscoverMetadata, DiscoveredMetadata, ExchangedTokens, Identity, WaitMs } from './loopback-flow.js';
@@ -130,7 +131,7 @@ export interface DeviceLoginDeps {
 }
 
 export type DeviceLoginResult =
-  | { readonly outcome: 'success'; readonly identity: Identity | null }
+  | { readonly outcome: 'success'; readonly identity: Identity | null; readonly scope: string }
   | { readonly outcome: 'access_denied' }
   | { readonly outcome: 'expired_token' }
   | { readonly outcome: 'timeout' }
@@ -211,7 +212,7 @@ export async function runDeviceLogin(deps: DeviceLoginDeps): Promise<DeviceLogin
           identity = null;
         }
 
-        return { outcome: 'success', identity };
+        return { outcome: 'success', identity, scope: decision.outcome.tokens.scope };
       }
       case 'access_denied':
         return { outcome: 'access_denied' };

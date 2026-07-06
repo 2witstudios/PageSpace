@@ -15,9 +15,11 @@
  * free of a runtime `@pagespace/lib` import.
  *
  * `LoopbackLoginResult`'s `success` case deliberately carries only
- * `identity`, never the access/refresh tokens — the tokens exist solely
- * inside this function's local scope between exchange and persistence, so
- * no caller can accidentally print or log one.
+ * `identity` and the server's granted `scope` (RFC 6749 §5.1 — the server
+ * may return a narrower scope than requested), never the access/refresh
+ * tokens — the tokens exist solely inside this function's local scope
+ * between exchange and persistence, so no caller can accidentally print or
+ * log one.
  */
 import { deriveCodeChallenge, generateCodeVerifier } from '@pagespace/sdk';
 import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
@@ -95,7 +97,7 @@ export interface LoopbackLoginDeps {
 }
 
 export type LoopbackLoginResult =
-  | { readonly outcome: 'success'; readonly identity: Identity | null }
+  | { readonly outcome: 'success'; readonly identity: Identity | null; readonly scope: string }
   | { readonly outcome: 'timeout' }
   | { readonly outcome: 'state_mismatch' }
   | { readonly outcome: 'access_denied' }
@@ -353,7 +355,7 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
       identity = null;
     }
 
-    return { outcome: 'success', identity };
+    return { outcome: 'success', identity, scope: tokens.scope };
   } finally {
     await server.close();
   }
