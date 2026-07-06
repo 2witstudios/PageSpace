@@ -452,20 +452,10 @@
       "import": "./dist/services/sandbox/github-token.js",
       "require": "./dist/services/sandbox/github-token.js"
     },
-    "./services/machines/machine-identity": {
-      "types": "./dist/services/machines/machine-identity.d.ts",
-      "import": "./dist/services/machines/machine-identity.js",
-      "require": "./dist/services/machines/machine-identity.js"
-    },
     "./services/machines/project-paths": {
       "types": "./dist/services/machines/project-paths.d.ts",
       "import": "./dist/services/machines/project-paths.js",
       "require": "./dist/services/machines/project-paths.js"
-    },
-    "./services/machines/machine-session-manager": {
-      "types": "./dist/services/machines/machine-session-manager.d.ts",
-      "import": "./dist/services/machines/machine-session-manager.js",
-      "require": "./dist/services/machines/machine-session-manager.js"
     },
     "./services/machines/machine-projects-store": {
       "types": "./dist/services/machines/machine-projects-store.d.ts",
@@ -1473,14 +1463,8 @@
       "services/sandbox/github-token": [
         "./dist/services/sandbox/github-token.d.ts"
       ],
-      "services/machines/machine-identity": [
-        "./dist/services/machines/machine-identity.d.ts"
-      ],
       "services/machines/project-paths": [
         "./dist/services/machines/project-paths.d.ts"
-      ],
-      "services/machines/machine-session-manager": [
-        "./dist/services/machines/machine-session-manager.d.ts"
       ],
       "services/machines/machine-projects-store": [
         "./dist/services/machines/machine-projects-store.d.ts"

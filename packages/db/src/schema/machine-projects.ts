@@ -9,19 +9,18 @@ import { pages } from './core';
  *
  * A git repo checked out on a Machine's persistent filesystem — the
  * "Projects" tier of the Terminal workspace navigator (Machine → Projects →
- * Branches). `machineKey` is the addressable machine identity (see
- * services/machines/machine-identity.ts: `own:<ownerId>` for a user's own
- * machine, `existing:<terminalId>` for a Terminal page's shared machine) —
- * `machineKind`/`terminalId` are kept alongside it (denormalized) so the
- * machine a project belongs to can be queried/joined without re-parsing the
- * key. `ownerId` is the actor who added the project, kept for audit only —
- * resource-level access is governed by page permissions on `terminalId` for
- * 'existing' machines, and by `ownerId` itself for 'own' machines.
+ * Branches). A Machine's identity IS its backing page (`terminalId`): the
+ * page's persistent Sprite session (`terminal_sessions`, services/sandbox/
+ * terminal-session-manager.ts) is the same one a live Terminal shell or a
+ * page-agent's "own machine" tool calls already reconnect to — Projects are
+ * cloned onto that SAME filesystem, not a separate one. `ownerId` is the
+ * actor who added the project, kept for audit only — resource-level access is
+ * governed by page permissions on `terminalId`.
  *
  * `path` is the absolute directory on the Sprite's filesystem the repo was
  * cloned into (always under services/machines/project-paths.ts#PROJECTS_ROOT).
- * One row per (machine, name) — a machine cannot have two projects with the
- * same directory name.
+ * One row per (terminalId, name) — a machine cannot have two projects with
+ * the same directory name.
  */
 export const machineProjects = pgTable('machine_projects', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -30,12 +29,9 @@ export const machineProjects = pgTable('machine_projects', {
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
 
-  machineKind: text('machineKind', { enum: ['own', 'existing'] }).notNull(),
-  // Only set when machineKind = 'existing'.
-  terminalId: text('terminalId').references(() => pages.id, { onDelete: 'cascade' }),
-
-  // Derived, stable identity for the owning machine — see deriveMachineKey.
-  machineKey: text('machineKey').notNull(),
+  terminalId: text('terminalId')
+    .notNull()
+    .references(() => pages.id, { onDelete: 'cascade' }),
 
   name: text('name').notNull(),
   repoUrl: text('repoUrl').notNull(),
@@ -44,8 +40,8 @@ export const machineProjects = pgTable('machine_projects', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
-  machineKeyIdx: index('machine_projects_machine_key_idx').on(table.machineKey),
-  machineKeyNameUnique: uniqueIndex('machine_projects_machine_key_name_idx').on(table.machineKey, table.name),
+  terminalIdIdx: index('machine_projects_terminal_id_idx').on(table.terminalId),
+  terminalIdNameUnique: uniqueIndex('machine_projects_terminal_id_name_idx').on(table.terminalId, table.name),
 }));
 
 export const machineProjectsRelations = relations(machineProjects, ({ one }) => ({

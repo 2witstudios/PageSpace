@@ -9,10 +9,9 @@ import {
 import type { MachineProjectStore, MachineProjectRecord } from '../machine-projects-store';
 import type { ExecutableSandbox, SandboxRunResult } from '../../sandbox/sandbox-client/types';
 import { PROJECTS_ROOT } from '../project-paths';
-import type { MachineIdentity } from '../machine-identity';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
-const OWN_MACHINE: MachineIdentity = { kind: 'own', ownerId: 'user-1' };
+const TERMINAL_ID = 'terminal-1';
 
 const actor = {
   userId: 'user-1',
@@ -23,13 +22,13 @@ const actor = {
 
 function makeStore(seed: MachineProjectRecord[] = []) {
   const rows = new Map<string, MachineProjectRecord>();
-  for (const row of seed) rows.set(`${row.machineKey}\0${row.name}`, row);
+  for (const row of seed) rows.set(`${row.terminalId}\0${row.name}`, row);
   let counter = 0;
   const store: MachineProjectStore = {
-    list: async (machineKey) => [...rows.values()].filter((r) => r.machineKey === machineKey),
-    findByName: async (machineKey, name) => rows.get(`${machineKey}\0${name}`) ?? null,
+    list: async (terminalId) => [...rows.values()].filter((r) => r.terminalId === terminalId),
+    findByName: async (terminalId, name) => rows.get(`${terminalId}\0${name}`) ?? null,
     create: async (input) => {
-      const k = `${input.machineKey}\0${input.name}`;
+      const k = `${input.terminalId}\0${input.name}`;
       if (rows.has(k)) {
         throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
       }
@@ -37,9 +36,7 @@ function makeStore(seed: MachineProjectRecord[] = []) {
       const row: MachineProjectRecord = {
         id: `proj-${counter}`,
         ownerId: input.ownerId,
-        machineKind: input.machineKind,
         terminalId: input.terminalId,
-        machineKey: input.machineKey,
         name: input.name,
         repoUrl: input.repoUrl,
         path: input.path,
@@ -49,8 +46,8 @@ function makeStore(seed: MachineProjectRecord[] = []) {
       rows.set(k, row);
       return row;
     },
-    remove: async (machineKey, name) => {
-      rows.delete(`${machineKey}\0${name}`);
+    remove: async (terminalId, name) => {
+      rows.delete(`${terminalId}\0${name}`);
     },
   };
   return { store, rows };
@@ -74,14 +71,18 @@ function makeSandbox(runCommandImpl?: (opts: Parameters<ExecutableSandbox['runCo
 
 function makeDeps(overrides: Partial<MachineProjectsDeps> = {}, storeSeed: MachineProjectRecord[] = []) {
   const { store } = makeStore(storeSeed);
-  const { sandbox, runCommandCalls } = makeSandbox(overrides.reconnect ? undefined : undefined);
+  const { sandbox, runCommandCalls } = makeSandbox();
   const slotCalls = { acquired: 0, released: 0 };
   const auditCalls: unknown[] = [];
+  const acquireCalls: string[] = [];
   const deps: MachineProjectsDeps = {
     store,
     isEnabled: () => true,
     now: () => NOW,
-    acquireMachineSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', sessionKey: 'key-1', resumed: false }),
+    acquireMachineSandbox: async (terminalId) => {
+      acquireCalls.push(terminalId);
+      return { ok: true, sandboxId: 'sbx-1', resumed: false };
+    },
     reconnect: async () => sandbox,
     resolveGitHubToken: async () => 'ghp_secret_token',
     quota: {
@@ -92,7 +93,7 @@ function makeDeps(overrides: Partial<MachineProjectsDeps> = {}, storeSeed: Machi
     audit: async (input) => { auditCalls.push(input); },
     ...overrides,
   };
-  return { deps, store, sandbox, runCommandCalls, slotCalls, auditCalls };
+  return { deps, store, sandbox, runCommandCalls, slotCalls, auditCalls, acquireCalls };
 }
 
 describe('planAddProject', () => {
@@ -126,9 +127,9 @@ describe('planAddProject', () => {
 
 describe('addProject', () => {
   it('given a valid clone, should run git clone with the token injected per-command and persist the project', async () => {
-    const { deps, runCommandCalls, auditCalls } = makeDeps();
+    const { deps, runCommandCalls, auditCalls, acquireCalls } = makeDeps();
     const result = await addProject({
-      machine: OWN_MACHINE,
+      terminalId: TERMINAL_ID,
       actor,
       name: 'my-repo',
       repoUrl: 'https://github.com/o/r.git',
@@ -144,12 +145,15 @@ describe('addProject', () => {
     // Token is injected into env for this one call only.
     expect(runCommandCalls[0].env).toMatchObject({ GH_TOKEN: 'ghp_secret_token', GITHUB_TOKEN: 'ghp_secret_token' });
     expect(auditCalls).toHaveLength(1);
+    // The clone ran against THIS machine's backing page (terminalId) — the same
+    // persistent session a live Terminal shell already reconnects to.
+    expect(acquireCalls).toEqual([TERMINAL_ID]);
   });
 
   it('given no GitHub token available (public repo), should still clone without token env vars', async () => {
     const { deps, runCommandCalls } = makeDeps({ resolveGitHubToken: async () => null });
     const result = await addProject({
-      machine: OWN_MACHINE,
+      terminalId: TERMINAL_ID,
       actor,
       name: 'public-repo',
       repoUrl: 'https://github.com/o/public.git',
@@ -163,7 +167,7 @@ describe('addProject', () => {
   it('given an invalid repo url, should reject before touching the sandbox', async () => {
     const { deps, runCommandCalls } = makeDeps();
     const result = await addProject({
-      machine: OWN_MACHINE,
+      terminalId: TERMINAL_ID,
       actor,
       name: 'my-repo',
       repoUrl: 'ssh://git@github.com/o/r.git',
@@ -177,9 +181,7 @@ describe('addProject', () => {
     const existing: MachineProjectRecord = {
       id: 'p1',
       ownerId: 'user-1',
-      machineKind: 'own',
-      terminalId: null,
-      machineKey: 'own:user-1',
+      terminalId: TERMINAL_ID,
       name: 'my-repo',
       repoUrl: 'https://github.com/o/r.git',
       path: `${PROJECTS_ROOT}/my-repo`,
@@ -188,7 +190,7 @@ describe('addProject', () => {
     };
     const { deps, runCommandCalls } = makeDeps({}, [existing]);
     const result = await addProject({
-      machine: OWN_MACHINE,
+      terminalId: TERMINAL_ID,
       actor,
       name: 'my-repo',
       repoUrl: 'https://github.com/o/r.git',
@@ -212,7 +214,7 @@ describe('addProject', () => {
     };
     const { deps, store } = makeDeps({ reconnect: async () => sandbox });
     const result = await addProject({
-      machine: OWN_MACHINE,
+      terminalId: TERMINAL_ID,
       actor,
       name: 'bad-repo',
       repoUrl: 'https://github.com/o/missing.git',
@@ -220,13 +222,13 @@ describe('addProject', () => {
     });
     expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
     expect(rmCalls).toBe(1);
-    expect(await store.list('own:user-1')).toEqual([]);
+    expect(await store.list(TERMINAL_ID)).toEqual([]);
   });
 
   it('given the kill switch is off, should refuse without touching the sandbox', async () => {
     const { deps, runCommandCalls } = makeDeps({ isEnabled: () => false });
     const result = await addProject({
-      machine: OWN_MACHINE,
+      terminalId: TERMINAL_ID,
       actor,
       name: 'my-repo',
       repoUrl: 'https://github.com/o/r.git',
@@ -242,18 +244,16 @@ describe('listProjects', () => {
     const other: MachineProjectRecord = {
       id: 'p-other',
       ownerId: 'user-2',
-      machineKind: 'own',
-      terminalId: null,
-      machineKey: 'own:user-2',
+      terminalId: 'terminal-2',
       name: 'other-repo',
       repoUrl: 'https://github.com/o/other.git',
       path: `${PROJECTS_ROOT}/other-repo`,
       createdAt: NOW,
       updatedAt: NOW,
     };
-    const mine: MachineProjectRecord = { ...other, id: 'p-mine', ownerId: 'user-1', machineKey: 'own:user-1', name: 'mine' };
+    const mine: MachineProjectRecord = { ...other, id: 'p-mine', ownerId: 'user-1', terminalId: TERMINAL_ID, name: 'mine' };
     const { store } = makeStore([other, mine]);
-    const result = await listProjects({ machine: OWN_MACHINE, store });
+    const result = await listProjects({ terminalId: TERMINAL_ID, store });
     expect(result).toEqual([mine]);
   });
 });
@@ -263,9 +263,7 @@ describe('removeProject', () => {
     const existing: MachineProjectRecord = {
       id: 'p1',
       ownerId: 'user-1',
-      machineKind: 'own',
-      terminalId: null,
-      machineKey: 'own:user-1',
+      terminalId: TERMINAL_ID,
       name: 'my-repo',
       repoUrl: 'https://github.com/o/r.git',
       path: `${PROJECTS_ROOT}/my-repo`,
@@ -273,15 +271,15 @@ describe('removeProject', () => {
       updatedAt: NOW,
     };
     const { deps, store, runCommandCalls } = makeDeps({}, [existing]);
-    const result = await removeProject({ machine: OWN_MACHINE, name: 'my-repo', deps });
+    const result = await removeProject({ terminalId: TERMINAL_ID, name: 'my-repo', deps });
     expect(result).toEqual({ ok: true });
     expect(runCommandCalls).toMatchObject([{ cmd: 'rm', args: ['-rf', `${PROJECTS_ROOT}/my-repo`] }]);
-    expect(await store.findByName('own:user-1', 'my-repo')).toBeNull();
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
   });
 
   it('given a non-existent project name, should return not_found without touching the sandbox', async () => {
     const { deps, runCommandCalls } = makeDeps();
-    const result = await removeProject({ machine: OWN_MACHINE, name: 'nope', deps });
+    const result = await removeProject({ terminalId: TERMINAL_ID, name: 'nope', deps });
     expect(result).toEqual({ ok: false, reason: 'not_found' });
     expect(runCommandCalls).toHaveLength(0);
   });
@@ -290,9 +288,7 @@ describe('removeProject', () => {
     const existing: MachineProjectRecord = {
       id: 'p1',
       ownerId: 'user-1',
-      machineKind: 'own',
-      terminalId: null,
-      machineKey: 'own:user-1',
+      terminalId: TERMINAL_ID,
       name: 'my-repo',
       repoUrl: 'https://github.com/o/r.git',
       path: `${PROJECTS_ROOT}/my-repo`,
@@ -303,8 +299,8 @@ describe('removeProject', () => {
       { acquireMachineSandbox: async () => ({ ok: false, reason: 'error' }) },
       [existing],
     );
-    const result = await removeProject({ machine: OWN_MACHINE, name: 'my-repo', deps });
+    const result = await removeProject({ terminalId: TERMINAL_ID, name: 'my-repo', deps });
     expect(result).toEqual({ ok: true });
-    expect(await store.findByName('own:user-1', 'my-repo')).toBeNull();
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
   });
 });

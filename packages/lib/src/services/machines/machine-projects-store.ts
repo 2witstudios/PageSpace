@@ -2,8 +2,11 @@
  * Machine Projects store (IO, dependency-injected).
  *
  * DB-backed CRUD for the `machine_projects` table — the durable record of
- * which git repos are cloned onto a Machine's persistent filesystem. Kept
- * separate from the clone/remove orchestration (machine-projects.ts) so that
+ * which git repos are cloned onto a Machine's persistent filesystem. A
+ * Machine's identity is its backing page (`terminalId`) — the same page whose
+ * persistent Sprite session (`terminal_sessions`) a live Terminal shell or a
+ * page-agent's "own machine" tool calls already reconnect to. Kept separate
+ * from the clone/remove orchestration (machine-projects.ts) so that
  * orchestration logic is testable against an in-memory fake without a real
  * database.
  */
@@ -13,9 +16,7 @@ import { isUniqueViolation } from '../subdomain-allocation';
 export interface MachineProjectRecord {
   id: string;
   ownerId: string;
-  machineKind: 'own' | 'existing';
-  terminalId: string | null;
-  machineKey: string;
+  terminalId: string;
   name: string;
   repoUrl: string;
   path: string;
@@ -25,9 +26,7 @@ export interface MachineProjectRecord {
 
 export interface NewMachineProjectInput {
   ownerId: string;
-  machineKind: 'own' | 'existing';
-  terminalId: string | null;
-  machineKey: string;
+  terminalId: string;
   name: string;
   repoUrl: string;
   path: string;
@@ -35,11 +34,11 @@ export interface NewMachineProjectInput {
 }
 
 export interface MachineProjectStore {
-  list(machineKey: string): Promise<MachineProjectRecord[]>;
-  findByName(machineKey: string, name: string): Promise<MachineProjectRecord | null>;
+  list(terminalId: string): Promise<MachineProjectRecord[]>;
+  findByName(terminalId: string, name: string): Promise<MachineProjectRecord | null>;
   /** Throws a unique-violation error (see `isUniqueViolation`) if `name` already exists on this machine. */
   create(input: NewMachineProjectInput): Promise<MachineProjectRecord>;
-  remove(machineKey: string, name: string): Promise<void>;
+  remove(terminalId: string, name: string): Promise<void>;
 }
 
 /** Re-exported so callers can classify a `create` rejection without importing the DB layer directly. */
@@ -58,19 +57,19 @@ export async function createDbMachineProjectStore(): Promise<MachineProjectStore
   ]);
 
   return {
-    async list(machineKey) {
+    async list(terminalId) {
       const rows = await db
         .select()
         .from(machineProjects)
-        .where(eq(machineProjects.machineKey, machineKey));
+        .where(eq(machineProjects.terminalId, terminalId));
       return rows;
     },
 
-    async findByName(machineKey, name) {
+    async findByName(terminalId, name) {
       const [row] = await db
         .select()
         .from(machineProjects)
-        .where(and(eq(machineProjects.machineKey, machineKey), eq(machineProjects.name, name)))
+        .where(and(eq(machineProjects.terminalId, terminalId), eq(machineProjects.name, name)))
         .limit(1);
       return row ?? null;
     },
@@ -80,9 +79,7 @@ export async function createDbMachineProjectStore(): Promise<MachineProjectStore
         .insert(machineProjects)
         .values({
           ownerId: input.ownerId,
-          machineKind: input.machineKind,
           terminalId: input.terminalId,
-          machineKey: input.machineKey,
           name: input.name,
           repoUrl: input.repoUrl,
           path: input.path,
@@ -93,10 +90,10 @@ export async function createDbMachineProjectStore(): Promise<MachineProjectStore
       return row;
     },
 
-    async remove(machineKey, name) {
+    async remove(terminalId, name) {
       await db
         .delete(machineProjects)
-        .where(and(eq(machineProjects.machineKey, machineKey), eq(machineProjects.name, name)));
+        .where(and(eq(machineProjects.terminalId, terminalId), eq(machineProjects.name, name)));
     },
   };
 }

@@ -31,10 +31,6 @@
       "types": "./dist/schema/terminal-sessions.d.ts",
       "default": "./dist/schema/terminal-sessions.js"
     },
-    "./schema/machine-sessions": {
-      "types": "./dist/schema/machine-sessions.d.ts",
-      "default": "./dist/schema/machine-sessions.js"
-    },
     "./schema/machine-projects": {
       "types": "./dist/schema/machine-projects.d.ts",
       "default": "./dist/schema/machine-projects.js"

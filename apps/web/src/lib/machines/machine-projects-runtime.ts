@@ -2,22 +2,38 @@
  * Production wiring for Machine Projects (Terminal — Workspace, Projects tier).
  *
  * Binds the provider-agnostic orchestration (`@pagespace/lib/services/machines/
- * machine-projects`) to the real implementations: the DB-backed project +
- * machine-session stores, the Fly Sprites driver, the quota/audit surface, the
- * GitHub token brokering, and a per-call machine-access re-check (the same
- * resume-re-authz invariant the Terminal sandbox lifecycle enforces — an
- * actor's access to a shared machine is re-verified on every acquire, not
- * cached from an earlier request).
+ * machine-projects`) to the real implementations. A Machine's identity is its
+ * backing page (`terminalId`) — Projects clone onto the SAME persistent Sprite
+ * session (`terminal_sessions` / `acquireTerminalSandbox`) that a live
+ * Terminal shell or a page-agent's "own machine" tool calls already
+ * reconnect to, not a separate one. The underlying Sprite client
+ * (`createProductionSpritesSandboxClient`) is composed through the MachineHost
+ * seam (`sprite-machine-host.ts` / `machine-host-adapter.ts`) — this module
+ * never imports the Sprites SDK or `sandbox-client/sprites.ts` directly.
+ *
+ * Every acquire re-checks page access for the CURRENT actor (resume re-authz,
+ * the same invariant the Terminal sandbox lifecycle enforces) and consults the
+ * shared machine-runtime guardrail (quota.ts), so Project operations can't run
+ * a machine past the same active-runtime backstop agent tool calls respect.
  */
 
 import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
-import { pages } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { decideFullEgressEnablement, isContainmentVerified } from '@pagespace/lib/services/sandbox/containment';
-import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/session-manager';
-import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
+import {
+  acquireTerminalSandbox,
+  createDbTerminalSessionStore,
+  getSandboxSessionSecret,
+} from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import {
+  acquireCodeExecutionSlot,
+  releaseCodeExecutionSlot,
+  checkMachineRuntimeGuardrail,
+  recordMachineActivity,
+} from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { defaultBuildEnv } from '@pagespace/lib/services/sandbox/tool-runners';
 import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
@@ -27,13 +43,8 @@ import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import {
-  acquireMachineSandbox,
-  createDbMachineSessionStore,
-} from '@pagespace/lib/services/machines/machine-session-manager';
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
-import { deriveMachineKey, type MachineIdentity } from '@pagespace/lib/services/machines/machine-identity';
-import type { MachineActorContext, MachineProjectsDeps } from '@pagespace/lib/services/machines/machine-projects';
+import type { MachineActorContext, MachineProjectsDeps, MachineAcquireResult } from '@pagespace/lib/services/machines/machine-projects';
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one —
 // @fly/sprites is ESM-only and @pagespace/lib compiles to CJS. Mirrors the
@@ -51,6 +62,10 @@ function assertSandboxRuntime(): void {
   }
 }
 
+// `createProductionSpritesSandboxClient` composes the raw Sprites SDK through
+// `createSpriteMachineHost` + `createExecClientFromMachineHost` internally
+// (apps/web/src/lib/sandbox/sprites-client.ts) — calling it here, rather than
+// `sandbox-client/sprites.ts` directly, IS routing through the MachineHost seam.
 let sandboxClientPromise: Promise<ExecSandboxClient> | null = null;
 function getSandboxClient(): Promise<ExecSandboxClient> {
   sandboxClientPromise ??= (async () => {
@@ -64,10 +79,10 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
   return sandboxClientPromise;
 }
 
-let machineSessionStorePromise: ReturnType<typeof createDbMachineSessionStore> | null = null;
-function getMachineSessionStore() {
-  machineSessionStorePromise ??= createDbMachineSessionStore();
-  return machineSessionStorePromise;
+let terminalSessionStorePromise: ReturnType<typeof createDbTerminalSessionStore> | null = null;
+function getTerminalSessionStore() {
+  terminalSessionStorePromise ??= createDbTerminalSessionStore();
+  return terminalSessionStorePromise;
 }
 
 let machineProjectStorePromise: ReturnType<typeof createDbMachineProjectStore> | null = null;
@@ -95,53 +110,69 @@ export async function resolveMachineActorContext(userId: string): Promise<Machin
   };
 }
 
-/**
- * Whether `actorUserId` may currently operate on `machine` — re-checked on
- * every acquire (not cached), mirroring the Terminal sandbox's resume
- * re-authz invariant. An 'own' machine is tautologically the actor's own
- * (callers only ever construct it with `ownerId: actorUserId`); an
- * 'existing' machine requires edit access on the Terminal page it names.
- */
-export async function canAccessMachine(actorUserId: string, machine: MachineIdentity): Promise<boolean> {
-  if (machine.kind === 'own') return true;
+async function findTerminalPage(terminalId: string) {
   const page = await db.query.pages.findFirst({
-    where: eq(pages.id, machine.terminalId),
-    columns: { type: true },
+    where: eq(pages.id, terminalId),
+    columns: { type: true, driveId: true },
   });
-  if (!page || !isTerminalPage(page.type as PageType)) return false;
-  return canUserEditPage(actorUserId, machine.terminalId);
+  if (!page || !isTerminalPage(page.type as PageType)) return null;
+  return page;
 }
 
-/** View-level access (list) — looser than edit-level (add/remove). */
-export async function canViewMachine(actorUserId: string, machine: MachineIdentity): Promise<boolean> {
-  if (machine.kind === 'own') return true;
-  const page = await db.query.pages.findFirst({
-    where: eq(pages.id, machine.terminalId),
-    columns: { type: true },
-  });
-  if (!page || !isTerminalPage(page.type as PageType)) return false;
-  return canUserViewPage(actorUserId, machine.terminalId);
+/** Edit-level access (add/remove) — re-checked on every acquire, not cached. */
+export async function canAccessMachine(actorUserId: string, terminalId: string): Promise<boolean> {
+  const page = await findTerminalPage(terminalId);
+  if (!page) return false;
+  return canUserEditPage(actorUserId, terminalId);
+}
+
+/** View-level access (list) — looser than edit-level. */
+export async function canViewMachine(actorUserId: string, terminalId: string): Promise<boolean> {
+  const page = await findTerminalPage(terminalId);
+  if (!page) return false;
+  return canUserViewPage(actorUserId, terminalId);
 }
 
 export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string }): MachineProjectsDeps {
   return {
     store: {
-      list: async (machineKey) => (await getMachineProjectStore()).list(machineKey),
-      findByName: async (machineKey, name) => (await getMachineProjectStore()).findByName(machineKey, name),
+      list: async (terminalId) => (await getMachineProjectStore()).list(terminalId),
+      findByName: async (terminalId, name) => (await getMachineProjectStore()).findByName(terminalId, name),
       create: async (input) => (await getMachineProjectStore()).create(input),
-      remove: async (machineKey, name) => (await getMachineProjectStore()).remove(machineKey, name),
+      remove: async (terminalId, name) => (await getMachineProjectStore()).remove(terminalId, name),
     },
     isEnabled: isCodeExecutionEnabled,
     now: () => new Date(),
-    acquireMachineSandbox: async (machine) => {
-      const canRun = isCodeExecutionEnabled() && (await canAccessMachine(actorUserId, machine));
-      return acquireMachineSandbox({
-        machineKey: deriveMachineKey(machine),
-        tenantId: actorUserId,
-        ownerId: actorUserId,
+    acquireMachineSandbox: async (terminalId): Promise<MachineAcquireResult> => {
+      const page = await db.query.pages.findFirst({
+        where: eq(pages.id, terminalId),
+        columns: { driveId: true },
+      });
+      if (!page) return { ok: false, reason: 'not_found' };
+      const drive = await db.query.drives.findFirst({
+        where: eq(drives.id, page.driveId),
+        columns: { ownerId: true },
+      });
+      if (!drive) return { ok: false, reason: 'error' };
+
+      // Resume re-authz: re-verify edit access for the CURRENT actor on every
+      // acquire, never trusting a permission check cached from an earlier request.
+      const canRun = isCodeExecutionEnabled() && (await canAccessMachine(actorUserId, terminalId));
+
+      const nowMs = Date.now();
+      if (canRun) {
+        const guardrail = checkMachineRuntimeGuardrail({ machineKey: terminalId, now: nowMs });
+        if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
+      }
+
+      const result = await acquireTerminalSandbox({
+        pageId: terminalId,
+        driveId: page.driveId,
+        tenantId: drive.ownerId,
+        userId: actorUserId,
         canRun,
         deps: {
-          store: await getMachineSessionStore(),
+          store: await getTerminalSessionStore(),
           client: await getSandboxClient(),
           now: () => new Date(),
           secret: getSandboxSessionSecret(),
@@ -152,6 +183,10 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
             }),
         },
       });
+
+      if (!result.ok) return { ok: false, reason: result.reason, cause: result.cause };
+      recordMachineActivity({ machineKey: terminalId, now: nowMs });
+      return { ok: true, sandboxId: result.sandboxId, resumed: result.resumed };
     },
     reconnect: async (sandboxId) => (await getSandboxClient()).get({ sandboxId }),
     resolveGitHubToken: (userId) => resolveGitHubTokenForSandbox({ userId, db }),
