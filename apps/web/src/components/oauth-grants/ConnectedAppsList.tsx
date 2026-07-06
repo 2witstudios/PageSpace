@@ -82,7 +82,9 @@ export function ConnectedAppsList() {
         // Only remember a pending grant once the email has actually been
         // dispatched — otherwise a failed request would leave a pending id
         // behind with no corresponding link ever on its way.
-        // codeql[js/clear-text-storage-of-sensitive-data] grantId is an opaque DB row id, not a credential/token
+        // grantId is an opaque OAuth-grant row id, not a credential/token — CodeQL alert #250
+        // flags it as clear-text sensitive-data storage purely because it's derived from
+        // useOAuthGrants(); dismissed as a false positive in the Security tab.
         sessionStorage.setItem(PENDING_REVOKE_STORAGE_KEY, grantId);
         setAwaitingEmailForId(grantId);
         setConfirmingGrant(null);
