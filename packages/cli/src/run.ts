@@ -15,6 +15,7 @@ import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
 import { mcpHandler } from './commands/mcp.js';
+import { tokensCreateHandler } from './commands/tokens/create.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
 import { resolveConfig } from './config/resolve.js';
@@ -44,15 +45,26 @@ export interface RunDependencies {
  * "not logged in" is a normal, graceful outcome for them, not a hard
  * failure — routing them through `enforceAuth` first would print this
  * resolver's generic message (and attempt a redundant refresh) ahead of
- * their own, more specific handling. `mcp` is NOT in this set: when given an
- * explicit credential it authenticates through `ctx.sdk` exactly like every
- * other command below. But it can't be blanket-exempted either, so it gets
- * its own pre-`enforceAuth` gate just below — without it, `enforceAuth`
- * would materialize (and, on a stored default profile, silently refresh and
- * rotate) the ambient personal credential before `mcp`'s own fail-closed
- * check ever ran (Phase 8 task 4).
+ * their own, more specific handling. `tokens create` belongs here for the
+ * same reason `login` does: it mints its credential through its own
+ * browser-consent OAuth flow (Phase 8 task 2) and never touches `ctx.sdk`,
+ * so enforcing ambient auth first would both break it for a fresh CLI with
+ * nothing stored and needlessly refresh/rotate the personal credential as a
+ * side effect of minting an unrelated scoped token. `mcp` is NOT in this
+ * set: when given an explicit credential it authenticates through `ctx.sdk`
+ * exactly like every other command below. But it can't be blanket-exempted
+ * either, so it gets its own pre-`enforceAuth` gate just below — without
+ * it, `enforceAuth` would materialize (and, on a stored default profile,
+ * silently refresh and rotate) the ambient personal credential before
+ * `mcp`'s own fail-closed check ever ran (Phase 8 task 4).
  */
-const AUTH_EXEMPT_HANDLERS = new Set([helpHandler, loginHandler, logoutHandler, whoamiHandler]);
+const AUTH_EXEMPT_HANDLERS = new Set([
+  helpHandler,
+  loginHandler,
+  logoutHandler,
+  whoamiHandler,
+  tokensCreateHandler,
+]);
 
 export async function run(deps: RunDependencies): Promise<ExitCode> {
   const parsed = parseArgv(deps.argv);

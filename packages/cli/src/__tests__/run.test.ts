@@ -134,6 +134,51 @@ describe('run', () => {
     });
   });
 
+  describe('"tokens create" is auth-exempt: it mints via its own browser-consent flow, never the ambient credential (Phase 8)', () => {
+    // The real handler's consent flow is covered by its own unit tests
+    // (commands/tokens/__tests__/create.test.ts); driving it through run()
+    // here would touch the real OS keychain. What only run() can prove is
+    // dispatch: with zero stored credentials the handler's own argument
+    // validation must be reached, instead of enforceAuth failing first on
+    // the missing ambient credential and rotating/refreshing anything.
+    it('reaches the handler with zero stored credentials instead of failing ambient-auth enforcement', async () => {
+      const deps = makeDeps(['tokens', 'create']);
+      const code = await run(deps);
+      expect(code).toBe(EXIT_USAGE_ERROR);
+      expect(deps.stderr.lines.join('')).toContain('--drive');
+      expect(deps.stderr.lines.join('')).not.toContain('pagespace login');
+    });
+
+    it('never reads or refreshes the ambient stored profile as a side effect', async () => {
+      let networkCalls = 0;
+      vi.stubGlobal(
+        'fetch',
+        (async () => {
+          networkCalls += 1;
+          throw new Error('tokens create must never touch the ambient credential');
+        }) as unknown as typeof fetch,
+      );
+      try {
+        const store = createFakeCredentialStore();
+        await store.set('https://pagespace.ai', {
+          refreshToken: 'ps_rt_personal_secret',
+          clientId: 'cli',
+          scopes: ['full'],
+          createdAt: new Date(0).toISOString(),
+        }, 'default');
+
+        const deps = { ...makeDeps(['tokens', 'create']), credentialStore: store };
+        const code = await run(deps);
+
+        expect(code).toBe(EXIT_USAGE_ERROR);
+        expect(networkCalls).toBe(0);
+        expect((await store.get('https://pagespace.ai', 'default'))?.refreshToken).toBe('ps_rt_personal_secret');
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
   it('resolves the profile from --profile and looks up the credential store under that profile name', async () => {
     const profilesSeen: Array<string | undefined> = [];
     const store = {
