@@ -317,8 +317,8 @@ describe('drive-member-service', () => {
       const result = await getDriveOwnerAsMember('drive-1');
       expect(result).not.toBeNull();
       expect(result!.role).toBe('OWNER');
-      expect(result!.user.email).toBe('owner@example.com');
-      expect(result!.user.name).toBe('Drive Owner');
+      expect(result!.user!.email).toBe('owner@example.com');
+      expect(result!.user!.name).toBe('Drive Owner');
     });
   });
 
