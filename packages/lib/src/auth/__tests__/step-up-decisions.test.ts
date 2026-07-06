@@ -36,6 +36,24 @@ describe('computeActionBindingHash', () => {
   it('produces a different hash when the key set differs, even with the same values', () => {
     expect(computeActionBindingHash({ a: '1' })).not.toBe(computeActionBindingHash({ b: '1' }));
   });
+
+  it('does not collide two different bindings when a value smuggles a "&key=" delimiter sequence', () => {
+    // Regression: with an unescaped key=value&... join, both of these
+    // serialized to "a=x&b=y&b=" — letting a grant minted for one request be
+    // spent on a maliciously different one.
+    expect(computeActionBindingHash({ a: 'x&b=y', b: '' })).not.toBe(computeActionBindingHash({ a: 'x', b: 'y&b=' }));
+  });
+
+  it('produces stable, matching hashes across calls for realistic OAuth binding inputs', () => {
+    const buildHash = () =>
+      computeActionBindingHash({
+        clientId: 'pagespace-cli',
+        redirectUri: 'http://127.0.0.1:51234/callback',
+        scope: 'drive:drv1:member offline_access',
+        state: 'st_abc123',
+      });
+    expect(buildHash()).toBe(buildHash());
+  });
 });
 
 describe('decideStepUpChallenge', () => {

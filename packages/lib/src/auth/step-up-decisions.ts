@@ -15,14 +15,22 @@
 import { hashToken } from './token-utils';
 import { secureCompare } from './secure-compare';
 
+/**
+ * The binding input is JSON-encoded (sorted `[key, value]` pairs), never an
+ * ad-hoc delimiter join: several of these values are attacker/client-supplied
+ * free-form strings (OAuth `redirect_uri`/`state`, MCP token names), and an
+ * unescaped join would let a value smuggling `&key=` collapse two different
+ * bindings to the same hash — defeating the action-bound-grant guarantee.
+ */
 export const computeActionBindingHash = (
   parts: Readonly<Record<string, string | undefined | null>>,
 ): string =>
   hashToken(
-    Object.keys(parts)
-      .sort()
-      .map((key) => `${key}=${parts[key] ?? ''}`)
-      .join('&'),
+    JSON.stringify(
+      Object.keys(parts)
+        .sort()
+        .map((key) => [key, parts[key] ?? '']),
+    ),
   );
 
 const safeParseJsonObject = (value: string | null): Record<string, unknown> | null => {
