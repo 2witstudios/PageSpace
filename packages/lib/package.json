@@ -387,6 +387,11 @@
       "import": "./dist/services/sandbox/machine-session.js",
       "require": "./dist/services/sandbox/machine-session.js"
     },
+    "./services/sandbox/machine-billing": {
+      "types": "./dist/services/sandbox/machine-billing.d.ts",
+      "import": "./dist/services/sandbox/machine-billing.js",
+      "require": "./dist/services/sandbox/machine-billing.js"
+    },
     "./services/sandbox/command-policy": {
       "types": "./dist/services/sandbox/command-policy.d.ts",
       "import": "./dist/services/sandbox/command-policy.js",
@@ -1415,6 +1420,9 @@
       ],
       "services/sandbox/machine-session": [
         "./dist/services/sandbox/machine-session.d.ts"
+      ],
+      "services/sandbox/machine-billing": [
+        "./dist/services/sandbox/machine-billing.d.ts"
       ],
       "services/sandbox/command-policy": [
         "./dist/services/sandbox/command-policy.d.ts"

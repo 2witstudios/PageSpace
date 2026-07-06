@@ -112,6 +112,27 @@ export const VOICE_HOLD_ESTIMATE_CENTS = envInt('VOICE_HOLD_ESTIMATE_CENTS', 2);
 export const VOICE_MAX_INFLIGHT = envInt('VOICE_MAX_INFLIGHT', 4);
 
 /**
+ * Flat per-call hold estimate for a Machine (Terminal) run, where the active-window
+ * duration — and therefore the real cost — isn't known until the run ends, so the
+ * gate has nothing exact to reserve against (mirrors VOICE_HOLD_ESTIMATE_CENTS' STT
+ * rationale). A short tool call or PTY burst costs a small fraction of a cent at the
+ * assumed default machine shape, so 2¢ is a reasonable approximate reservation. The
+ * real cost always settles exactly via consumeCredits and the 1.5× markup; concurrent
+ * overdraw is bounded by TERMINAL_MAX_INFLIGHT instead. Tune via env.
+ */
+export const TERMINAL_HOLD_ESTIMATE_CENTS = envInt('TERMINAL_HOLD_ESTIMATE_CENTS', 2);
+
+/**
+ * Max concurrent in-flight Machine (Terminal) runs per payer, applied to ALL tiers
+ * (mirrors VOICE_MAX_INFLIGHT). Bounds worst-case concurrent overdraw to
+ * `TERMINAL_MAX_INFLIGHT × the real settled cost of a single run` — a payer's
+ * multiple agent tool calls and/or interactive PTY sessions can run concurrently
+ * across different machines, so this is generous enough for legitimate multi-machine
+ * use. Default 4.
+ */
+export const TERMINAL_MAX_INFLIGHT = envInt('TERMINAL_MAX_INFLIGHT', 4);
+
+/**
  * How long a hold lives before the reconcile cron may sweep it. Must exceed the
  * longest possible stream plus its settle window (AI routes cap streams at 300s),
  * so a still-running call's reservation is never reclaimed out from under it.

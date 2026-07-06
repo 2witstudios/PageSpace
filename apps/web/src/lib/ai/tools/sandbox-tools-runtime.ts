@@ -32,6 +32,7 @@ import {
   createDbTerminalSessionStore,
 } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
+import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import {
   acquireCodeExecutionSlot,
@@ -172,6 +173,9 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       }),
     now: () => new Date(),
     logger: loggers.ai,
+    // Terminal Epic 3: meter this run's active-runtime cost against the machine's
+    // payer (the drive owner by default — see resolveTerminalPayerId).
+    billing: defaultSandboxBillingDeps,
   };
 }
 
