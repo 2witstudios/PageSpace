@@ -295,6 +295,72 @@ describe('buildAgentTerminalHandlers', () => {
       expect(persistStreamSessionId).not.toHaveBeenCalled();
     });
 
+    it('given a FRESH session where the post-launch listSessions call rejects, should discover no new session id rather than throwing', async () => {
+      const auth = makeAuthSuccess({ streamSessionId: null });
+      auth.sprite.listSessions = vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockRejectedValueOnce(new Error('sprite unreachable'));
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      await expect(vi.advanceTimersByTimeAsync(0)).resolves.not.toThrow();
+      expect(persistStreamSessionId).not.toHaveBeenCalled();
+    });
+
+    it('given the pre-launch listSessions snapshot rejects, should still open the shell (defaults to an empty snapshot)', async () => {
+      const auth = makeAuthSuccess({ streamSessionId: null });
+      auth.sprite.listSessions = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('sprite unreachable'))
+        .mockResolvedValueOnce([]);
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(openShell).toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('given no authenticated user on the socket, should call checkAuth with an empty-string userId rather than throwing', async () => {
+      socket.data.user = undefined;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: '' }));
+    });
+
+    it('given a reconnect while a prior disconnect\'s idle timer is still pending, should cancel the pending reap so the session survives past the original timeout', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect();
+
+      // Reconnect partway through the idle window — cancels the pending reap.
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS / 2);
+      const reconnectSocket = makeSocket('sock2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: reconnectSocket, persistStreamSessionId });
+      await handlers2.onConnect(validPayload);
+
+      // Advance past when the ORIGINAL idle timer would have fired.
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS / 2 + 1_000);
+
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('given the re-auth interval fires after the session was already removed, should clear the interval rather than re-checking auth', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      expect(checkAuth).toHaveBeenCalledTimes(1);
+
+      sessionMap.deleteByKey('branch1:agent:cli');
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(checkAuth).toHaveBeenCalledTimes(1);
+    });
+
     it('given reconnecting to an in-memory live session, should reuse it and emit scrollback instead of reopening', async () => {
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
@@ -490,6 +556,28 @@ describe('buildAgentTerminalHandlers', () => {
       attackerHandlers.onDisconnect({ connectionId: 'victim-pane' });
       expect(sessionMap.getBySocket('victim-pane')).toBeDefined(); // still alive — the attacker's disconnect was a no-op
     });
+
+    it('given two connects on the SAME socket resolving to the SAME sessionKey, the second reattach steals the first connectionId\'s socket mapping — onInput/onResize/onDisconnect for the now-dangling first connectionId should no-op rather than throw', async () => {
+      // Both connects resolve to the identical (scope, name) sessionKey — e.g.
+      // the client reconnected a pane without ever disconnecting the old one
+      // first. sessionMap.reattach() steals 'pane-a's socket mapping when
+      // 'pane-b' reattaches, but this handler's own activeConnectionIds set
+      // still remembers 'pane-a' — every entry point must tolerate that.
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ sessionKey: 'branch1:agent:cli' })) as unknown as ReturnType<typeof vi.fn> &
+        AgentTerminalCheckAuthFn;
+      const { onConnect, onInput, onResize, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await onConnect({ ...validPayload, connectionId: 'pane-a' });
+      await onConnect({ ...validPayload, connectionId: 'pane-b' });
+      expect(sessionMap.getBySocket('pane-a')).toBeUndefined(); // stolen by the pane-b reattach
+
+      expect(() => onInput({ data: 'ls\n', connectionId: 'pane-a' })).not.toThrow();
+      expect(() => onResize({ cols: 80, rows: 24, connectionId: 'pane-a' })).not.toThrow();
+      expect(() => onDisconnect({ connectionId: 'pane-a' })).not.toThrow();
+
+      // The real (pane-b) session is untouched by any of the pane-a no-ops.
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
   });
 
   describe('onDisconnect', () => {
@@ -588,6 +676,23 @@ describe('buildAgentTerminalHandlers', () => {
       expect(billing.releaseHold).not.toHaveBeenCalled();
     });
 
+    it('given the shell exits naturally WHILE disconnected (idle reap still pending), should cancel the pending reap so it never double-settles', async () => {
+      const billing = makeBilling();
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+      onDisconnect();
+
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+      await vi.advanceTimersByTimeAsync(5_000);
+      onExitArg(0);
+
+      // Advance past when the (now-cancelled) idle timer would have reaped it again.
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      expect(shell.kill).not.toHaveBeenCalled();
+    });
+
     it('on a re-auth failure kill, settles the hold rather than leaking it', async () => {
       const billing = makeBilling();
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
@@ -598,6 +703,22 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
       expect(billing.releaseHold).not.toHaveBeenCalled();
+    });
+
+    it('given a re-auth failure WHILE disconnected (idle reap still pending), should clear the pending idle timer too, settling only once', async () => {
+      const billing = makeBilling();
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+      onDisconnect();
+
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Advance past when the (now-cancelled) idle timer would have reaped it again.
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+      expect(shell.kill).toHaveBeenCalledTimes(1);
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
     });
 
     it('reattaching to a live session does NOT place a second hold', async () => {

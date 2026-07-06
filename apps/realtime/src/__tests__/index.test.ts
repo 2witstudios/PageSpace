@@ -686,6 +686,39 @@ describe('requestListener - /api/terminal-activity', () => {
     expect(res.writeHead).toHaveBeenCalledWith(500, { 'Content-Type': 'application/json' });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: false, error: 'Internal error' }));
   });
+
+  it('given the sandbox lookup rejects with a non-Error value, should still respond 500 (wraps it via String() before logging)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockFindBySessionKey.mockRejectedValueOnce('connection terminated unexpectedly');
+
+    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(terminalActivityBody()));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(500, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: false, error: 'Internal error' }));
+  });
+
+  it('given a persisted sandbox record for the machine, should resolve the agent-terminal session key (still delivered:false with nobody watching)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockFindBySessionKey.mockResolvedValueOnce({ sandboxId: 'sbx-persisted-1' });
+
+    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(terminalActivityBody()));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockFindBySessionKey).toHaveBeenCalled();
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, delivered: false }));
+  });
 });
 
 describe('requestListener - 404', () => {
@@ -1910,6 +1943,28 @@ describe('populateUserMetadata', () => {
     expect(next).toHaveBeenCalledWith(/* no error */);
     expect(next.mock.calls[0]).toHaveLength(0);
     expect((socket.data.user as { name: string }).name).toBe('Unknown');
+  });
+
+  it('given a validated session with an empty-string userId, should skip the DB lookup entirely rather than querying with an empty id', async () => {
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: '',
+    } as Awaited<ReturnType<typeof sessionService.validateSession>>);
+
+    const socket = createMockSocket({
+      data: { user: { id: 'placeholder', name: 'Unknown', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_metaempty' },
+        headers: { origin: undefined },
+        address: '127.0.0.1',
+      },
+    });
+    const next = vi.fn();
+
+    await capturedIoUseCallback!(socket, next);
+
+    expect(next).toHaveBeenCalledWith(/* no error */);
+    expect(mockDbSelect).not.toHaveBeenCalled();
+    expect((socket.data.user as { id: string }).id).toBe('');
   });
 });
 
