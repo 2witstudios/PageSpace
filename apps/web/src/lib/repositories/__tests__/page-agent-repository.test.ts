@@ -2,11 +2,34 @@
  * Unit tests for page-agent-repository
  *
  * Tests for pure functions that contain business logic.
- * Database operations are tested via integration tests.
+ * Database operations are tested via integration tests, except for
+ * getAgentById's jsonb-coercion contract, which is cheap to verify here
+ * with a mocked db select chain.
  */
 
-import { describe, it, expect } from 'vitest';
-import { calculateNextPosition, isMachineRef, isMachineRefArray } from '../page-agent-repository';
+import { describe, it, expect, vi } from 'vitest';
+
+const { mockDbSelect } = vi.hoisted(() => ({
+  mockDbSelect: vi.fn(),
+}));
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: (...args: unknown[]) => mockDbSelect(...args),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  and: vi.fn(),
+  desc: vi.fn(),
+  isNull: vi.fn(),
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id' },
+  drives: { id: 'id' },
+}));
+
+import { calculateNextPosition, isMachineRef, isMachineRefArray, pageAgentRepository } from '../page-agent-repository';
 
 describe('calculateNextPosition', () => {
   it('should return 1 when there are no siblings', () => {
@@ -104,5 +127,73 @@ describe('isMachineRefArray', () => {
     expect(isMachineRefArray({ kind: 'own' })).toBe(false);
     expect(isMachineRefArray(null)).toBe(false);
     expect(isMachineRefArray(undefined)).toBe(false);
+  });
+});
+
+describe('getAgentById', () => {
+  const basePageRow = {
+    id: 'agent_1',
+    title: 'Test Agent',
+    type: 'AI_CHAT',
+    driveId: 'drive_1',
+    parentId: null,
+    systemPrompt: null,
+    enabledTools: null,
+    aiProvider: null,
+    aiModel: null,
+    toolExposureMode: 'upfront' as const,
+    isTrashed: false,
+  };
+
+  function mockSelectResult(row: Record<string, unknown> | undefined) {
+    mockDbSelect.mockImplementation(() => ({
+      from: () => ({
+        where: () => Promise.resolve(row ? [row] : []),
+      }),
+    }));
+  }
+
+  it('coerces a NULL machines column to an empty array and terminalAccess to false', async () => {
+    mockSelectResult({ ...basePageRow, terminalAccess: null, machines: null });
+
+    const agent = await pageAgentRepository.getAgentById('agent_1');
+
+    expect(agent?.terminalAccess).toBe(false);
+    expect(agent?.machines).toEqual([]);
+  });
+
+  it('coerces missing terminalAccess/machines fields (pre-existing row) to defaults', async () => {
+    mockSelectResult({ ...basePageRow });
+
+    const agent = await pageAgentRepository.getAgentById('agent_1');
+
+    expect(agent?.terminalAccess).toBe(false);
+    expect(agent?.machines).toEqual([]);
+  });
+
+  it('passes through a populated machines column and terminalAccess: true', async () => {
+    const machines = [{ kind: 'own' }, { kind: 'existing', terminalId: 'term_1' }];
+    mockSelectResult({ ...basePageRow, terminalAccess: true, machines });
+
+    const agent = await pageAgentRepository.getAgentById('agent_1');
+
+    expect(agent?.terminalAccess).toBe(true);
+    expect(agent?.machines).toEqual(machines);
+  });
+
+  it('discards a malformed machines column rather than surfacing bad data', async () => {
+    mockSelectResult({ ...basePageRow, terminalAccess: false, machines: [{ kind: 'bogus' }] });
+
+    const agent = await pageAgentRepository.getAgentById('agent_1');
+
+    expect(agent?.machines).toEqual([]);
+  });
+
+  it('returns null when the agent does not exist', async () => {
+    mockSelectResult(undefined);
+
+    const agent = await pageAgentRepository.getAgentById('missing');
+
+    expect(agent).toBeNull();
   });
 });
