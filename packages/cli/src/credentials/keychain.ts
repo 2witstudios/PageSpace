@@ -43,13 +43,23 @@ const PROFILE_KEY_SEPARATOR = '\u0000';
  * `host`/`profile` containing the separator itself and collide two distinct
  * pairs onto the same account key — e.g. `("A\0B", "C")` and `("A", "B\0C")`
  * both encode to `"A\0B\0C"`, so one pair's `set()` would silently overwrite
- * the other's keychain entry. Reject the separator at this boundary so no
- * caller can construct that collision.
+ * the other's keychain entry.
+ *
+ * Exported (rather than kept private) so `CompositeCredentialStore` (`store.ts`)
+ * can call it as a choke point *before* attempting either backend — a throw
+ * from inside `keychainAccountKey` alone would be caught by the store's
+ * generic keychain-error fallback and silently degrade to the file store,
+ * which has no equivalent check, letting a NUL-containing pair through via
+ * that code path instead of being rejected outright.
  */
-export function keychainAccountKey(host: string, profile: string = DEFAULT_PROFILE_NAME): string {
+export function assertValidAccountKeyInputs(host: string, profile: string): void {
   if (host.includes(PROFILE_KEY_SEPARATOR) || profile.includes(PROFILE_KEY_SEPARATOR)) {
     throw new Error('Host and profile names must not contain a NUL byte.');
   }
+}
+
+export function keychainAccountKey(host: string, profile: string = DEFAULT_PROFILE_NAME): string {
+  assertValidAccountKeyInputs(host, profile);
   return profile === DEFAULT_PROFILE_NAME ? host : `${host}${PROFILE_KEY_SEPARATOR}${profile}`;
 }
 

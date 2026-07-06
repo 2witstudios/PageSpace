@@ -8,7 +8,12 @@
  * mid-session (that would make "where did this write go?" nondeterministic).
  */
 import { FileCredentialStore } from './file-store.js';
-import { createNativeKeychainAdapter, keychainAccountKey, parseKeychainAccountKey } from './keychain.js';
+import {
+  assertValidAccountKeyInputs,
+  createNativeKeychainAdapter,
+  keychainAccountKey,
+  parseKeychainAccountKey,
+} from './keychain.js';
 import type { KeychainAdapter } from './keychain.js';
 import { DEFAULT_PROFILE_NAME, parseHostCredential, serializeHostCredential, tokenPrefix } from './serialize.js';
 import type { CredentialSummary, HostCredential } from './serialize.js';
@@ -38,6 +43,7 @@ export class CompositeCredentialStore implements CredentialStore {
   ) {}
 
   async get(host: string, profile: string = DEFAULT_PROFILE_NAME): Promise<HostCredential | null> {
+    assertValidAccountKeyInputs(host, profile);
     return this.withFallback(
       async () => {
         const secret = await this.keychain.getSecret(keychainAccountKey(host, profile));
@@ -48,6 +54,7 @@ export class CompositeCredentialStore implements CredentialStore {
   }
 
   async set(host: string, credential: HostCredential, profile: string = DEFAULT_PROFILE_NAME): Promise<void> {
+    assertValidAccountKeyInputs(host, profile);
     return this.withFallback(
       () => this.keychain.setSecret(keychainAccountKey(host, profile), serializeHostCredential(credential)),
       () => this.fileStore.set(host, credential, profile),
@@ -55,6 +62,7 @@ export class CompositeCredentialStore implements CredentialStore {
   }
 
   async delete(host: string, profile: string = DEFAULT_PROFILE_NAME): Promise<void> {
+    assertValidAccountKeyInputs(host, profile);
     return this.withFallback(
       () => this.keychain.deleteSecret(keychainAccountKey(host, profile)),
       () => this.fileStore.delete(host, profile),
