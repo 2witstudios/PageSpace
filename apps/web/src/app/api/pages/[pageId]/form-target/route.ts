@@ -118,6 +118,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   try {
     const body = createBodySchema.parse(await req.json());
+    // Resolve before mutating anything — createFormTarget writes the Sheet
+    // header row and inserts the active form_targets row; a WEB_APP_URL
+    // misconfiguration discovered afterward would leave that mutation
+    // orphaned (the raw token is unrecoverable, and the sheet's "one active
+    // target" unique index would then block re-provisioning until someone
+    // manually archives the orphaned row).
+    const webAppBaseUrl = getWebAppUrl();
 
     const { token, formTarget } = await createFormTarget({
       sheetPageId: body.sheetPageId,
@@ -127,7 +134,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       canvasPageId: pageId,
     });
 
-    const submitUrl = `${getWebAppUrl()}/api/public/forms/${token}/submit`;
+    const submitUrl = `${webAppBaseUrl}/api/public/forms/${token}/submit`;
     const formHtml = buildFormHtml({ fields: body.fields, submitUrl });
 
     auditRequest(req, {

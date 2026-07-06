@@ -147,8 +147,13 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
       toast.error('Pick a target Sheet page first');
       return;
     }
-    const fields = draftFields.map(({ name, label, type, required }) => ({ name, label, type, required }));
-    if (fields.some((f) => !f.name.trim() || !f.label.trim())) {
+    const fields = draftFields.map(({ name, label, type, required }) => ({
+      name: name.trim(),
+      label: label.trim(),
+      type,
+      required,
+    }));
+    if (fields.some((f) => !f.name || !f.label)) {
       toast.error('Every field needs a name and a label');
       return;
     }
@@ -217,11 +222,12 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
   );
 
   const handleAddField = useCallback(async () => {
-    if (!newField.name.trim() || !newField.label.trim()) {
+    const trimmedField = { ...newField, name: newField.name.trim(), label: newField.label.trim() };
+    if (!trimmedField.name || !trimmedField.label) {
       toast.error('The new field needs a name and a label');
       return;
     }
-    const result = await patch({ op: 'add-field', field: newField });
+    const result = await patch({ op: 'add-field', field: trimmedField });
     if (result) {
       setFormTarget(result.formTarget);
       setLastFieldSnippet(result.fieldSnippet ?? null);

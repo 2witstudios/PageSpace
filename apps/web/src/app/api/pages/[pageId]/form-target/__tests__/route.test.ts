@@ -153,6 +153,15 @@ describe('/api/pages/[pageId]/form-target', () => {
       const response = await POST(createRequest('POST', { sheetPageId: 'sheet-1', fields }), params());
       expect(response.status).toBe(400);
     });
+
+    it('never mutates anything when WEB_APP_URL is unconfigured', async () => {
+      delete process.env.WEB_APP_URL;
+
+      const response = await POST(createRequest('POST', { sheetPageId: 'sheet-1', fields }), params());
+
+      expect(response.status).toBe(500);
+      expect(mockCreateFormTarget).not.toHaveBeenCalled();
+    });
   });
 
   describe('PATCH', () => {
