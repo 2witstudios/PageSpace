@@ -52,6 +52,18 @@ describe('renderCanvasDocument', () => {
     );
   });
 
+  it('should default to the unchanged BASELINE_CSP when no formActionOrigin is given', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>' });
+    expect(out).toContain(`content="${BASELINE_CSP}"`);
+  });
+
+  it('should scope form-action/connect-src to the given formActionOrigin, never a wildcard', () => {
+    const out = renderCanvasDocument({ html: '<form></form>', formActionOrigin: 'https://app.pagespace.ai' });
+    expect(out).toContain("form-action 'self' https://app.pagespace.ai");
+    expect(out).toContain('connect-src https://app.pagespace.ai');
+    expect(out).not.toContain('form-action *');
+  });
+
   it('should embed the Google Fonts hosts in the rendered CSP <meta> when the author links them', () => {
     const out = renderCanvasDocument({
       html: '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter&display=swap"><p>x</p>',

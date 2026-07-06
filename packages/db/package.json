@@ -234,6 +234,10 @@
     "./schema/oauth": {
       "types": "./dist/schema/oauth.d.ts",
       "default": "./dist/schema/oauth.js"
+    },
+    "./schema/form-targets": {
+      "types": "./dist/schema/form-targets.d.ts",
+      "default": "./dist/schema/form-targets.js"
     }
   },
   "scripts": {

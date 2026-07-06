@@ -40,6 +40,8 @@ export interface RenderPublishedPageInput {
   description?: string;
   /** Robots directive; defaults to "index, follow" — see RenderCanvasDocumentInput.robots. */
   robots?: string;
+  /** Scopes form-action/connect-src to this origin — see RenderCanvasDocumentInput.formActionOrigin. */
+  formActionOrigin?: string;
 }
 
 /**

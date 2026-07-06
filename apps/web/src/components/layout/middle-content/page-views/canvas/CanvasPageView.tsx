@@ -12,6 +12,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { useFindStore } from '@/stores/useFindStore';
 import CanvasPublishControls from './CanvasPublishControls';
+import CanvasFormsSettingsTab from './CanvasFormsSettingsTab';
 
 interface CanvasPageViewProps {
   pageId: string;
@@ -147,6 +148,15 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     saveWithDebounce(value);
   }, [updateContent, saveWithDebounce]);
 
+  // Generic content read/write for the Forms tab, which owns all the <form>
+  // tag detection/wiring/deletion logic itself (parse-form-tags.ts,
+  // @pagespace/lib/forms/form-html + embed-html) — CanvasPageView just needs
+  // to persist whatever the tab decides the new content should be.
+  const handleFormsTabContentChange = useCallback((value: string) => {
+    updateContent(value);
+    saveWithDebounce(value);
+  }, [updateContent, saveWithDebounce]);
+
   // Cleanup on unmount - auto-save any unsaved changes
   useEffect(() => {
     return () => {
@@ -171,6 +181,12 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
         >
           View
         </button>
+        <button
+          className={`px-4 py-2 ${activeTab === 'forms' ? 'border-b-2 border-blue-500' : ''}`}
+          onClick={() => setActiveTab('forms')}
+        >
+          Forms
+        </button>
         <div className="ml-auto min-w-0 max-w-full">
           <CanvasPublishControls pageId={pageId} contentDirty={documentState?.isDirty} />
         </div>
@@ -189,6 +205,11 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           <ErrorBoundary>
             <CanvasFrame html={content} />
           </ErrorBoundary>
+        </div>
+      )}
+      {activeTab === 'forms' && (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <CanvasFormsSettingsTab pageId={pageId} content={content} onContentChange={handleFormsTabContentChange} />
         </div>
       )}
 

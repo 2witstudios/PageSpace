@@ -150,6 +150,13 @@ vi.mock('../../tools/command-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/form-tools', () => ({
+  formTools: {
+    provision_form_target: { name: 'provision_form_target', description: 'Provision form target' },
+    update_form_target_status: { name: 'update_form_target_status', description: 'Update form target status' },
+  },
+}));
+
 // Stub the sandbox tools so the builder can be exercised without loading the DB
 // module graph or the real Fly Sprites driver.
 vi.mock('../../tools/sandbox-tools-runtime', () => ({
@@ -180,6 +187,7 @@ import { workflowTools } from '../../tools/workflow-tools';
 import { triggerTools } from '../../tools/trigger-tools';
 import { modelTools } from '../../tools/model-tools';
 import { commandTools } from '../../tools/command-tools';
+import { formTools } from '../../tools/form-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -207,6 +215,7 @@ describe('ai-tools', () => {
         ...triggerTools,
         ...modelTools,
         ...commandTools,
+        ...formTools,
       });
     });
 
@@ -230,6 +239,7 @@ describe('ai-tools', () => {
         Object.keys(triggerTools),
         Object.keys(modelTools),
         Object.keys(commandTools),
+        Object.keys(formTools),
       ];
 
       const allKeys = moduleKeysets.flat();
