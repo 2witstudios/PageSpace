@@ -1,5 +1,5 @@
 {
-  "id": "a539e109-efa6-4298-a448-11c5af32150b",
+  "id": "93c57e49-ef72-4160-99e2-5f86bbe631ec",
   "prevId": "915b16c4-6afc-4899-83c3-2425c9f12dad",
   "version": "7",
   "dialect": "postgresql",
@@ -18638,11 +18638,29 @@
           "primaryKey": false,
           "notNull": true
         },
+        "terminalId": {
+          "name": "terminalId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "projectName": {
+          "name": "projectName",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "machineBranchId": {
           "name": "machineBranchId",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "name": {
           "name": "name",
@@ -18655,6 +18673,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "command": {
+          "name": "command",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "streamSessionId": {
           "name": "streamSessionId",
@@ -18677,6 +18701,21 @@
         }
       },
       "indexes": {
+        "machine_agent_terminals_terminal_id_idx": {
+          "name": "machine_agent_terminals_terminal_id_idx",
+          "columns": [
+            {
+              "expression": "terminalId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "machine_agent_terminals_branch_id_idx": {
           "name": "machine_agent_terminals_branch_id_idx",
           "columns": [
@@ -18692,13 +18731,25 @@
           "method": "btree",
           "with": {}
         },
-        "machine_agent_terminals_branch_name_idx": {
-          "name": "machine_agent_terminals_branch_name_idx",
+        "machine_agent_terminals_scope_name_idx": {
+          "name": "machine_agent_terminals_scope_name_idx",
           "columns": [
             {
-              "expression": "machineBranchId",
+              "expression": "terminalId",
               "isExpression": false,
               "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "coalesce(\"projectName\", '')",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "coalesce(\"machineBranchId\", '')",
+              "asc": true,
+              "isExpression": true,
               "nulls": "last"
             },
             {
@@ -18721,6 +18772,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "ownerId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "machine_agent_terminals_terminalId_pages_id_fk": {
+          "name": "machine_agent_terminals_terminalId_pages_id_fk",
+          "tableFrom": "machine_agent_terminals",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "terminalId"
           ],
           "columnsTo": [
             "id"

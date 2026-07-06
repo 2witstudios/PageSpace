@@ -10,6 +10,15 @@
  * branch's Sprite directly, so only it needs a `MachineHost`
  * (`getMachineHostForBranches`); spawning/listing/resolving never provision
  * or touch the Sprite.
+ *
+ * `projectStore`/`machineSandbox` (project/machine-scope support) are left
+ * unwired here — today's only consumer (the navigator API route) is
+ * branch-scoped only, and wiring the Machine's own Sprite acquisition would
+ * require threading the acting user's resume-re-authz through this module's
+ * callers (a route-surface change — separate PR node, see tasks/terminal.md).
+ * `branchStore.findById` IS wired, since the level-agnostic resolve/kill path
+ * needs no such threading (a branch lookup by its own row id carries no actor
+ * context either way).
  */
 
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
@@ -42,13 +51,15 @@ function buildBaseDeps(): Pick<SpawnAgentTerminalDeps & KillAgentTerminalDeps, '
     branchStore: {
       findByName: async (terminalId, projectName, branchName) =>
         (await getMachineBranchStore()).findByName(terminalId, projectName, branchName),
+      findById: async (id) => (await getMachineBranchStore()).findById(id),
     },
     store: {
-      list: async (machineBranchId) => (await getMachineAgentTerminalStore()).list(machineBranchId),
-      findByName: async (machineBranchId, name) => (await getMachineAgentTerminalStore()).findByName(machineBranchId, name),
+      list: async (scope) => (await getMachineAgentTerminalStore()).list(scope),
+      findByName: async (scope, name) => (await getMachineAgentTerminalStore()).findByName(scope, name),
+      findById: async (id) => (await getMachineAgentTerminalStore()).findById(id),
       create: async (input) => (await getMachineAgentTerminalStore()).create(input),
       updateStreamSessionId: async (input) => (await getMachineAgentTerminalStore()).updateStreamSessionId(input),
-      remove: async (machineBranchId, name) => (await getMachineAgentTerminalStore()).remove(machineBranchId, name),
+      remove: async (scope, name) => (await getMachineAgentTerminalStore()).remove(scope, name),
     },
   };
 }

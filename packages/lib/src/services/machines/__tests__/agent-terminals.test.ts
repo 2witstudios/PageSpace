@@ -3,44 +3,83 @@ import {
   planSpawnAgentTerminal,
   spawnAgentTerminal,
   resolveAgentTerminal,
+  resolveAgentTerminalById,
   killAgentTerminal,
+  killAgentTerminalById,
   listAgentTerminals,
+  deriveAgentTerminalScope,
   type AgentTerminalsDeps,
   type AgentTerminalBranchLookup,
+  type AgentTerminalProjectLookup,
+  type AgentTerminalMachineSandbox,
 } from '../agent-terminals';
-import type { MachineAgentTerminalStore, MachineAgentTerminalRecord } from '../agent-terminals-store';
+import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTerminalScopeKey } from '../agent-terminals-store';
 import type { MachineHost, MachineHandle } from '../../sandbox/machine-host';
+import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
+import { BRANCH_REPO_PATH } from '../machine-branches';
 
 const NOW = new Date('2026-07-06T12:00:00.000Z');
 const TERMINAL_ID = 'terminal-1';
 const PROJECT_NAME = 'my-repo';
 const BRANCH_NAME = 'feature-x';
 const BRANCH_ID = 'branch-1';
-const SANDBOX_ID = 'sprite-branch-1';
+const BRANCH_SANDBOX_ID = 'sprite-branch-1';
+const MACHINE_SANDBOX_ID = 'sprite-machine-1';
+const PROJECT_PATH = '/workspace/projects/my-repo';
 
 const actor = { userId: 'user-1' };
 
 function makeBranchLookup(rows: Record<string, { id: string; sandboxId: string }> = {}): AgentTerminalBranchLookup {
+  const byId = new Map<string, { sandboxId: string }>();
+  for (const row of Object.values(rows)) byId.set(row.id, { sandboxId: row.sandboxId });
   return {
     findByName: async (terminalId, projectName, branchName) =>
       rows[`${terminalId}\0${projectName}\0${branchName}`] ?? null,
+    findById: async (id) => byId.get(id) ?? null,
   };
 }
 
 const defaultBranchLookup = makeBranchLookup({
-  [`${TERMINAL_ID}\0${PROJECT_NAME}\0${BRANCH_NAME}`]: { id: BRANCH_ID, sandboxId: SANDBOX_ID },
+  [`${TERMINAL_ID}\0${PROJECT_NAME}\0${BRANCH_NAME}`]: { id: BRANCH_ID, sandboxId: BRANCH_SANDBOX_ID },
 });
+
+function makeProjectLookup(rows: Record<string, { path: string }> = {}): AgentTerminalProjectLookup {
+  return {
+    findByName: async (terminalId, name) => rows[`${terminalId}\0${name}`] ?? null,
+  };
+}
+
+const defaultProjectLookup = makeProjectLookup({
+  [`${TERMINAL_ID}\0${PROJECT_NAME}`]: { path: PROJECT_PATH },
+});
+
+function makeMachineSandbox(over: Partial<AgentTerminalMachineSandbox> = {}): AgentTerminalMachineSandbox {
+  return {
+    acquire: async () => ({ ok: true, sandboxId: MACHINE_SANDBOX_ID }),
+    ...over,
+  };
+}
+
+function scopeKeyOf(row: MachineAgentTerminalRecord): AgentTerminalScopeKey {
+  return { terminalId: row.terminalId, projectName: row.projectName, machineBranchId: row.machineBranchId };
+}
+
+function sameScope(a: AgentTerminalScopeKey, b: AgentTerminalScopeKey): boolean {
+  return a.terminalId === b.terminalId && a.projectName === b.projectName && a.machineBranchId === b.machineBranchId;
+}
 
 function makeStore(seed: MachineAgentTerminalRecord[] = []) {
   const rows = new Map<string, MachineAgentTerminalRecord>();
-  const key = (machineBranchId: string, name: string) => `${machineBranchId}\0${name}`;
-  for (const row of seed) rows.set(key(row.machineBranchId, row.name), row);
+  const key = (scope: AgentTerminalScopeKey, name: string) =>
+    `${scope.terminalId}\0${scope.projectName ?? ''}\0${scope.machineBranchId ?? ''}\0${name}`;
+  for (const row of seed) rows.set(key(scopeKeyOf(row), row.name), row);
   let counter = 0;
   const store: MachineAgentTerminalStore = {
-    list: async (machineBranchId) => [...rows.values()].filter((r) => r.machineBranchId === machineBranchId),
-    findByName: async (machineBranchId, name) => rows.get(key(machineBranchId, name)) ?? null,
+    list: async (scope) => [...rows.values()].filter((r) => sameScope(scopeKeyOf(r), scope)),
+    findByName: async (scope, name) => rows.get(key(scope, name)) ?? null,
+    findById: async (id) => [...rows.values()].find((r) => r.id === id) ?? null,
     create: async (input) => {
-      const k = key(input.machineBranchId, input.name);
+      const k = key({ terminalId: input.terminalId, projectName: input.projectName, machineBranchId: input.machineBranchId }, input.name);
       if (rows.has(k)) {
         throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
       }
@@ -48,9 +87,13 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
       const row: MachineAgentTerminalRecord = {
         id: `agent-terminal-${counter}`,
         ownerId: input.ownerId,
+        terminalId: input.terminalId,
+        scope: input.scope,
+        projectName: input.projectName,
         machineBranchId: input.machineBranchId,
         name: input.name,
         agentType: input.agentType,
+        command: input.command,
         streamSessionId: null,
         createdAt: input.now,
         updatedAt: input.now,
@@ -66,8 +109,8 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
         }
       }
     },
-    remove: async (machineBranchId, name) => {
-      rows.delete(key(machineBranchId, name));
+    remove: async (scope, name) => {
+      rows.delete(key(scope, name));
     },
   };
   return { store, rows };
@@ -86,7 +129,7 @@ function makeHost(over: Partial<MachineHost> = {}): MachineHost {
 
 function makeHandle(over: Partial<MachineHandle> = {}): MachineHandle {
   return {
-    machineId: SANDBOX_ID,
+    machineId: BRANCH_SANDBOX_ID,
     exec: async () => ({ success: true, exitCode: 0, stdout: '', stderr: '' }),
     writeFiles: async () => {},
     readFile: async () => null,
@@ -106,12 +149,28 @@ function makeHandle(over: Partial<MachineHandle> = {}): MachineHandle {
 function makeDeps(overrides: Partial<AgentTerminalsDeps> = {}): AgentTerminalsDeps {
   return {
     branchStore: defaultBranchLookup,
+    projectStore: defaultProjectLookup,
+    machineSandbox: makeMachineSandbox(),
     store: makeStore().store,
     host: makeHost(),
     now: () => NOW,
     ...overrides,
   };
 }
+
+describe('deriveAgentTerminalScope', () => {
+  it('given machineBranchId set, should classify branch (regardless of projectName)', () => {
+    expect(deriveAgentTerminalScope({ projectName: PROJECT_NAME, machineBranchId: BRANCH_ID })).toBe('branch');
+  });
+
+  it('given only projectName set, should classify project', () => {
+    expect(deriveAgentTerminalScope({ projectName: PROJECT_NAME, machineBranchId: null })).toBe('project');
+  });
+
+  it('given neither set, should classify machine', () => {
+    expect(deriveAgentTerminalScope({ projectName: null, machineBranchId: null })).toBe('machine');
+  });
+});
 
 describe('planSpawnAgentTerminal', () => {
   it('given a valid name and known agent type, should allow it', () => {
@@ -131,9 +190,20 @@ describe('planSpawnAgentTerminal', () => {
       reason: 'invalid_agent_type',
     });
   });
+
+  it('given an empty command override, should reject it', () => {
+    expect(planSpawnAgentTerminal({ name: 'reviewer', agentType: 'shell', command: '   ' })).toEqual({
+      ok: false,
+      reason: 'invalid_command',
+    });
+  });
+
+  it('given a valid command override, should allow it', () => {
+    expect(planSpawnAgentTerminal({ name: 'reviewer', agentType: 'shell', command: 'htop' })).toEqual({ ok: true });
+  });
 });
 
-describe('spawnAgentTerminal', () => {
+describe('spawnAgentTerminal — branch scope', () => {
   it('given a branch that does not exist, should deny', async () => {
     const deps = makeDeps({ branchStore: makeBranchLookup() });
     const result = await spawnAgentTerminal({
@@ -148,7 +218,20 @@ describe('spawnAgentTerminal', () => {
     expect(result).toEqual({ ok: false, reason: 'branch_not_found' });
   });
 
-  it('given a fresh name, should reserve a pagespace-cli agent terminal', async () => {
+  it('given branchName without projectName, should reject as an invalid target', async () => {
+    const deps = makeDeps();
+    const result = await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      branchName: BRANCH_NAME,
+      name: 'cli',
+      agentType: 'pagespace-cli',
+      actor,
+      deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'invalid_target' });
+  });
+
+  it('given a fresh name, should reserve a pagespace-cli agent terminal keyed to the branch with scope="branch"', async () => {
     const { store, rows } = makeStore();
     const deps = makeDeps({ store });
     const result = await spawnAgentTerminal({
@@ -161,7 +244,25 @@ describe('spawnAgentTerminal', () => {
       deps,
     });
     expect(result).toMatchObject({ ok: true, agentType: 'pagespace-cli', resumed: false });
-    expect(rows.get(`${BRANCH_ID}\0cli`)?.agentType).toBe('pagespace-cli');
+    const row = [...rows.values()][0];
+    expect(row).toMatchObject({ scope: 'branch', machineBranchId: BRANCH_ID, projectName: PROJECT_NAME, agentType: 'pagespace-cli', command: null });
+  });
+
+  it('given a command override, should persist it on the row', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store });
+    await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: BRANCH_NAME,
+      name: 'top',
+      agentType: 'shell',
+      command: 'htop',
+      actor,
+      deps,
+    });
+    const row = [...rows.values()][0];
+    expect(row.command).toBe('htop');
   });
 
   it('given a second, differently-named spawn in the SAME branch, should let a claude terminal coexist with the pagespace-cli one', async () => {
@@ -246,6 +347,94 @@ describe('spawnAgentTerminal', () => {
   });
 });
 
+describe('spawnAgentTerminal — project scope', () => {
+  it('given a project that does not exist, should deny', async () => {
+    const deps = makeDeps({ projectStore: makeProjectLookup() });
+    const result = await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'pagespace-cli',
+      actor,
+      deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'project_not_found' });
+  });
+
+  it('given no projectStore wired, should report scope_unsupported rather than provisioning anything', async () => {
+    const deps = makeDeps({ projectStore: undefined });
+    const result = await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'pagespace-cli',
+      actor,
+      deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'scope_unsupported' });
+  });
+
+  it('given a valid project, should reserve an agent terminal keyed to the project (scope="project", no machineBranchId)', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store });
+    const result = await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'pagespace-cli',
+      actor,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true, agentType: 'pagespace-cli', resumed: false });
+    const row = [...rows.values()][0];
+    expect(row).toMatchObject({ scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+  });
+});
+
+describe('spawnAgentTerminal — machine scope', () => {
+  it('given neither projectName nor branchName, should reserve an agent terminal with ZERO projects on the machine Sprite (scope="machine")', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    const result = await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      name: 'cli',
+      agentType: 'pagespace-cli',
+      actor,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true, agentType: 'pagespace-cli', resumed: false });
+    const row = [...rows.values()][0];
+    expect(row).toMatchObject({ scope: 'machine', terminalId: TERMINAL_ID, projectName: null, machineBranchId: null });
+  });
+
+  it('given a bare shell agentType, should reserve it (the plain shell IS a machine-scope agent terminal, not a separate concept)', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    const result = await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      name: 'shell',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true, agentType: 'shell' });
+    expect([...rows.values()][0]).toMatchObject({ scope: 'machine', agentType: 'shell' });
+  });
+
+  it('should not require projectStore/machineSandbox at spawn time (spawn never touches the Sprite)', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store, projectStore: undefined, machineSandbox: undefined });
+    const result = await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      name: 'cli',
+      agentType: 'pagespace-cli',
+      actor,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true, resumed: false });
+  });
+});
+
 describe('resolveAgentTerminal', () => {
   it('given an unknown branch, should deny', async () => {
     const deps = makeDeps({ branchStore: makeBranchLookup() });
@@ -271,7 +460,7 @@ describe('resolveAgentTerminal', () => {
     expect(result).toEqual({ ok: false, reason: 'not_found' });
   });
 
-  it('given a spawned agent terminal, should resolve its Sprite, launch spec, and known session id', async () => {
+  it('given a branch-scoped agent terminal, should resolve the isolated branch Sprite and its repo cwd', async () => {
     const { store } = makeStore();
     const deps = makeDeps({ store });
     await spawnAgentTerminal({
@@ -295,24 +484,211 @@ describe('resolveAgentTerminal', () => {
     expect(result).toEqual({
       ok: true,
       agentTerminalId: 'agent-terminal-1',
-      sandboxId: SANDBOX_ID,
+      sandboxId: BRANCH_SANDBOX_ID,
+      cwd: BRANCH_REPO_PATH,
       agentType: 'pagespace-cli',
+      command: null,
       streamSessionId: null,
     });
+  });
+
+  it('given a project-scoped agent terminal, should resolve the SAME machine Sprite with cwd=project.path', async () => {
+    const { store } = makeStore();
+    const acquireCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      machineSandbox: makeMachineSandbox({
+        acquire: async (terminalId) => {
+          acquireCalls.push(terminalId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+    await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'pagespace-cli',
+      actor,
+      deps,
+    });
+
+    const result = await resolveAgentTerminal({
+      terminalId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      deps,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      agentTerminalId: 'agent-terminal-1',
+      sandboxId: MACHINE_SANDBOX_ID,
+      cwd: PROJECT_PATH,
+      agentType: 'pagespace-cli',
+      command: null,
+      streamSessionId: null,
+    });
+    expect(acquireCalls).toEqual([TERMINAL_ID]);
+  });
+
+  it('given a machine-scoped agent terminal spawned with ZERO projects, should resolve the machine Sprite with cwd=SANDBOX_ROOT', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      name: 'cli',
+      agentType: 'pagespace-cli',
+      actor,
+      deps,
+    });
+
+    const result = await resolveAgentTerminal({
+      terminalId: TERMINAL_ID,
+      name: 'cli',
+      deps,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      agentTerminalId: 'agent-terminal-1',
+      sandboxId: MACHINE_SANDBOX_ID,
+      cwd: SANDBOX_ROOT,
+      agentType: 'pagespace-cli',
+      command: null,
+      streamSessionId: null,
+    });
+  });
+
+  it('given the machine Sprite fails to acquire, should deny as machine_unavailable', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    await spawnAgentTerminal({ terminalId: TERMINAL_ID, name: 'cli', agentType: 'pagespace-cli', actor, deps });
+
+    const failingDeps = { ...deps, machineSandbox: makeMachineSandbox({ acquire: async () => ({ ok: false, reason: 'provision_failed' }) }) };
+    const result = await resolveAgentTerminal({ terminalId: TERMINAL_ID, name: 'cli', deps: failingDeps });
+
+    expect(result).toEqual({ ok: false, reason: 'machine_unavailable' });
+  });
+});
+
+describe('resolveAgentTerminalById — level-agnostic (PurePoint Attach{agent_id} parity)', () => {
+  it('given an unknown id, should return not_found', async () => {
+    const deps = makeDeps();
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'ghost', deps });
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('given a branch-scoped row id, should resolve its isolated branch Sprite WITHOUT any project/branch name lookup', async () => {
+    const { store } = makeStore();
+    const findByNameCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      branchStore: {
+        ...defaultBranchLookup,
+        findByName: async (...args) => {
+          findByNameCalls.push(args.join(':'));
+          return defaultBranchLookup.findByName(...args);
+        },
+      },
+    });
+    const spawned = await spawnAgentTerminal({
+      terminalId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: BRANCH_NAME,
+      name: 'cli',
+      agentType: 'pagespace-cli',
+      actor,
+      deps,
+    });
+    expect(spawned.ok).toBe(true);
+    findByNameCalls.length = 0; // clear the spawn-time lookup; only care about resolve-time calls below
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: spawned.ok ? spawned.id : '', deps });
+
+    expect(result).toEqual({
+      ok: true,
+      agentTerminalId: 'agent-terminal-1',
+      sandboxId: BRANCH_SANDBOX_ID,
+      cwd: BRANCH_REPO_PATH,
+      agentType: 'pagespace-cli',
+      command: null,
+      streamSessionId: null,
+    });
+    expect(findByNameCalls).toEqual([]); // level-agnostic: resolved purely by id, no name-based branch lookup
+  });
+
+  it('given a project-scoped row id, should resolve the SAME machine Sprite with cwd=project.path', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store });
+    const spawned = await spawnAgentTerminal({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', agentType: 'pagespace-cli', actor, deps });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: spawned.ok ? spawned.id : '', deps });
+
+    expect(result).toEqual({
+      ok: true,
+      agentTerminalId: 'agent-terminal-1',
+      sandboxId: MACHINE_SANDBOX_ID,
+      cwd: PROJECT_PATH,
+      agentType: 'pagespace-cli',
+      command: null,
+      streamSessionId: null,
+    });
+  });
+
+  it('given a machine-scoped row id, should resolve the machine Sprite with cwd=SANDBOX_ROOT', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    const spawned = await spawnAgentTerminal({ terminalId: TERMINAL_ID, name: 'cli', agentType: 'pagespace-cli', actor, deps });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: spawned.ok ? spawned.id : '', deps });
+
+    expect(result).toEqual({
+      ok: true,
+      agentTerminalId: 'agent-terminal-1',
+      sandboxId: MACHINE_SANDBOX_ID,
+      cwd: SANDBOX_ROOT,
+      agentType: 'pagespace-cli',
+      command: null,
+      streamSessionId: null,
+    });
+  });
+
+  it('given a row whose branch has vanished, should deny as branch_not_found', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store });
+    const spawned = await spawnAgentTerminal({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', agentType: 'pagespace-cli', actor, deps });
+
+    const goneDeps = { ...deps, branchStore: makeBranchLookup() };
+    const result = await resolveAgentTerminalById({ agentTerminalId: spawned.ok ? spawned.id : '', deps: goneDeps });
+
+    expect(result).toEqual({ ok: false, reason: 'branch_not_found' });
   });
 });
 
 describe('listAgentTerminals', () => {
-  it('given two agent terminals spawned in one branch, should list both', async () => {
+  it('given two agent terminals spawned in one branch, should list both without leaking the project/machine-scoped ones', async () => {
     const { store } = makeStore();
     const deps = makeDeps({ store });
     await spawnAgentTerminal({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', agentType: 'pagespace-cli', actor, deps });
     await spawnAgentTerminal({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'reviewer', agentType: 'claude', actor, deps });
+    await spawnAgentTerminal({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'project-cli', agentType: 'pagespace-cli', actor, deps });
+    await spawnAgentTerminal({ terminalId: TERMINAL_ID, name: 'machine-cli', agentType: 'pagespace-cli', actor, deps });
 
     const result = await listAgentTerminals({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, deps });
 
     expect(result.ok).toBe(true);
     expect(result.ok && result.terminals.map((t) => t.name).sort()).toEqual(['cli', 'reviewer']);
+  });
+
+  it('given a machine scope with zero spawned terminals, should list empty rather than surfacing project/branch ones', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store });
+    await spawnAgentTerminal({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', agentType: 'pagespace-cli', actor, deps });
+
+    const result = await listAgentTerminals({ terminalId: TERMINAL_ID, deps });
+
+    expect(result).toEqual({ ok: true, terminals: [] });
   });
 });
 
@@ -329,7 +705,7 @@ describe('killAgentTerminal', () => {
     expect(result).toEqual({ ok: false, reason: 'not_found' });
   });
 
-  it('given an agent terminal whose PTY was never opened (no streamSessionId), should drop the row without touching the Sprite', async () => {
+  it('given a branch-scoped agent terminal whose PTY was never opened (no streamSessionId), should drop the row without touching the Sprite', async () => {
     const { store, rows } = makeStore();
     const attachCalls: string[] = [];
     const deps = makeDeps({
@@ -345,26 +721,32 @@ describe('killAgentTerminal', () => {
     expect(rows.size).toBe(0);
   });
 
-  it('given an agent terminal whose PTY IS running, should attach the branch Sprite, kill that specific session, and drop the row', async () => {
+  it('given a branch-scoped agent terminal whose PTY IS running, should attach the ISOLATED branch Sprite, kill that specific session, and drop the row', async () => {
     const { store, rows } = makeStore([
       {
         id: 'agent-terminal-1',
         ownerId: 'user-1',
+        terminalId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
         machineBranchId: BRANCH_ID,
         name: 'cli',
         agentType: 'pagespace-cli',
+        command: null,
         streamSessionId: 'sess-abc',
         createdAt: NOW,
         updatedAt: NOW,
       },
     ]);
     const killed: string[] = [];
+    let attachedMachineId: string | undefined;
     let attachedSessionId: string | undefined;
     const deps = makeDeps({
       store,
       host: makeHost({
-        attach: async ({ machineId }) =>
-          machineId === SANDBOX_ID
+        attach: async ({ machineId }) => {
+          attachedMachineId = machineId;
+          return machineId === BRANCH_SANDBOX_ID
             ? makeHandle({
                 stream: async ({ sessionId }) => {
                   attachedSessionId = sessionId;
@@ -378,14 +760,111 @@ describe('killAgentTerminal', () => {
                   };
                 },
               })
-            : null,
+            : null;
+        },
       }),
     });
 
     const result = await killAgentTerminal({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
 
     expect(result).toEqual({ ok: true });
+    expect(attachedMachineId).toBe(BRANCH_SANDBOX_ID);
     expect(attachedSessionId).toBe('sess-abc');
+    expect(killed).toEqual(['SIGKILL']);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a project-scoped agent terminal whose PTY IS running, should attach the SAME machine Sprite, kill that session, and drop the row', async () => {
+    const { store, rows } = makeStore([
+      {
+        id: 'agent-terminal-1',
+        ownerId: 'user-1',
+        terminalId: TERMINAL_ID,
+        scope: 'project',
+        projectName: PROJECT_NAME,
+        machineBranchId: null,
+        name: 'cli',
+        agentType: 'pagespace-cli',
+        command: null,
+        streamSessionId: 'sess-proj',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    let attachedMachineId: string | undefined;
+    const killed: string[] = [];
+    const deps = makeDeps({
+      store,
+      host: makeHost({
+        attach: async ({ machineId }) => {
+          attachedMachineId = machineId;
+          return makeHandle({
+            machineId,
+            stream: async () => ({
+              write: () => {},
+              resize: () => {},
+              onData: () => {},
+              onExit: () => {},
+              onError: () => {},
+              kill: (signal) => killed.push(signal ?? 'SIGTERM'),
+            }),
+          });
+        },
+      }),
+    });
+
+    const result = await killAgentTerminal({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(attachedMachineId).toBe(MACHINE_SANDBOX_ID);
+    expect(killed).toEqual(['SIGKILL']);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a machine-scoped agent terminal whose PTY IS running, should attach the machine Sprite, kill that session, and drop the row', async () => {
+    const { store, rows } = makeStore([
+      {
+        id: 'agent-terminal-1',
+        ownerId: 'user-1',
+        terminalId: TERMINAL_ID,
+        scope: 'machine',
+        projectName: null,
+        machineBranchId: null,
+        name: 'cli',
+        agentType: 'pagespace-cli',
+        command: null,
+        streamSessionId: 'sess-machine',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    let attachedMachineId: string | undefined;
+    const killed: string[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup(),
+      host: makeHost({
+        attach: async ({ machineId }) => {
+          attachedMachineId = machineId;
+          return makeHandle({
+            machineId,
+            stream: async () => ({
+              write: () => {},
+              resize: () => {},
+              onData: () => {},
+              onExit: () => {},
+              onError: () => {},
+              kill: (signal) => killed.push(signal ?? 'SIGTERM'),
+            }),
+          });
+        },
+      }),
+    });
+
+    const result = await killAgentTerminal({ terminalId: TERMINAL_ID, name: 'cli', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(attachedMachineId).toBe(MACHINE_SANDBOX_ID);
     expect(killed).toEqual(['SIGKILL']);
     expect(rows.size).toBe(0);
   });
@@ -395,9 +874,13 @@ describe('killAgentTerminal', () => {
       {
         id: 'agent-terminal-1',
         ownerId: 'user-1',
+        terminalId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
         machineBranchId: BRANCH_ID,
         name: 'cli',
         agentType: 'pagespace-cli',
+        command: null,
         streamSessionId: 'sess-abc',
         createdAt: NOW,
         updatedAt: NOW,
@@ -416,9 +899,13 @@ describe('killAgentTerminal', () => {
       {
         id: 'agent-terminal-1',
         ownerId: 'user-1',
+        terminalId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
         machineBranchId: BRANCH_ID,
         name: 'cli',
         agentType: 'pagespace-cli',
+        command: null,
         streamSessionId: 'sess-abc',
         createdAt: NOW,
         updatedAt: NOW,
@@ -437,5 +924,49 @@ describe('killAgentTerminal', () => {
 
     expect(result).toEqual({ ok: false, reason: 'error' });
     expect(rows.size).toBe(1);
+  });
+});
+
+describe('killAgentTerminalById — level-agnostic (PurePoint Attach{agent_id} parity)', () => {
+  it('given an unknown id, should return not_found', async () => {
+    const deps = makeDeps();
+    const result = await killAgentTerminalById({ agentTerminalId: 'ghost', deps });
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('given a branch-scoped row id whose PTY IS running, should kill it purely by id (no project/branch name needed)', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store });
+    const spawned = await spawnAgentTerminal({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', agentType: 'pagespace-cli', actor, deps });
+    const id = spawned.ok ? spawned.id : '';
+    await store.updateStreamSessionId({ id, streamSessionId: 'sess-abc', now: NOW });
+
+    const killed: string[] = [];
+    const killDeps = {
+      ...deps,
+      host: makeHost({
+        attach: async ({ machineId }) =>
+          machineId === BRANCH_SANDBOX_ID
+            ? makeHandle({ stream: async () => ({ write: () => {}, resize: () => {}, onData: () => {}, onExit: () => {}, onError: () => {}, kill: (s) => killed.push(s ?? 'SIGTERM') }) })
+            : null,
+      }),
+    };
+
+    const result = await killAgentTerminalById({ agentTerminalId: id, deps: killDeps });
+
+    expect(result).toEqual({ ok: true });
+    expect(killed).toEqual(['SIGKILL']);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a machine-scoped row id, should acquire the machine Sprite and drop the row', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    const spawned = await spawnAgentTerminal({ terminalId: TERMINAL_ID, name: 'cli', agentType: 'pagespace-cli', actor, deps });
+
+    const result = await killAgentTerminalById({ agentTerminalId: spawned.ok ? spawned.id : '', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(rows.size).toBe(0);
   });
 });

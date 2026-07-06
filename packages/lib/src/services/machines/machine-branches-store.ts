@@ -36,6 +36,8 @@ export interface NewMachineBranchInput {
 export interface MachineBranchStore {
   list(terminalId: string, projectName: string): Promise<MachineBranchRecord[]>;
   findByName(terminalId: string, projectName: string, branchName: string): Promise<MachineBranchRecord | null>;
+  /** Level-agnostic lookup by the branch-terminal's own row id — no project/branch name path required (mirrors PurePoint's `Attach{agent_id}`). */
+  findById(id: string): Promise<MachineBranchRecord | null>;
   /** Throws a unique-violation error (see `isUniqueViolation`) if this (terminalId, projectName, branchName) already exists. */
   create(input: NewMachineBranchInput): Promise<MachineBranchRecord>;
   /**
@@ -86,6 +88,11 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
           ),
         )
         .limit(1);
+      return row ?? null;
+    },
+
+    async findById(id) {
+      const [row] = await db.select().from(machineBranches).where(eq(machineBranches.id, id)).limit(1);
       return row ?? null;
     },
 
