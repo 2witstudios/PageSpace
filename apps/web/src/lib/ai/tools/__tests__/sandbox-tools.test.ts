@@ -249,6 +249,18 @@ describe('createSandboxTools', () => {
       expect(result.machines.find((m) => m.id === 't1')?.active).toBe(true);
       expect(result.machines.find((m) => m.id === 'own')?.active).toBe(false);
     });
+
+    it('given a configured machine the actor can no longer access, should exclude it instead of exposing its name', async () => {
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 'revoked' }],
+        describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Should Not Appear' }),
+        isMachineAccessible: async (_c, m) => m.kind === 'own',
+      };
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+      const result = (await exec(tools.list_machines, {}, {})) as { success: true; machines: Array<{ id: string }> };
+      expect(result.machines).toEqual([{ id: 'own', name: 'My Machine', active: true }]);
+      expect(result.machines.find((m) => m.id === 'revoked')).toBeUndefined();
+    });
   });
 
   describe('switch_machine', () => {
@@ -307,6 +319,18 @@ describe('createSandboxTools', () => {
       expect(schema.safeParse({ machine: '' }).success).toBe(false);
       expect(schema.safeParse({ machine: 'own' }).success).toBe(true);
       expect(schema.safeParse({ machine: 'own', bogus: true }).success).toBe(false);
+    });
+
+    it('given no rawContext to persist the switch onto, should return an error instead of a silent no-op success', async () => {
+      // A permissive resolveContext (unlike production's, which fails closed
+      // without a conversationId/userId) can still resolve successfully even
+      // when no experimental_context was passed at all.
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const result = await exec(tools.switch_machine, { machine: 'own' }, undefined);
+      expect(result).toEqual({
+        success: false,
+        error: 'Unable to switch machines without an execution context.',
+      });
     });
   });
 

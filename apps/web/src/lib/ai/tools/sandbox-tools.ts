@@ -256,10 +256,17 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
           };
         }
 
+        if (!rawContext) {
+          return {
+            success: false,
+            error: 'Unable to switch machines without an execution context.',
+          };
+        }
+
         // Mutate the shared per-run context object in place so later tool
         // calls in this same turn see the new active machine (see the
         // activeMachine doc comment on ToolExecutionContext).
-        if (rawContext) rawContext.activeMachine = target;
+        rawContext.activeMachine = target;
 
         const desc = await machines.describeMachine(rawContext, target);
         return { success: true, active: machineRefId(target), name: desc.name };
@@ -278,16 +285,25 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
         const configured = await machines.listMachines(rawContext);
         const active = await resolveActiveMachine(rawContext, machines);
+        // Mirror list_pages: only surface machines the actor can currently
+        // access — a machine's page permissions can be revoked after it was
+        // configured, and describeMachine's title lookup does not itself
+        // check accessibility.
+        const accessibleEntries = await Promise.all(
+          configured.map(async (m) => ({ machine: m, accessible: await machines.isMachineAccessible(rawContext, m) })),
+        );
         const entries = await Promise.all(
-          configured.map(async (m) => {
-            const desc = await machines.describeMachine(rawContext, m);
-            return {
-              id: machineRefId(m),
-              name: desc.name,
-              ...(desc.description ? { description: desc.description } : {}),
-              active: machineRefEquals(m, active),
-            };
-          }),
+          accessibleEntries
+            .filter(({ accessible }) => accessible)
+            .map(async ({ machine: m }) => {
+              const desc = await machines.describeMachine(rawContext, m);
+              return {
+                id: machineRefId(m),
+                name: desc.name,
+                ...(desc.description ? { description: desc.description } : {}),
+                active: machineRefEquals(m, active),
+              };
+            }),
         );
         return { success: true, machines: entries };
       },
