@@ -11,6 +11,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { isMachineRefArray } from '@/lib/repositories/page-agent-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -90,6 +91,8 @@ export async function GET(
       includePageTree: page.includePageTree ?? false,
       pageTreeScope: page.pageTreeScope ?? 'children',
       toolExposureMode: page.toolExposureMode ?? 'upfront',
+      terminalAccess: page.terminalAccess ?? false,
+      machines: isMachineRefArray(page.machines) ? page.machines : [],
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -125,6 +128,8 @@ export async function PATCH(
       includePageTree,
       pageTreeScope,
       toolExposureMode,
+      terminalAccess,
+      machines,
       expectedRevision,
     } = body;
 
@@ -164,6 +169,15 @@ export async function PATCH(
           { status: 400 }
         );
       }
+    }
+
+    // Validate machines shape: each entry is either `{ kind: 'own' }` or
+    // `{ kind: 'existing', terminalId }`; machines[0] is the default active machine.
+    if (machines !== undefined && !isMachineRefArray(machines)) {
+      return NextResponse.json(
+        { error: 'machines must be an array of MachineRef objects' },
+        { status: 400 }
+      );
     }
 
     // Validate the model selection against the real catalog (anti-hallucination).
@@ -226,6 +240,15 @@ export async function PATCH(
       if (toolExposureMode === 'upfront' || toolExposureMode === 'search') {
         updateData.toolExposureMode = toolExposureMode;
       }
+    }
+
+    if (terminalAccess !== undefined) {
+      updateData.terminalAccess = Boolean(terminalAccess);
+    }
+
+    if (machines !== undefined) {
+      // Already validated above as MachineRef[]
+      updateData.machines = machines;
     }
 
     // Only update if there are changes
@@ -298,6 +321,8 @@ export async function PATCH(
       visibleToGlobalAssistant: responsePage.visibleToGlobalAssistant ?? true,
       includePageTree: responsePage.includePageTree ?? false,
       pageTreeScope: responsePage.pageTreeScope ?? 'children',
+      terminalAccess: responsePage.terminalAccess ?? false,
+      machines: isMachineRefArray(responsePage.machines) ? responsePage.machines : [],
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

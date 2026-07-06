@@ -1268,6 +1268,13 @@
       "when": 1783278936602,
       "tag": "0180_loose_puppet_master",
       "breakpoints": true
+    },
+    {
+      "idx": 181,
+      "version": "7",
+      "when": 1783314772463,
+      "tag": "0181_lucky_stryfe",
+      "breakpoints": true
     }
   ]
 }
