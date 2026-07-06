@@ -461,6 +461,35 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getBySocket('pane-a')).toBeUndefined();
       expect(sessionMap.getBySocket('pane-b')).toBeUndefined();
     });
+
+    it('given a DIFFERENT socket referencing a connectionId it never established itself, should ignore it rather than acting on another socket\'s session', async () => {
+      // `agentTerminalSessionMap` is one shared, server-wide instance — a
+      // connectionId is only trustworthy when the CALLING socket is the one
+      // that registered it via its own authorized onConnect. A second socket
+      // merely claiming someone else's connectionId (e.g. observed, guessed,
+      // or replayed) must never be able to write input to, resize, or tear
+      // down that session.
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect({ ...validPayload, name: 'cli', connectionId: 'victim-pane' });
+
+      const attackerSocket = makeSocket('attacker-sock');
+      const attackerHandlers = buildAgentTerminalHandlers({
+        sessionMap,
+        openShell,
+        checkAuth,
+        socket: attackerSocket,
+        persistStreamSessionId,
+      });
+
+      attackerHandlers.onInput({ data: 'rm -rf /\n', connectionId: 'victim-pane' });
+      expect(shell.write).not.toHaveBeenCalled();
+
+      attackerHandlers.onResize({ cols: 1, rows: 1, connectionId: 'victim-pane' });
+      expect(shell.resize).not.toHaveBeenCalled();
+
+      attackerHandlers.onDisconnect({ connectionId: 'victim-pane' });
+      expect(sessionMap.getBySocket('victim-pane')).toBeDefined(); // still alive — the attacker's disconnect was a no-op
+    });
   });
 
   describe('onDisconnect', () => {

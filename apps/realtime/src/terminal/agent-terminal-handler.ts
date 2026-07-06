@@ -357,6 +357,7 @@ export function buildAgentTerminalHandlers({
 
     onInput(payload: unknown) {
       const connectionId = readConnectionId(payload) ?? socket.id;
+      if (!activeConnectionIds.has(connectionId)) return;
       const session = sessionMap.getBySocket(connectionId);
       if (!session) return;
       const p = payload as { data?: string };
@@ -367,6 +368,7 @@ export function buildAgentTerminalHandlers({
 
     onResize(payload: unknown) {
       const connectionId = readConnectionId(payload) ?? socket.id;
+      if (!activeConnectionIds.has(connectionId)) return;
       const session = sessionMap.getBySocket(connectionId);
       if (!session) return;
       const p = payload as { cols?: number; rows?: number };
@@ -381,8 +383,15 @@ export function buildAgentTerminalHandlers({
       if (explicitConnectionId !== undefined) {
         // One pane explicitly closed (e.g. the Terminal workspace's "Split"
         // panes closing one of several) — leave this socket's OTHER
-        // connections (other live panes) untouched.
-        disconnectConnection(explicitConnectionId);
+        // connections (other live panes) untouched. Only a connectionId THIS
+        // socket itself registered via a successful, authorized `onConnect`
+        // is honored — `agentTerminalSessionMap` is one shared, server-wide
+        // instance (every socket's sessions live in it), so a connectionId a
+        // client merely CLAIMS (rather than one this socket actually
+        // established) must never be trusted to reach another socket's PTY.
+        if (activeConnectionIds.has(explicitConnectionId)) {
+          disconnectConnection(explicitConnectionId);
+        }
         return;
       }
       // The socket itself disconnected (tab closed/reloaded, network drop) —
