@@ -320,6 +320,27 @@ describe('drive-member-service', () => {
       expect(result!.user!.email).toBe('owner@example.com');
       expect(result!.user!.name).toBe('Drive Owner');
     });
+
+    it('should pass through legacy plaintext PII unchanged', async () => {
+      const row = {
+        id: 'owner-1',
+        email: 'owner@example.com',
+        name: 'Drive Owner',
+        username: 'owner1',
+        displayName: 'Owner Display',
+        avatarUrl: null,
+      };
+      const chain = {
+        innerJoin: vi.fn().mockReturnThis(),
+        leftJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([row]) }),
+      };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      const result = await getDriveOwnerAsMember('drive-1');
+      expect(result!.user!.email).toBe('owner@example.com');
+      expect(result!.user!.name).toBe('Drive Owner');
+    });
   });
 
   describe('getMemberPermissions', () => {
