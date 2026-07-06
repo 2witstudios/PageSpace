@@ -95,6 +95,15 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     const decision = await gate(ctx);
     if (!decision.ok) return { ok: false, error: { success: false, error: decision.error } };
     const activeMachine = await resolveActiveMachine(rawContext, machines);
+    if (!activeMachine) {
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: 'Terminal access is not enabled for this agent. Ask an admin to turn on Terminal Access in this agent\'s settings.',
+        },
+      };
+    }
     // Re-verify page-view access on EVERY call, mirroring sandbox-tools.ts —
     // the actual execution boundary must not trust a machine reference that
     // was accessible only at a past switch_machine call (OWASP A01).

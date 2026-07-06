@@ -80,6 +80,28 @@ describe('createSandboxTools', () => {
     expect(acquired).toBe(false);
   });
 
+  it('bash: given no configured machines (terminalAccess off), should deny instead of falling back to the own machine', async () => {
+    let acquired = false;
+    const runDeps = fakeRunDeps();
+    runDeps.acquireSandbox = async () => {
+      acquired = true;
+      return { ok: true, sandboxId: 'sbx', resumed: false };
+    };
+    // createMachineDirectory.listMachines returns [] exactly when terminalAccess
+    // is off — this must deny the call, not silently resolve to { kind: 'own' }
+    // (which used to key an implicit persistent machine off the agent's own
+    // page, bypassing the terminalAccess gate entirely).
+    const machines: MachineDirectoryDeps = {
+      listMachines: async () => [],
+      describeMachine: async () => ({ name: 'My Machine' }),
+      isMachineAccessible: async () => true,
+    };
+    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+    const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
+    expect(result).toMatchObject({ success: false });
+    expect(acquired).toBe(false);
+  });
+
   it('bash: given an unresolvable context, should surface the resolver error without running', async () => {
     let acquired = false;
     const runDeps = fakeRunDeps();

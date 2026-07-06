@@ -137,15 +137,24 @@ export interface MachineDirectoryDeps {
  * Terminal tools (bash/file/git) call this to determine which machine's
  * session to operate on — `resolveMachinePageId` (packages/lib/services/
  * sandbox/machine-session.ts) then keys the persistent session by it.
+ *
+ * Returns `undefined` when the actor has no configured machines at all —
+ * `listMachines` (createMachineDirectory) already returns `[]` exactly when
+ * `terminalAccess` is off, so an empty list here is never "no preference,
+ * default to 'own'"; it is "not entitled." Callers MUST treat `undefined` as
+ * a denial, not silently fall back to `{ kind: 'own' }` — that fallback used
+ * to key an implicit persistent machine off the agent's own page even with
+ * terminalAccess off, defeating the gate (OWASP A01).
  */
 export async function resolveActiveMachine(
   rawContext: ToolExecutionContext | undefined,
   machines: MachineDirectoryDeps,
-): Promise<MachineRef> {
+): Promise<MachineRef | undefined> {
   const configured = await machines.listMachines(rawContext);
+  if (configured.length === 0) return undefined;
   const active = rawContext?.activeMachine;
   if (active && configured.some((m) => machineRefEquals(m, active))) return active;
-  return configured[0] ?? { kind: 'own' };
+  return configured[0];
 }
 
 /** Resolves the actor context for a turn, or an error to surface to the model. */
@@ -205,6 +214,15 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
     const decision = await gate(ctx);
     if (!decision.ok) return { ok: false, error: gateDenial(decision) };
     const activeMachine = await resolveActiveMachine(rawContext, machines);
+    if (!activeMachine) {
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: 'Terminal access is not enabled for this agent. Ask an admin to turn on Terminal Access in this agent\'s settings.',
+        },
+      };
+    }
     // Re-verify page-view access to the resolved machine on EVERY call — not
     // just at switch_machine time. A machine's page permissions (or the
     // Terminal page itself) can change between calls, and this is the actual
@@ -347,7 +365,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
                 id: machineRefId(m),
                 name: desc.name,
                 ...(desc.description ? { description: desc.description } : {}),
-                active: machineRefEquals(m, active),
+                active: active !== undefined && machineRefEquals(m, active),
               };
             }),
         );
