@@ -1,6 +1,6 @@
 /**
- * Red-team test: a manage-keys-only OAuth credential (Phase 9, not yet
- * reachable via any real request — see ScopeSet.manageKeys) must not be able
+ * Red-team test: a manage-keys-only OAuth credential (Phase 9, mintable today
+ * via the manage_keys scope token — see ScopeSet.manageKeys) must not be able
  * to read a channel's messages. Uses the REAL checkMCPPageScope/
  * isManageKeysOnly implementation (not mocked) so this fails if the
  * hardening in apps/web/src/lib/auth/index.ts regresses.

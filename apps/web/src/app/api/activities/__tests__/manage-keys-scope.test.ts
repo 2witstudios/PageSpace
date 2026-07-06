@@ -1,6 +1,6 @@
 /**
- * Red-team test: a manage-keys-only OAuth credential (Phase 9, not yet
- * reachable via any real request — see ScopeSet.manageKeys) must not see the
+ * Red-team test: a manage-keys-only OAuth credential (Phase 9, mintable today
+ * via the manage_keys scope token — see ScopeSet.manageKeys) must not see the
  * activity feed for every drive its owning user belongs to. GET /api/activities
  * in the default 'user' context with no driveId reads allowedDriveIds directly
  * (bypassing checkMCPDriveScope/checkMCPPageScope entirely) — this is exactly

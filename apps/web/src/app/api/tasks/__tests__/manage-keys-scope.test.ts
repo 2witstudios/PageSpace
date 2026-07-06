@@ -1,6 +1,6 @@
 /**
- * Red-team test: a manage-keys-only OAuth credential (Phase 9, not yet
- * reachable via any real request — see ScopeSet.manageKeys) must not be able
+ * Red-team test: a manage-keys-only OAuth credential (Phase 9, mintable today
+ * via the manage_keys scope token — see ScopeSet.manageKeys) must not be able
  * to list tasks in a drive. Uses the REAL checkMCPDriveScope/isManageKeysOnly
  * implementation (not mocked). isPrincipalDriveMember is stubbed to `true` —
  * simulating a hypothetical bypass of that separate membership check — so

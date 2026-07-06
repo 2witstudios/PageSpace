@@ -566,8 +566,10 @@ export async function authenticateWithEnforcedContext(
 
 /**
  * True iff this credential can only manage keys and must never resolve to
- * content access. No scope parser sets this today (see ScopeSet.manageKeys),
- * so this is always false for every credential that exists in production.
+ * content access. `parseScopeList` (see ScopeSet.manageKeys) mints this today
+ * via the `manage_keys` token, through both the authorize and
+ * device-authorization flows — every helper below exists because this is a
+ * real, reachable credential shape, not a hypothetical one.
  */
 export function isManageKeysOnly(auth: AuthResult): boolean {
   return isOAuthAuthResult(auth) && auth.scopes.manageKeys === true;

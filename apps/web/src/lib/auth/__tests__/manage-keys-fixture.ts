@@ -1,11 +1,12 @@
 import type { OAuthAuthResult } from '../index';
 
 /**
- * A manage-keys-only OAuth credential. No scope parser can produce
- * `scopes.manageKeys: true` today (see ScopeSet.manageKeys) — this fixture
- * exists so tests can prove the drive-scope helpers already fail closed for
- * it, rather than applying the empty-driveScopes-means-full-access
- * convention every other credential relies on.
+ * A manage-keys-only OAuth credential. `parseScopeList` mints
+ * `scopes.manageKeys: true` today via the `manage_keys` token (see
+ * ScopeSet.manageKeys) — this fixture exists so tests can prove the
+ * drive-scope helpers already fail closed for it, rather than applying the
+ * empty-driveScopes-means-full-access convention every other credential
+ * relies on.
  */
 export function manageKeysScopedAuthResult(
   overrides: Partial<OAuthAuthResult> = {}

@@ -491,11 +491,11 @@ describe('MCP Scope Enforcement', () => {
   });
 
   // ===========================================================================
-  // 7. MANAGE-KEYS-ONLY CREDENTIAL (future zero-content-scope OAuth token)
+  // 7. MANAGE-KEYS-ONLY CREDENTIAL (zero-content-scope OAuth token)
   // ===========================================================================
   //
-  // No scope parser can produce scopes.manageKeys: true today. These tests
-  // exist to pin down that once one does, every helper below already denies
+  // `parseScopeList` mints scopes.manageKeys: true today via the manage_keys
+  // token. These tests pin down that every helper below already denies
   // content access instead of applying the empty-driveScopes-means-full-access
   // convention every other credential relies on.
 
