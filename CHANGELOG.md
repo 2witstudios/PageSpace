@@ -41,6 +41,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **GDPR data exports now include system logs, API metrics, and error logs** — the account data
+  export (`Settings > Privacy > Download my data`) previously omitted these three monitoring
+  tables even though they can carry your user ID until account deletion. They're now included in
+  both the native ZIP (`system-logs.json`, `api-metrics.json`, `error-logs.json`) and the portable
+  schema.org export, with raw stack traces, IP addresses, user agents, and internal admin fields
+  redacted.
 - **`pagespace login` no longer hangs after a successful login** — the post-login identity
   lookup used to retry for up to 2 minutes before the CLI would return control to your terminal;
   it's now bounded to a few seconds so the command finishes promptly. The browser callback page
