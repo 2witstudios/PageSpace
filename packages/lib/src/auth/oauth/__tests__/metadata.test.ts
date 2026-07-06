@@ -83,6 +83,7 @@ describe('buildServerMetadata', () => {
 
     expect(metadata.scopes_supported).toContain('account');
     expect(metadata.scopes_supported).toContain('offline_access');
+    expect(metadata.scopes_supported).toContain('manage_keys');
     expect(metadata.scopes_supported.some((scope) => scope.startsWith('drive:'))).toBe(true);
   });
 
