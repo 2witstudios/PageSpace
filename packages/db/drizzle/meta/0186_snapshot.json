@@ -1,6 +1,6 @@
 {
-  "id": "839df3f0-cbc3-47e0-a53c-225b90ae0e56",
-  "prevId": "537dbecc-1b53-42c9-badb-5a4e04db238a",
+  "id": "537dbecc-1b53-42c9-badb-5a4e04db238a",
+  "prevId": "514ea963-4876-4889-b039-be7602174e7f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1645,6 +1645,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "not_found_page_id": {
+          "name": "not_found_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_favicon_url": {
+          "name": "publish_favicon_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1721,6 +1733,19 @@
           "tableTo": "pages",
           "columnsFrom": [
             "homePageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "drives_not_found_page_id_pages_id_fk": {
+          "name": "drives_not_found_page_id_pages_id_fk",
+          "tableFrom": "drives",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "not_found_page_id"
           ],
           "columnsTo": [
             "id"
@@ -11668,25 +11693,6 @@
           "notNull": true,
           "default": true
         },
-        "terminal_access": {
-          "name": "terminal_access",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "machines": {
-          "name": "machines",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "own_machine_page_id": {
-          "name": "own_machine_page_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -11715,19 +11721,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "global_assistant_config_own_machine_page_id_pages_id_fk": {
-          "name": "global_assistant_config_own_machine_page_id_pages_id_fk",
-          "tableFrom": "global_assistant_config",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "own_machine_page_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

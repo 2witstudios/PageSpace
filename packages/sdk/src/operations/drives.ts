@@ -71,6 +71,8 @@ const driveRowSchema = z.object({
   publishSubdomain: z.string().nullable(),
   homePageId: z.string().nullable(),
   publishDefaultOgImageUrl: z.string().nullable(),
+  notFoundPageId: z.string().nullable(),
+  publishFaviconUrl: z.string().nullable(),
 });
 
 export const renameDrive = defineOperation({

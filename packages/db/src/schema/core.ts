@@ -22,6 +22,8 @@ export const drives = pgTable('drives', {
   publishSubdomain: text('publishSubdomain').unique(), // Globally-unique subdomain for published pages; set on first publish
   homePageId: text('homePageId').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }), // Drive landing page shown at drive root
   publishDefaultOgImageUrl: text('publish_default_og_image_url'), // Drive-wide default social share image for published pages lacking their own
+  notFoundPageId: text('not_found_page_id').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }), // Canvas page rendered as the published site's 404.html; falls back to the generic branded 404 when unset
+  publishFaviconUrl: text('publish_favicon_url'), // Drive-wide favicon override for published pages lacking their own <link rel="icon">
 }, (table) => {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),

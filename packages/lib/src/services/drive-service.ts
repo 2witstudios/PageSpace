@@ -50,6 +50,8 @@ export interface UpdateDriveInput {
   drivePrompt?: string | null;
   homePageId?: string | null;
   publishDefaultOgImageUrl?: string | null;
+  notFoundPageId?: string | null;
+  publishFaviconUrl?: string | null;
 }
 
 export interface DriveAccessInfo {
@@ -417,6 +419,14 @@ export async function updateDrive(
     updateData.publishDefaultOgImageUrl = input.publishDefaultOgImageUrl;
   }
 
+  if (input.notFoundPageId !== undefined) {
+    updateData.notFoundPageId = input.notFoundPageId;
+  }
+
+  if (input.publishFaviconUrl !== undefined) {
+    updateData.publishFaviconUrl = input.publishFaviconUrl;
+  }
+
   // Home drives cannot be renamed; other updates (drivePrompt, homePageId) are allowed.
   const whereClause = input.name !== undefined
     ? and(eq(drives.id, driveId), ne(drives.kind, 'HOME'))
@@ -442,6 +452,25 @@ export async function isValidDriveHomePage(driveId: string, pageId: string): Pro
       eq(pages.id, pageId),
       eq(pages.driveId, driveId),
       eq(pages.isTrashed, false)
+    ),
+  });
+
+  return !!page;
+}
+
+/**
+ * Server-side gate for PATCH /api/drives/[driveId] notFoundPageId: a page may
+ * be a drive's custom 404 page only if it exists, belongs to that drive, is
+ * not trashed, AND is a CANVAS page — unlike the home page, the 404 page is
+ * rendered through the canvas publish pipeline, so no other page type applies.
+ */
+export async function isValidDriveNotFoundPage(driveId: string, pageId: string): Promise<boolean> {
+  const page = await db.query.pages.findFirst({
+    where: and(
+      eq(pages.id, pageId),
+      eq(pages.driveId, driveId),
+      eq(pages.isTrashed, false),
+      eq(pages.type, 'CANVAS')
     ),
   });
 

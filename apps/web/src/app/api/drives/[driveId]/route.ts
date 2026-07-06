@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getDriveById, getDriveWithAccess, updateDrive, trashDrive, isValidDriveHomePage } from '@pagespace/lib/services/drive-service';
+import { getDriveById, getDriveWithAccess, updateDrive, trashDrive, isValidDriveHomePage, isValidDriveNotFoundPage } from '@pagespace/lib/services/drive-service';
 import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -10,7 +10,9 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isMCPA
 import { getAppDriveMembership, getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
+import { syncPublishedHomeRoot, regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
+import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
+import { db } from '@pagespace/db/db';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -25,6 +27,16 @@ const patchSchema = z.object({
   // Drive-wide default OG/share image. "" or null clears it; a non-empty value
   // must be a valid URL.
   publishDefaultOgImageUrl: z.union([z.literal(''), z.string().url()]).nullable().optional(),
+  // CANVAS page rendered as the published site's 404.html. min(1): "" must
+  // never reach the FK; null is the only clear "unset" signal.
+  notFoundPageId: z.string().min(1).nullable().optional(),
+  // Drive-wide favicon override, same shape/semantics as publishDefaultOgImageUrl.
+  publishFaviconUrl: z.union([z.literal(''), z.string().url()]).nullable().optional(),
+  // Alternative to pasting a URL: reference an uploaded FILE page. Resolved
+  // server-side to a durable public CDN URL and stored in the URL column above
+  // — never trusted as a URL directly.
+  ogImageFileId: z.string().min(1).optional(),
+  faviconFileId: z.string().min(1).optional(),
 }).strict();
 
 /**
@@ -164,17 +176,63 @@ export async function PATCH(
       }
     }
 
-    // Update the drive. An empty-string default OG image is normalized to null
-    // (clear) so the column never holds a blank string.
+    // The custom 404 page must be a non-trashed CANVAS page belonging to this drive.
+    if (typeof validatedBody.notFoundPageId === 'string') {
+      const validNotFoundPage = await isValidDriveNotFoundPage(driveId, validatedBody.notFoundPageId);
+      if (!validNotFoundPage) {
+        return NextResponse.json(
+          { error: '404 page must be a non-trashed Canvas page in this drive' },
+          { status: 400 }
+        );
+      }
+    }
+
+    // ogImageFileId/faviconFileId are an alternative to pasting a URL: the
+    // client picked an uploaded FILE page, and we resolve it server-side to a
+    // durable public CDN URL rather than trusting a client-supplied URL.
+    // Pasting a URL and picking a file are mutually exclusive per field; when
+    // both are sent, the resolved file wins (it's the more specific action).
+    let resolvedOgImageUrl = validatedBody.publishDefaultOgImageUrl;
+    if (validatedBody.ogImageFileId) {
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.ogImageFileId, driveId, userId, db });
+      if (!resolved) {
+        return NextResponse.json({ error: 'Selected image is unavailable or not accessible' }, { status: 400 });
+      }
+      resolvedOgImageUrl = resolved;
+    }
+
+    let resolvedFaviconUrl = validatedBody.publishFaviconUrl;
+    if (validatedBody.faviconFileId) {
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.faviconFileId, driveId, userId, db });
+      if (!resolved) {
+        return NextResponse.json({ error: 'Selected favicon is unavailable or not accessible' }, { status: 400 });
+      }
+      resolvedFaviconUrl = resolved;
+    }
+
+    // Update the drive. An empty-string default OG image/favicon is normalized
+    // to null (clear) so the column never holds a blank string.
     const updatedDrive = await updateDrive(driveId, {
       name: validatedBody.name,
       drivePrompt: validatedBody.drivePrompt,
       homePageId: validatedBody.homePageId,
       publishDefaultOgImageUrl:
-        validatedBody.publishDefaultOgImageUrl === undefined
+        resolvedOgImageUrl === undefined
           ? undefined
-          : validatedBody.publishDefaultOgImageUrl || null,
+          : resolvedOgImageUrl || null,
+      notFoundPageId: validatedBody.notFoundPageId,
+      publishFaviconUrl:
+        resolvedFaviconUrl === undefined
+          ? undefined
+          : resolvedFaviconUrl || null,
     });
+
+    // A changed 404 page or favicon must be reflected in the site files
+    // immediately, not wait on an unrelated publish/unpublish. Fire-and-forget,
+    // mirroring the syncPublishedHomeRoot call below for homePageId.
+    if (validatedBody.notFoundPageId !== undefined || resolvedFaviconUrl !== undefined) {
+      void regeneratePublishedSiteFiles(driveId);
+    }
 
     // Broadcast drive update event if name, drivePrompt, or homePageId changed
     if (updatedDrive && (validatedBody.name || validatedBody.drivePrompt !== undefined || validatedBody.homePageId !== undefined)) {

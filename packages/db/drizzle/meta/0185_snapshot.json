@@ -1,6 +1,6 @@
 {
-  "id": "537dbecc-1b53-42c9-badb-5a4e04db238a",
-  "prevId": "514ea963-4876-4889-b039-be7602174e7f",
+  "id": "514ea963-4876-4889-b039-be7602174e7f",
+  "prevId": "cd07758e-394c-4f50-9ae4-0e06c6a0fe50",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1645,6 +1645,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "not_found_page_id": {
+          "name": "not_found_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_favicon_url": {
+          "name": "publish_favicon_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1721,6 +1733,19 @@
           "tableTo": "pages",
           "columnsFrom": [
             "homePageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "drives_not_found_page_id_pages_id_fk": {
+          "name": "drives_not_found_page_id_pages_id_fk",
+          "tableFrom": "drives",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "not_found_page_id"
           ],
           "columnsTo": [
             "id"
@@ -15925,6 +15950,157 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
+    },
+    "public.sandbox_sessions": {
+      "name": "sandbox_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "sessionKey": {
+          "name": "sessionKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "conversationId": {
+          "name": "conversationId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "driveId": {
+          "name": "driveId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tenantId": {
+          "name": "tenantId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sandboxId": {
+          "name": "sandboxId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "lastActiveAt": {
+          "name": "lastActiveAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "sandbox_sessions_conversation_id_idx": {
+          "name": "sandbox_sessions_conversation_id_idx",
+          "columns": [
+            {
+              "expression": "conversationId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sandbox_sessions_last_active_at_idx": {
+          "name": "sandbox_sessions_last_active_at_idx",
+          "columns": [
+            {
+              "expression": "lastActiveAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "sandbox_sessions_conversationId_conversations_id_fk": {
+          "name": "sandbox_sessions_conversationId_conversations_id_fk",
+          "tableFrom": "sandbox_sessions",
+          "tableTo": "conversations",
+          "columnsFrom": [
+            "conversationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sandbox_sessions_driveId_drives_id_fk": {
+          "name": "sandbox_sessions_driveId_drives_id_fk",
+          "tableFrom": "sandbox_sessions",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "driveId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sandbox_sessions_userId_users_id_fk": {
+          "name": "sandbox_sessions_userId_users_id_fk",
+          "tableFrom": "sandbox_sessions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "sandbox_sessions_sessionKey_unique": {
+          "name": "sandbox_sessions_sessionKey_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "sessionKey"
+          ]
+        }
+      }
     },
     "public.terminal_sessions": {
       "name": "terminal_sessions",

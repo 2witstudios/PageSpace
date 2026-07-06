@@ -1,6 +1,6 @@
 {
-  "id": "915b16c4-6afc-4899-83c3-2425c9f12dad",
-  "prevId": "bdb82f18-fdff-4d35-98cc-74b8efb1d22e",
+  "id": "bdb82f18-fdff-4d35-98cc-74b8efb1d22e",
+  "prevId": "4b65b843-b281-4366-b4e8-6abe5c4a4c3f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1645,6 +1645,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "not_found_page_id": {
+          "name": "not_found_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_favicon_url": {
+          "name": "publish_favicon_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1721,6 +1733,19 @@
           "tableTo": "pages",
           "columnsFrom": [
             "homePageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "drives_not_found_page_id_pages_id_fk": {
+          "name": "drives_not_found_page_id_pages_id_fk",
+          "tableFrom": "drives",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "not_found_page_id"
           ],
           "columnsTo": [
             "id"
@@ -18478,149 +18503,6 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
-    },
-    "public.machine_branches": {
-      "name": "machine_branches",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "ownerId": {
-          "name": "ownerId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "terminalId": {
-          "name": "terminalId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "projectName": {
-          "name": "projectName",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "branchName": {
-          "name": "branchName",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sessionKey": {
-          "name": "sessionKey",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sandboxId": {
-          "name": "sandboxId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "machine_branches_terminal_id_idx": {
-          "name": "machine_branches_terminal_id_idx",
-          "columns": [
-            {
-              "expression": "terminalId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "machine_branches_terminal_project_branch_idx": {
-          "name": "machine_branches_terminal_project_branch_idx",
-          "columns": [
-            {
-              "expression": "terminalId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "projectName",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "branchName",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "machine_branches_ownerId_users_id_fk": {
-          "name": "machine_branches_ownerId_users_id_fk",
-          "tableFrom": "machine_branches",
-          "tableTo": "users",
-          "columnsFrom": [
-            "ownerId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "machine_branches_terminalId_pages_id_fk": {
-          "name": "machine_branches_terminalId_pages_id_fk",
-          "tableFrom": "machine_branches",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "terminalId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "machine_branches_sessionKey_unique": {
-          "name": "machine_branches_sessionKey_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "sessionKey"
-          ]
-        }
-      }
     },
     "public.form_targets": {
       "name": "form_targets",
