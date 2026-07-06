@@ -262,7 +262,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(consumeStepUpGrant).toHaveBeenCalledWith({
           userId: 'test-user-id',
           token: 'ps_stepup_test',
-          actionBinding: { name: 'My Token', driveScopes: '' },
+          actionBinding: { name: 'My Token', driveScopes: '[]' },
         });
       });
     });

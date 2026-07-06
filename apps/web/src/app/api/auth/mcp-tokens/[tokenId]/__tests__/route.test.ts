@@ -326,7 +326,7 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
       expect(consumeStepUpGrant).toHaveBeenCalledWith({
         userId: 'test-user-id',
         token: 'ps_stepup_test',
-        actionBinding: { name: 'token-123', driveScopes: 'drive-1:ADMIN:' },
+        actionBinding: { name: 'token-123', driveScopes: '[["drive-1","ADMIN",""]]' },
       });
     });
   });
