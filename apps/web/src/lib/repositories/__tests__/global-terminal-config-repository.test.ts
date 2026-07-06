@@ -7,23 +7,54 @@
  * validation, and own-machine-page lazy provisioning/reuse.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockGetOrCreateConfig, mockUpdateRawConfig, mockGetHomeDrive, mockGetUserAccessiblePagesInDrive, mockDbSelect, mockPageRepoFindById, mockPageRepoGetNextPosition, mockPageRepoCreate, mockProvisionHomeDriveIfNeeded } =
-  vi.hoisted(() => ({
-    mockGetOrCreateConfig: vi.fn(),
-    mockUpdateRawConfig: vi.fn(),
-    mockGetHomeDrive: vi.fn(),
-    mockGetUserAccessiblePagesInDrive: vi.fn(),
-    mockDbSelect: vi.fn(),
-    mockPageRepoFindById: vi.fn(),
-    mockPageRepoGetNextPosition: vi.fn(),
-    mockPageRepoCreate: vi.fn(),
-    mockProvisionHomeDriveIfNeeded: vi.fn(),
-  }));
+const {
+  mockGetOrCreateConfig,
+  mockGetHomeDrive,
+  mockGetUserAccessiblePagesInDrive,
+  mockDbSelect,
+  mockPageRepoFindById,
+  mockPageRepoGetNextPosition,
+  mockPageRepoCreate,
+  mockProvisionHomeDriveIfNeeded,
+  mockTxLockedRow,
+  mockTxUpdateSet,
+} = vi.hoisted(() => ({
+  mockGetOrCreateConfig: vi.fn(),
+  mockGetHomeDrive: vi.fn(),
+  mockGetUserAccessiblePagesInDrive: vi.fn(),
+  mockDbSelect: vi.fn(),
+  mockPageRepoFindById: vi.fn(),
+  mockPageRepoGetNextPosition: vi.fn(),
+  mockPageRepoCreate: vi.fn(),
+  mockProvisionHomeDriveIfNeeded: vi.fn(),
+  mockTxLockedRow: vi.fn(),
+  mockTxUpdateSet: vi.fn(),
+}));
+
+// Fakes the `SELECT ... FOR UPDATE` + `UPDATE ... SET` transaction chain
+// getOrCreateOwnMachinePageId uses to serialize concurrent provisioning.
+const fakeTx = {
+  select: () => ({
+    from: () => ({
+      where: () => ({
+        for: async () => mockTxLockedRow(),
+      }),
+    }),
+  }),
+  update: () => ({
+    set: (values: unknown) => ({
+      where: async () => mockTxUpdateSet(values),
+    }),
+  }),
+};
 
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: (...args: unknown[]) => mockDbSelect(...args) },
+  db: {
+    select: (...args: unknown[]) => mockDbSelect(...args),
+    transaction: async (cb: (tx: typeof fakeTx) => unknown) => cb(fakeTx),
+  },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
@@ -33,9 +64,11 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', title: 'title', type: 'type', isTrashed: 'isTrashed' },
 }));
+vi.mock('@pagespace/db/schema/integrations', () => ({
+  globalAssistantConfig: { userId: 'user_id', ownMachinePageId: 'own_machine_page_id' },
+}));
 vi.mock('@pagespace/lib/integrations/repositories/config-repository', () => ({
   getOrCreateConfig: (...args: unknown[]) => mockGetOrCreateConfig(...args),
-  updateConfig: (...args: unknown[]) => mockUpdateRawConfig(...args),
 }));
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getHomeDrive: (...args: unknown[]) => mockGetHomeDrive(...args),
@@ -59,6 +92,10 @@ vi.mock('@/lib/onboarding/home-drive', () => ({
 
 import { globalTerminalConfigRepository } from '../global-terminal-config-repository';
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 describe('globalTerminalConfigRepository.getConfig', () => {
   it('given machines is not a valid MachineRef array (e.g. null), should coerce to an empty array', async () => {
     mockGetOrCreateConfig.mockResolvedValue({ terminalAccess: false, machines: null });
@@ -76,14 +113,6 @@ describe('globalTerminalConfigRepository.getConfig', () => {
       terminalAccess: true,
       machines: [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
     });
-  });
-});
-
-describe('globalTerminalConfigRepository.updateConfig', () => {
-  it('should forward only the defined fields to the raw config update', async () => {
-    mockUpdateRawConfig.mockResolvedValue({ terminalAccess: true, machines: [{ kind: 'own' }] });
-    await globalTerminalConfigRepository.updateConfig('u1', { terminalAccess: true });
-    expect(mockUpdateRawConfig).toHaveBeenCalledWith(expect.anything(), 'u1', { terminalAccess: true });
   });
 });
 
@@ -133,18 +162,23 @@ describe('globalTerminalConfigRepository.validateMachines', () => {
 });
 
 describe('globalTerminalConfigRepository.getOrCreateOwnMachinePageId', () => {
-  it('given an existing valid ownMachinePageId, should reuse it without creating a new page', async () => {
-    mockGetOrCreateConfig.mockResolvedValue({ ownMachinePageId: 'page-1' });
+  beforeEach(() => {
+    mockGetOrCreateConfig.mockResolvedValue({ ownMachinePageId: null });
+  });
+
+  it('given an existing valid ownMachinePageId under the row lock, should reuse it without creating a new page', async () => {
+    mockTxLockedRow.mockReturnValue([{ ownMachinePageId: 'page-1' }]);
     mockPageRepoFindById.mockResolvedValue({ id: 'page-1', type: 'TERMINAL' });
 
     const result = await globalTerminalConfigRepository.getOrCreateOwnMachinePageId('u1');
 
     expect(result).toBe('page-1');
     expect(mockProvisionHomeDriveIfNeeded).not.toHaveBeenCalled();
+    expect(mockTxUpdateSet).not.toHaveBeenCalled();
   });
 
-  it('given no ownMachinePageId yet, should provision the Home drive and create a personal Terminal page', async () => {
-    mockGetOrCreateConfig.mockResolvedValue({ ownMachinePageId: null });
+  it('given no ownMachinePageId under the row lock, should provision the Home drive, create a personal Terminal page, and persist it', async () => {
+    mockTxLockedRow.mockReturnValue([{ ownMachinePageId: null }]);
     mockProvisionHomeDriveIfNeeded.mockResolvedValue({ driveId: 'home-drive-1', created: false });
     mockPageRepoGetNextPosition.mockResolvedValue(1);
     mockPageRepoCreate.mockResolvedValue({ id: 'new-page-1', title: 'My Machine', type: 'TERMINAL' });
@@ -155,11 +189,11 @@ describe('globalTerminalConfigRepository.getOrCreateOwnMachinePageId', () => {
     expect(mockPageRepoCreate).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'TERMINAL', driveId: 'home-drive-1', createdBy: 'u1' }),
     );
-    expect(mockUpdateRawConfig).toHaveBeenCalledWith(expect.anything(), 'u1', { ownMachinePageId: 'new-page-1' });
+    expect(mockTxUpdateSet).toHaveBeenCalledWith({ ownMachinePageId: 'new-page-1' });
   });
 
   it('given a stale ownMachinePageId whose page no longer exists, should re-provision a new one', async () => {
-    mockGetOrCreateConfig.mockResolvedValue({ ownMachinePageId: 'deleted-page' });
+    mockTxLockedRow.mockReturnValue([{ ownMachinePageId: 'deleted-page' }]);
     mockPageRepoFindById.mockResolvedValue(null);
     mockProvisionHomeDriveIfNeeded.mockResolvedValue({ driveId: 'home-drive-1', created: false });
     mockPageRepoGetNextPosition.mockResolvedValue(2);
@@ -168,5 +202,17 @@ describe('globalTerminalConfigRepository.getOrCreateOwnMachinePageId', () => {
     const result = await globalTerminalConfigRepository.getOrCreateOwnMachinePageId('u1');
 
     expect(result).toBe('replacement-page');
+  });
+
+  it('given a second concurrent caller sees the first caller\'s committed row under the lock, should reuse the winner\'s page instead of provisioning its own', async () => {
+    // Simulates the second (blocked) caller unblocking AFTER the first committed
+    // its ownMachinePageId — the row lock is what makes this the observed order.
+    mockTxLockedRow.mockReturnValueOnce([{ ownMachinePageId: 'winner-page' }]);
+    mockPageRepoFindById.mockResolvedValue({ id: 'winner-page', type: 'TERMINAL' });
+
+    const result = await globalTerminalConfigRepository.getOrCreateOwnMachinePageId('u2');
+
+    expect(result).toBe('winner-page');
+    expect(mockPageRepoCreate).not.toHaveBeenCalled();
   });
 });

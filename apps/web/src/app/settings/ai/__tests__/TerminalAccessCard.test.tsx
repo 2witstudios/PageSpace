@@ -32,6 +32,22 @@ describe('TerminalAccessCard', () => {
     expect(screen.getByText('Loading…')).toBeInTheDocument();
   });
 
+  it('given the initial GET fails, should show a distinct error state (not stuck on Loading…) with a working retry', async () => {
+    mocks.fetchWithAuth.mockRejectedValueOnce(new Error('network down'));
+    render(<TerminalAccessCard />);
+
+    await waitFor(() => expect(screen.getByText('Could not load Terminal Access settings.')).toBeInTheDocument());
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+
+    mocks.fetchWithAuth.mockResolvedValueOnce(
+      mockGetResponse({ terminalAccess: false, machines: [], availableTerminals: [] }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(screen.getByText('Terminal Access')).toBeInTheDocument());
+    expect(screen.queryByText('Could not load Terminal Access settings.')).not.toBeInTheDocument();
+  });
+
   it('given terminalAccess is off, should render the toggle unchecked and hide the machines section', async () => {
     mocks.fetchWithAuth.mockResolvedValue(
       mockGetResponse({ terminalAccess: false, machines: [], availableTerminals: [] }),

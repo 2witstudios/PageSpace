@@ -29,11 +29,15 @@ function machineKey(machine: MachineRef): string {
 export function TerminalAccessCard() {
   const [config, setConfig] = useState<TerminalAccessConfig | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedTerminalId, setSelectedTerminalId] = useState('');
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setLoadError(false);
     (async () => {
       try {
         const response = await fetchWithAuth('/api/user/assistant-config');
@@ -48,7 +52,10 @@ export function TerminalAccessCard() {
         }
       } catch (error) {
         console.error('Failed to load terminal access config:', error);
-        if (!cancelled) toast.error('Failed to load Terminal Access settings');
+        if (!cancelled) {
+          setLoadError(true);
+          toast.error('Failed to load Terminal Access settings');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -56,7 +63,7 @@ export function TerminalAccessCard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadToken]);
 
   async function persist(next: { terminalAccess: boolean; machines: MachineRef[] }) {
     if (!config) return;
@@ -73,11 +80,24 @@ export function TerminalAccessCard() {
     }
   }
 
-  if (loading || !config) {
+  if (loading) {
     return (
       <Card>
         <CardContent className="py-6">
           <p className="text-sm text-muted-foreground">Loading…</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (loadError || !config) {
+    return (
+      <Card>
+        <CardContent className="py-6 flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">Could not load Terminal Access settings.</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => setReloadToken((t) => t + 1)}>
+            Retry
+          </Button>
         </CardContent>
       </Card>
     );
