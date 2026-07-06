@@ -95,6 +95,10 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
   const [isBusy, setIsBusy] = useState(false);
   const [formTarget, setFormTarget] = useState<FormTarget | null>(null);
   const [driveId, setDriveId] = useState<string | null>(null);
+  // True while setting up a replacement for an archived target — the create
+  // form otherwise only renders when formTarget is null, which an archived
+  // target (a terminal but still-returned status) would never satisfy.
+  const [creatingNew, setCreatingNew] = useState(false);
 
   // Draft state for a brand-new form target — only meaningful while formTarget is null.
   const [draftSheetPageId, setDraftSheetPageId] = useState<string | null>(null);
@@ -163,6 +167,7 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
       const data = (await res.json()) as { formTargetId: string; formHtml: string };
       onEmbedFormHtml(data.formHtml, data.formTargetId);
       toast.success('Form created and embedded into this Canvas page');
+      setCreatingNew(false);
       await loadFormTarget();
     } catch {
       toast.error('Failed to create the form');
@@ -246,7 +251,7 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
     return <div className="p-4 text-sm text-muted-foreground">Loading…</div>;
   }
 
-  if (!formTarget) {
+  if (!formTarget || creatingNew) {
     return (
       <div className="p-4 max-w-2xl space-y-4">
         <Card>
@@ -258,6 +263,11 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {formTarget && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setCreatingNew(false)}>
+                ← Back to the archived form
+              </Button>
+            )}
             <div className="space-y-1.5">
               <Label>Target Sheet</Label>
               {driveId ? (
@@ -421,7 +431,18 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
               </SelectContent>
             </Select>
             {formTarget.status === 'archived' && (
-              <span className="text-xs text-muted-foreground">Archiving is permanent</span>
+              <>
+                <span className="text-xs text-muted-foreground">Archiving is permanent</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="ml-auto"
+                  onClick={() => setCreatingNew(true)}
+                >
+                  Set up a new form
+                </Button>
+              </>
             )}
           </div>
 

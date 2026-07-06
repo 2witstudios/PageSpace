@@ -5,6 +5,25 @@ a new row in a Sheet page. This is the human-facing reference for hand-editing
 a form already provisioned via the `provision_form_target` AI tool — the tool
 itself returns ready-to-embed HTML, so most authors never need this doc.
 
+## Setting one up without an AI agent
+
+A Canvas page has a **Forms** tab (next to View/Code) for creating and
+managing a form target directly: pick a target Sheet, define fields, and the
+generated HTML is embedded into the page automatically. It's backed by the
+same `form_targets` row and the same provisioning path as
+`provision_form_target` — an AI-tool-provisioned form appears in the tab too
+once it's linked to a Canvas page (`canvasPageId`), and a tab-provisioned form
+can be managed by an AI agent via `update_form_target_status`.
+
+Fields are **append-only** once a target exists — mirroring Google Forms:
+reordering or removing a field would misalign already-collected columns, so
+the tab only lets you append a new field, edit a label/type/required flag, or
+archive a field to retire it without losing its column's history. Adding a
+field after creation can't regenerate the full embedded `<form>` (the raw
+submit token is only ever available once, at creation), so the tab returns a
+standalone `<input>`/`<label>` snippet to paste into the already-embedded
+form instead.
+
 ## The convention
 
 1. **Provision first.** Call `provision_form_target` with the target Sheet's
@@ -36,7 +55,12 @@ Call `update_form_target_status` with the `formTargetId` (returned by
 
 - **paused** — submissions are rejected (identical to an unknown token — no
   oracle for whether a token exists), resumable later.
-- **archived** — permanent; cannot be reactivated.
+- **archived** — permanent; cannot be reactivated. Enforced server-side (a
+  reactivation attempt is rejected, not silently accepted), and the Forms tab
+  disables the status control once archived. To replace an archived form,
+  use the tab's "Set up a new form" — it provisions a fresh target against
+  (optionally) a different Sheet and takes over the Canvas page's embed;
+  the archived target's history and Sheet data are untouched.
 
 Both take effect on the very next submission — there is no cache or
 propagation delay, since the submit endpoint re-reads status on every request.

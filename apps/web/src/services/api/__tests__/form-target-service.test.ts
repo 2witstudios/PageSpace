@@ -50,6 +50,9 @@ vi.mock('@pagespace/db/db', () => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
           limit: mockSelectLimit,
+          orderBy: vi.fn(() => ({
+            limit: mockSelectLimit,
+          })),
         })),
       })),
     })),
@@ -69,6 +72,7 @@ vi.mock('@pagespace/db/operators', () => ({
   ne: vi.fn((field: unknown, value: unknown) => ({ field, value, ne: true })),
   and: vi.fn((...conditions: unknown[]) => ({ and: conditions })),
   or: vi.fn((...conditions: unknown[]) => ({ or: conditions })),
+  desc: vi.fn((field: unknown) => ({ field, desc: true })),
 }));
 
 import {
@@ -191,6 +195,30 @@ describe('createFormTarget', () => {
         mutationContext: { userId: 'user-1' },
       })
     ).rejects.toThrow(/not a SHEET/i);
+  });
+
+  it('releases any prior target\'s claim on the same Canvas page before inserting the new one', async () => {
+    await createFormTarget({
+      sheetPageId: 'sheet-1',
+      fields,
+      createdBy: 'user-1',
+      mutationContext: { userId: 'user-1' },
+      canvasPageId: 'canvas-1',
+    });
+
+    expect(txMock.update).toHaveBeenCalled();
+    expect(mockTxUpdateWhere).toHaveBeenCalled();
+  });
+
+  it('does not touch other rows when no canvasPageId is provided', async () => {
+    await createFormTarget({
+      sheetPageId: 'sheet-1',
+      fields,
+      createdBy: 'user-1',
+      mutationContext: { userId: 'user-1' },
+    });
+
+    expect(txMock.update).not.toHaveBeenCalled();
   });
 });
 

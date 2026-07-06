@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { eq, and, ne, or } from '@pagespace/db/operators';
+import { eq, and, ne, or, desc } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { formTargets, type FormTarget, type FormFieldDef, type FormTargetStatus } from '@pagespace/db/schema/form-targets';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
@@ -92,6 +92,18 @@ export async function createFormTarget({
         tx,
       });
 
+      // Release any prior (necessarily archived — the Forms settings UI only
+      // offers "create a replacement" once the existing target is archived)
+      // target's claim on this Canvas page first, so at most one row ever
+      // matches canvasPageId — getFormTargetByCanvasPageId relies on that to
+      // stay unambiguous rather than picking arbitrarily among several.
+      if (canvasPageId) {
+        await tx
+          .update(formTargets)
+          .set({ canvasPageId: null })
+          .where(eq(formTargets.canvasPageId, canvasPageId));
+      }
+
       return tx
         .insert(formTargets)
         .values({
@@ -137,13 +149,20 @@ export async function getFormTargetById(formTargetId: string): Promise<FormTarge
 /**
  * Looks up the form target embedded in a given Canvas page, if any. Returns
  * any status (not just active), same as getFormTargetById — the Forms
- * settings UI must still show a paused/archived target so it can be resumed.
+ * settings UI must still show a paused/archived target so it can be viewed.
+ *
+ * Ordered by createdAt desc so that if a Canvas page ever has more than one
+ * matching row (e.g. an archived target left behind after the settings UI
+ * created a replacement — see createFormTarget's canvasPageId hand-off), the
+ * most recently created one wins deterministically instead of an
+ * unspecified Postgres row order.
  */
 export async function getFormTargetByCanvasPageId(canvasPageId: string): Promise<FormTarget | null> {
   const [row] = await db
     .select()
     .from(formTargets)
     .where(eq(formTargets.canvasPageId, canvasPageId))
+    .orderBy(desc(formTargets.createdAt))
     .limit(1);
   return row ?? null;
 }
