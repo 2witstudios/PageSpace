@@ -10,6 +10,10 @@
  * same shared `confirmDestructive` gate every other destructive command
  * (`pages trash`, `drives trash`, `tasks delete`, ...) uses, via the
  * `HandlerContext`'s own `isTTY`/`prompt`.
+ *
+ * `tokensRevoke` is exported separately from `tokensRevokeHandler` so
+ * `commands/keys/aliases.ts` can wrap it in a distinct `CommandHandler`
+ * reference (Phase 9 task 5) — see the identical note in `list.ts`.
  */
 import { revokeMcpToken } from '@pagespace/sdk';
 import { confirmationFailureMessage, confirmDestructive } from '../../confirm.js';
@@ -17,7 +21,7 @@ import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../exit-c
 import type { CommandHandler } from '../../router/router.js';
 import { parseTokensRevokeArgs } from './args.js';
 
-export const tokensRevokeHandler: CommandHandler = async (ctx, intent) => {
+export const tokensRevoke: CommandHandler = async (ctx, intent) => {
   const parsed = parseTokensRevokeArgs(intent.args);
   if (!parsed.ok) {
     ctx.stderr.write(`${parsed.message}\n`);
@@ -49,3 +53,5 @@ export const tokensRevokeHandler: CommandHandler = async (ctx, intent) => {
 
   return EXIT_SUCCESS;
 };
+
+export const tokensRevokeHandler: CommandHandler = tokensRevoke;

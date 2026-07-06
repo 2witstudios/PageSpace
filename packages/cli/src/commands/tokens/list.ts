@@ -6,13 +6,19 @@
  *
  * Auth flows only through `ctx.sdk` — see create.ts for why this handler
  * has no auth wiring of its own.
+ *
+ * `tokensList` is exported separately from `tokensListHandler` so
+ * `commands/keys/aliases.ts` can wrap it in a distinct `CommandHandler`
+ * reference (Phase 9 task 5) — `run.ts`'s `AUTH_EXEMPT_HANDLERS` gates by
+ * handler identity, and `keys list` (ambient-credential-eligible) must be
+ * exempt without also exempting `tokens list` (explicit-credential-only).
  */
 import type { z } from 'zod';
 import { listMcpTokens } from '@pagespace/sdk';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../../exit-codes.js';
 import type { CommandHandler } from '../../router/router.js';
 
-export const tokensListHandler: CommandHandler = async (ctx, intent) => {
+export const tokensList: CommandHandler = async (ctx, intent) => {
   let tokens: z.infer<typeof listMcpTokens.outputSchema>;
   try {
     tokens = await ctx.sdk.invoke(listMcpTokens, {});
@@ -40,3 +46,5 @@ export const tokensListHandler: CommandHandler = async (ctx, intent) => {
 
   return EXIT_SUCCESS;
 };
+
+export const tokensListHandler: CommandHandler = tokensList;
