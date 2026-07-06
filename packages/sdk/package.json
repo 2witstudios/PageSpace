@@ -1,0 +1,42 @@
+{
+  "name": "@pagespace/sdk",
+  "version": "0.1.1",
+  "description": "Typed TypeScript/JavaScript client SDK for the PageSpace API — drives, pages, tasks, roles, search, agents, and more.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2witstudios/PageSpace.git",
+    "directory": "packages/sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "bun run build",
+    "pretypecheck": "bun run build",
+    "typecheck": "tsc --noEmit",
+    "pretest": "bun run build",
+    "test": "vitest run",
+    "pretest:coverage": "bun run build",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@pagespace/lib": "workspace:*"
+  }
+}

@@ -9,8 +9,7 @@ import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { TaskRenderer } from './TaskRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { renderToolContent } from './registry';
-import { parseIntegrationToolName, isIntegrationTool } from '@pagespace/lib/integrations/converter/ai-sdk';
-import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
 
 interface ToolPart {
   type: string;
@@ -24,6 +23,8 @@ interface ToolPart {
 
 interface ToolCallRendererProps {
   part: ToolPart;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 // Helper for safe JSON parsing
@@ -42,7 +43,7 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
 };
 
 // Tool name mapping (display labels for the collapsible header)
-const TOOL_NAME_MAP: Record<string, string> = {
+export const TOOL_NAME_MAP: Record<string, string> = {
   // Drive tools
   'list_drives': 'Workspaces',
   'create_drive': 'Create Workspace',
@@ -119,7 +120,7 @@ const TOOL_NAME_MAP: Record<string, string> = {
 };
 
 // Internal renderer component with hooks
-const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function ToolCallRendererInternal({ part, toolName }) {
+const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; open?: boolean; onOpenChange?: (open: boolean) => void }> = memo(function ToolCallRendererInternal({ part, toolName, open, onOpenChange }) {
   const state = part.state || 'input-available';
   const input = part.input;
   const output = part.output;
@@ -148,16 +149,11 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
 
   // Memoize formatted tool name
   const formattedToolName = useMemo(() => {
-    if (isIntegrationTool(toolName)) {
-      const parsed = parseIntegrationToolName(toolName);
-      if (parsed) {
-        const provider = getBuiltinProvider(parsed.providerSlug);
-        const tool = provider?.tools.find(t => t.id === parsed.toolId);
-        if (tool) return tool.name;
-        return parsed.toolId.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-      }
-    }
-    return TOOL_NAME_MAP[toolName] || toolName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    return (
+      resolveIntegrationToolLabel(toolName) ||
+      TOOL_NAME_MAP[toolName] ||
+      toolName.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+    );
   }, [toolName]);
 
   // Memoize descriptive title
@@ -203,8 +199,18 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
   );
 
   // Render with rich content (no Parameters/Result wrappers)
+  // Only pass open/onOpenChange (making the Collapsible controlled) when a
+  // caller actually provides onOpenChange — otherwise Radix's
+  // useControllableState would see `open` flip from undefined to a boolean
+  // the first time an ancestor records a manual toggle, logging an
+  // uncontrolled-to-controlled warning even though nothing is visibly wrong.
+  // Deciding controlled-ness once, up front, based on onOpenChange's
+  // presence (rather than open's value) means a given mounted instance never
+  // changes modes across its lifetime.
+  const collapsibleProps = onOpenChange ? { open: open ?? false, onOpenChange } : {};
+
   return (
-    <Tool className="my-2">
+    <Tool className="my-2" {...collapsibleProps}>
       <ToolHeader
         title={descriptiveTitle}
         type={`tool-${toolName}`}
@@ -228,24 +234,17 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> =
   );
 });
 
-export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function ToolCallRenderer({ part }) {
-  let toolName = part.toolName || part.type?.replace('tool-', '') || 'unknown_tool';
-  let resolvedPart = part;
+export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function ToolCallRenderer({ part, open, onOpenChange }) {
+  const dispatch = dispatchToolCall(part, TASK_TOOL_NAMES);
 
-  if (toolName === 'tool_search') return null;
-
-  if (toolName === 'execute_tool') {
-    const raw = safeJsonParse(part.input);
-    const innerName = typeof raw?.tool_name === 'string' ? raw.tool_name : null;
-    if (innerName) {
-      toolName = innerName;
-      resolvedPart = { ...part, input: raw?.parameters ?? {} };
-    }
+  switch (dispatch.kind) {
+    case 'hidden':
+      return null;
+    case 'task':
+      return <TaskRenderer part={dispatch.part} />;
+    case 'agent':
+      return <PageAgentConversationRenderer part={dispatch.part} />;
+    case 'generic':
+      return <ToolCallRendererInternal part={dispatch.part} toolName={dispatch.toolName} open={open} onOpenChange={onOpenChange} />;
   }
-
-  if (toolName === 'tool_search') return null;
-
-  if (TASK_TOOL_NAMES.has(toolName)) return <TaskRenderer part={resolvedPart} />;
-  if (toolName === 'ask_agent') return <PageAgentConversationRenderer part={resolvedPart} />;
-  return <ToolCallRendererInternal part={resolvedPart} toolName={toolName} />;
 });

@@ -120,6 +120,17 @@ export interface KickResult {
   error?: string;
 }
 
+/** Client-received shape of the `access_revoked` socket event (see apps/realtime/src/kick-handler.ts's executeKick). */
+export interface AccessRevokedPayload {
+  room: string;
+  reason: KickReason;
+  metadata?: {
+    driveId?: string;
+    pageId?: string;
+    driveName?: string;
+  };
+}
+
 export interface InboxEventPayload {
   operation: InboxOperation;
   type: 'dm' | 'channel';
@@ -1267,6 +1278,22 @@ export async function kickUserFromRooms(payload: KickPayload): Promise<KickResul
       body: requestBody,
       signal: AbortSignal.timeout(30000),
     });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      realtimeLogger.error(
+        'Kick request rejected by realtime server',
+        undefined,
+        {
+          userId: maskIdentifier(payload.userId),
+          roomPattern: payload.roomPattern,
+          reason: payload.reason,
+          status: response.status,
+          errorBody,
+        }
+      );
+      return { success: false, kickedCount: 0, rooms: [], error: `Kick request failed with status ${response.status}` };
+    }
 
     const result = await response.json() as KickResult;
 

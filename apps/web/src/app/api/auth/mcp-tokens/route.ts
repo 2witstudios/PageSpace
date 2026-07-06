@@ -6,11 +6,16 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import { customRoleBelongsToDrive, getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
+import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { rejectScopedOAuth } from './scope-guard';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+// 'oauth' lets the pagespace CLI (which never holds a session cookie —
+// `pagespace tokens create/list` authenticates with an OAuth access token
+// from `pagespace login`) call this route directly. CSRF is already skipped
+// for Bearer-token auth (`authenticateRequestWithOptions`), so this is not a
+// CSRF-relevant change.
+const AUTH_OPTIONS_READ = { allow: ['session', 'oauth'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'oauth'] as const, requireCSRF: true };
 
 // Schema for creating a new MCP token
 const createTokenSchema = z.object({
@@ -30,6 +35,8 @@ const createTokenSchema = z.object({
 export async function POST(req: NextRequest) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   try {
@@ -42,34 +49,8 @@ export async function POST(req: NextRequest) {
     const uniqueDriveScopes = [...new Map(driveScopes.map(d => [d.id, d])).values()];
 
     if (uniqueDriveScopes.length > 0) {
-      const invalidDriveIds: string[] = [];
-      const unauthorizedRoles: string[] = [];
-      const invalidCustomRoles: string[] = [];
-      const unauthorizedCustomRoles: string[] = [];
-
-      for (const scope of uniqueDriveScopes) {
-        const access = await getDriveAccess(scope.id, userId);
-        if (!access.isOwner && !access.isMember) {
-          invalidDriveIds.push(scope.id);
-          continue;
-        }
-        // A MEMBER cannot grant ADMIN — cap to caller's actual authority
-        if (scope.role === 'ADMIN' && !access.isAdmin) {
-          unauthorizedRoles.push(scope.id);
-        }
-        // Prevent using a custom role that belongs to a different drive
-        if (scope.customRoleId && !await customRoleBelongsToDrive(scope.customRoleId, scope.id)) {
-          invalidCustomRoles.push(scope.id);
-          continue;
-        }
-        // Non-admins can only mint tokens with their own assigned custom role
-        if (scope.customRoleId && !access.isAdmin && !access.isOwner) {
-          const callerCustomRoleId = await getMemberCustomRoleId(scope.id, userId);
-          if (scope.customRoleId !== callerCustomRoleId) {
-            unauthorizedCustomRoles.push(scope.id);
-          }
-        }
-      }
+      const { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles } =
+        await validateDriveScopeAccess(uniqueDriveScopes, userId);
 
       if (invalidDriveIds.length > 0) {
         return NextResponse.json(
@@ -150,6 +131,8 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
+  const scopeRejection = rejectScopedOAuth(auth);
+  if (scopeRejection) return scopeRejection;
   const userId = auth.userId;
 
   try {

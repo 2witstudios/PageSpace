@@ -6,7 +6,7 @@
 
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray, type InferSelectModel } from '@pagespace/db/operators'
-import { socketTokens, deviceTokens, mcpTokens } from '@pagespace/db/schema/auth'
+import { deviceTokens, mcpTokens } from '@pagespace/db/schema/auth'
 import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { drives } from '@pagespace/db/schema/core';
 
@@ -14,17 +14,6 @@ export type DeviceToken = InferSelectModel<typeof deviceTokens>;
 export type McpToken = InferSelectModel<typeof mcpTokens>;
 
 export const sessionRepository = {
-  /**
-   * Store a hashed socket token for Socket.IO authentication.
-   */
-  async createSocketToken(data: {
-    tokenHash: string;
-    userId: string;
-    expiresAt: Date;
-  }): Promise<void> {
-    await db.insert(socketTokens).values(data);
-  },
-
   /**
    * Update a device token's deviceId (one-time OAuth migration fix).
    * Returns the updated record, or null if not found.
@@ -105,16 +94,20 @@ export const sessionRepository = {
       columns: {
         id: true,
         name: true,
+        tokenPrefix: true,
         lastUsed: true,
         createdAt: true,
         isScoped: true,
       },
       with: {
         driveScopes: {
-          columns: { driveId: true },
+          columns: { driveId: true, role: true, customRoleId: true },
           with: {
             drive: {
               columns: { id: true, name: true },
+            },
+            customRole: {
+              columns: { id: true, name: true, color: true },
             },
           },
         },
@@ -124,6 +117,7 @@ export const sessionRepository = {
     return tokens.map((token) => ({
       id: token.id,
       name: token.name,
+      tokenPrefix: token.tokenPrefix,
       lastUsed: token.lastUsed,
       createdAt: token.createdAt,
       isScoped: token.isScoped,
@@ -132,6 +126,9 @@ export const sessionRepository = {
         .map((scope) => ({
           id: scope.drive.id,
           name: scope.drive.name,
+          role: scope.role,
+          customRoleId: scope.customRoleId,
+          customRoleName: scope.customRole?.name ?? null,
         })),
     }));
   },
@@ -158,6 +155,56 @@ export const sessionRepository = {
       .update(mcpTokens)
       .set({ revokedAt: new Date() })
       .where(and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)));
+  },
+
+  /**
+   * Replace all drive scopes on an existing MCP token transactionally.
+   *
+   * Once a token is scoped, it stays scoped (isScoped is never set to false).
+   * If drives is empty, all existing scopes are removed but the token remains
+   * scoped (fail-closed: scoped + no drives = deny all access).
+   *
+   * Returns the updated token record, or null if the token doesn't belong
+   * to the given user.
+   */
+  async updateMcpTokenDriveScopes(
+    tokenId: string,
+    userId: string,
+    drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[]
+  ): Promise<McpToken | null> {
+    // Ownership check — must match both tokenId AND userId
+    const existing = await db.query.mcpTokens.findFirst({
+      where: and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)),
+      columns: { id: true },
+    });
+    if (!existing) return null;
+
+    return db.transaction(async (tx) => {
+      // Delete all existing drive scopes for this token
+      await tx.delete(mcpTokenDrives).where(eq(mcpTokenDrives.tokenId, tokenId));
+
+      // Insert new scopes
+      if (drives.length > 0) {
+        await tx.insert(mcpTokenDrives).values(
+          drives.map(({ id: driveId, role, customRoleId }) => ({
+            tokenId,
+            driveId,
+            role,
+            customRoleId: customRoleId ?? null,
+            addedBy: userId,
+          }))
+        );
+      }
+
+      // Ensure token stays scoped (once scoped, always scoped)
+      const [updated] = await tx
+        .update(mcpTokens)
+        .set({ isScoped: true })
+        .where(eq(mcpTokens.id, tokenId))
+        .returning();
+
+      return updated;
+    });
   },
 };
 

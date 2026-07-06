@@ -143,8 +143,12 @@ export const verificationTokens = pgTable('verification_tokens', {
   };
 });
 
-// Socket tokens for cross-origin Socket.IO authentication
-// Short-lived tokens (5 min) that bypass sameSite: 'strict' cookie restrictions
+// DEPRECATED (#1054): superseded by the unified `sessions` table with
+// `type: 'socket'`, minted/validated through opaque-tokens.ts + session-service.ts
+// like every other token type. No longer written to. Left in place (rather than
+// dropped) so the retention-cleanup job keeps purging any legacy rows and so we
+// avoid a table drop in the same PR that changes the write path. Safe to drop in
+// a follow-up once confirmed empty in production.
 export const socketTokens = pgTable('socket_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),

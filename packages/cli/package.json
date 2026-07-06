@@ -1,0 +1,49 @@
+{
+  "name": "@pagespace/cli",
+  "version": "0.1.2",
+  "description": "pagespace — the official CLI for PageSpace: browser-based login, drive/page/task management, and a `pagespace mcp` stdio server for coding agents.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2witstudios/PageSpace.git",
+    "directory": "packages/cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "bin": {
+    "pagespace": "./dist/bin.js",
+    "pagespace-mcp": "./dist/bin-pagespace-mcp.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/bin.js dist/bin-pagespace-mcp.js",
+    "prepack": "bun run build",
+    "pretypecheck": "bun run build",
+    "typecheck": "tsc --noEmit",
+    "pretest": "bun run build",
+    "test": "vitest run",
+    "pretest:coverage": "bun run build",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@napi-rs/keyring": "^1.3.0",
+    "@pagespace/sdk": "^0.1.1",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@pagespace/lib": "workspace:*"
+  }
+}

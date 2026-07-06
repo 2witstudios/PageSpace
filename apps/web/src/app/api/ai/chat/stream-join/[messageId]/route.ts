@@ -7,6 +7,11 @@ import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 
 export const dynamic = 'force-dynamic';
 
+// How often to re-verify view access on an open SSE connection. Bounds the window during
+// which a revoked user can keep receiving an in-flight stream to a few seconds, without
+// putting a permission check in the hot path of every streamed chunk.
+const PERMISSION_RECHECK_INTERVAL_MS = 5000;
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ messageId: string }> },
@@ -35,9 +40,10 @@ export async function GET(
   }
 
   const channelOwner = parseGlobalChannelId(meta.pageId);
-  const canView = channelOwner !== null
-    ? channelOwner === userId
-    : await canUserViewPage(userId, meta.pageId);
+  const hasViewAccess = async (): Promise<boolean> =>
+    channelOwner !== null ? channelOwner === userId : canUserViewPage(userId, meta.pageId);
+
+  const canView = await hasViewAccess();
   if (!canView) {
     auditRequest(request, {
       eventType: 'authz.access.denied',
@@ -50,11 +56,17 @@ export async function GET(
   }
 
   const encoder = new TextEncoder();
+  const encodeDoneFrame = (aborted: boolean): Uint8Array =>
+    encoder.encode(`data: ${JSON.stringify({ done: true, aborted })}\n\n`);
   // Chunks that arrive during subscribe's synchronous buffer replay, before the
   // ReadableStream controller exists, are collected here and flushed in start().
   const preBuffer: Uint8Array[] = [];
   let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
   let streamClosed = false;
+  // Self-rescheduled after each check resolves (see recheckAccess) rather than a
+  // fixed-cadence interval, so a slow permission check can't stack overlapping ones.
+  let recheckTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  const clearRecheckTimeout = () => clearTimeout(recheckTimeoutId);
 
   const unsubscribe = streamMulticastRegistry.subscribe(
     messageId,
@@ -67,7 +79,8 @@ export async function GET(
       }
     },
     (aborted) => {
-      const done = encoder.encode(`data: ${JSON.stringify({ done: true, aborted })}\n\n`);
+      clearRecheckTimeout();
+      const done = encodeDoneFrame(aborted);
       if (streamController) {
         streamController.enqueue(done);
         streamController.close();
@@ -111,9 +124,54 @@ export async function GET(
       request.signal.addEventListener('abort', () => {
         if (streamClosed) return;
         streamClosed = true;
+        clearRecheckTimeout();
         unsubscribe();
         controller.close();
       }, { once: true });
+
+      const closeStreamAsDenied = (reason: string) => {
+        streamClosed = true;
+        unsubscribe();
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          resourceType: 'ai_stream',
+          resourceId: messageId,
+          details: { reason, pageId: meta.pageId },
+          riskScore: 0.5,
+        });
+        try {
+          controller.enqueue(encodeDoneFrame(true));
+          controller.close();
+        } catch {
+          // Controller may already be closed via a racing path (e.g. client abort
+          // firing between the streamClosed check above and this enqueue) — the
+          // stream is already torn down either way, nothing more to do.
+        }
+      };
+
+      const recheckAccess = async () => {
+        if (streamClosed) return;
+        let stillAllowed: boolean;
+        try {
+          stillAllowed = await hasViewAccess();
+        } catch {
+          // Fail closed: a broken permission check must not silently disable the
+          // revocation backstop for the rest of the stream's lifetime. Without this,
+          // a transient DB error would leave the stream open with no future rechecks.
+          if (!streamClosed) closeStreamAsDenied('permission_recheck_failed');
+          return;
+        }
+        if (streamClosed) return;
+
+        if (stillAllowed) {
+          recheckTimeoutId = setTimeout(() => void recheckAccess(), PERMISSION_RECHECK_INTERVAL_MS);
+          return;
+        }
+
+        closeStreamAsDenied('permission_revoked_mid_stream');
+      };
+
+      recheckTimeoutId = setTimeout(() => void recheckAccess(), PERMISSION_RECHECK_INTERVAL_MS);
     },
   });
 

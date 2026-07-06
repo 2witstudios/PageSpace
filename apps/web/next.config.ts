@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import CopyPlugin from "copy-webpack-plugin";
 import { withSentryConfig } from "@sentry/nextjs";
+import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
 
 // Guard: only externalize workspace packages when running in production AND
 // their dist directories exist. The production check prevents stale dist/
@@ -14,10 +15,15 @@ const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/
 const workspaceDistReady =
   process.env.NODE_ENV === "production" && dbDistExists && libDistExists;
 
-const nextConfig: NextConfig = {
+// Named export so tests can assert on rewrites()/redirects() without going
+// through withSentryConfig's wrapping.
+export const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
   transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
+  // Preserve RFC 8252 loopback redirect_uri query values; NextRequest URL
+  // normalization rewrites percent-encoded 127.0.0.1 to localhost otherwise.
+  skipMiddlewareUrlNormalize: true,
   // pg resolves via bun's cache path (~/.bun/install/cache/pg@.../), which
   // contains no "node_modules" segment, so Next.js's path-based heuristic
   // fails to auto-externalize it. List it explicitly here as a backstop; the
@@ -97,6 +103,13 @@ const nextConfig: NextConfig = {
       { source: '/dashboard/inbox', destination: '/dashboard/dms', permanent: false },
       { source: '/dashboard/:driveId/inbox', destination: '/dashboard/:driveId/channels', permanent: false },
     ];
+  },
+  async rewrites() {
+    // beforeFiles: /.well-known/* must be rewritten BEFORE Next's filesystem +
+    // prerender check, otherwise the prerendered 404 for that namespace (Next
+    // treats it as static because public/.well-known/ exists) wins and the
+    // afterFiles rewrite never fires. See RFC 8414 discovery — pagespace-cli.
+    return { beforeFiles: [...WELL_KNOWN_REWRITES] };
   },
 };
 

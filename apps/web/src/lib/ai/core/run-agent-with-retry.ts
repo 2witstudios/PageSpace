@@ -51,7 +51,12 @@ export interface RunAgentWithRetryParams {
   maxRetries?: number;
   /** `Date.now()` at request start, for the wall-clock budget. */
   startTimeMs: number;
-  /** Stop retrying once elapsed exceeds this (keeps us under the 300s function cap). */
+  /**
+   * Stop retrying once elapsed exceeds this (keeps us under the 300s function cap).
+   * If you change this default (or any route's `maxDuration`), also check
+   * `SANDBOX_MAX_TIMEOUT_MS` (packages/lib/src/services/sandbox/execution-policy.ts)
+   * — its cap is sized to leave headroom under this budget for a single bash call.
+   */
   maxDurationMs?: number;
   /** Backoff before retry attempt N (0-indexed). Default 0.5s then 1.5s. Injectable for tests. */
   backoffMs?: (attempt: number) => number;
@@ -85,6 +90,17 @@ const mergeUsage = (
     totalTokens: num(acc.totalTokens, next.totalTokens),
     reasoningTokens: num(acc.reasoningTokens, next.reasoningTokens),
     cachedInputTokens: num(acc.cachedInputTokens, next.cachedInputTokens),
+    // v6 added required token-detail breakdowns to LanguageModelUsage; sum them
+    // field-wise so accumulated usage stays a valid LanguageModelUsage across attempts.
+    inputTokenDetails: {
+      noCacheTokens: num(acc.inputTokenDetails?.noCacheTokens, next.inputTokenDetails?.noCacheTokens),
+      cacheReadTokens: num(acc.inputTokenDetails?.cacheReadTokens, next.inputTokenDetails?.cacheReadTokens),
+      cacheWriteTokens: num(acc.inputTokenDetails?.cacheWriteTokens, next.inputTokenDetails?.cacheWriteTokens),
+    },
+    outputTokenDetails: {
+      textTokens: num(acc.outputTokenDetails?.textTokens, next.outputTokenDetails?.textTokens),
+      reasoningTokens: num(acc.outputTokenDetails?.reasoningTokens, next.outputTokenDetails?.reasoningTokens),
+    },
   };
 };
 
@@ -164,16 +180,18 @@ export async function runAgentWithRetry(
 
     // The stream may have errored mid-flight (or buildStreamText threw, leaving aiResult
     // undefined); default each field defensively so a failed attempt is classified.
+    // v6: streamText result fields are PromiseLike (no `.catch`); wrap in
+    // Promise.resolve() to recover full Promise semantics without changing behavior.
     const finishReason: FinishReason | undefined = aiResult
-      ? await aiResult.finishReason.catch(() => undefined)
+      ? await Promise.resolve(aiResult.finishReason).catch(() => undefined)
       : undefined;
     const responseMessages: ModelMessage[] = aiResult
-      ? await aiResult.response.then((r) => r.messages).catch(() => [])
+      ? await Promise.resolve(aiResult.response).then((r) => r.messages).catch(() => [])
       : [];
     const steps: ProviderMetadataCarrier[] = aiResult
-      ? await aiResult.steps.then((s) => s as ProviderMetadataCarrier[]).catch(() => [])
+      ? await Promise.resolve(aiResult.steps).then((s) => s as ProviderMetadataCarrier[]).catch(() => [])
       : [];
-    const usage = aiResult ? await aiResult.totalUsage.catch(() => undefined) : undefined;
+    const usage = aiResult ? await Promise.resolve(aiResult.totalUsage).catch(() => undefined) : undefined;
 
     accumulatedSteps.push(...steps);
     accumulatedUsage = mergeUsage(accumulatedUsage, usage);

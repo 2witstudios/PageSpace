@@ -33,6 +33,14 @@ export const STATUS_GROUP_CONFIG: Record<TaskStatusGroup, { label: string; color
   done: { label: 'Done', color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
 };
 
+/**
+ * Groups that aren't one of the 3 known keys (e.g. a task list whose
+ * taskStatusConfigs never got seeded) must not crash the Kanban board.
+ */
+export function getStatusGroupConfig(group: string): { label: string; color: string } {
+  return STATUS_GROUP_CONFIG[group as TaskStatusGroup] ?? STATUS_GROUP_CONFIG.todo;
+}
+
 export interface KanbanCardProps {
   task: Task;
   isDragging?: boolean;
@@ -224,7 +232,7 @@ export function KanbanColumn({
   onCancelEdit,
 }: KanbanColumnProps) {
   const { setNodeRef } = useDroppable({ id: statusGroup });
-  const config = STATUS_GROUP_CONFIG[statusGroup];
+  const config = getStatusGroupConfig(statusGroup);
 
   return (
     <div className="flex-shrink-0 w-72 flex flex-col">

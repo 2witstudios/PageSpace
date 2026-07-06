@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canActorEditPage } from './actor-permissions';
+import { canActorEditPage, isMcpScoped } from './actor-permissions';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentRepository } from '@pagespace/lib/repositories/agent-repository';
@@ -8,6 +9,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { ToolExecutionContext } from '../core/types';
 import { pageSpaceTools } from '../core/ai-tools';
+import { filterToolsForMcpScope } from '../core/tool-filtering';
 import { validateAgentModelSelection } from '../core/ai-providers-config';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 
@@ -32,8 +34,9 @@ export const agentTools = {
       includePageTree: z.boolean().optional().describe('Include page tree structure in the agent\'s context.'),
       pageTreeScope: z.enum(['children', 'drive']).optional().describe('Scope for page tree: "children" or "drive".'),
       toolExposureMode: z.enum(['upfront', 'search']).optional().describe('How tools are exposed to the agent: "upfront" sends every enabled tool schema directly, "search" sends only core tools plus tool_search/execute_tool so the model discovers the rest on demand.'),
+      userScopedAccess: z.boolean().optional().describe('Owner-only: when true, this agent falls back to the invoking user\'s own access instead of being confined to its own drive memberships. Use for personal/global-style assistants that need the user\'s full reach.'),
     }),
-    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope, toolExposureMode }, { experimental_context: context }) => {
+    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope, toolExposureMode, userScopedAccess }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -53,9 +56,21 @@ export const agentTools = {
           throw new Error('Insufficient permissions to update this AI agent');
         }
 
-        // Validate enabled tools if provided
+        // userScopedAccess widens the agent's reach to the invoking user's entire
+        // account, so it's gated stricter than general edit access — only the
+        // drive owner may toggle it, mirroring the issue's "owner-only" flag.
+        if (userScopedAccess !== undefined) {
+          const driveAccess = await checkDriveAccess(agent.driveId, userId);
+          if (!driveAccess.isOwner) {
+            throw new Error('Only the drive owner can change this agent\'s user-scoped access setting');
+          }
+        }
+
+        // Validate enabled tools if provided. A drive-scoped MCP token cannot
+        // newly enable an account-level-only tool (e.g. create_drive) —
+        // mirrors the runtime chat/consult tool-list filtering.
         if (enabledTools && enabledTools.length > 0) {
-          const availableToolNames = Object.keys(pageSpaceTools);
+          const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isMcpScoped(context as ToolExecutionContext)));
           const invalidTools = enabledTools.filter(toolName => !availableToolNames.includes(toolName));
           if (invalidTools.length > 0) {
             throw new Error(`Invalid tools specified: ${invalidTools.join(', ')}. Available tools: ${availableToolNames.join(', ')}`);
@@ -87,6 +102,7 @@ export const agentTools = {
           includePageTree?: boolean;
           pageTreeScope?: 'children' | 'drive';
           toolExposureMode?: 'upfront' | 'search';
+          userScopedAccess?: boolean;
         }
 
         const updateData: AgentUpdateData = {};
@@ -120,6 +136,9 @@ export const agentTools = {
         }
         if (toolExposureMode !== undefined) {
           updateData.toolExposureMode = toolExposureMode;
+        }
+        if (userScopedAccess !== undefined) {
+          updateData.userScopedAccess = userScopedAccess;
         }
 
         const updatedFields = Object.keys(updateData);

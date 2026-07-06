@@ -468,4 +468,81 @@ describe('POST /api/workflows', () => {
 
     expect(response.status).toBe(201);
   });
+
+  // The DB column and internal create_workflow tool both support
+  // instructionPageId as an alternative to prompt (agentTriggerBaseSchema).
+  // The route's .strict() schema previously rejected it outright and
+  // required prompt unconditionally — any MCP/SDK client sending
+  // instructionPageId got a 400 despite the feature working end-to-end
+  // internally.
+  it('should return 400 when neither prompt nor instructionPageId is provided', async () => {
+    vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+      isOwner: true,
+      isMember: true,
+      drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+    }));
+
+    const { prompt: _prompt, ...bodyWithoutPrompt } = validBody;
+    const request = new Request('https://example.com/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyWithoutPrompt),
+    });
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Invalid input');
+  });
+
+  it('should return 400 when instructionPageId page is not found in the drive', async () => {
+    vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+      isOwner: true,
+      isMember: true,
+      drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+    }));
+    vi.mocked(validateCronExpression).mockReturnValue({ valid: true });
+    mockWhere
+      .mockResolvedValueOnce([{ id: 'page_1', type: 'AI_CHAT', driveId: mockDriveId }]) // agent lookup
+      .mockResolvedValueOnce([]); // instruction page lookup
+
+    const { prompt: _prompt, ...bodyWithoutPrompt } = validBody;
+    const request = new Request('https://example.com/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...bodyWithoutPrompt, instructionPageId: 'page_missing' }),
+    });
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Instruction page not found in this drive');
+  });
+
+  it('should create a workflow from instructionPageId alone, defaulting the prompt', async () => {
+    vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+      isOwner: true,
+      isMember: true,
+      drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+    }));
+    vi.mocked(validateCronExpression).mockReturnValue({ valid: true });
+    vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
+    mockWhere
+      .mockResolvedValueOnce([{ id: 'page_1', type: 'AI_CHAT', driveId: mockDriveId }]) // agent lookup
+      .mockResolvedValueOnce([{ id: 'page_instr', driveId: mockDriveId, isTrashed: false }]); // instruction page lookup
+
+    const { prompt: _prompt, ...bodyWithoutPrompt } = validBody;
+    const request = new Request('https://example.com/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...bodyWithoutPrompt, instructionPageId: 'page_instr' }),
+    });
+    const response = await POST(request);
+
+    expect(response.status).toBe(201);
+    expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({
+      instructionPageId: 'page_instr',
+      prompt: 'Execute instructions from linked page.',
+    }));
+  });
 });

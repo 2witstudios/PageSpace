@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canActorEditPage, canActorDeletePage, driveDeniedByAppToken } from './actor-permissions';
+import { canActorEditPage, canActorDeletePage, canActorManageDrive, driveDeniedByAppToken } from './actor-permissions';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
@@ -20,6 +20,7 @@ import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, create
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { ensureTaskListForPage } from '@/services/api/task-sync-service';
 import { replaceLines } from '@/lib/editor/line-edit';
 import { insertAtAnchor } from '@/lib/editor/text-edit';
 
@@ -284,12 +285,17 @@ async function trashPage(
 
 // Helper: Trash a drive
 async function trashDrive(
-  userId: string,
+  context: ToolExecutionContext,
   driveId: string,
   confirmDriveName: string
 ): Promise<{ id: string; name: string; slug: string }> {
-  // Use repository seam for drive lookup
-  const drive = await driveRepository.findByIdAndOwner(driveId, userId);
+  // Owner or admin — mirrors DELETE /api/drives/[driveId], which allows both,
+  // not just the owner (canActorManageDrive handles MCP scope/app-token ceilings).
+  if (!(await canActorManageDrive(context, driveId))) {
+    throw new Error('Drive not found or you do not have permission to delete it');
+  }
+
+  const drive = await driveRepository.findById(driveId);
 
   if (!drive) {
     throw new Error('Drive not found or you do not have permission to delete it');
@@ -626,6 +632,18 @@ export const pageWriteTools = {
           });
         }
 
+        // TASK_LIST pages need their `task_lists` + default status configs seeded
+        // immediately — unlike the browser's page-creation flow, this repository-level
+        // create() bypasses pageService.createPage()'s seeding, so without this the
+        // Kanban UI crashes on first load with no status-group config to render.
+        if (type === 'TASK_LIST') {
+          await ensureTaskListForPage(db, {
+            pageId: newPage.id,
+            title: newPage.title,
+            userId,
+          });
+        }
+
         await createPageVersion({
           pageId: newPage.id,
           driveId: drive.id,
@@ -850,7 +868,7 @@ export const pageWriteTools = {
         if (!confirmDriveName) {
           throw new Error('Drive name confirmation is required for trashing drives (confirmDriveName parameter)');
         }
-        const drive = await trashDrive(userId, id, confirmDriveName);
+        const drive = await trashDrive(context as ToolExecutionContext, id, confirmDriveName);
 
         // Log activity for AI-generated drive trash (fire-and-forget)
         logDriveActivityAsync(userId, 'trash', {
@@ -989,10 +1007,11 @@ export const pageWriteTools = {
           throw new Error(`Page with ID "${pageId}" not found`);
         }
 
-        // Check permissions on the source page
-        const canEdit = await canActorEditPage(context as ToolExecutionContext,page.id);
-        if (!canEdit) {
-          throw new Error('Insufficient permissions to move this page');
+        // Moving/reordering a page requires drive owner or admin — mirrors the
+        // /api/pages/reorder REST route's authorization bar for the same operation.
+        const canManage = await canActorManageDrive(context as ToolExecutionContext, page.driveId);
+        if (!canManage) {
+          throw new Error('Only drive owners and admins can move pages');
         }
 
         // If newParentId is provided, verify it exists and is in the same drive
@@ -1000,14 +1019,6 @@ export const pageWriteTools = {
           const parentExists = await pageRepository.existsInDrive(newParentId, page.driveId);
           if (!parentExists) {
             throw new Error(`Parent page with ID "${newParentId}" not found in this drive`);
-          }
-        }
-
-        // Check permissions on the destination if moving to a folder
-        if (newParentId) {
-          const canEditDest = await canActorEditPage(context as ToolExecutionContext,newParentId);
-          if (!canEditDest) {
-            throw new Error('Insufficient permissions to move page to this destination');
           }
         }
 

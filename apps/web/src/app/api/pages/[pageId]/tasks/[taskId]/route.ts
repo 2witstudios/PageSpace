@@ -12,8 +12,10 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 
-import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
+import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger, disableTaskTriggers, createTaskTriggerWorkflow, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
 import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS } from '@/lib/tasks/completion-guard';
+import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
+import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -61,7 +63,7 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const { title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, position } = body;
+  const { title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, position, note, timezone, agentTrigger } = body;
 
   // Build update object
   const updates: Partial<typeof taskItems.$inferInsert> = {};
@@ -112,6 +114,18 @@ export async function PATCH(
         updates.completedAt = null;
       }
     }
+  }
+
+  // Add note to metadata (mirrors the internal update_task tool)
+  if (note || status !== undefined) {
+    updates.metadata = {
+      ...(existingTask.metadata as Record<string, unknown> || {}),
+      lastUpdate: {
+        at: new Date().toISOString(),
+        note,
+        ...(status !== undefined ? { statusChange: { from: existingTask.status, to: status } } : {}),
+      },
+    };
   }
 
   if (priority !== undefined) {
@@ -182,8 +196,33 @@ export async function PATCH(
     updates.dueDate = dueDate ? new Date(dueDate) : null;
   }
 
-  if (position !== undefined) {
-    updates.position = position;
+  // Validate agentTrigger shape up front (before any writes), mirroring the POST route.
+  let normalizedAgentTrigger: typeof agentTrigger | undefined;
+  if (agentTrigger) {
+    if (!taskListPage?.driveId) {
+      return NextResponse.json({ error: 'Agent triggers require a drive-based task list' }, { status: 400 });
+    }
+    if (!agentTrigger.agentPageId || typeof agentTrigger.agentPageId !== 'string') {
+      return NextResponse.json({ error: 'agentTrigger.agentPageId is required' }, { status: 400 });
+    }
+    if (!agentTrigger.prompt && !agentTrigger.instructionPageId) {
+      return NextResponse.json({ error: 'Agent trigger needs either a prompt or instructionPageId' }, { status: 400 });
+    }
+    if (agentTrigger.prompt && (typeof agentTrigger.prompt !== 'string' || agentTrigger.prompt.length > 10000)) {
+      return NextResponse.json({ error: 'agentTrigger.prompt must be a string of at most 10000 characters' }, { status: 400 });
+    }
+    const triggerType = agentTrigger.triggerType || 'due_date';
+    if (triggerType !== 'due_date' && triggerType !== 'completion') {
+      return NextResponse.json({ error: 'agentTrigger.triggerType must be "due_date" or "completion"' }, { status: 400 });
+    }
+    const effectiveDueDate = dueDate !== undefined ? (dueDate ? new Date(dueDate) : null) : existingTask.dueDate;
+    if (triggerType === 'due_date' && !effectiveDueDate) {
+      return NextResponse.json({ error: 'Due date is required for due_date triggers' }, { status: 400 });
+    }
+    if (agentTrigger.contextPageIds && (!Array.isArray(agentTrigger.contextPageIds) || agentTrigger.contextPageIds.length > 10)) {
+      return NextResponse.json({ error: 'contextPageIds must be an array of at most 10 page IDs' }, { status: 400 });
+    }
+    normalizedAgentTrigger = { ...agentTrigger, triggerType };
   }
 
   // Completion guard: cannot mark a task done while it has incomplete sub-tasks
@@ -314,6 +353,30 @@ export async function PATCH(
     throw error;
   }
 
+  // Clamp + re-densify positions (0..n-1), matching the reorder_task tool — replaces
+  // the previous raw, unclamped position write that could leave duplicate/gapped positions.
+  if (position !== undefined) {
+    await reorderTaskPeers(pageId, taskId, position);
+  }
+
+  // Create the agent trigger workflow after the transaction commits, mirroring update_task.
+  let agentTriggerResult: TaskTriggerWorkflowResult | undefined;
+  if (normalizedAgentTrigger && taskListPage?.driveId) {
+    const resolvedTimezone = typeof timezone === 'string' && timezone.trim()
+      ? timezone.trim()
+      : (await getUserTimezone(userId)) || 'UTC';
+    agentTriggerResult = await createTaskTriggerWorkflow({
+      database: db,
+      driveId: taskListPage.driveId,
+      userId,
+      taskId,
+      taskMetadata: updatedTask.metadata as Record<string, unknown> | null,
+      agentTrigger: normalizedAgentTrigger,
+      dueDate: updatedTask.dueDate,
+      timezone: resolvedTimezone,
+    });
+  }
+
   // Task trigger cascades (after transaction commits)
   if (dueDate !== undefined) {
     void syncTaskDueDateTrigger(taskId, dueDate ? new Date(dueDate) : null);
@@ -386,7 +449,13 @@ export async function PATCH(
     }
   }
 
-  const responseBody = { ...taskWithRelations, title: responseTitle };
+  // Surface the trigger created/updated by an inline agentTrigger — otherwise
+  // the response is indistinguishable from an update that touched no trigger.
+  const responseBody = {
+    ...taskWithRelations,
+    title: responseTitle,
+    ...(agentTriggerResult ? { agentTrigger: agentTriggerResult } : {}),
+  };
 
   // Broadcast events
   const broadcasts: Promise<void>[] = [
@@ -512,8 +581,14 @@ export async function DELETE(
     }
   }
 
-  // Disable triggers only after successful page trash
-  void disableTaskTriggers(taskId, 'Task deleted');
+  // Disable triggers before hard-deleting the task row: task_triggers cascades on
+  // taskItemId, so deleting first would wipe the rows this helper needs to read.
+  await disableTaskTriggers(taskId, 'Task deleted');
+
+  // Hard-delete the task row (REST parity with the internal delete_task tool) —
+  // trashing the linked page alone left a resurrectable "deleted" task: restoring
+  // the trashed page brought the task back since the taskItems row still existed.
+  await db.delete(taskItems).where(eq(taskItems.id, taskId));
 
   // Broadcast events
   const broadcasts: Promise<void>[] = [

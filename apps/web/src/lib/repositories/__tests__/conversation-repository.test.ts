@@ -116,6 +116,81 @@ describe('conversationRepository.getConversation', () => {
   });
 });
 
+describe('conversationRepository.createConversation', () => {
+  // #1846 Codex P2: a caller-supplied conversationId must not be able to
+  // claim ownership of a pre-existing conversation (real chat_messages, no
+  // conversations row yet) authored by a different user. Two DB round trips:
+  // (1) does a conversations row already exist? (2) if not, does any prior
+  // message in this conversation belong to someone else?
+  function mockConversationsLookup(existing: Array<{ id: string }>) {
+    const limitMock = vi.fn().mockResolvedValue(existing);
+    return { where: vi.fn().mockReturnValue({ limit: limitMock }) };
+  }
+  function mockChatMessagesLookup(rows: Array<{ userId: string | null }>) {
+    return { where: vi.fn().mockResolvedValue(rows) };
+  }
+
+  it('does nothing when a conversations row already exists (cheap indexed short-circuit)', async () => {
+    let call = 0;
+    mockSelectChain.from.mockImplementation(() => {
+      call += 1;
+      return mockConversationsLookup([{ id: 'conv-a' }]);
+    });
+
+    await conversationRepository.createConversation('conv-a', 'user-1', 'agent-1');
+
+    expect(call).toBe(1); // only the conversations lookup — never touches chat_messages or inserts
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('creates the row when no conversations row exists and no prior message conflicts', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
+    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
+    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+
+    await conversationRepository.createConversation('conv-new', 'user-1', 'agent-1');
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conv-new', userId: 'user-1', contextId: 'agent-1', isShared: false })
+    );
+    expect(onConflictDoNothing).toHaveBeenCalled();
+  });
+
+  it('does NOT create the row when an existing message in this conversation belongs to a different user (Codex P2)', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([
+        { userId: 'victim-user' },
+        { userId: null },
+      ]));
+
+    await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'agent-1');
+
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('creates the row when prior messages exist but all belong to the caller', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([
+        { userId: 'user-1' },
+        { userId: null },
+      ]));
+    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
+    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+
+    await conversationRepository.createConversation('conv-mine', 'user-1', 'agent-1');
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conv-mine', userId: 'user-1' })
+    );
+  });
+});
+
 describe('conversationRepository.setConversationShared', () => {
   it('should update isShared to true for a conversation', async () => {
     const whereMock = vi.fn().mockResolvedValue(undefined);

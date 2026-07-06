@@ -14,6 +14,7 @@ import {
   isOriginValidationBlocking,
 } from '@/lib/auth';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
+import { WELL_KNOWN_REWRITES } from '@/lib/well-known/rewrites';
 
 // Edge-safe middleware: only checks presence of auth tokens, not validity.
 // Full validation happens in route handlers via verifyAuth()/validateMCPToken().
@@ -103,10 +104,31 @@ export async function middleware(req: NextRequest) {
       return response;
     }
 
+    // Well-known discovery routes (e.g. RFC 8414 OAuth metadata) must be
+    // reachable with no session — it's the first request the CLI login flow
+    // makes. The App Router can't route `.`-prefixed folders, and next.config
+    // rewrites() run AFTER the filesystem/prerender check: because
+    // public/.well-known/ exists, Next serves that namespace a prerendered +
+    // cached 404 before any rewrite phase can fire (observed in prod:
+    // x-nextjs-prerender=1, x-nextjs-cache=HIT). Middleware runs BEFORE routing
+    // and is never cached, so the rewrite to the routable API handler must
+    // happen HERE. Match the pre-rewrite source pathname; this is also public
+    // (no session), which is why it sits above the auth checks below.
+    const wellKnown = WELL_KNOWN_REWRITES.find((rewrite) => rewrite.source === pathname);
+    if (wellKnown) {
+      return NextResponse.rewrite(new URL(wellKnown.destination, req.url));
+    }
+
     // Public routes that don't require authentication
     // Note: Cron routes handle their own auth via validateSignedCronRequest (HMAC-SHA256 + nonce)
     // Device/mobile auth endpoints authenticate via body tokens (device token, magic link),
     // not session cookies, so they must bypass the cookie check to allow cookie-expired recovery.
+    // OAuth grant endpoints are public by protocol design (RFC 6749/7009/8628): the CLI calls
+    // them with no browser session at all, authenticating via client_id/code/refresh_token/
+    // device_code in the request body instead — each route enforces its own auth internally
+    // (authorize's POST still requires a session; token/revoke/device_authorization never do).
+    // Exact matches only — device_authorization's /verify and /decision sub-routes are the
+    // browser-side /activate screen and DO require a session, so must not be swept in here.
     if (
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/login-csrf') ||
@@ -119,10 +141,15 @@ export async function middleware(req: NextRequest) {
       pathname.startsWith('/api/mcp/') ||
       pathname.startsWith('/api/drives') ||
       pathname.startsWith('/api/cron/') ||
+      pathname === '/api/oauth/authorize' ||
+      pathname === '/api/oauth/token' ||
+      pathname === '/api/oauth/revoke' ||
+      pathname === '/api/oauth/device_authorization' ||
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron' ||
       pathname === '/api/integrations/zoom/webhook' ||
-      pathname === '/api/health'
+      pathname === '/api/health' ||
+      pathname === '/api/version'
     ) {
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute });
       return response;

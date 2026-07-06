@@ -12,6 +12,11 @@
     "lint": "eslint src"
   },
   "exports": {
+    "./api-contract-version": {
+      "types": "./dist/api-contract-version.d.ts",
+      "import": "./dist/api-contract-version.js",
+      "require": "./dist/api-contract-version.js"
+    },
     "./client-safe": {
       "types": "./dist/client-safe.d.ts",
       "import": "./dist/client-safe.js",
@@ -351,6 +356,31 @@
       "types": "./dist/services/sandbox/sandbox-options.d.ts",
       "import": "./dist/services/sandbox/sandbox-options.js",
       "require": "./dist/services/sandbox/sandbox-options.js"
+    },
+    "./services/sandbox/containment": {
+      "types": "./dist/services/sandbox/containment.d.ts",
+      "import": "./dist/services/sandbox/containment.js",
+      "require": "./dist/services/sandbox/containment.js"
+    },
+    "./services/sandbox/network-options": {
+      "types": "./dist/services/sandbox/network-options.d.ts",
+      "import": "./dist/services/sandbox/network-options.js",
+      "require": "./dist/services/sandbox/network-options.js"
+    },
+    "./services/sandbox/injection-seam": {
+      "types": "./dist/services/sandbox/injection-seam.d.ts",
+      "import": "./dist/services/sandbox/injection-seam.js",
+      "require": "./dist/services/sandbox/injection-seam.js"
+    },
+    "./services/sandbox/outbound-throttle": {
+      "types": "./dist/services/sandbox/outbound-throttle.d.ts",
+      "import": "./dist/services/sandbox/outbound-throttle.js",
+      "require": "./dist/services/sandbox/outbound-throttle.js"
+    },
+    "./services/sandbox/egress-ip": {
+      "types": "./dist/services/sandbox/egress-ip.d.ts",
+      "import": "./dist/services/sandbox/egress-ip.js",
+      "require": "./dist/services/sandbox/egress-ip.js"
     },
     "./services/sandbox/session-store": {
       "types": "./dist/services/sandbox/session-store.d.ts",
@@ -907,6 +937,51 @@
       "import": "./dist/auth/constants.js",
       "require": "./dist/auth/constants.js"
     },
+    "./auth/oauth/scopes": {
+      "types": "./dist/auth/oauth/scopes.d.ts",
+      "import": "./dist/auth/oauth/scopes.js",
+      "require": "./dist/auth/oauth/scopes.js"
+    },
+    "./auth/oauth/metadata": {
+      "types": "./dist/auth/oauth/metadata.d.ts",
+      "import": "./dist/auth/oauth/metadata.js",
+      "require": "./dist/auth/oauth/metadata.js"
+    },
+    "./auth/oauth/clients": {
+      "types": "./dist/auth/oauth/clients.d.ts",
+      "import": "./dist/auth/oauth/clients.js",
+      "require": "./dist/auth/oauth/clients.js"
+    },
+    "./auth/oauth/authorize-request": {
+      "types": "./dist/auth/oauth/authorize-request.d.ts",
+      "import": "./dist/auth/oauth/authorize-request.js",
+      "require": "./dist/auth/oauth/authorize-request.js"
+    },
+    "./auth/oauth/consent": {
+      "types": "./dist/auth/oauth/consent.d.ts",
+      "import": "./dist/auth/oauth/consent.js",
+      "require": "./dist/auth/oauth/consent.js"
+    },
+    "./auth/oauth/code-lifecycle": {
+      "types": "./dist/auth/oauth/code-lifecycle.d.ts",
+      "import": "./dist/auth/oauth/code-lifecycle.js",
+      "require": "./dist/auth/oauth/code-lifecycle.js"
+    },
+    "./auth/oauth/issue-tokens": {
+      "types": "./dist/auth/oauth/issue-tokens.d.ts",
+      "import": "./dist/auth/oauth/issue-tokens.js",
+      "require": "./dist/auth/oauth/issue-tokens.js"
+    },
+    "./auth/oauth/refresh-rotation": {
+      "types": "./dist/auth/oauth/refresh-rotation.d.ts",
+      "import": "./dist/auth/oauth/refresh-rotation.js",
+      "require": "./dist/auth/oauth/refresh-rotation.js"
+    },
+    "./auth/oauth/user-code": {
+      "types": "./dist/auth/oauth/user-code.d.ts",
+      "import": "./dist/auth/oauth/user-code.js",
+      "require": "./dist/auth/oauth/user-code.js"
+    },
     "./auth/account-lockout": {
       "types": "./dist/auth/account-lockout.d.ts",
       "import": "./dist/auth/account-lockout.js",
@@ -952,6 +1027,11 @@
       "import": "./dist/auth/token-utils.js",
       "require": "./dist/auth/token-utils.js"
     },
+    "./auth/mcp-token-scopes": {
+      "types": "./dist/auth/mcp-token-scopes.d.ts",
+      "import": "./dist/auth/mcp-token-scopes.js",
+      "require": "./dist/auth/mcp-token-scopes.js"
+    },
     "./auth/exchange-codes": {
       "types": "./dist/auth/exchange-codes.d.ts",
       "import": "./dist/auth/exchange-codes.js",
@@ -971,6 +1051,11 @@
       "types": "./dist/auth/pkce.d.ts",
       "import": "./dist/auth/pkce.js",
       "require": "./dist/auth/pkce.js"
+    },
+    "./auth/oauth/pkce": {
+      "types": "./dist/auth/oauth/pkce.d.ts",
+      "import": "./dist/auth/oauth/pkce.js",
+      "require": "./dist/auth/oauth/pkce.js"
     },
     "./auth/passkey-service": {
       "types": "./dist/auth/passkey-service.d.ts",
@@ -1683,6 +1768,12 @@
       "auth/pkce": [
         "./dist/auth/pkce.d.ts"
       ],
+      "auth/oauth/pkce": [
+        "./dist/auth/oauth/pkce.d.ts"
+      ],
+      "auth/oauth/metadata": [
+        "./dist/auth/oauth/metadata.d.ts"
+      ],
       "auth/passkey-service": [
         "./dist/auth/passkey-service.d.ts"
       ],
@@ -1780,7 +1871,7 @@
     "server-only": "^0.0.1",
     "xlsx": "^0.18.5",
     "yaml": "^2.8.2",
-    "zod": "^4.0.16"
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@react-email/preview-server": "5.1.1",

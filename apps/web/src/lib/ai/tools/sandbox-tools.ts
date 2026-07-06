@@ -34,29 +34,40 @@ import type { ToolExecutionContext } from '../core/types';
 
 export const MAX_PATH_LENGTH = 1024;
 
-export const bashInputSchema = z.object({
-  command: z
-    .string()
-    .min(1, 'command is required')
-    .max(MAX_COMMAND_BYTES, 'command is too large'),
-  cwd: z.string().max(MAX_PATH_LENGTH).optional(),
-});
+export const bashInputSchema = z
+  .object({
+    command: z
+      .string()
+      .min(1, 'command is required')
+      .max(MAX_COMMAND_BYTES, 'command is too large'),
+    cwd: z.string().max(MAX_PATH_LENGTH).optional(),
+    // Opt-in override for long-running commands (e.g. `bun install`), clamped
+    // to SANDBOX_MAX_TIMEOUT_MS by the runner. Omit for the default (120s).
+    timeoutMs: z.number().int().positive().optional(),
+  })
+  .strict();
 
-export const writeFileInputSchema = z.object({
-  path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
-  content: z.string().max(MAX_WRITE_BYTES, 'content is too large'),
-});
+export const writeFileInputSchema = z
+  .object({
+    path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
+    content: z.string().max(MAX_WRITE_BYTES, 'content is too large'),
+  })
+  .strict();
 
-export const readFileInputSchema = z.object({
-  path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
-});
+export const readFileInputSchema = z
+  .object({
+    path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
+  })
+  .strict();
 
-export const editFileInputSchema = z.object({
-  path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
-  oldString: z.string().min(1, 'oldString is required'),
-  newString: z.string(),
-  replaceAll: z.boolean().optional(),
-});
+export const editFileInputSchema = z
+  .object({
+    path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
+    oldString: z.string().min(1, 'oldString is required'),
+    newString: z.string(),
+    replaceAll: z.boolean().optional(),
+  })
+  .strict();
 
 /** Resolves the actor context for a turn, or an error to surface to the model. */
 export type ResolveSandboxContext = (
@@ -113,10 +124,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
       description:
         'Run a shell command in this conversation\'s isolated sandbox. Returns stdout, stderr, and the exit code. The filesystem is scoped to the sandbox.',
       inputSchema: bashInputSchema,
-      execute: async ({ command, cwd }, options) => {
+      execute: async ({ command, cwd, timeoutMs }, options) => {
         const opened = await open(options);
         if (!opened.ok) return opened.error;
-        return runBashInSandbox({ command, cwd, ctx: opened.ctx, deps: runDeps });
+        return runBashInSandbox({ command, cwd, timeoutMs, ctx: opened.ctx, deps: runDeps });
       },
     }),
 

@@ -35,6 +35,7 @@ vi.mock('@/lib/repositories/session-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  isScopedOAuthAuth: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -68,22 +69,40 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/drive-service', () => ({
-  getDriveAccess: vi.fn(),
-}));
-
-vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
-  customRoleBelongsToDrive: vi.fn().mockResolvedValue(true),
-  getMemberCustomRoleId: vi.fn().mockResolvedValue(null),
+  validateDriveScopeAccess: vi.fn(),
 }));
 
 import { POST, GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import { getMemberCustomRoleId, customRoleBelongsToDrive } from '@pagespace/lib/permissions/membership-queries';
+import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
+
+const DRIVE_SCOPED_OAUTH = {
+  userId: 'test-user-id',
+  role: 'user',
+  tokenVersion: 0,
+  adminRoleVersion: 0,
+  tokenType: 'oauth',
+  tokenId: 'oauth-token-1',
+  scopes: { account: false, offlineAccess: false, drives: new Map([['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'inherit' } }]]) },
+  driveScopes: [{ driveId: 'drive-1', role: null, customRoleId: null }],
+  allowedDriveIds: ['drive-1'],
+};
+
+const ACCOUNT_SCOPED_OAUTH = {
+  userId: 'test-user-id',
+  role: 'user',
+  tokenVersion: 0,
+  adminRoleVersion: 0,
+  tokenType: 'oauth',
+  tokenId: 'oauth-token-2',
+  scopes: { account: true, offlineAccess: false, drives: new Map() },
+  driveScopes: [],
+  allowedDriveIds: [],
+};
 
 describe('/api/auth/mcp-tokens (additional coverage)', () => {
   beforeEach(() => {
@@ -99,6 +118,13 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
     } as never);
     vi.mocked(isAuthError).mockImplementation(
       (result: unknown) => result != null && typeof result === 'object' && 'error' in result
+    );
+    vi.mocked(isScopedOAuthAuth).mockImplementation(
+      (auth: unknown) =>
+        !!auth &&
+        typeof auth === 'object' &&
+        (auth as { tokenType?: string }).tokenType === 'oauth' &&
+        !(auth as { scopes?: { account?: boolean } }).scopes?.account
     );
 
     // Default mocks that need re-setup after resetAllMocks
@@ -118,21 +144,32 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
     vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([]);
     vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([]);
 
-    // Default drive access mock
-    vi.mocked(getDriveAccess).mockResolvedValue({
-      isOwner: true,
-      isAdmin: true,
-      isMember: true,
-      role: 'OWNER',
-    } as never);
-
-    // Default: custom role belongs to drive, caller has no custom role assigned
-    vi.mocked(customRoleBelongsToDrive).mockResolvedValue(true);
-    vi.mocked(getMemberCustomRoleId).mockResolvedValue(null);
+    // Default: drive scope validation succeeds
+    vi.mocked(validateDriveScopeAccess).mockResolvedValue({
+      invalidDriveIds: [],
+      unauthorizedRoles: [],
+      invalidCustomRoles: [],
+      unauthorizedCustomRoles: [],
+    });
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
     describe('authentication', () => {
+      it('allows OAuth bearer tokens (CLI `pagespace tokens create`), not just session cookies', async () => {
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Token' }),
+        });
+
+        await POST(request);
+
+        expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+          request,
+          expect.objectContaining({ allow: expect.arrayContaining(['oauth']) })
+        );
+      });
+
       it('returns auth error response when not authenticated', async () => {
         const mockErrorResponse = Response.json({ error: 'Unauthorized' }, { status: 401 });
         vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
@@ -150,14 +187,57 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       });
     });
 
+    describe('P1a — OAuth account-scope enforcement (a drive-scoped OAuth token must not mint an unscoped MCP token)', () => {
+      it('rejects a drive-scoped OAuth token, never reaching the repository', async () => {
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(DRIVE_SCOPED_OAUTH as never);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Token' }),
+        });
+
+        const response = await POST(request);
+
+        expect(response.status).toBe(403);
+        expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+      });
+
+      it('allows an account-scoped OAuth token', async () => {
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(ACCOUNT_SCOPED_OAUTH as never);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Token' }),
+        });
+
+        const response = await POST(request);
+
+        expect(response.status).toBe(200);
+      });
+
+      it('leaves session auth unaffected', async () => {
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Token' }),
+        });
+
+        const response = await POST(request);
+
+        expect(response.status).toBe(200);
+      });
+    });
+
     describe('drive scope validation', () => {
       it('returns 403 when user lacks access to specified drives', async () => {
-        vi.mocked(getDriveAccess).mockResolvedValue({
-          isOwner: false,
-          isAdmin: false,
-          isMember: false,
-          role: null,
-        } as never);
+        vi.mocked(validateDriveScopeAccess).mockResolvedValue({
+          invalidDriveIds: ['drive-1', 'drive-2'],
+          unauthorizedRoles: [],
+          invalidCustomRoles: [],
+          unauthorizedCustomRoles: [],
+        });
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -180,13 +260,6 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       });
 
       it('allows scoping to drives where user is member but not owner', async () => {
-        vi.mocked(getDriveAccess).mockResolvedValue({
-          isOwner: false,
-          isAdmin: false,
-          isMember: true,
-          role: 'MEMBER',
-        } as never);
-
         vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([
           { id: 'drive-1', name: 'Shared Drive' },
         ]);
@@ -206,13 +279,6 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       });
 
       it('deduplicates drive IDs', async () => {
-        vi.mocked(getDriveAccess).mockResolvedValue({
-          isOwner: true,
-          isAdmin: true,
-          isMember: true,
-          role: 'OWNER',
-        } as never);
-
         vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([
           { id: 'drive-1', name: 'My Drive' },
         ]);
@@ -230,8 +296,12 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         const response = await POST(request);
         expect(response.status).toBe(200);
 
-        // getDriveAccess should only be called once (deduplication)
-        expect(getDriveAccess).toHaveBeenCalledTimes(1);
+        // Validation should run once on the deduplicated set, not once per raw ID
+        expect(validateDriveScopeAccess).toHaveBeenCalledTimes(1);
+        expect(validateDriveScopeAccess).toHaveBeenCalledWith(
+          [{ id: 'drive-1', role: null, customRoleId: undefined }],
+          'test-user-id'
+        );
 
         // Repository should be called with deduplicated drives.
         // Legacy driveIds carry no role: stored role is null (inherit owner).
@@ -264,10 +334,12 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
     describe('custom role privilege escalation', () => {
       it('returns 403 when a MEMBER specifies a custom role not assigned to them', async () => {
-        vi.mocked(getDriveAccess).mockResolvedValue({
-          isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER',
-        } as never);
-        vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-assigned');
+        vi.mocked(validateDriveScopeAccess).mockResolvedValue({
+          invalidDriveIds: [],
+          unauthorizedRoles: [],
+          invalidCustomRoles: [],
+          unauthorizedCustomRoles: ['drive-1'],
+        });
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -283,10 +355,6 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       });
 
       it('allows a MEMBER to mint a token with their own assigned custom role', async () => {
-        vi.mocked(getDriveAccess).mockResolvedValue({
-          isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER',
-        } as never);
-        vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-xyz');
         vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([{ id: 'drive-1', name: 'Drive' }] as never);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
@@ -299,10 +367,11 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(response.status).toBe(200);
       });
 
-      it('allows an ADMIN to mint a token with any custom role without checking their own role', async () => {
-        vi.mocked(getDriveAccess).mockResolvedValue({
-          isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN',
-        } as never);
+      it('allows an ADMIN to mint a token with any custom role', async () => {
+        // Whether the admin-bypass rule (no ownership check on the caller's
+        // own custom role) is applied correctly is unit-tested directly on
+        // validateDriveScopeAccess in drive-service.test.ts; at the route
+        // level we just confirm a successful validation results in 200.
         vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([{ id: 'drive-1', name: 'Drive' }] as never);
 
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
@@ -313,7 +382,6 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
         const response = await POST(request);
         expect(response.status).toBe(200);
-        expect(getMemberCustomRoleId).not.toHaveBeenCalled();
       });
     });
 
@@ -348,6 +416,20 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
   describe('GET /api/auth/mcp-tokens', () => {
     describe('authentication', () => {
+      it('allows OAuth bearer tokens (CLI `pagespace tokens list`), not just session cookies', async () => {
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'GET',
+          headers: { Cookie: 'ps_session=valid-token' },
+        });
+
+        await GET(request);
+
+        expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+          request,
+          expect.objectContaining({ allow: expect.arrayContaining(['oauth']) })
+        );
+      });
+
       it('returns auth error response when not authenticated', async () => {
         const mockErrorResponse = Response.json({ error: 'Unauthorized' }, { status: 401 });
         vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
@@ -361,6 +443,27 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
         const response = await GET(request);
         expect(response.status).toBe(401);
+      });
+    });
+
+    describe('P1a — OAuth account-scope enforcement (a drive-scoped OAuth token must not list all MCP tokens)', () => {
+      it('rejects a drive-scoped OAuth token, never reaching the repository', async () => {
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(DRIVE_SCOPED_OAUTH as never);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', { method: 'GET' });
+        const response = await GET(request);
+
+        expect(response.status).toBe(403);
+        expect(sessionRepository.findUserMcpTokensWithDrives).not.toHaveBeenCalled();
+      });
+
+      it('allows an account-scoped OAuth token', async () => {
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue(ACCOUNT_SCOPED_OAUTH as never);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', { method: 'GET' });
+        const response = await GET(request);
+
+        expect(response.status).toBe(200);
       });
     });
 
@@ -392,6 +495,31 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         expect(response.status).toBe(200);
         expect(body[0].driveScopes.length).toBe(1);
         expect(body[0].driveScopes[0].id).toBe('drive-1');
+      });
+
+      it('includes tokenPrefix in the response so the CLI can display it without ever showing the full token', async () => {
+        vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([
+          {
+            id: 'token-1',
+            name: 'Token 1',
+            tokenPrefix: 'mcp_abcdefghijk',
+            lastUsed: null,
+            createdAt: new Date(),
+            isScoped: true,
+            driveScopes: [],
+          },
+        ] as never);
+
+        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
+          method: 'GET',
+          headers: { Cookie: 'ps_session=valid-token' },
+        });
+
+        const response = await GET(request);
+        const body = await response.json();
+
+        expect(body[0].tokenPrefix).toBe('mcp_abcdefghijk');
+        expect(JSON.stringify(body)).not.toContain('"token":');
       });
 
       it('includes isScoped field in response', async () => {

@@ -14,6 +14,14 @@ export const SANDBOX_EGRESS_ALLOWLIST = Object.freeze([
 ] as const);
 
 export const SANDBOX_TIMEOUT_MS = 120_000;
+// Opt-in ceiling for the `bash` tool's per-call `timeoutMs` override — long
+// installs/typechecks can ask for headroom above the default without lifting
+// the cap for every command. Kept well under the AI route's own budget
+// (runAgentWithRetry's maxDurationMs defaults to 285_000, itself under the
+// platform's hard maxDuration=300 route ceiling) — a single tool call must
+// leave room for the rest of the turn (model latency, other tool calls), not
+// consume the entire per-request budget by itself.
+export const SANDBOX_MAX_TIMEOUT_MS = 200_000;
 export const SANDBOX_MAX_OUTPUT_BYTES = 256 * 1024;
 
 // Resource caps set explicitly per sandbox at creation, rather than relying on

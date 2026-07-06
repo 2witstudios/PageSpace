@@ -1,28 +1,35 @@
 import { tool, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
-import { generateText, UIMessage, type ToolSet } from 'ai';
+import { generateText, UIMessage, type ToolSet, type Tool } from 'ai';
 import { db } from '@pagespace/db/db'
 import { eq, and, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
+import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
+import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, saveMessageToDatabase, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } from '@/lib/ai/core/ai-providers-config';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { createId } from '@paralleldrive/cuid2';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
+import { guardReadPageToolForVision } from './read-page-vision-output';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { pageWriteTools } from './page-write-tools';
 import { searchTools } from './search-tools';
 import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { MAX_FILE_PARTS_PER_MESSAGE } from '@/lib/ai/core/validate-image-parts';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
 // until inner stepCountIs budget is reworked — see PR #713. Raising this without
@@ -246,21 +253,32 @@ export const agentCommunicationTools = {
       }
       
       try {
-        // Get all drives the user has access to
-        const allUserDrives = await db
-          .select({
-            id: drives.id,
-            name: drives.name,
-            slug: drives.slug,
-          })
-          .from(drives)
-          .where(eq(drives.ownerId, userId)); // Simplified - you might want more complex permission logic
+        // Page-agents are scoped to their explicit drive memberships (matching
+        // list_drives), unless they've opted into user-scoped reach.
+        const agentPageId = await resolveActingAgentId(executionContext);
+        let userDrives: { id: string; name: string; slug: string }[];
 
-        // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
-        const allowedIds = new Set(
-          await filterDriveIdsByAppTokenScope(executionContext, allUserDrives.map((d) => d.id)),
-        );
-        const userDrives = allUserDrives.filter((d) => allowedIds.has(d.id));
+        if (agentPageId) {
+          const allAgentDrives = await listAgentDrives(agentPageId);
+          const scopedIds = new Set(
+            await filterDriveIdsByAppTokenScope(executionContext, allAgentDrives.map((d) => d.driveId)),
+          );
+          userDrives = allAgentDrives
+            .filter((d) => scopedIds.has(d.driveId))
+            .map((d) => ({ id: d.driveId, name: d.driveName, slug: d.driveSlug }));
+        } else {
+          // Full user-scoped reach: owned + member + page-permission drives
+          // (matches list_drives' user path), not just owned drives.
+          const allUserDrives = await listAccessibleDrives(userId);
+
+          // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
+          const allowedIds = new Set(
+            await filterDriveIdsByAppTokenScope(executionContext, allUserDrives.map((d) => d.id)),
+          );
+          userDrives = allUserDrives
+            .filter((d) => allowedIds.has(d.id))
+            .map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
+        }
 
         let totalAgentCount = 0;
         const agentsByDrive = [];
@@ -386,9 +404,25 @@ export const agentCommunicationTools = {
       agentId: z.string().describe('Unique ID of the AI agent page to consult'),
       question: z.string().describe('Question or request for the target agent. Be specific and provide context.'),
       context: z.string().optional().describe('Additional context about why you\'re asking this question or what you need the response for'),
-      conversationId: z.string().optional().describe('Optional conversation ID to continue a previous conversation. If not provided, a new conversation will be created. Use the conversationId returned in previous responses to continue the same conversation.')
+      conversationId: z.string().optional().describe('Optional conversation ID to continue a previous conversation. If not provided, a new conversation will be created. Use the conversationId returned in previous responses to continue the same conversation.'),
+      // ask_agent is itself an LLM-callable tool, so this input is untrusted
+      // model output, not just internal plumbing from the channel responder.
+      // The URL scheme restriction (https/data only) exists specifically so a
+      // prompt-injected caller can't point the model's file-part fetch at an
+      // arbitrary internal host (e.g. cloud metadata endpoints) — providers
+      // that don't accept URL passthrough have the AI SDK download file-part
+      // URLs server-side. The count cap mirrors the human-upload limit in
+      // validate-image-parts.ts so this path can't be used to bypass it.
+      imageAttachments: z.array(z.object({
+        url: z.string().refine(
+          (url) => url.startsWith('https://') || url.startsWith('data:'),
+          { message: 'imageAttachments url must be an https:// or data: URL' }
+        ).describe('Fetchable URL (data: URL or HTTPS) for the image'),
+        mediaType: z.string().describe('Image MIME type, e.g. image/png'),
+        filename: z.string().optional().describe('Original filename, if known'),
+      })).max(MAX_FILE_PARTS_PER_MESSAGE).optional().describe('Recent image attachments (e.g. from channel context) to give the target agent visual context. Ignored if the target agent\'s model does not support vision — a text note is added instead.'),
     }),
-    execute: async ({ agentPath, agentId, question, context, conversationId }, { experimental_context }) => {
+    execute: async ({ agentPath, agentId, question, context, conversationId, imageAttachments }, { experimental_context }) => {
       const executionContext = experimental_context as ToolExecutionContext;
       const userId = executionContext?.userId;
       
@@ -443,6 +477,15 @@ export const agentCommunicationTools = {
         // 3. Create or use existing conversation
         const activeConversationId = conversationId || createId();
 
+        // Eagerly ensure a conversations row exists so this conversation is
+        // listable via GET .../conversations (same fix as the consult route,
+        // #1837 finding #1) — without it, chat_messages are persisted but the
+        // listing query's ownership join never matches. createConversation
+        // itself refuses to claim ownership of a supplied conversationId that
+        // already has messages from a different user (see its doc comment) —
+        // safe to call unconditionally.
+        await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
+
         // 4. Load conversation history if continuing an existing conversation
         let messages: UIMessage[] = [];
         if (conversationId) {
@@ -457,7 +500,7 @@ export const agentCommunicationTools = {
             ))
             .orderBy(chatMessages.createdAt);
 
-          messages = dbMessages.map(convertDbMessageToUIMessage);
+          messages = await Promise.all(dbMessages.map(convertDbMessageToUIMessage));
 
           loggers.ai.debug('Loaded conversation history for ask_agent:', {
             conversationId,
@@ -468,15 +511,44 @@ export const agentCommunicationTools = {
 
         // 5. Build and save the user's question message
         const userMessageId = createId();
-        const userMessageContent = `${context ? `Context: ${context}\n\n` : ''}${question}`;
+        const targetHasVision = hasVisionCapability(targetAgent.aiModel || DEFAULT_MODEL);
+        const attachments = imageAttachments ?? [];
+        const attachmentCount = attachments.length;
+        const hasImageAttachments = attachmentCount > 0;
+        const attachmentNoun = attachmentCount === 1 ? 'image attachment' : 'image attachments';
+        // Past tense throughout: this note is replayed on every later turn of
+        // this conversation, but the file parts themselves are never persisted
+        // (see below) — "is/are attached" would read as still-true on replay.
+        const visionNote = !hasImageAttachments
+          ? ''
+          : targetHasVision
+            ? `\n\n[${attachmentCount} ${attachmentNoun} from recent channel context ${attachmentCount === 1 ? 'was' : 'were'} attached to this message.]`
+            : `\n\n[${attachmentCount} ${attachmentNoun} ${attachmentCount === 1 ? 'was' : 'were'} provided but this agent's model does not support vision, so ${attachmentCount === 1 ? 'it' : 'they'} could not be viewed.]`;
+        const userMessageContent = `${context ? `Context: ${context}\n\n` : ''}${question}${visionNote}`;
+        const imageFileParts = hasImageAttachments && targetHasVision
+          ? attachments.map((attachment) => ({
+              type: 'file' as const,
+              url: attachment.url,
+              mediaType: attachment.mediaType,
+              filename: attachment.filename,
+            }))
+          : [];
+        // The image file parts carry presigned URLs that expire within the
+        // hour, so they ride only on the in-memory message for THIS model
+        // request. Persisting them would replay dead URLs into every later
+        // request on this conversation once the TTL lapses; the durable
+        // visionNote in the text keeps the history coherent instead.
         const userMessage: UIMessage = {
           id: userMessageId,
           role: 'user' as const,
-          parts: [{
-            type: 'text',
-            text: userMessageContent
-          }]
+          parts: [
+            {
+              type: 'text',
+              text: userMessageContent
+            },
+          ]
         };
+        const modelUserMessage: UIMessage = { ...userMessage, parts: [...userMessage.parts, ...imageFileParts] };
 
         // Determine sourceAgentId - only set if the calling context is an AI_CHAT page
         const callingPage = executionContext?.locationContext?.currentPage;
@@ -491,16 +563,37 @@ export const agentCommunicationTools = {
           role: 'user',
           content: userMessageContent,
           sourceAgentId, // Track which AI agent sent this message (for agent-to-agent communication)
+          uiMessage: userMessage, // Durable parts only — transient presigned image parts are deliberately excluded
         });
 
         // Add user message to conversation
-        messages.push(userMessage);
+        messages.push(modelUserMessage);
 
         // 6. Sanitize messages for AI model
         const sanitizedMessages = sanitizeMessagesForModel(messages);
         
         // 7. Build system prompt with agent configuration
         let systemPrompt = targetAgent.systemPrompt || '';
+
+        // Prepend context from any other drives this agent is a member of with
+        // includeContext enabled. Lives here (rather than in each caller) so
+        // every ask_agent path — direct tool calls and the channel-mention
+        // responder, which invokes this same execute — gets the same drive
+        // context uniformly. Scope-filtered so a scoped MCP caller can't pull
+        // a member drive's prompt outside its own token scope.
+        try {
+          const allContextDrives = await getAgentContextDrives(agentId);
+          const allowedIds = new Set(filterDriveIdsByMcpScope(executionContext, allContextDrives.map((d) => d.driveId)));
+          const contextDrives = allContextDrives.filter((d) => allowedIds.has(d.driveId));
+          if (contextDrives.length > 0) {
+            const memberDriveContextPrefix = contextDrives
+              .map((d) => `## DRIVE CONTEXT: ${d.driveName}\n\n${d.drivePrompt}\n\n---\n\n`)
+              .join('');
+            systemPrompt = memberDriveContextPrefix + systemPrompt;
+          }
+        } catch (error) {
+          loggers.ai.error('ask_agent: Failed to fetch member-drive context', error as Error);
+        }
 
         // Add timestamp context (using user's timezone from execution context)
         systemPrompt += '\n\n' + buildTimestampSystemPrompt(executionContext?.timezone);
@@ -534,8 +627,14 @@ export const agentCommunicationTools = {
             aiModel: targetAgent.aiModel
           });
         
-        // 9. Filter tools for agent
-        const agentTools = filterToolsForAgent(targetAgent.enabledTools as string[] | null);
+        // 9. Filter tools for agent. Nested calls inherit the top-level caller's MCP
+        // drive scope via nestedContext below, so a scoped token must not be able to
+        // reach create_drive (or other account-level-only tools) through a consulted
+        // agent's enabledTools either — same listing gate as the top-level routes.
+        const agentTools = filterToolsForMcpScope(
+          filterToolsForAgent(targetAgent.enabledTools as string[] | null),
+          isMcpScoped(executionContext),
+        );
 
         // try/catch: resolver failures degrade to built-in tools only rather than hard-failing the call
         let integrationTools: Record<string, unknown> = {};
@@ -554,6 +653,17 @@ export const agentCommunicationTools = {
         // sorted keys — so the serialized tool bytes are prefix-cache-stable without
         // re-sorting here (same guarantee as the chat/global route merges).
         const allAgentTools = { ...agentTools, ...integrationTools };
+
+        // Guard against a stale read_page tool-result (image bytes delivered on an
+        // earlier turn when the target agent had a vision-capable model) being
+        // re-embedded as an image when history is re-converted for a model that no
+        // longer has vision (e.g. the agent's configured model changed since).
+        if (allAgentTools.read_page) {
+          allAgentTools.read_page = guardReadPageToolForVision(
+            allAgentTools.read_page as Tool,
+            hasVisionCapability(resolvedModelName),
+          );
+        }
 
         // 10. Create enhanced execution context for nested calls
         // Preserve locationContext so nested agents know which drive/page they're operating in
@@ -611,7 +721,7 @@ export const agentCommunicationTools = {
           tools: executionTools,
           user: { id: userId, role: callerUserRole },
         });
-        const { modelMessages: agentModelMessages } = finishModelRequest({ prepared, tools: executionTools as ToolSet });
+        const { modelMessages: agentModelMessages } = await finishModelRequest({ prepared, tools: executionTools as ToolSet });
 
         // 11. Process with target agent's configuration (ephemeral - no persistence)
         const response = Object.keys(allAgentTools).length > 0

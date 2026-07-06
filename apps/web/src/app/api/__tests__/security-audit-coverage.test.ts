@@ -33,6 +33,7 @@ const AUDIT_CALL_PATTERN =
 const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- Public/unauthenticated endpoints (no user context to audit) ---
   ['health', 'Infrastructure health probe, no auth or user data'],
+  ['version', 'ADR 0001 D2 public handshake endpoint, no auth or user data, constant response'],
   ['compiled-css', 'Static CSS compilation, no user context'],
   ['contact', 'Public contact form, no authenticated user'],
   ['avatar/[userId]/[filename]', 'Public asset serving, no auth required'],
@@ -90,6 +91,9 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['ai/models', 'Public model-catalog discovery, unauthenticated, no user data or resource access'],
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
+
+  // --- OAuth discovery (RFC 8414, public by spec) ---
+  ['well-known/oauth-authorization-server', 'RFC 8414 authorization server metadata — public by spec, unauthenticated, no user data or resource access; destination of the /.well-known/oauth-authorization-server rewrite'],
 
   // --- Share link management routes ---
   // TODO: Add audit coverage in follow-up PR

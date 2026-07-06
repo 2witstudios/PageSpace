@@ -14,6 +14,7 @@ import {
   isMCPAuthResult,
   checkMCPPageScope,
   getAllowedDriveIds,
+  isScopedMCPAuth,
   canPrincipalViewPage,
   canPrincipalEditPage,
 } from '@/lib/auth';
@@ -21,10 +22,12 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
-import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
+import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
+import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { validateInferenceRequest } from '@/lib/ai/openai-api/validate-inference-request';
 import { adaptToOpenAIChunk } from '@/lib/ai/openai-api/adapt-to-openai-chunk';
@@ -118,7 +121,25 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
-  // 5b. Conversation ownership check — if a conversation_id is provided the caller
+  // 5b. Image security gate — mirrors the in-app chat route
+  // (apps/web/src/app/api/ai/chat/route.ts). Runs after the permission checks so an
+  // unauthorized caller gets the 403 and never learns anything page-specific from image
+  // errors, and before the credit hold (6b) so a rejected image never reserves a hold or
+  // an in-flight slot. EVERY message in the request body is validated — not just the
+  // newest one (non-threaded and client_manages_history callers resend full history) and
+  // not just user-role ones: normalizeMessage passes pre-built `parts` arrays through
+  // as-is and the AI SDK forwards assistant file parts to the provider exactly like user
+  // ones, so an assistant-role message must not bypass the data:-URL/size/magic-byte rules.
+  const messagesWithFileParts = messages.filter(m => hasFileParts(m));
+  for (const messageWithFileParts of messagesWithFileParts) {
+    const imageValidation = validateUserMessageFileParts(messageWithFileParts);
+    if (!imageValidation.valid) {
+      return NextResponse.json({ error: imageValidation.error }, { status: 400 });
+    }
+  }
+  const requestHasImageParts = messagesWithFileParts.length > 0;
+
+  // 5c. Conversation ownership check — if a conversation_id is provided the caller
   // must own the conversations row. This prevents one user from appending messages
   // into another user's thread.
   //
@@ -175,6 +196,18 @@ export async function POST(request: Request): Promise<Response> {
   // agent configured with `glm` + an invalid model resolves to the metered default,
   // so both the admin gate and the credit gate below key off this, not the raw config.
   const effectiveProvider = providerResult.provider;
+
+  // 6a. Vision-capability gate — judged against the RESOLVED model (post
+  // catalog-substitution), not the raw page config: a null or invalid configured model
+  // resolves to a real default, and that resolved model is what the images will actually
+  // reach. Still before the credit hold (6b) so a rejected image never reserves a hold
+  // or an in-flight slot.
+  if (requestHasImageParts && !hasVisionCapability(providerResult.modelName)) {
+    return NextResponse.json(
+      { error: `The selected model "${providerResult.modelName}" does not support image attachments. Please choose a vision-capable model.` },
+      { status: 400 },
+    );
+  }
 
   // 6b. Prepaid credit gate: block out-of-credits users before any model invocation.
   // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
@@ -239,9 +272,12 @@ export async function POST(request: Request): Promise<Response> {
       ? [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)]
       : [stepCountIs(100)];
 
+    // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.
+    const isMcpScopedRequest = isScopedMCPAuth(authResult);
+
     if (inServerOnlyMode) {
       // server-only: existing pipeline unchanged
-      const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
+      const baseTools = filterToolsForMcpScope(filterToolsForReadOnly(pageSpaceTools, false), isMcpScopedRequest);
       let filteredTools: ToolSet =
         agentEnabledTools != null
           ? (Object.fromEntries(
@@ -257,7 +293,7 @@ export async function POST(request: Request): Promise<Response> {
       finalTools = clientToolSet;
     } else {
       // both: server tools + client tools; client wins on name collision
-      const baseTools = filterToolsForReadOnly(pageSpaceTools, false);
+      const baseTools = filterToolsForMcpScope(filterToolsForReadOnly(pageSpaceTools, false), isMcpScopedRequest);
       let filteredTools: ToolSet =
         agentEnabledTools != null
           ? (Object.fromEntries(
@@ -268,6 +304,16 @@ export async function POST(request: Request): Promise<Response> {
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
       finalTools = { ...filteredTools, ...clientToolSet } as ToolSet;
+    }
+
+    // Guard against a stale read_page tool-result (image bytes delivered on an
+    // earlier turn/request when the model had vision) being re-embedded as an
+    // image when history is re-converted for a model that no longer has vision.
+    if (finalTools.read_page) {
+      finalTools = {
+        ...finalTools,
+        read_page: guardReadPageToolForVision(finalTools.read_page, hasVisionCapability(providerResult.modelName)),
+      };
     }
 
     // Load the caller's timezone so time-aware tools (calendar, task triggers)
@@ -287,7 +333,7 @@ export async function POST(request: Request): Promise<Response> {
     let inferenceMessages = messages;
     if (isThreadMode && !clientManagesHistory) {
       const dbMessages = await chatMessageRepository.getMessagesForPage(pageId, conversationId);
-      inferenceMessages = [...dbMessages.map(convertDbMessageToUIMessage), userMessage];
+      inferenceMessages = [...await Promise.all(dbMessages.map(convertDbMessageToUIMessage)), userMessage];
     }
 
     // Back-fill: when the client manages full history, persist tool results that arrived
@@ -365,7 +411,7 @@ export async function POST(request: Request): Promise<Response> {
 
     // Sliding-window compaction: only active for thread-mode calls where we own history.
     // Non-admin users, client-manages-history, and non-thread-mode all get exact legacy behavior.
-    let compactedModelMessages: ModelMessage[] = convertToModelMessages(sanitized);
+    let compactedModelMessages: ModelMessage[] = await convertToModelMessages(sanitized);
     let v1ScheduleCompaction: () => void = () => undefined;
     if (isThreadMode && !clientManagesHistory) {
       const prepared = await prepareHistoryForModel({
@@ -380,7 +426,7 @@ export async function POST(request: Request): Promise<Response> {
         user: { id: authResult.userId, role: gateUser?.role ?? null },
       });
       v1ScheduleCompaction = prepared.scheduleCompaction;
-      ({ modelMessages: compactedModelMessages } = finishModelRequest({ prepared, tools: finalTools }));
+      ({ modelMessages: compactedModelMessages } = await finishModelRequest({ prepared, tools: finalTools }));
     }
 
     // Standard OpenAI-style cancel: the consumer closing the HTTP connection stops generation.
@@ -555,8 +601,8 @@ export async function POST(request: Request): Promise<Response> {
           if (aborted) {
             loggers.ai.info('OpenAI API: stream aborted by consumer', { pageId, conversationId });
           }
-          const totalUsage = await aiResult.totalUsage.catch(() => undefined);
-          const steps = await aiResult.steps.catch(() => undefined);
+          const totalUsage = await Promise.resolve(aiResult.totalUsage).catch(() => undefined);
+          const steps = await Promise.resolve(aiResult.steps).catch(() => undefined);
           await settle({ aborted, text: assistantText || undefined, totalUsage, steps });
           if (!aborted) v1ScheduleCompaction();
           if (!aborted) {
@@ -572,8 +618,8 @@ export async function POST(request: Request): Promise<Response> {
           // Gather whatever partial usage/spend the stream produced before failing.
           // totalUsage/steps reject if the stream never produced them — treat that as
           // "nothing burned".
-          const totalUsage = await aiResult.totalUsage.catch(() => undefined);
-          const steps = await aiResult.steps.catch(() => undefined);
+          const totalUsage = await Promise.resolve(aiResult.totalUsage).catch(() => undefined);
+          const steps = await Promise.resolve(aiResult.steps).catch(() => undefined);
 
           if (aborted) {
             // Some providers surface an abort as a thrown AbortError instead of ending the

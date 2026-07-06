@@ -1233,6 +1233,41 @@
       "when": 1782418513221,
       "tag": "0175_sharp_tiger_shark",
       "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "7",
+      "when": 1783102493213,
+      "tag": "0176_curved_carnage",
+      "breakpoints": true
+    },
+    {
+      "idx": 177,
+      "version": "7",
+      "when": 1783178735370,
+      "tag": "0177_hot_songbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 178,
+      "version": "7",
+      "when": 1783229015580,
+      "tag": "0178_mighty_norrin_radd",
+      "breakpoints": true
+    },
+    {
+      "idx": 179,
+      "version": "7",
+      "when": 1783277225114,
+      "tag": "0179_vengeful_metal_master",
+      "breakpoints": true
+    },
+    {
+      "idx": 180,
+      "version": "7",
+      "when": 1783278936602,
+      "tag": "0180_loose_puppet_master",
+      "breakpoints": true
     }
   ]
 }

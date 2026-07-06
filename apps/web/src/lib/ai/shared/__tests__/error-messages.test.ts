@@ -17,7 +17,7 @@ describe('classifyAIError', () => {
   it('classifies out-of-credits (402 / error code / human phrasing)', () => {
     expect(classifyAIError('{"error":"out_of_credits"}')).toBe('out_of_credits');
     expect(classifyAIError('Request failed: 402')).toBe('out_of_credits');
-    expect(classifyAIError('You have run out of AI credits.')).toBe('out_of_credits');
+    expect(classifyAIError('You have run out of credits.')).toBe('out_of_credits');
   });
 
   it('classifies the in-flight concurrency cap (429 too_many_in_flight)', () => {

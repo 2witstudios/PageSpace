@@ -59,6 +59,7 @@ import {
   driveOutsideMcpScope,
   driveDeniedByAppToken,
   filterDriveIdsByAppTokenScope,
+  hasAgentUserScopedAccess,
 } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
 
@@ -70,7 +71,11 @@ const agentCtx = {
 } as ToolExecutionContext;
 
 describe('canActorManageDrive', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Agent actors look up their pages row for userScopedAccess; default: not found.
+    mockDbWhere.mockResolvedValue([]);
+  });
 
   it('allows a drive owner', async () => {
     mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true });
@@ -107,7 +112,11 @@ describe('canActorManageDrive', () => {
 });
 
 describe('MCP drive-scope enforcement', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Agent actors look up their pages row for userScopedAccess; default: not found.
+    mockDbWhere.mockResolvedValue([]);
+  });
 
   // A scoped MCP token acting as an agent that DOES have access to the target.
   const scopedAgentCtx = {
@@ -326,5 +335,98 @@ describe('filterDriveIdsByMcpScope / driveOutsideMcpScope', () => {
     expect(driveOutsideMcpScope(scoped, 'c')).toBe(true);
     expect(driveOutsideMcpScope(scoped, 'a')).toBe(false);
     expect(driveOutsideMcpScope(unscoped, 'c')).toBe(false);
+  });
+});
+
+describe('user-scoped agents (userScopedAccess fallback to the invoking user)', () => {
+  const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The agent's pages-row lookup: user-scoped access enabled.
+    mockDbWhere.mockResolvedValue([{ userScopedAccess: true }]);
+  });
+
+  it('canActorViewPage authorizes as the invoking user, not the agent', async () => {
+    const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+
+    expect(await canActorViewPage(agentCtx, 'page-x')).toBe(true);
+    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'page-x');
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorEditPage authorizes as the invoking user', async () => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+
+    expect(await canActorEditPage(agentCtx, 'page-x')).toBe(true);
+    expect(vi.mocked(canUserEditPage)).toHaveBeenCalledWith('user-1', 'page-x');
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('canActorAccessDrive falls back to the user drive access, not agent membership', async () => {
+    mockGetUserDriveAccess.mockResolvedValue(true);
+
+    expect(await canActorAccessDrive(agentCtx, DRIVE)).toBe(true);
+    expect(mockGetUserDriveAccess).toHaveBeenCalledWith('user-1', DRIVE);
+    expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
+  });
+
+  it('canActorManageDrive requires the INVOKING user to be owner/admin (invoker-scoped)', async () => {
+    mockCheckDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false, isMember: true });
+
+    expect(await canActorManageDrive(agentCtx, DRIVE)).toBe(false);
+    expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
+  });
+
+  it('getActorAccessiblePagesInDrive returns the user page set', async () => {
+    const { getUserAccessiblePagesInDriveWithDetails } = await import('@pagespace/lib/permissions/permissions');
+    const { getAgentAccessiblePagesInDrive } = await import('@pagespace/lib/permissions/agent-permissions');
+    vi.mocked(getUserAccessiblePagesInDriveWithDetails).mockResolvedValue([
+      { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false, permissions: { ...FULL } },
+    ]);
+
+    const result = await getActorAccessiblePagesInDrive(agentCtx, DRIVE);
+    expect(result.map((p) => p.id)).toEqual(['p1']);
+    expect(vi.mocked(getAgentAccessiblePagesInDrive)).not.toHaveBeenCalled();
+  });
+
+  it('keeps the agent-scoped path when the flag is off', async () => {
+    mockDbWhere.mockResolvedValue([{ userScopedAccess: false }]);
+    mockGetAgentAccessLevel.mockResolvedValue(FULL);
+
+    expect(await canActorViewPage(agentCtx, 'page-x')).toBe(true);
+    expect(mockGetAgentAccessLevel).toHaveBeenCalledWith('agent-1', 'page-x');
+  });
+
+  it('a scoped MCP token still ceilings a user-scoped agent', async () => {
+    const scopedCtx = {
+      userId: 'user-1',
+      chatSource: { type: 'page', agentPageId: 'agent-1' },
+      mcpAllowedDriveIds: ['drive-A'],
+    } as ToolExecutionContext;
+
+    expect(await canActorAccessDrive(scopedCtx, 'drive-B')).toBe(false);
+    expect(mockGetUserDriveAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('hasAgentUserScopedAccess', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns true when the agent page has userScopedAccess set', async () => {
+    mockDbWhere.mockResolvedValue([{ userScopedAccess: true }]);
+    expect(await hasAgentUserScopedAccess('agent-1')).toBe(true);
+  });
+
+  it('returns false when the agent page has userScopedAccess unset', async () => {
+    mockDbWhere.mockResolvedValue([{ userScopedAccess: false }]);
+    expect(await hasAgentUserScopedAccess('agent-1')).toBe(false);
+  });
+
+  it('defaults to false when the agent page is not found', async () => {
+    mockDbWhere.mockResolvedValue([]);
+    expect(await hasAgentUserScopedAccess('missing-agent')).toBe(false);
   });
 });

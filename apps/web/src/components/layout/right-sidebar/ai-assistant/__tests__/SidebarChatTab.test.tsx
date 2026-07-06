@@ -46,6 +46,22 @@ function getStopFunction(
   return stop;
 }
 
+/**
+ * Pure function that mirrors the agent-mode load-on-select effect in
+ * SidebarChatTab: with a stable useChat id, the agent Chat instance is never
+ * recreated on conversation switch, so usePageAgentSidebarState's fetched
+ * messages must be explicitly applied via setMessages whenever the reference
+ * changes — but only while in agent mode.
+ */
+function shouldApplySidebarAgentMessages<T>(
+  selectedAgent: { id: string } | null,
+  agentInitialMessages: T[],
+  prevAgentInitialMessages: T[] | null
+): boolean {
+  if (agentInitialMessages === prevAgentInitialMessages) return false;
+  return Boolean(selectedAgent);
+}
+
 // ============================================
 // Test Data
 // ============================================
@@ -295,6 +311,40 @@ describe('SidebarChatTab Display Logic', () => {
       const result = getDisplayMessages(null, [], manyMessages);
       // Should return the same reference, not a copy
       expect(result).toBe(manyMessages);
+    });
+  });
+
+  // ============================================
+  // Agent-mode load-on-select regression tests
+  //
+  // Regression coverage for: with a stable useChat id, the sidebar's agent
+  // Chat instance is never recreated on conversation switch/select/create, so
+  // fetched messages must be explicitly applied via setMessages. Without this,
+  // agent-mode conversations never load in the sidebar (the exact class of bug
+  // this PR fixes, reintroduced for this one surface).
+  // ============================================
+
+  describe('shouldApplySidebarAgentMessages (agent-mode load-on-select)', () => {
+    it('given an agent selected and a new messages reference, should apply', () => {
+      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, null)).toBe(true);
+    });
+
+    it('given an agent selected and conversation switch fetches a new reference, should apply', () => {
+      const firstConversation = [mockUserMessage] as never[];
+      const secondConversation = [mockAssistantMessage] as never[];
+      expect(shouldApplySidebarAgentMessages(mockAgent, secondConversation, firstConversation)).toBe(true);
+    });
+
+    it('given an agent selected but the messages reference is unchanged, should NOT re-apply (no-op)', () => {
+      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, mockAgentMessages)).toBe(false);
+    });
+
+    it('given global mode (no agent selected), should never apply agent messages even on a new reference', () => {
+      expect(shouldApplySidebarAgentMessages(null, mockAgentMessages, null)).toBe(false);
+    });
+
+    it('given a new empty-array reference (new conversation created), should still apply', () => {
+      expect(shouldApplySidebarAgentMessages(mockAgent, [], null)).toBe(true);
     });
   });
 });

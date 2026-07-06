@@ -11,7 +11,7 @@ const isSubscriptionTier = (value: string): value is SubscriptionTier =>
   value === 'free' || value === 'pro' || value === 'founder' || value === 'business';
 
 /**
- * GET /api/credits — the authenticated user's prepaid AI-credit balance.
+ * GET /api/credits — the authenticated user's prepaid credit balance.
  *
  * Returns the monthly allowance bucket (rolls over each period), the never-expiring
  * top-up bucket, the spendable total (net of in-flight reservations), and the
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
       resourceId: 'self',
     });
 
-    return NextResponse.json(balance);
+    return NextResponse.json({ ...balance, subscriptionTier: tier });
   } catch (error) {
     console.error('Error fetching credit balance:', error);
     return NextResponse.json({ error: 'Failed to fetch credit balance' }, { status: 500 });

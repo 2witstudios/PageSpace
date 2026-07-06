@@ -12,6 +12,7 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
+import { customRoleBelongsToDrive, getMemberCustomRoleId } from '../permissions/membership-queries';
 
 // ============================================================================
 // Types
@@ -244,6 +245,62 @@ export async function getDriveAccess(
   }
 
   return { isOwner: false, isAdmin: false, isMember: false, role: null };
+}
+
+export interface DriveScopeToValidate {
+  id: string;
+  role?: 'ADMIN' | 'MEMBER' | null;
+  customRoleId?: string;
+}
+
+export interface DriveScopeValidationResult {
+  invalidDriveIds: string[];
+  unauthorizedRoles: string[];
+  invalidCustomRoles: string[];
+  unauthorizedCustomRoles: string[];
+}
+
+/**
+ * Validate that `userId` may grant each of the given drive scopes: drive
+ * membership/ownership, role authority (a MEMBER can't grant ADMIN), and
+ * custom role ownership/assignment. Shared by the MCP token create (POST)
+ * and edit (PATCH) routes, which each format their own error responses from
+ * the returned categorized ID lists.
+ */
+export async function validateDriveScopeAccess(
+  scopes: DriveScopeToValidate[],
+  userId: string
+): Promise<DriveScopeValidationResult> {
+  const invalidDriveIds: string[] = [];
+  const unauthorizedRoles: string[] = [];
+  const invalidCustomRoles: string[] = [];
+  const unauthorizedCustomRoles: string[] = [];
+
+  for (const scope of scopes) {
+    const access = await getDriveAccess(scope.id, userId);
+    if (!access.isOwner && !access.isMember) {
+      invalidDriveIds.push(scope.id);
+      continue;
+    }
+    // A MEMBER cannot grant ADMIN — cap to caller's actual authority
+    if (scope.role === 'ADMIN' && !access.isAdmin) {
+      unauthorizedRoles.push(scope.id);
+    }
+    // Prevent using a custom role that belongs to a different drive
+    if (scope.customRoleId && !await customRoleBelongsToDrive(scope.customRoleId, scope.id)) {
+      invalidCustomRoles.push(scope.id);
+      continue;
+    }
+    // Non-admins can only use their own assigned custom role
+    if (scope.customRoleId && !access.isAdmin && !access.isOwner) {
+      const callerCustomRoleId = await getMemberCustomRoleId(scope.id, userId);
+      if (scope.customRoleId !== callerCustomRoleId) {
+        unauthorizedCustomRoles.push(scope.id);
+      }
+    }
+  }
+
+  return { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles };
 }
 
 export interface DriveAccessWithDrive {

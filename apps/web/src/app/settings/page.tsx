@@ -6,7 +6,7 @@ import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
@@ -71,7 +71,7 @@ export default function SettingsPage() {
         },
         {
           title: "Usage",
-          description: "AI credits, usage breakdown, automations & storage",
+          description: "Credits, usage breakdown, automations & storage",
           icon: Coins,
           href: "/settings/usage",
           available: true,
@@ -149,6 +149,13 @@ export default function SettingsPage() {
     {
       title: "Legal",
       items: filterItems([
+        {
+          title: "Privacy & Cookies",
+          description: "Review or withdraw cookie consent",
+          icon: Cookie,
+          href: "/settings/privacy",
+          available: true,
+        },
         {
           title: "Open-source licenses",
           description: "Third-party OSS attribution notices",

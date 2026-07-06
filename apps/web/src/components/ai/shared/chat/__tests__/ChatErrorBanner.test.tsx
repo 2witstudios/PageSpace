@@ -18,7 +18,7 @@ vi.mock('@/components/billing/BuyCreditsButton', () => ({
 
 // The exact JSON body the credit gate returns before streaming starts.
 const OUT_OF_CREDITS_BODY =
-  '{"error":"out_of_credits","message":"You have run out of AI credits. Add credits or wait for your monthly allowance to reset."}';
+  '{"error":"out_of_credits","message":"You have run out of credits. Add credits or wait for your monthly allowance to reset."}';
 const IN_FLIGHT_BODY =
   '{"error":"too_many_in_flight","message":"Too many AI requests in flight at once. Wait for one to finish, then try again."}';
 
@@ -40,7 +40,7 @@ describe('ChatErrorBanner', () => {
       <ChatErrorBanner error={new Error(OUT_OF_CREDITS_BODY)} />
     );
     // Friendly copy, not the raw JSON body.
-    getByText(/used up your AI credits/i);
+    getByText(/used up your credits/i);
     expect(queryByText(/out_of_credits/)).toBeNull();
     expect(queryByText(/"error"/)).toBeNull();
     // CTA present.

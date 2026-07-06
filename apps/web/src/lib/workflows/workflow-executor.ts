@@ -318,7 +318,7 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
       ? await generateText({
           model: providerResult.model,
           system: enhancedSystemPrompt,
-          messages: convertToModelMessages(messages.map(m => ({
+          messages: await convertToModelMessages(messages.map(m => ({
             role: m.role as 'user' | 'assistant',
             content: m.content,
             parts: [{ type: 'text' as const, text: m.content }],
@@ -332,7 +332,7 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
       : await generateText({
           model: providerResult.model,
           system: enhancedSystemPrompt,
-          messages: convertToModelMessages(messages.map(m => ({
+          messages: await convertToModelMessages(messages.map(m => ({
             role: m.role as 'user' | 'assistant',
             content: m.content,
             parts: [{ type: 'text' as const, text: m.content }],

@@ -42,6 +42,25 @@ describe('usePendingStreamsStore', () => {
       expect(getRemotePageStreams('page-a')).toHaveLength(2);
     });
 
+    it('given initial parts, should seed the stream with them', () => {
+      const { addStream } = usePendingStreamsStore.getState();
+      addStream({ ...BASE_STREAM, parts: [text('restored')] });
+
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      const [stream] = getRemotePageStreams('page-a');
+      expect(stream.parts).toEqual([text('restored')]);
+    });
+
+    it('given a duplicate addStream carrying initial parts, should keep the existing entry parts (no double-seed)', () => {
+      const { addStream } = usePendingStreamsStore.getState();
+      addStream({ ...BASE_STREAM, parts: [text('restored')] });
+      addStream({ ...BASE_STREAM, parts: [text('restored')] });
+
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      const [stream] = getRemotePageStreams('page-a');
+      expect(stream.parts).toEqual([text('restored')]);
+    });
+
     it('given a stream with messageId X already present, should preserve existing parts on duplicate addStream', () => {
       const { addStream, appendPart } = usePendingStreamsStore.getState();
       addStream(BASE_STREAM);

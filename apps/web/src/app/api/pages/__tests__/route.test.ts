@@ -26,6 +26,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+  isScopedMCPAuth: vi.fn().mockReturnValue(false),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -37,6 +38,15 @@ vi.mock('@/lib/websocket', () => ({
     type,
     ...data,
   })),
+}));
+
+// The route's own enabledTools scope-filter validation only needs tool names;
+// mock this to avoid pulling in the full real AI tool registry's heavy import graph.
+vi.mock('@/lib/ai/core/ai-tools', () => ({
+  pageSpaceTools: {
+    read_page: { description: 'Read a page' },
+    create_drive: { description: 'Create a drive' },
+  },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

@@ -240,14 +240,20 @@ export function useMessageActions({
       );
     }
 
-    // Now regenerate with a clean slate
+    // Now regenerate with a clean slate. conversationId is included for both
+    // modes — global mode's useChat transport is frozen at first construction
+    // (see global-chat-request-body.ts), so the body is what actually
+    // determines which conversation this lands in after a switch, same as a
+    // regular send.
     regenerate({
       body: isAgentMode
         ? {
             chatId: agentId,
             conversationId,
           }
-        : undefined,
+        : {
+            conversationId,
+          },
     });
   }, [isAgentMode, agentId, conversationId, setMessages, regenerate]);
 

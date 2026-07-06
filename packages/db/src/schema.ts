@@ -8,6 +8,7 @@ export * from './schema/dashboard';
 export * from './schema/conversations';
 export * from './schema/notifications';
 export * from './schema/email-notifications';
+export * from './schema/toast-notification-preferences';
 export * from './schema/display-preferences';
 export * from './schema/monitoring';
 export * from './schema/versioning';
@@ -49,6 +50,7 @@ export * from './schema/ai-compaction';
 export * from './schema/custom-domains';
 export * from './schema/incidents';
 export * from './schema/data-subject-requests';
+export * from './schema/oauth';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -60,6 +62,7 @@ import * as dashboard from './schema/dashboard';
 import * as conversations from './schema/conversations';
 import * as notifications from './schema/notifications';
 import * as emailNotifications from './schema/email-notifications';
+import * as toastNotificationPreferences from './schema/toast-notification-preferences';
 import * as displayPreferences from './schema/display-preferences';
 import * as monitoring from './schema/monitoring';
 import * as versioning from './schema/versioning';
@@ -101,6 +104,7 @@ import * as aiCompaction from './schema/ai-compaction';
 import * as customDomains from './schema/custom-domains';
 import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
+import * as oauth from './schema/oauth';
 
 export const schema = {
   ...auth,
@@ -113,6 +117,7 @@ export const schema = {
   ...conversations,
   ...notifications,
   ...emailNotifications,
+  ...toastNotificationPreferences,
   ...displayPreferences,
   ...monitoring,
   ...versioning,
@@ -154,4 +159,5 @@ export const schema = {
   ...customDomains,
   ...incidents,
   ...dataSubjectRequests,
+  ...oauth,
 };

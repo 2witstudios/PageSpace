@@ -85,6 +85,7 @@ const SECURITY_OPERATIONS = new Set<string>([
   'email_change',
   'token_create',
   'token_revoke',
+  'token_update',
   'account_delete',
 ]);
 

@@ -39,7 +39,7 @@ export default function UsagePage() {
         <div className="text-center space-y-2">
           <h1 className="text-4xl font-bold">Usage</h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-            AI credits, usage breakdown, automations, and storage
+            Credits, usage breakdown, automations, and storage
           </p>
         </div>
       </div>

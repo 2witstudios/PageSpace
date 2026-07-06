@@ -13,7 +13,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   isMCPAuthResult: vi.fn((r: { tokenType?: string }) => r?.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
-  getAllowedDriveIds: vi.fn(() => undefined),
+  getAllowedDriveIds: vi.fn(() => []),
+  isScopedMCPAuth: vi.fn(() => false),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -58,7 +59,8 @@ vi.mock('@pagespace/db/db', () => {
   };
   return { db: { select: vi.fn(() => builder) } };
 });
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), desc: vi.fn(), and: vi.fn() }));
+vi.mock('@/lib/ai/core/message-utils', () => ({ saveMessageToDatabase: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id' }, drives: { id: 'id' }, chatMessages: { pageId: 'pageId', createdAt: 'createdAt' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', subscriptionTier: 'subscriptionTier' } }));
 

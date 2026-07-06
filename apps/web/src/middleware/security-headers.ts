@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
 
 export const NONCE_HEADER = 'x-nonce';
 
@@ -46,6 +47,7 @@ const ERROR_RESPONSE_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Permissions-Policy': PERMISSIONS_POLICY,
+  'X-PageSpace-API-Version': API_CONTRACT_VERSION,
 };
 
 export const createSecureErrorResponse = (
@@ -93,16 +95,19 @@ export const buildCSPPolicy = (nonce: string): string => {
 
   // Cloud-only: Google and Stripe external origins
   if (IS_CLOUD) {
-    scriptSrc.push('https://accounts.google.com');
+    scriptSrc.push('https://accounts.google.com', 'https://js.stripe.com', 'https://m.stripe.network');
     styleSrc.push('https://accounts.google.com');
-    frameSrc.push('https://accounts.google.com', 'https://js.stripe.com');
+    // hooks.stripe.com hosts the 3D Secure challenge iframe; m.stripe.network is Stripe.js's
+    // fraud-detection beacon frame. Without these, confirmPayment() hangs forever on 3DS.
+    frameSrc.push('https://accounts.google.com', 'https://js.stripe.com', 'https://hooks.stripe.com', 'https://m.stripe.network');
   }
 
   const connectSrc = ["'self'", 'ws:', 'wss:'];
 
   // Cloud mode: allow Stripe client SDK and Google One Tap connections
   if (IS_CLOUD) {
-    connectSrc.push('https://accounts.google.com', 'https://*.stripe.com');
+    // *.stripe.com does not match the .network TLD, so m.stripe.network needs its own entry.
+    connectSrc.push('https://accounts.google.com', 'https://*.stripe.com', 'https://m.stripe.network');
   }
 
   const directives: CSPDirectives = {
@@ -152,6 +157,7 @@ export const applySecurityHeaders = (
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   response.headers.set('Permissions-Policy', PERMISSIONS_POLICY);
+  response.headers.set('X-PageSpace-API-Version', API_CONTRACT_VERSION);
   // COEP 'credentialless' is set for all page routes except Stripe-dependent
   // paths (/settings/plan, /settings/billing) where it blocks Stripe.js loading
   // via no-cors without Cross-Origin-Resource-Policy headers.

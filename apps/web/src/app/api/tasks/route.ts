@@ -33,6 +33,7 @@ const querySchema = z.object({
   assigneeId: z.string().optional(),
   assigneeAgentId: z.string().optional(),
   showAllAssignees: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
+  includeCompleted: z.enum(['true', 'false']).transform(v => v === 'true').optional(),
   dueDateFilter: z.enum(['overdue', 'today', 'this_week', 'upcoming']).optional(),
   // Group-level status filter: 'active' = todo + in_progress, 'completed' = done.
   // Custom per-task-list status configs are honoured; fall back to DEFAULT_STATUS_CONFIG
@@ -83,6 +84,7 @@ export async function GET(request: Request) {
       assigneeId: searchParams.get('assigneeId') ?? undefined,
       assigneeAgentId: searchParams.get('assigneeAgentId') ?? undefined,
       showAllAssignees: searchParams.get('showAllAssignees') ?? undefined,
+      includeCompleted: searchParams.get('includeCompleted') ?? undefined,
       dueDateFilter: searchParams.get('dueDateFilter') ?? undefined,
       statusGroup: searchParams.get('statusGroup') ?? undefined,
       limit: searchParams.get('limit') ?? undefined,
@@ -250,6 +252,11 @@ export async function GET(request: Request) {
 
     if (params.status) {
       filterConditions.push(eq(taskItems.status, params.status));
+    } else if (!params.includeCompleted && !params.statusGroup) {
+      // Exclude completed tasks by default, matching the internal get_assigned_tasks
+      // tool. Skipped when the caller already scopes completion via statusGroup
+      // (which may itself request 'completed') or explicitly opts in.
+      filterConditions.push(isNull(taskItems.completedAt));
     }
     if (params.priority) {
       filterConditions.push(eq(taskItems.priority, params.priority));

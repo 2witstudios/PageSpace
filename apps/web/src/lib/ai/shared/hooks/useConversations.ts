@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import useSWR, { mutate } from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
+import { createId } from '@paralleldrive/cuid2';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import type { UIMessage } from 'ai';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -190,40 +191,70 @@ export function useConversations({
     [isAgentMode, agentId, onConversationLoad, onConversationLoadError]
   );
 
-  // Create a new conversation
+  // Create a new conversation.
+  //
+  // Agent mode: the id is generated client-side (cuid2) and handed to the
+  // caller synchronously — the create POST is a fire-and-forget, idempotent
+  // persist (the page-agents route accepts and honors a client-supplied id),
+  // not the mechanism used to learn the id. This closes the race where a
+  // send fired before the old server round trip resolved would carry a
+  // stale conversationId.
+  //
+  // Global mode: the /api/ai/global route does not accept a client-supplied
+  // id (it always mints its own), so this path keeps the original
+  // await-then-adopt-the-server-id behavior to avoid diverging from what was
+  // actually persisted.
   const createConversation = useCallback(async (): Promise<string | null> => {
-    try {
-      const createUrl = isAgentMode
-        ? `/api/ai/page-agents/${agentId}/conversations`
-        : `/api/ai/global`;
+    if (!isAgentMode) {
+      try {
+        const response = await fetchWithAuth('/api/ai/global', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Browser-Session-Id': getBrowserSessionId(),
+          },
+          body: JSON.stringify({ type: 'global' }),
+        });
 
-      const response = await fetchWithAuth(createUrl, {
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        const newConversationId = data.conversationId || data.id;
+        if (swrKey) mutate(swrKey);
+        onConversationCreate?.(newConversationId);
+        return newConversationId;
+      } catch (error) {
+        console.error('Failed to create conversation:', error);
+        toast.error('Failed to create new conversation');
+        return null;
+      }
+    }
+
+    const conversationId = createId();
+    onConversationCreate?.(conversationId);
+
+    try {
+      const response = await fetchWithAuth(`/api/ai/page-agents/${agentId}/conversations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Browser-Session-Id': getBrowserSessionId(),
         },
-        body: JSON.stringify(isAgentMode ? {} : { type: 'global' }),
+        body: JSON.stringify({ conversationId }),
       });
 
       if (response.ok) {
-        const data = await response.json();
-        const newConversationId = data.conversationId || data.id;
-
-        // Invalidate SWR cache
-        if (swrKey) {
-          mutate(swrKey);
-        }
-
-        onConversationCreate?.(newConversationId);
-        return newConversationId;
+        if (swrKey) mutate(swrKey);
+      } else {
+        console.error('Failed to persist new conversation');
+        toast.error('Failed to create new conversation');
       }
-      return null;
     } catch (error) {
       console.error('Failed to create conversation:', error);
       toast.error('Failed to create new conversation');
-      return null;
     }
+
+    return conversationId;
   }, [isAgentMode, agentId, swrKey, onConversationCreate]);
 
   // Delete a conversation

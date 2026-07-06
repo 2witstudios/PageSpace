@@ -11,6 +11,7 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 
 const logger = loggers.api.child({ module: 'task-triggers-api' });
 
@@ -23,6 +24,7 @@ const upsertTriggerSchema = z.object({
   prompt: z.string().max(10000).optional(),
   instructionPageId: z.string().nullable().optional(),
   contextPageIds: z.array(z.string()).max(10).optional(),
+  timezone: z.string().optional(),
 }).strict().refine(
   (data) => Boolean(data.prompt?.trim()) || Boolean(data.instructionPageId),
   { message: 'Either prompt or instructionPageId is required' }
@@ -33,7 +35,6 @@ type ResolvedTaskContext = {
   taskListPageId: string;
   taskListId: string | undefined;
   driveId: string;
-  timezone: string;
 };
 
 async function resolveTaskContext(taskId: string): Promise<ResolvedTaskContext | null> {
@@ -61,7 +62,6 @@ async function resolveTaskContext(taskId: string): Promise<ResolvedTaskContext |
     taskListPageId,
     taskListId: taskList?.id,
     driveId: page.driveId,
-    timezone: 'UTC',
   };
 }
 
@@ -157,6 +157,10 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
     );
   }
 
+  // Explicit body value wins, else the caller's profile timezone, else UTC —
+  // matching the internal update_task/create_task tools.
+  const timezone = parsed.data.timezone?.trim() || (await getUserTimezone(userId)) || 'UTC';
+
   try {
     await createTaskTriggerWorkflow({
       database: db,
@@ -172,7 +176,7 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
         triggerType: parsed.data.triggerType,
       },
       dueDate: ctx.task.dueDate,
-      timezone: ctx.timezone,
+      timezone,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to save trigger';

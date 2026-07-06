@@ -66,6 +66,7 @@ import {
 import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
 import {
   buildVolatileTurnContext,
@@ -171,7 +172,7 @@ export async function GET(
     const orderedMessages = messagesToReturn.reverse();
 
     // Convert to UIMessage format with proper tool call reconstruction
-    const uiMessages = orderedMessages.map(msg =>
+    const uiMessages = await Promise.all(orderedMessages.map(msg =>
       convertGlobalAssistantMessageToUIMessage({
         id: msg.id,
         conversationId: msg.conversationId,
@@ -184,7 +185,7 @@ export async function GET(
         isActive: msg.isActive,
         editedAt: msg.editedAt,
       })
-    );
+    ));
 
     // Determine cursors for pagination
     const nextCursor = hasMore && orderedMessages.length > 0
@@ -248,8 +249,38 @@ export async function POST(
     }
     const userId = auth.userId;
 
-    const { id: conversationId } = await context.params;
+    const { id: urlConversationId } = await context.params;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
+
+    // Body size guard — reject payloads over 25MB before parsing
+    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+    if (contentLength > 25 * 1024 * 1024) {
+      loggers.api.warn('Global Assistant Chat API: Request body too large', { contentLength });
+      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
+    }
+
+    // Parse request body
+    const requestBody = await request.json();
+
+    // The URL segment is baked into useChat's transport at construction and
+    // never updates thereafter (its Chat instance is deliberately kept alive
+    // across conversation switches to avoid clobbering messages — see
+    // chat-config.ts). The body's conversationId reflects the client's
+    // current identity state and is what determines where this message
+    // actually lands; the URL segment is only a fallback for callers that
+    // don't send one.
+    const conversationId: string =
+      typeof requestBody.conversationId === 'string' && requestBody.conversationId.length > 0
+        ? requestBody.conversationId
+        : urlConversationId;
+
+    loggers.api.debug('Global Assistant Chat API: Request body received', {
+      messageCount: requestBody.messages?.length || 0,
+      conversationId,
+      selectedProvider: requestBody.selectedProvider,
+      selectedModel: requestBody.selectedModel,
+      hasLocationContext: !!requestBody.locationContext
+    });
 
     // Resolve existing conversation or auto-create on first message (lazy creation).
     // Clients generate the ID locally; this is the point where the DB row is guaranteed.
@@ -264,23 +295,6 @@ export async function POST(
       throw e;
     }
 
-    // Body size guard — reject payloads over 25MB before parsing
-    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
-    if (contentLength > 25 * 1024 * 1024) {
-      loggers.api.warn('Global Assistant Chat API: Request body too large', { contentLength });
-      return NextResponse.json({ error: 'Request body too large (max 25MB)' }, { status: 413 });
-    }
-
-    // Parse request body
-    const requestBody = await request.json();
-    loggers.api.debug('Global Assistant Chat API: Request body received', {
-      messageCount: requestBody.messages?.length || 0,
-      conversationId,
-      selectedProvider: requestBody.selectedProvider,
-      selectedModel: requestBody.selectedModel,
-      hasLocationContext: !!requestBody.locationContext
-    });
-    
     const {
       messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
@@ -518,7 +532,7 @@ export async function POST(
       .orderBy(messages.createdAt);
 
     // Convert database messages to UI format
-    const conversationHistory = dbMessages.map(msg =>
+    const conversationHistory = await Promise.all(dbMessages.map(msg =>
       convertGlobalAssistantMessageToUIMessage({
         id: msg.id,
         conversationId: msg.conversationId,
@@ -531,7 +545,7 @@ export async function POST(
         isActive: msg.isActive,
         editedAt: msg.editedAt,
       })
-    );
+    ));
 
     loggers.api.debug('Global Assistant Chat API: Loaded conversation history from database', {
       messageCount: conversationHistory.length,
@@ -768,6 +782,16 @@ MENTION PROCESSING:
       execute_tool: createExecuteTool(nonCoreTools),
     };
 
+    // Guard against a stale read_page tool-result (image bytes delivered on an
+    // earlier turn when the model had vision) being re-embedded as an image when
+    // history is re-converted for a model that no longer has vision.
+    if (finalTools.read_page) {
+      finalTools = {
+        ...finalTools,
+        read_page: guardReadPageToolForVision(finalTools.read_page, hasVisionCapability(currentModel)),
+      };
+    }
+
     loggers.api.debug('Global Assistant Chat API: Tool modes', {
       isReadOnly: readOnlyMode,
       webSearchEnabled: webSearchMode,
@@ -910,7 +934,7 @@ MENTION PROCESSING:
             ]
           : (processedTail as UIMessage[]);
 
-        const { modelMessages, stableBoundaryIndex } = finishModelRequest({
+        const { modelMessages, stableBoundaryIndex } = await finishModelRequest({
           prepared,
           tail: processedTail,
           tools: finalTools,

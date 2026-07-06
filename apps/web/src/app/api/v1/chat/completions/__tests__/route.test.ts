@@ -1,3 +1,9 @@
+// @vitest-environment node
+// These are API route-handler tests with no DOM needs. The default jsdom env
+// makes AbortController/AbortSignal jsdom globals while Request stays Node's
+// undici, so on Node >=24 `new Request(url, { signal })` throws because the
+// jsdom AbortSignal fails undici's `instanceof AbortSignal` check. Running this
+// file under the node env keeps both on the same (undici) implementation.
 import { describe, test, beforeEach, vi } from 'vitest';
 import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
 
@@ -9,6 +15,7 @@ vi.mock('@/lib/auth', () => ({
   isMCPAuthResult: vi.fn((r: unknown) => (r as { tokenType?: string })?.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
+  isScopedMCPAuth: vi.fn(() => false),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -95,14 +102,32 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
   extractToolResults: vi.fn().mockReturnValue([]),
 }));
-vi.mock('@/lib/ai/core/ai-tools', () => ({
-  pageSpaceTools: {},
-}));
+vi.mock('@/lib/ai/core/ai-tools', async () => {
+  const { toModelOutputForReadPage } = await import('@/lib/ai/tools/read-page-vision-output');
+  return {
+    pageSpaceTools: {
+      // Mirrors the real read_page tool's toModelOutput wiring (page-read-tools.ts)
+      // so the cross-turn vision guard test below exercises the real mapper/guard.
+      read_page: {
+        name: 'read_page',
+        toModelOutput: ({ output }: { output: unknown }) => toModelOutputForReadPage(output),
+        execute: async () => ({}),
+      },
+    },
+  };
+});
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
+  filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
 }));
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
+  hasVisionCapability: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock('@/lib/ai/core/validate-image-parts', () => ({
+  hasFileParts: vi.fn().mockReturnValue(false),
+  validateUserMessageFileParts: vi.fn().mockReturnValue({ valid: true, filePartCount: 0 }),
 }));
 
 vi.mock('@/lib/ai/tools/tool-exposure', () => ({
@@ -174,6 +199,8 @@ import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 
 const mcpAuth = {
   userId: 'user-1',
@@ -222,6 +249,9 @@ describe('POST /api/v1/chat/completions', () => {
     } as unknown as ReturnType<typeof db.select>);
     vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
+    vi.mocked(hasFileParts).mockReturnValue(false);
+    vi.mocked(hasVisionCapability).mockReturnValue(true);
+    vi.mocked(validateUserMessageFileParts).mockReturnValue({ valid: true, filePartCount: 0 });
   });
 
   test('returns 402 when the prepaid credit gate denies the request', async () => {
@@ -244,6 +274,189 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'return a 200 SSE stream',
       actual: { status: response.status, contentType: response.headers.get('content-type') },
       expected: { status: 200, contentType: 'text/event-stream' },
+    });
+  });
+
+  test('returns 400 and never touches the credit gate when an image is sent to a non-vision model', async () => {
+    vi.mocked(hasFileParts).mockReturnValue(true);
+    vi.mocked(hasVisionCapability).mockReturnValue(false);
+    const bodyWithImage = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        id: 'msg-1',
+        content: 'What is in this image?',
+        parts: [
+          { type: 'text', text: 'What is in this image?' },
+          { type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' },
+        ],
+      }],
+    };
+    const response = await POST(makeRequest(bodyWithImage));
+    const body = await response.json();
+    assert({
+      given: 'a user message with a file part sent to an agent configured with a non-vision model',
+      should: 'return 400 with a descriptive error and never call the prepaid credit gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: {
+        status: 400,
+        error: `The selected model "${agentPage.aiModel}" does not support image attachments. Please choose a vision-capable model.`,
+        creditGateCalled: false,
+      },
+    });
+  });
+
+  test('returns 400 when file-part validation fails, before the credit gate', async () => {
+    vi.mocked(hasFileParts).mockReturnValue(true);
+    vi.mocked(validateUserMessageFileParts).mockReturnValue({ valid: false, error: 'Image "cat.png" exceeds the 4MB size limit', filePartCount: 1 });
+    const bodyWithImage = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        id: 'msg-1',
+        content: 'What is in this image?',
+        parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+      }],
+    };
+    const response = await POST(makeRequest(bodyWithImage));
+    const body = await response.json();
+    assert({
+      given: 'a user message with a file part that fails size/format validation',
+      should: 'return 400 with the validation error and never call the prepaid credit gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: { status: 400, error: 'Image "cat.png" exceeds the 4MB size limit', creditGateCalled: false },
+    });
+  });
+
+  test('validates file parts in earlier user messages, not just the final one', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.id === 'msg-1');
+    vi.mocked(validateUserMessageFileParts).mockReturnValue({ valid: false, error: 'Image "cat.png" exceeds the 4MB size limit', filePartCount: 1 });
+    const bodyWithEarlierImage = {
+      model: 'ps-agent://page-123',
+      messages: [
+        {
+          role: 'user',
+          id: 'msg-1',
+          content: 'What is in this image?',
+          parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+        },
+        { role: 'assistant', id: 'msg-2', content: 'A cat.', parts: [{ type: 'text', text: 'A cat.' }] },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(bodyWithEarlierImage));
+    const body = await response.json();
+    assert({
+      given: 'a resent full history where only an EARLIER user message carries an invalid file part and the final message is text-only',
+      should: 'still return 400 from file-part validation and never call the prepaid credit gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: { status: 400, error: 'Image "cat.png" exceeds the 4MB size limit', creditGateCalled: false },
+    });
+  });
+
+  test('applies the vision-capability gate to images in earlier user messages', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.id === 'msg-1');
+    vi.mocked(hasVisionCapability).mockReturnValue(false);
+    const bodyWithEarlierImage = {
+      model: 'ps-agent://page-123',
+      messages: [
+        {
+          role: 'user',
+          id: 'msg-1',
+          content: 'What is in this image?',
+          parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+        },
+        { role: 'assistant', id: 'msg-2', content: 'A cat.', parts: [{ type: 'text', text: 'A cat.' }] },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(bodyWithEarlierImage));
+    const body = await response.json();
+    assert({
+      given: 'a resent full history with a valid image in an EARLIER user message and a non-vision model',
+      should: 'return 400 from the vision gate and never call the prepaid credit gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: {
+        status: 400,
+        error: `The selected model "${agentPage.aiModel}" does not support image attachments. Please choose a vision-capable model.`,
+        creditGateCalled: false,
+      },
+    });
+  });
+
+  test('rejects invalid file parts on assistant-role messages too', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.role === 'assistant');
+    vi.mocked(validateUserMessageFileParts).mockReturnValue({ valid: false, error: 'Image "x.png" is not a valid data URL', filePartCount: 1 });
+    const bodyWithAssistantImage = {
+      model: 'ps-agent://page-123',
+      messages: [
+        { role: 'user', id: 'msg-1', content: 'Draw a cat.', parts: [{ type: 'text', text: 'Draw a cat.' }] },
+        {
+          role: 'assistant',
+          id: 'msg-2',
+          content: '',
+          parts: [{ type: 'file', url: 'https://attacker.example/x.png', mediaType: 'image/png' }],
+        },
+        { role: 'user', id: 'msg-3', content: 'Another one.', parts: [{ type: 'text', text: 'Another one.' }] },
+      ],
+    };
+    const response = await POST(makeRequest(bodyWithAssistantImage));
+    const body = await response.json();
+    assert({
+      given: 'a resent history where an ASSISTANT-role message carries an invalid file part (e.g. a remote URL)',
+      should: 'return 400 from file-part validation instead of letting non-user roles bypass the gate',
+      actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
+      expected: { status: 400, error: 'Image "x.png" is not a valid data URL', creditGateCalled: false },
+    });
+  });
+
+  test('a valid image on a vision-capable model passes the gate and reaches the credit gate', async () => {
+    vi.mocked(hasFileParts).mockReturnValue(true);
+    const bodyWithImage = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        id: 'msg-1',
+        content: 'What is in this image?',
+        parts: [
+          { type: 'text', text: 'What is in this image?' },
+          { type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' },
+        ],
+      }],
+    };
+    const response = await POST(makeRequest(bodyWithImage));
+    assert({
+      given: 'a valid image sent to a vision-capable model by an authorized caller with credits',
+      should: 'proceed through the image gate to the credit gate and return a 200 SSE stream',
+      actual: {
+        status: response.status,
+        contentType: response.headers.get('content-type'),
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+      },
+      expected: { status: 200, contentType: 'text/event-stream', creditGateCalled: true },
+    });
+  });
+
+  test('returns 403 to a caller without page access before any vision error can reveal the agent model', async () => {
+    vi.mocked(canPrincipalViewPage).mockResolvedValue(false);
+    vi.mocked(hasFileParts).mockReturnValue(true);
+    vi.mocked(hasVisionCapability).mockReturnValue(false);
+    const bodyWithImage = {
+      model: 'ps-agent://page-123',
+      messages: [{
+        role: 'user',
+        id: 'msg-1',
+        content: 'What is in this image?',
+        parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+      }],
+    };
+    const response = await POST(makeRequest(bodyWithImage));
+    const body = await response.json();
+    assert({
+      given: 'an authenticated caller with a valid image who lacks view permission on a non-vision agent page',
+      should: 'return the permission 403 rather than the vision 400 that would leak the configured model',
+      actual: { status: response.status, error: body.error, leaksModel: String(body.error).includes(String(agentPage.aiModel)) },
+      expected: { status: 403, error: 'Access denied', leaksModel: false },
     });
   });
 
@@ -840,6 +1053,45 @@ describe('POST /api/v1/chat/completions', () => {
         hasToolResults: Array.isArray(assistantSave?.[0]?.toolResults) && (assistantSave![0].toolResults as unknown[]).length > 0,
       },
       expected: { hasToolCalls: true, hasToolResults: true },
+    });
+  });
+
+  test('cross-turn vision guard: read_page degrades a stale visual_content_delivered result when the requested model lacks vision', async () => {
+    vi.mocked(hasVisionCapability).mockReturnValueOnce(false);
+    vi.mocked(streamText).mockImplementationOnce((() => ({
+      totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 10 }),
+      steps: Promise.resolve([]),
+      toUIMessageStream: async function* () {
+        yield { type: 'start' };
+        yield { type: 'finish' };
+      },
+    })) as unknown as typeof streamText);
+
+    await POST(makeRequest(validBody));
+
+    const toolsArg = vi.mocked(streamText).mock.calls[0]?.[0]?.tools as
+      | Record<string, { toModelOutput?: (args: { output: unknown }) => unknown }>
+      | undefined;
+    const readPageTool = toolsArg?.read_page;
+    const visualDeliveredOutput = {
+      success: true,
+      type: 'visual_content_delivered',
+      pageId: 'page-1',
+      title: 'diagram.png',
+      mimeType: 'image/jpeg',
+      originalMimeType: 'image/png',
+      message: 'Delivered visual content: "diagram.png" (image/jpeg)',
+      imageBase64: 'ZmFrZS1iYXNlNjQ=',
+      sizeBytes: 1234,
+      metadata: { processingStatus: 'visual', originalFileName: 'diagram.png', presetUsed: 'ai-vision' },
+    };
+
+    const modelOutput = readPageTool!.toModelOutput!({ output: visualDeliveredOutput }) as { type: string; value: Record<string, unknown> };
+    assert({
+      given: 'a request whose resolved model lacks vision and a stale visual_content_delivered read_page result',
+      should: 'degrade to visual_content_metadata rather than re-embedding the image bytes',
+      actual: { type: modelOutput.type, innerType: modelOutput.value.type, containsBase64: JSON.stringify(modelOutput).includes(visualDeliveredOutput.imageBase64) },
+      expected: { type: 'json', innerType: 'visual_content_metadata', containsBase64: false },
     });
   });
 

@@ -10,6 +10,7 @@ vi.mock('@pagespace/db/db', () => ({
     where: vi.fn(),
     orderBy: vi.fn().mockReturnThis(),
     groupBy: vi.fn().mockReturnThis(),
+    insert: vi.fn(),
     query: {
       pages: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       drives: { findFirst: vi.fn() },
@@ -103,16 +104,26 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  checkDriveAccess: vi.fn(),
+}));
+vi.mock('../../core/image-preset-fetch', () => ({
+  fetchCachedImagePreset: vi.fn(),
+}));
 
 import { pageReadTools } from '../page-read-tools';
 import { db } from '@pagespace/db/db';
 import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { fetchCachedImagePreset } from '../../core/image-preset-fetch';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
 const mockGetUserAccessLevel = vi.mocked(getUserAccessLevel);
 const mockGetUserAccessiblePagesInDrive = vi.mocked(getUserAccessiblePagesInDriveWithDetails);
 const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
+const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
+const mockFetchCachedImagePreset = vi.mocked(fetchCachedImagePreset);
 
 const createMockPage = (content: string, type = 'DOCUMENT') => ({
   id: 'page-1',
@@ -338,6 +349,433 @@ describe('page-read-tools', () => {
       });
     });
 
+    describe('include=content', () => {
+      const driveSlug = 'my-drive';
+      const driveId = 'drive-1';
+
+      const docPage = { id: 'doc-1', title: 'README', type: 'DOCUMENT', parentId: null, position: 1, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const codePage = { id: 'code-1', title: 'index.ts', type: 'CODE', parentId: null, position: 2, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const taskListPage = { id: 'tasks-1', title: 'Sprint Tasks', type: 'TASK_LIST', parentId: null, position: 3, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const channelPage = { id: 'channel-1', title: 'General', type: 'CHANNEL', parentId: null, position: 4, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const filePage = { id: 'file-1', title: 'report.pdf', type: 'FILE', parentId: null, position: 5, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+
+      const setupDriveAccessWithContent = (
+        visiblePages: unknown[],
+        contentRows: Array<{ id: string; content: string; contentMode: string; type: string }>,
+      ) => {
+        mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+        mockGetUserAccessiblePagesInDrive.mockResolvedValue(visiblePages as unknown as never);
+        (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(contentRows),
+          }),
+        });
+      };
+
+      it('returns content for a DOCUMENT and CODE page', async () => {
+        setupDriveAccessWithContent(
+          [docPage, codePage],
+          [
+            { id: 'doc-1', content: 'Hello world', contentMode: 'html', type: 'DOCUMENT' },
+            { id: 'code-1', content: 'export const x = 1;', contentMode: 'markdown', type: 'CODE' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string; contentOmitted?: string }> };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+        const code = result.pages.find(p => p.id === 'code-1');
+
+        assert({
+          given: 'include=content with a DOCUMENT page',
+          should: 'attach serialized content',
+          actual: doc?.content,
+          expected: 'Hello world',
+        });
+
+        assert({
+          given: 'include=content with a CODE page',
+          should: 'attach raw content untouched',
+          actual: code?.content,
+          expected: 'export const x = 1;',
+        });
+
+        assert({
+          given: 'text-serializable pages',
+          should: 'not set contentOmitted',
+          actual: [doc?.contentOmitted, code?.contentOmitted],
+          expected: [undefined, undefined],
+        });
+      });
+
+      it('omits content with a reason for TASK_LIST, CHANNEL, and FILE pages', async () => {
+        setupDriveAccessWithContent(
+          [taskListPage, channelPage, filePage],
+          [
+            { id: 'tasks-1', content: '', contentMode: 'html', type: 'TASK_LIST' },
+            { id: 'channel-1', content: '', contentMode: 'html', type: 'CHANNEL' },
+            { id: 'file-1', content: '', contentMode: 'html', type: 'FILE' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string; contentOmitted?: string }> };
+
+        for (const id of ['tasks-1', 'channel-1', 'file-1']) {
+          const entry = result.pages.find(p => p.id === id);
+          assert({
+            given: `a structured page type (${id})`,
+            should: 'not include a content field',
+            actual: entry?.content,
+            expected: undefined,
+          });
+          assert({
+            given: `a structured page type (${id})`,
+            should: 'include a contentOmitted explanation',
+            actual: typeof entry?.contentOmitted,
+            expected: 'string',
+          });
+        }
+      });
+
+      it('reports the guardrail when the page count exceeds the content cap', async () => {
+        const manyPages = Array.from({ length: 60 }, (_, i) => ({
+          id: `page-${i}`,
+          title: `Page ${i}`,
+          type: 'DOCUMENT',
+          parentId: null,
+          position: i,
+          driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        }));
+        const contentRows = manyPages
+          .slice(0, 50)
+          .map(p => ({ id: p.id, content: 'x', contentMode: 'html', type: 'DOCUMENT' }));
+
+        setupDriveAccessWithContent(manyPages, contentRows);
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string }>;
+          contentTruncated: boolean;
+          contentPageCap: number;
+          nextSteps: string[];
+        };
+
+        assert({
+          given: '60 pages with include=content and a cap of 50',
+          should: 'flag contentTruncated as true',
+          actual: result.contentTruncated,
+          expected: true,
+        });
+
+        assert({
+          given: '60 pages with include=content',
+          should: 'only attach content to the first 50 pages',
+          actual: result.pages.filter(p => p.content !== undefined).length,
+          expected: 50,
+        });
+
+        assert({
+          given: 'truncated content batch',
+          should: 'report what was dropped in nextSteps rather than staying silent',
+          actual: result.nextSteps.some(s => s.includes('50') && s.includes('60')),
+          expected: true,
+        });
+      });
+
+      it('clips a single page whose content exceeds the per-page character cap', async () => {
+        const hugeContent = 'x'.repeat(10000);
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: hugeContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean; contentClippedAfterLine?: number }>;
+          contentClippedCount: number;
+          contentCharCapPerPage: number;
+          nextSteps: string[];
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'a page whose content exceeds the per-page char cap with no newlines to cut at',
+          should: 'fall back to a hard clip at the cap length',
+          actual: doc?.content?.length,
+          expected: result.contentCharCapPerPage,
+        });
+
+        assert({
+          given: 'a clipped page',
+          should: 'flag contentClipped: true on that entry',
+          actual: doc?.contentClipped,
+          expected: true,
+        });
+
+        assert({
+          given: 'a clipped page with no newlines',
+          should: 'report a single-line contentClippedAfterLine',
+          actual: doc?.contentClippedAfterLine,
+          expected: 1,
+        });
+
+        assert({
+          given: 'a batch with one clipped page',
+          should: 'report contentClippedCount',
+          actual: result.contentClippedCount,
+          expected: 1,
+        });
+
+        assert({
+          given: 'a batch with a clipped page',
+          should: 'mention the clip in nextSteps rather than staying silent',
+          actual: result.nextSteps.some(s => s.includes('clipped')),
+          expected: true,
+        });
+      });
+
+      it('cuts a clipped page at the last newline instead of mid-line', async () => {
+        // 900 lines of 10 chars + newline = 9900 chars, over the 8000 cap.
+        // The clip should land on a line boundary, not mid-line.
+        const lines = Array.from({ length: 900 }, (_, i) => `line${String(i).padStart(5, '0')}`);
+        const longContent = lines.join('\n');
+
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: longContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean; contentClippedAfterLine?: number }>;
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+        const clippedLines = doc?.content?.split('\n') ?? [];
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'not end mid-line (every line is a full "lineNNNNN" token)',
+          actual: clippedLines.every(l => /^line\d{5}$/.test(l)),
+          expected: true,
+        });
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'stay under the char cap',
+          actual: (doc?.content?.length ?? Infinity) <= 8000,
+          expected: true,
+        });
+
+        assert({
+          given: '900 ten-char lines clipped at an 8000-char cap (800 full lines fit exactly)',
+          should: 'keep exactly 800 complete lines',
+          actual: clippedLines.length,
+          expected: 800,
+        });
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'report contentClippedAfterLine matching the number of lines kept',
+          actual: doc?.contentClippedAfterLine,
+          expected: clippedLines.length,
+        });
+      });
+
+      it('does not clip content exactly at the per-page character cap', async () => {
+        const exactContent = 'x'.repeat(8000);
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: exactContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean }>;
+          contentClippedCount: number;
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'content exactly at the per-page char cap (not exceeding it)',
+          should: 'not be clipped',
+          actual: doc?.contentClipped,
+          expected: undefined,
+        });
+
+        assert({
+          given: 'content exactly at the per-page char cap',
+          should: 'keep the full content',
+          actual: doc?.content?.length,
+          expected: 8000,
+        });
+
+        assert({
+          given: 'content exactly at the per-page char cap',
+          should: 'report contentClippedCount of 0',
+          actual: result.contentClippedCount,
+          expected: 0,
+        });
+      });
+
+      it('does not truncate content when exactly at the page-count cap (50 pages)', async () => {
+        const exactlyFiftyPages = Array.from({ length: 50 }, (_, i) => ({
+          id: `page-${i}`,
+          title: `Page ${i}`,
+          type: 'DOCUMENT',
+          parentId: null,
+          position: i,
+          driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        }));
+        const contentRows = exactlyFiftyPages.map(p => ({ id: p.id, content: 'x', contentMode: 'html', type: 'DOCUMENT' }));
+
+        setupDriveAccessWithContent(exactlyFiftyPages, contentRows);
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string }>;
+          contentTruncated: boolean;
+        };
+
+        assert({
+          given: 'exactly 50 pages (the page-count cap) with include=content',
+          should: 'not flag contentTruncated',
+          actual: result.contentTruncated,
+          expected: false,
+        });
+
+        assert({
+          given: 'exactly 50 pages with include=content',
+          should: 'attach content to all 50 pages',
+          actual: result.pages.filter(p => p.content !== undefined).length,
+          expected: 50,
+        });
+      });
+    });
+
+  });
+
+  describe('list_trash', () => {
+    it('has correct tool definition', () => {
+      expect(pageReadTools.list_trash).toBeDefined();
+      expect(pageReadTools.list_trash.description).toContain('trash');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        pageReadTools.list_trash.execute!({ driveSlug: 'my-drive', driveId: 'drive-1' }, context)
+      ).rejects.toThrow('User authentication required');
+    });
+
+    // Regression test for #1774: list_trash's output had no page id, so an
+    // agent that just listed trash had nothing to pass to restore_page (which
+    // requires { id }) — it could see a trashed page but not restore it.
+    it('includes the page id for each trashed page, so restore_page can act on it', async () => {
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, drive: null });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockResolvedValue([
+              {
+                id: 'page-trashed-1',
+                title: 'Old Notes',
+                type: 'DOCUMENT',
+                trashedAt: new Date('2026-01-01'),
+                parentId: null,
+                position: 0,
+                driveId: 'drive-1',
+              },
+            ]),
+          }),
+        }),
+      });
+
+      const result = await pageReadTools.list_trash.execute!(
+        { driveSlug: 'my-drive', driveId: 'drive-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      const trashedPages = result.trashedPages as Array<{ id: string; title: string }>;
+      assert({
+        given: 'list_trash result',
+        should: 'include the id of each trashed page',
+        actual: trashedPages[0]?.id,
+        expected: 'page-trashed-1',
+      });
+    });
+
+    // ========================================================================
+    // Regression coverage for #1772: list_trash only required drive
+    // membership, unlike GET /api/drives/[driveId]/trash which requires
+    // owner/admin. The bars must agree.
+    // ========================================================================
+    it('denies a plain drive member (not owner or admin) from listing trash', async () => {
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false, isMember: true, drive: null });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageReadTools.list_trash.execute!(
+          { driveSlug: 'my-drive', driveId: 'drive-1' },
+          context
+        )
+      ).rejects.toThrow('Only drive owners and admins');
+    });
+
+    it('allows the drive owner to list trash', async () => {
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, drive: null });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'owner-user' } as ToolExecutionContext,
+      };
+
+      const result = await pageReadTools.list_trash.execute!(
+        { driveSlug: 'my-drive', driveId: 'drive-1' },
+        context
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+    });
   });
 
   describe('read_page', () => {
@@ -429,6 +867,94 @@ describe('page-read-tools', () => {
         should: 'include structured channelMessages array',
         actual: Array.isArray((result as { channelMessages: unknown[] }).channelMessages),
         expected: true,
+      });
+    });
+
+    describe('visual FILE pages', () => {
+      const createMockVisualFilePage = () => ({
+        id: 'page-1',
+        title: 'diagram.png',
+        type: 'FILE',
+        isTrashed: false,
+        driveId: 'drive-1',
+        processingStatus: 'visual',
+        mimeType: 'image/png',
+        contentHash: 'hash-abc',
+        fileSize: 5000,
+        originalFileName: 'diagram.png',
+      });
+
+      const createVisionAuthContext = (userId = 'user-123') => ({
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId,
+          modelCapabilities: { hasVision: true, hasTools: true, model: 'gpt-5.4', provider: 'openai' },
+        } as ToolExecutionContext,
+      });
+
+      beforeEach(() => {
+        mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+        mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      });
+
+      it('returns delivered image content for a visual FILE page on a vision-capable model', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockVisualFilePage());
+        mockFetchCachedImagePreset.mockResolvedValue({
+          base64: 'ZmFrZS1pbWFnZS1ieXRlcw==',
+          mediaType: 'image/jpeg',
+          preset: 'ai-vision',
+        });
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'diagram.png', pageId: 'page-1' },
+          createVisionAuthContext()
+        ) as { type: string; imageBase64: string; mimeType: string; originalMimeType: string; success: boolean };
+
+        assert({
+          given: 'a visual FILE page and a vision-capable model',
+          should: 'return a visual_content_delivered result',
+          actual: result.type,
+          expected: 'visual_content_delivered',
+        });
+
+        assert({
+          given: 'a visual FILE page and a vision-capable model',
+          should: 'deliver the base64 bytes from fetchCachedImagePreset',
+          actual: result.imageBase64,
+          expected: 'ZmFrZS1pbWFnZS1ieXRlcw==',
+        });
+
+        assert({
+          given: 'a visual FILE page and a vision-capable model',
+          should: "deliver the fetched preset's mediaType rather than the page's declared mimeType",
+          actual: result.mimeType,
+          expected: 'image/jpeg',
+        });
+
+        assert({
+          given: "a visual FILE page whose delivered preset was re-encoded to a different format (png page, jpeg preset)",
+          should: "still carry the page's true mimeType as originalMimeType, for correct reporting if this result later degrades to metadata-only",
+          actual: result.originalMimeType,
+          expected: 'image/png',
+        });
+      });
+
+      it('falls back to metadata-only when no cached preset is available', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockVisualFilePage());
+        mockFetchCachedImagePreset.mockResolvedValue(null);
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'diagram.png', pageId: 'page-1' },
+          createVisionAuthContext()
+        ) as { type: string };
+
+        assert({
+          given: 'a visual FILE page with no usable cached preset',
+          should: 'fall back to the existing visual_content_metadata result',
+          actual: result.type,
+          expected: 'visual_content_metadata',
+        });
       });
     });
 
@@ -641,6 +1167,12 @@ describe('page-read-tools', () => {
         mockDb.query.taskStatusConfigs = {
           findMany: vi.fn().mockResolvedValue(opts.statusConfigs ?? []),
         } as unknown as typeof mockDb.query.taskStatusConfigs;
+        // Default no-op insert: most of these tests aren't asserting on the
+        // legacy-backfill insert this triggers when statusConfigs is empty
+        // (see the dedicated backfill test below, which overrides this).
+        mockDb.insert = vi.fn(() => ({
+          values: () => Promise.resolve(undefined),
+        })) as unknown as typeof mockDb.insert;
 
         // db.select().from().innerJoin().where().orderBy() for tasks (title joined from pages)
         // db.select().from().innerJoin().where().groupBy() for sub-task count aggregates
@@ -765,6 +1297,119 @@ describe('page-read-tools', () => {
           should: 'compute percentage from the done group',
           actual: result.progress.percentage,
           expected: 67,
+        });
+      });
+
+      it('persists a task_lists row AND seeds task_status_configs when auto-creating (not just the response fallback)', async () => {
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }] });
+
+        // No taskLists row exists yet for this page.
+        mockDb.query.taskLists = {
+          findFirst: vi.fn().mockResolvedValue(undefined),
+        } as unknown as typeof mockDb.query.taskLists;
+        // Simulates the findMany the tool runs right after creation seeing the rows
+        // ensureTaskListForPage just inserted, so the separate empty-configs backfill
+        // check doesn't also fire and double-insert.
+        mockDb.query.taskStatusConfigs = {
+          findMany: vi.fn().mockResolvedValue([
+            { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
+          ]),
+        } as unknown as typeof mockDb.query.taskStatusConfigs;
+
+        const taskListInserts: Array<Record<string, unknown>> = [];
+        const statusConfigInserts: Array<Record<string, unknown>> = [];
+        mockDb.insert = vi.fn((table: { pageId?: string }) => ({
+          values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+            if (table?.pageId === 'pageId') {
+              taskListInserts.push(vals as Record<string, unknown>);
+              return { returning: () => Promise.resolve([{ id: 'list-new', pageId: 'page-1', title: 'My Tasks' }]) };
+            }
+            statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
+            return Promise.resolve(undefined);
+          },
+        })) as unknown as typeof mockDb.insert;
+
+        await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'a TASK_LIST page with no task_lists row yet',
+          should: 'insert exactly one task_lists row',
+          actual: taskListInserts.length,
+          expected: 1,
+        });
+        assert({
+          given: 'a newly auto-created task_lists row',
+          should: 'persist the 4 default task_status_configs (not just return them in the response)',
+          actual: statusConfigInserts.map(c => c.slug),
+          expected: ['pending', 'in_progress', 'blocked', 'completed'],
+        });
+        assert({
+          given: 'the persisted status configs',
+          should: 'link each row to the new task_lists id',
+          actual: statusConfigInserts.every(c => c.taskListId === 'list-new'),
+          expected: true,
+        });
+      });
+
+      it('backfills status configs for a legacy task_lists row that exists but has none', async () => {
+        // Reproduces the gap flagged in review: a task_lists row created by a pre-fix
+        // lazy-init path (or one seeded before this fix shipped) has zero configs.
+        // ensureTaskListForPage no-ops since the row already exists, so read_page
+        // itself must backfill once it observes the empty configs, instead of
+        // leaving that row permanently half-initialized.
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
+
+        const statusConfigInserts: Array<Record<string, unknown>> = [];
+        mockDb.insert = vi.fn(() => ({
+          values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+            statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
+            return Promise.resolve(undefined);
+          },
+        })) as unknown as typeof mockDb.insert;
+
+        await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'a task_lists row that already exists but has zero status configs',
+          should: 'backfill the 4 default status configs',
+          actual: statusConfigInserts.map(c => c.slug),
+          expected: ['pending', 'in_progress', 'blocked', 'completed'],
+        });
+        assert({
+          given: 'the backfilled status configs',
+          should: 'link each row to the existing task_lists id',
+          actual: statusConfigInserts.every(c => c.taskListId === 'list-1'),
+          expected: true,
+        });
+      });
+
+      it('still returns the DEFAULT_TASK_STATUSES fallback when the legacy backfill insert fails', async () => {
+        // The backfill is best-effort: this branch used to be a pure read (no
+        // write) that could never fail. A transient DB error on the backfill
+        // insert must not turn a previously-safe display fallback into a
+        // failed tool call -- it should log and let the read still succeed.
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
+
+        mockDb.insert = vi.fn(() => ({
+          values: () => Promise.reject(new Error('connection reset')),
+        })) as unknown as typeof mockDb.insert;
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        ) as { availableStatuses: Array<{ slug: string }> };
+
+        assert({
+          given: 'a legacy list whose backfill insert fails with an unrelated error',
+          should: 'still return the documented default statuses instead of throwing',
+          actual: result.availableStatuses.map(s => s.slug).sort(),
+          expected: ['blocked', 'completed', 'in_progress', 'pending'],
         });
       });
     });

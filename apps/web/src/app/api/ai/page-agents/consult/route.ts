@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage } from '@/lib/auth';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -15,11 +16,14 @@ import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-mid
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { supportsTemperature } from '@/lib/ai/core/model-capabilities';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, and, desc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { createId } from '@paralleldrive/cuid2';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
@@ -167,7 +171,7 @@ export async function POST(request: Request) {
     const userId = auth.userId;
 
     const body = await request.json();
-    const { agentId, question, context } = body;
+    const { agentId, question, context, conversationId } = body;
 
     if (!agentId || !question) {
       return NextResponse.json(
@@ -262,19 +266,51 @@ export async function POST(request: Request) {
     const systemPrompt = agent.systemPrompt || 'You are a helpful AI assistant.';
     const enabledTools = agent.enabledTools || [];
 
-    // Get recent conversation history for context (last 10 messages)
-    const recentMessages = await db
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.pageId, agentId))
-      .orderBy(chatMessages.createdAt)
-      .limit(10);
+    // Persistent conversation support (parity with the internal ask_agent tool):
+    // a supplied conversationId continues that exact conversation; otherwise a
+    // new one is minted and returned so the caller can continue it later.
+    const activeConversationId: string = conversationId || createId();
+
+    // Eagerly ensure a conversations row exists so this conversation is
+    // listable via GET .../conversations, which joins against `conversations`
+    // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
+    // Without this, chatMessages are persisted but the conversation itself is
+    // invisible to list_conversations. createConversation itself refuses to
+    // claim ownership of a supplied conversationId that already has messages
+    // from a different user (see its doc comment) — safe to call unconditionally.
+    await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
+
+    let historyMessages: Array<{ role: string; content: string | null }>;
+    if (conversationId) {
+      // Scoped to this conversation only, in chronological order.
+      historyMessages = await db
+        .select()
+        .from(chatMessages)
+        .where(and(
+          eq(chatMessages.pageId, agentId),
+          eq(chatMessages.conversationId, conversationId),
+          eq(chatMessages.isActive, true)
+        ))
+        .orderBy(chatMessages.createdAt);
+    } else {
+      // No conversationId: fall back to the agent's most recent messages across
+      // all conversations for lightweight context. Must order DESC then reverse
+      // — ordering ASCENDING with limit(10) returns the agent's FIRST 10
+      // messages ever, not the most recent.
+      const recentMessages = await db
+        .select()
+        .from(chatMessages)
+        .where(eq(chatMessages.pageId, agentId))
+        .orderBy(desc(chatMessages.createdAt))
+        .limit(10);
+      historyMessages = recentMessages.slice().reverse();
+    }
 
     // Build conversation messages (exclude system - handled separately)
     const conversationMessages = [];
 
     // Add recent conversation context if available
-    for (const msg of recentMessages) {
+    for (const msg of historyMessages) {
       if (msg.content) {
         conversationMessages.push({
           role: msg.role,
@@ -291,6 +327,17 @@ export async function POST(request: Request) {
     conversationMessages.push({
       role: 'user',
       content: consultationMessage
+    });
+
+    // Persist the question immediately so it survives even if generation fails below.
+    const userMessageId = createId();
+    await saveMessageToDatabase({
+      messageId: userMessageId,
+      pageId: agentId,
+      conversationId: activeConversationId,
+      userId,
+      role: 'user',
+      content: consultationMessage,
     });
 
     // Get configured AI model for agent
@@ -343,10 +390,13 @@ export async function POST(request: Request) {
       mcpTokenId: isMCPAuthResult(auth) ? auth.tokenId : undefined,
     };
 
+    // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.
+    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth));
+
     // Filter tools based on agent's enabled tools
     const availableTools = Array.isArray(enabledTools) && enabledTools.length > 0
       ? Object.fromEntries(
-          Object.entries(pageSpaceTools).filter(([toolName]) =>
+          Object.entries(scopedPageSpaceTools).filter(([toolName]) =>
             enabledTools.includes(toolName)
           )
         )
@@ -400,7 +450,7 @@ export async function POST(request: Request) {
         ? await generateText({
             model,
             system: enhancedSystemPrompt,
-            messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
+            messages: await convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
               role: m.role as 'user' | 'assistant' | 'system',
               content: m.content,
               parts: [{ type: 'text', text: m.content }]
@@ -410,7 +460,11 @@ export async function POST(request: Request) {
             ...(tempSupported ? { temperature: 0.7 } : {}),
             maxRetries: 3,
             experimental_context: executionContext,
-            stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
+            // 20, not 100 — matches the internal ask_agent tool's sub-agent step
+            // budget (agent-communication-tools.ts) since this route enables the
+            // same ask_agent tool and must not allow a far larger budget for an
+            // externally/MCP-triggered call than an internally-triggered one.
+            stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
             onStepFinish: ({ toolCalls, toolResults, text }) => {
               loggers.api.debug('Agent tool execution step completed', {
                 agentId,
@@ -424,7 +478,7 @@ export async function POST(request: Request) {
         : await generateText({
             model,
             system: enhancedSystemPrompt,
-            messages: convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
+            messages: await convertToModelMessages(conversationMessages.filter(m => m.role !== 'system').map(m => ({
               role: m.role as 'user' | 'assistant' | 'system',
               content: m.content,
               parts: [{ type: 'text', text: m.content }]
@@ -519,8 +573,9 @@ export async function POST(request: Request) {
           errors: toolErrors,
         });
       }
-      // Track AI usage. This is a tool loop (stepCountIs(100)); use totalUsage so
-      // every round-trip is billed, not just the final step.
+      // Track AI usage. This is a tool loop (stepCountIs(20) when tools are
+      // enabled); use totalUsage so every round-trip is billed, not just the
+      // final step.
       const usage = result.totalUsage;
       AIMonitoring.trackUsage({
         userId,
@@ -544,6 +599,17 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+
+    // Persist the answer so the conversation can be continued via conversationId.
+    const assistantMessageId = createId();
+    await saveMessageToDatabase({
+      messageId: assistantMessageId,
+      pageId: agentId,
+      conversationId: activeConversationId,
+      userId: null,
+      role: 'assistant',
+      content: responseText,
+    });
 
     loggers.api.info('Agent consultation completed', {
       agentId,
@@ -570,8 +636,9 @@ export async function POST(request: Request) {
       question,
       response: responseText,
       context: context || null,
+      conversationId: activeConversationId,
       metadata: {
-        conversationLength: recentMessages.length,
+        conversationLength: historyMessages.length,
         toolsAvailable: Array.isArray(enabledTools) ? enabledTools.length : 0,
         provider: agent.aiProvider || 'default',
         model: agent.aiModel || 'default',

@@ -1,18 +1,17 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, ne, isNotNull } from '@pagespace/db/operators'
-import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { eq, and } from '@pagespace/db/operators'
+import { drives } from '@pagespace/db/schema/core'
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
+import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
-import { getAgentPageId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
+import { resolveActingAgentId, filterDriveIdsByAppTokenScope, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 
 // Helper: Extract AI attribution context with actor info for activity logging
@@ -50,9 +49,11 @@ export const driveTools = {
       }
 
       // Page-agents are scoped to their explicit drive memberships (plus their
-      // home drive), so discovery matches where they can actually act. The user
-      // / global assistant path (no agentPageId) stays user-scoped below.
-      const agentPageId = getAgentPageId(context as ToolExecutionContext);
+      // home drive), so discovery matches where they can actually act — unless
+      // they've opted into user-scoped reach, which falls through to the
+      // user-scoped enumeration below (matching multi_drive_list_agents). The
+      // user / global assistant path (no agentPageId) stays user-scoped below.
+      const agentPageId = await resolveActingAgentId(context as ToolExecutionContext);
       if (agentPageId) {
         try {
           const allAgentDrives = await listAgentDrives(agentPageId);
@@ -88,63 +89,19 @@ export const driveTools = {
       }
 
       try {
-        // 1. Get user's own drives
-        const ownedDrives = await db
-          .select({
-            id: drives.id,
-            name: drives.name,
-            slug: drives.slug,
-            createdAt: drives.createdAt,
-            ownerId: drives.ownerId,
-          })
-          .from(drives)
-          .where(eq(drives.ownerId, userId));
+        // Full user-scoped reach: owned + member + page-permission drives,
+        // excluding trashed ones (same source multi_drive_list_agents uses).
+        const accessibleDrives = await listAccessibleDrives(userId);
 
-        // 2. Get drives where user is a member
-        const memberDrives = await db.selectDistinct({ 
-          id: drives.id,
-          name: drives.name,
-          slug: drives.slug,
-          createdAt: drives.createdAt,
-          ownerId: drives.ownerId,
-        })
-          .from(driveMembers)
-          .leftJoin(drives, eq(driveMembers.driveId, drives.id))
-          .where(and(
-            eq(driveMembers.userId, userId),
-            isNotNull(driveMembers.acceptedAt),
-            ne(drives.ownerId, userId) // Exclude owned drives
-          ));
-
-        // 3. Get drives where user has page permissions
-        const permissionDrives = await db.selectDistinct({
-          id: drives.id,
-          name: drives.name,
-          slug: drives.slug,
-          createdAt: drives.createdAt,
-          ownerId: drives.ownerId,
-        })
-          .from(pagePermissions)
-          .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-          .leftJoin(drives, eq(pages.driveId, drives.id))
-          .where(and(
-            eq(pagePermissions.userId, userId),
-            eq(pagePermissions.canView, true),
-            ne(drives.ownerId, userId) // Exclude owned drives
-          ));
-
-        // 4. Combine all drives and deduplicate
-        const allDrives = [...ownedDrives, ...memberDrives, ...permissionDrives];
-        const dedupedDrives = Array.from(new Map(allDrives.map(d => [d.id, d])).values());
         // Ceiling a scoped MCP token to its allowed drives + its own role's
         // view access (no-op otherwise).
         const scopedIds = new Set(
           await filterDriveIdsByAppTokenScope(
             context as ToolExecutionContext,
-            dedupedDrives.map(d => d.id).filter((id): id is string => id != null),
+            accessibleDrives.map(d => d.id),
           ),
         );
-        const uniqueDrives = dedupedDrives.filter(d => d.id != null && scopedIds.has(d.id));
+        const uniqueDrives = accessibleDrives.filter(d => scopedIds.has(d.id));
 
         return {
           success: true,
@@ -191,6 +148,14 @@ export const driveTools = {
       // new ones (mirrors the /api/mcp/drives REST gate). No-op for unscoped callers.
       if (isMcpScoped(context as ToolExecutionContext)) {
         throw new Error('This token is scoped to specific drives and cannot create new drives');
+      }
+
+      // A brand-new drive is by definition outside a page-agent's existing
+      // memberships, so creating one is gated behind the same user-scoped-access
+      // opt-in that lets an agent reach beyond its explicit memberships
+      // (mirrors the list_drives / multi_drive_list_agents agent branch).
+      if (await resolveActingAgentId(context as ToolExecutionContext)) {
+        throw new Error('This agent is scoped to its own drive memberships and cannot create new drives. Enable user-scoped access in the agent settings to allow this.');
       }
 
       try {

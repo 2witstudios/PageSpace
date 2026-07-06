@@ -318,6 +318,157 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     });
   });
 
+  describe('permission recheck (revocation backstop)', () => {
+    const RECHECK_INTERVAL_MS = 5000;
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('given permission is revoked before the first recheck tick, should send a done+aborted frame and stop pushing further chunks', async () => {
+      vi.useFakeTimers();
+      let allowed = true;
+      vi.mocked(canUserViewPage).mockImplementation(async () => allowed);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      expect(response.status).toBe(200);
+
+      allowed = false;
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      // Further pushes after revocation must not reach the (already-closed) response body.
+      testRegistry.push(mockMessageId, { type: 'text', text: 'after-revoke' });
+
+      const body = await readSSEBody(response);
+
+      expect(body).toContain('data: {"done":true,"aborted":true}\n\n');
+      expect(body).not.toContain('after-revoke');
+    });
+
+    it('given permission is revoked mid-stream, should unsubscribe from the registry', async () => {
+      vi.useFakeTimers();
+      let allowed = true;
+      vi.mocked(canUserViewPage).mockImplementation(async () => allowed);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      allowed = false;
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      // finish() notifies subscribers via onComplete; if the route already unsubscribed,
+      // this must not throw and must not double-close the (already-closed) controller.
+      expect(() => testRegistry.finish(mockMessageId)).not.toThrow();
+    });
+
+    it('given permission remains granted at recheck time, should keep the stream open and continue delivering chunks', async () => {
+      vi.useFakeTimers();
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      testRegistry.push(mockMessageId, { type: 'text', text: 'still-allowed' });
+      testRegistry.finish(mockMessageId);
+
+      const body = await readSSEBody(response);
+
+      expect(body).toContain('data: {"part":{"type":"text","text":"still-allowed"}}\n\n');
+      expect(body).toContain('data: {"done":true,"aborted":false}\n\n');
+    });
+
+    it('given the stream finishes naturally before any recheck fires, should clear the recheck interval', async () => {
+      vi.useFakeTimers();
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+      testRegistry.finish(mockMessageId);
+
+      vi.mocked(canUserViewPage).mockClear();
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS * 3);
+
+      // No leaked interval still polling after the stream naturally finished.
+      expect(canUserViewPage).not.toHaveBeenCalled();
+    });
+
+    it('given a slow permission check, should not start a second overlapping check before the first resolves', async () => {
+      vi.useFakeTimers();
+      let resolveRecheck!: (allowed: boolean) => void;
+      let callCount = 0;
+      vi.mocked(canUserViewPage).mockImplementation(() => {
+        callCount += 1;
+        // Call #1 is the initial join-time gate check — resolve it immediately
+        // so the stream actually starts; only the recheck ticks are made slow.
+        if (callCount === 1) return Promise.resolve(true);
+        return new Promise((res) => { resolveRecheck = res; });
+      });
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      // First recheck tick fires; canUserViewPage is now pending (not yet resolved).
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+      expect(canUserViewPage).toHaveBeenCalledTimes(2);
+
+      // Advancing well past another interval must not start a second recheck —
+      // the next one is only scheduled once the pending check resolves.
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS * 3);
+      expect(canUserViewPage).toHaveBeenCalledTimes(2);
+
+      resolveRecheck(true);
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+      expect(canUserViewPage).toHaveBeenCalledTimes(3);
+
+      testRegistry.finish(mockMessageId);
+      await readSSEBody(response);
+    });
+
+    it('given the permission recheck throws (e.g. a transient DB error), should fail closed: close the stream and emit a denial audit event', async () => {
+      vi.useFakeTimers();
+      vi.mocked(canUserViewPage)
+        .mockResolvedValueOnce(true) // initial join-time gate check
+        .mockRejectedValueOnce(new Error('DB connection lost')); // first recheck tick
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      const body = await readSSEBody(response);
+
+      expect(body).toContain('data: {"done":true,"aborted":true}\n\n');
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'authz.access.denied',
+          resourceType: 'ai_stream',
+          resourceId: mockMessageId,
+          details: expect.objectContaining({ reason: 'permission_recheck_failed', pageId: mockPageId }),
+        }),
+      );
+    });
+
+    it('given the permission recheck throws, should not schedule a further recheck (no leaked timer)', async () => {
+      vi.useFakeTimers();
+      vi.mocked(canUserViewPage)
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error('DB connection lost'));
+      testRegistry.register(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      vi.mocked(canUserViewPage).mockClear();
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS * 3);
+
+      expect(canUserViewPage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('client disconnect', () => {
     it('given client disconnect, should unsubscribe without leaking resources', async () => {
       const abortController = new AbortController();

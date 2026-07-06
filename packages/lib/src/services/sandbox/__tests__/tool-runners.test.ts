@@ -304,6 +304,66 @@ describe('runBashInSandbox', () => {
     await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
     expect(seen).toEqual({ timeoutMs: 120_000, maxBytes: 256 * 1024 });
   });
+
+  it('given an explicit timeoutMs, should forward it to the driver instead of the default', async () => {
+    let seenTimeout: number | undefined;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seenTimeout = a.timeoutMs;
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    await runBashInSandbox({ command: 'bun install', timeoutMs: 180_000, ctx: makeCtx(), deps });
+    expect(seenTimeout).toBe(180_000);
+  });
+
+  it('given a timeoutMs above the max, should clamp it down instead of passing it through raw', async () => {
+    let seenTimeout: number | undefined;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seenTimeout = a.timeoutMs;
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    await runBashInSandbox({ command: 'bun install', timeoutMs: 10_000_000, ctx: makeCtx(), deps });
+    expect(seenTimeout).toBe(200_000);
+  });
+
+  it('given no timeoutMs, should default to SANDBOX_TIMEOUT_MS unchanged', async () => {
+    let seenTimeout: number | undefined;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seenTimeout = a.timeoutMs;
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(seenTimeout).toBe(120_000);
+  });
+
+  it('given a non-positive timeoutMs (bypassing the zod schema at this exported layer), should clamp to a floor of 1 instead of passing it through raw', async () => {
+    let seenTimeout: number | undefined;
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async (a) => {
+            seenTimeout = a.timeoutMs;
+            return { exitCode: 0, stdout: '', stderr: '' };
+          },
+        }),
+    });
+    await runBashInSandbox({ command: 'echo hi', timeoutMs: 0, ctx: makeCtx(), deps });
+    expect(seenTimeout).toBe(1);
+  });
 });
 
 describe('writeSandboxFile', () => {
@@ -496,5 +556,43 @@ describe('readSandboxFile', () => {
     const result = await readSandboxFile({ path: '/etc/passwd', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false, reason: 'path_escape' });
     expect(acquired).toBe(false);
+  });
+});
+
+describe('injection seam wiring (screenOutput, fail-open)', () => {
+  it('given a screenOutput hook, bash stdout is screened before it returns to the model', async () => {
+    const { deps } = makeDeps({ screenOutput: async (t) => `[SCREENED]${t}` });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    if (result.success) expect(result.stdout).toBe('[SCREENED]ok');
+  });
+
+  it('given NO screenOutput hook, bash stdout passes through unchanged (seam disabled)', async () => {
+    const { deps } = makeDeps();
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    if (result.success) expect(result.stdout).toBe('ok');
+  });
+
+  it('given a screenOutput hook, bash STDERR is also screened (injected instructions can be on stderr)', async () => {
+    const sandbox = makeSandbox({
+      runCommand: async () => ({ exitCode: 0, stdout: 'out', stderr: 'err' }),
+    });
+    const { deps } = makeDeps({
+      reconnect: async () => sandbox,
+      screenOutput: async (t) => `[SCREENED]${t}`,
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    if (result.success) {
+      expect(result.stdout).toBe('[SCREENED]out');
+      expect(result.stderr).toBe('[SCREENED]err');
+    }
+  });
+
+  it('given a screenOutput hook, readFile content is screened before it returns to the model', async () => {
+    const { deps } = makeDeps({ screenOutput: async (t) => `[SCREENED]${t}` });
+    const result = await readSandboxFile({ path: 'a.txt', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    if (result.success) expect(result.content).toBe('[SCREENED]file-contents');
   });
 });

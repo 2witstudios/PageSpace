@@ -37,10 +37,15 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
-      - name: Setup Node.js
+      # Test on the Node version we ship. apps/web and apps/realtime run Node 24
+      # in production (see their Dockerfiles), so the bulk of the suite runs here.
+      # apps/processor is the exception: it ships on Node 22 and its Magika
+      # (onnxruntime) content detection fails to load on Node 24 — so it is
+      # excluded here and run separately below on its own Node 22 runtime.
+      - name: Setup Node.js (24 — web/realtime runtime)
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: '22'
+          node-version: '24'
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -58,10 +63,23 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
         run: bun run --filter '@pagespace/db' db:migrate
 
-      - name: Run tests with coverage
+      - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: bun run test:coverage
+        run: bunx turbo run test:coverage --filter='!@pagespace/processor'
+
+      # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
+      # onnxruntime native bindings fail to initialize on Node 24, so test the
+      # processor on the runtime it actually deploys to.
+      - name: Setup Node.js (22 — processor runtime)
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22'
+
+      - name: Run processor tests with coverage (Node 22)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+        run: bunx turbo run test:coverage --filter='@pagespace/processor'
 
       # Backfill scripts have their own vitest context (scripts/vitest.config.ts)
       # and are not part of any workspace package, so the turbo test pipeline

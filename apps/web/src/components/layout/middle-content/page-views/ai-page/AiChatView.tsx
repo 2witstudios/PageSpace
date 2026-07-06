@@ -45,6 +45,7 @@ import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnCo
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
 import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
+import { isPlaceholderConversationId } from '@/lib/ai/streams/isPlaceholderConversationId';
 import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
@@ -53,9 +54,13 @@ import {
   useMessageActions,
   useProviderSettings,
   useConversations,
+  useConversationIdentity,
+  conversationIdFrom,
+  isResolving,
   useChatTransport,
   useStreamingRegistration,
   useSendHandoff,
+  buildChatConfig,
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
@@ -82,7 +87,6 @@ type ConversationListResponse = { conversations?: Array<{ id: string }> };
 type ConversationMessagesResponse = { messages: UIMessage[] };
 
 const VOICE_OWNER: VoiceModeOwner = 'ai-page';
-const EMPTY_MESSAGES: UIMessage[] = [];
 
 const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const params = useParams();
@@ -94,7 +98,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // ============================================
   // LOCAL STATE
   // ============================================
-  const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const { draft: input, setDraft: setInput, clearDraft: clearInputDraft } = useDraft(
     buildDraftKey('ai', page.id),
   );
@@ -102,7 +105,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [showError, setShowError] = useState(true);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
   // Message-load state — tracks in-progress DB fetches and their failures independently
@@ -132,148 +134,42 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Always reflects the current page.id so async callbacks can detect stale pages
   const pageIdRef = useRef(page.id);
   useEffect(() => { pageIdRef.current = page.id; }, [page.id]);
+  // Always reflects the current identity's conversationId (kept in sync
+  // directly during render, further below, once currentConversationId is
+  // derived) so async reconciliation callbacks (e.g. the late-joiner sync)
+  // can detect that the user has since switched away before applying a
+  // stale setIdentity call.
+  const currentConversationIdRef = useRef<string | null>(null);
   // Tracks the conversationId of the most recent loadMessagesForConversation call so
   // stale in-flight fetches (from a previous conversation) are silently dropped.
   const loadRequestedIdRef = useRef<string | null>(null);
   // When set to a conversationId, the load-on-select effect skips the fetch for that
   // id on its next fire (messages are already provided inline, avoiding a double-fetch).
   const skipLoadEffectRef = useRef<string | null>(null);
+  // Messages prefetched by resolveConversation (init path) for the id it resolves to,
+  // consumed once by the load-on-select effect below to avoid a double-fetch.
+  const preloadedMessagesRef = useRef<{ id: string; messages: UIMessage[] } | null>(null);
 
   // ============================================
-  // SHARED HOOKS
+  // CHAT CONFIGURATION (hoisted above conversation identity: loadMessagesForConversation
+  // needs setMessages, and identity resolution needs loadMessagesForConversation)
   // ============================================
-  const {
-    isLoading: isLoadingProviders,
-    isAnyProviderConfigured,
-    needsSetup,
-    selectedProvider,
-    setSelectedProvider,
-    selectedModel,
-    setSelectedModel,
-    isProviderConfigured,
-  } = useProviderSettings({ pageId: page.id });
-
-  const hasVision = hasVisionCapability(selectedModel || '');
-
-  const {
-    isDesktop,
-    runningServers,
-    runningServerNames,
-    mcpToolSchemas,
-    enabledServerCount,
-    isServerEnabled,
-    setServerEnabled,
-    allServersEnabled,
-    setAllServersEnabled,
-  } = useMCPTools({ conversationId: currentConversationId });
-
-  // Get web search setting from global assistant settings store
-  const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
-
-  const {
-    conversations,
-    isLoading: isLoadingConversations,
-    loadConversation,
-    createConversation,
-    deleteConversation,
-    prependConversationOptimistic,
-    refreshConversations,
-  } = useConversations({
-    agentId: page.id,
-    currentConversationId,
-    // Enabled on the chat tab too (not just history) so the header can show the
-    // active conversation's share state and let the owner toggle it in place.
-    enabled: activeTab === 'history' || activeTab === 'chat',
-    onConversationLoad: (conversationId, messages) => {
-      // Use the pre-fetched messages directly (no re-fetch) and suppress the
-      // load-on-select effect for this id so we don't double-request the server.
-      skipLoadEffectRef.current = conversationId;
-      setCurrentConversationId(conversationId);
-      setActiveTab('chat');
-      void loadMessagesForConversation(conversationId, messages);
-    },
-    onConversationLoadError: (_conversationId, error) => {
-      // The conversation list fetch failed — show the error inline without
-      // clearing existing messages (caller's toast already announced the failure).
-      setMessagesLoadError(error);
-    },
-    onConversationCreate: (conversationId) => {
-      // New conversation has no messages — skip the load effect.
-      skipLoadEffectRef.current = conversationId;
-      setCurrentConversationId(conversationId);
-      setMessages([]);
-      setActiveTab('chat');
-    },
-    onConversationDelete: () => {
-      setCurrentConversationId(null);
-      setMessages([]);
-    },
-  });
-
-  // Toggle share status for a conversation the user owns
-  const toggleConversationShare = useCallback(async (conversationId: string, isShared: boolean) => {
-    try {
-      const response = await fetchWithAuth(
-        `/api/ai/page-agents/${page.id}/conversations/${conversationId}`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ isShared }),
-        }
-      );
-      if (!response.ok) {
-        toast.error('Failed to update conversation sharing');
-        return;
-      }
-      refreshConversations();
-    } catch {
-      toast.error('Failed to update conversation sharing');
-    }
-  }, [page.id, refreshConversations]);
-
-  // The active conversation's metadata (share state, ownership), derived from the
-  // conversation list. Null for the page-scoped placeholder id (no persisted
-  // conversation yet) — the header toggle is hidden until the first message lands.
-  const currentConversation = useMemo(
-    () => conversations.find((c) => c.id === currentConversationId) ?? null,
-    [conversations, currentConversationId],
-  );
-
-  // A real conversation can become active without ever entering the cached list:
-  // the first message on a fresh page creates it, but private conversations are
-  // not broadcast and the stream-completion path doesn't refresh the list. Since
-  // the list is now fetched on the chat tab, a fresh page caches [] up-front;
-  // without this, the header share toggle never appears and opening History
-  // reuses that stale empty cache. Pull the list once per id that's missing from
-  // it so both the header and History reflect the just-created conversation.
-  const syncedConversationRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!currentConversationId) return;
-    if (currentConversationId === `${page.id}-default`) return;
-    if (conversations.some((c) => c.id === currentConversationId)) return;
-    if (syncedConversationRef.current === currentConversationId) return;
-    syncedConversationRef.current = currentConversationId;
-    refreshConversations();
-  }, [currentConversationId, conversations, page.id, refreshConversations]);
-
-  // ============================================
-  // CHAT CONFIGURATION
-  // ============================================
-  // Use conversation ID for stream tracking (falls back to page.id before conversation is created)
-  const streamTrackingId = currentConversationId || page.id;
-
-  const transport = useChatTransport(streamTrackingId, '/api/ai/chat');
+  // Stable transport: uses page.id so the transport (and therefore chatConfig)
+  // never changes across conversation switches within the same page. Changing
+  // the transport on every switch caused useChat to reset its internal store,
+  // which clobbered the messages written by loadMessagesForConversation — the
+  // root cause of conversations not loading when clicked from History.
+  const transport = useChatTransport(page.id, '/api/ai/chat');
+  const streamTrackingId = page.id;
 
   const handleChatError = useCallback((error: Error) => {
     console.error('AiChatView: Chat error:', error);
   }, []);
 
   const chatConfig = useMemo(
-    () => !transport ? null : ({
+    () => !transport ? null : buildChatConfig({
       id: page.id,
-      messages: EMPTY_MESSAGES,
       transport,
-      experimental_throttle: 100,
       onError: handleChatError,
     }),
     [page.id, transport, handleChatError]
@@ -299,7 +195,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     preloadedMessages?: UIMessage[],
   ): Promise<void> => {
     // Skip the placeholder id — it has no server-side messages yet.
-    if (conversationId === `${page.id}-default`) return;
+    if (isPlaceholderConversationId(conversationId, page.id)) return;
 
     loadRequestedIdRef.current = conversationId;
     setIsLoadingMessages(true);
@@ -348,6 +244,196 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       }
     }
   }, [page.id, setMessages]);
+
+  // ============================================
+  // CONVERSATION IDENTITY
+  // ============================================
+  // Determines which conversation this page should show. The only genuine async
+  // unknown is "does this page already have a persisted conversation" — a real
+  // fetch failure here must surface an error/retry state, not be silently treated
+  // as "no conversations exist" (that misclassification was the root cause of a
+  // fresh, disconnected conversation replacing a real one after a transient
+  // network blip). Creating/selecting a conversation elsewhere is always a
+  // synchronous setIdentity call — never routed through this resolver.
+  const resolveConversation = useCallback(async (): Promise<{ conversationId: string }> => {
+    const listResponse = await fetchWithAuth(
+      `/api/ai/page-agents/${page.id}/conversations?pageSize=1`
+    );
+    if (!listResponse.ok) {
+      throw new Error(`Failed to load conversations (${listResponse.status})`);
+    }
+    const { conversations: list } = (await listResponse.json()) as ConversationListResponse;
+
+    if (list && list.length > 0) {
+      const conv = list[0];
+      // The conversation's identity is already known at this point (conv.id) —
+      // a failure prefetching its messages (thrown exception or a non-ok
+      // response) must not be treated as an identity-resolution failure.
+      // loadMessagesForConversation takes the network path itself and
+      // surfaces its own per-conversation error banner on failure.
+      let loaded: UIMessage[] | undefined;
+      try {
+        const msgResponse = await fetchWithAuth(
+          `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`
+        );
+        loaded = msgResponse.ok
+          ? (((await msgResponse.json()) as ConversationMessagesResponse).messages ?? [])
+          : undefined;
+      } catch (err) {
+        console.warn('Failed to prefetch messages during init, falling back to network load:', err);
+        loaded = undefined;
+      }
+      if (loaded !== undefined) {
+        preloadedMessagesRef.current = { id: conv.id, messages: loaded };
+      }
+      return { conversationId: conv.id };
+    }
+
+    // No persisted conversations exist yet. Derive a stable ID from the page so
+    // concurrent openers share the same conversation before either sends a message.
+    // The conversation is anchored in the DB once the first message is saved.
+    return { conversationId: `${page.id}-default` };
+  }, [page.id]);
+
+  const {
+    state: identityState,
+    canSend: canSendMessage,
+    setIdentity,
+    retry: retryResolveConversation,
+  } = useConversationIdentity({ resolve: resolveConversation });
+
+  const currentConversationId = conversationIdFrom(identityState);
+  // Updated directly during render (not via an effect like pageIdRef) so the
+  // late-joiner sync callback always reads the value from the most recently
+  // rendered pass with no effect-flush lag. This component uses no
+  // concurrent-rendering features (no Suspense/startTransition) that could
+  // discard an in-progress render before commit, so the theoretical
+  // staleness a render-body write risks doesn't apply here — but an effect
+  // introduces a real one: an async callback firing before React flushes a
+  // just-scheduled effect would read a stale ref value.
+  currentConversationIdRef.current = currentConversationId;
+  const isInitialized = !isResolving(identityState) && identityState.status !== 'idle';
+  const conversationResolveError = identityState.status === 'error' ? identityState.message : null;
+
+  // ============================================
+  // SHARED HOOKS
+  // ============================================
+  const {
+    isLoading: isLoadingProviders,
+    isAnyProviderConfigured,
+    needsSetup,
+    selectedProvider,
+    setSelectedProvider,
+    selectedModel,
+    setSelectedModel,
+    isProviderConfigured,
+  } = useProviderSettings({ pageId: page.id });
+
+  const hasVision = hasVisionCapability(selectedModel || '');
+
+  const {
+    isDesktop,
+    runningServers,
+    runningServerNames,
+    mcpToolSchemas,
+    enabledServerCount,
+    isServerEnabled,
+    setServerEnabled,
+    allServersEnabled,
+    setAllServersEnabled,
+  } = useMCPTools({ conversationId: currentConversationId });
+
+  // Get web search setting from global assistant settings store
+  const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
+
+  const {
+    conversations,
+    isLoading: isLoadingConversations,
+    loadConversation,
+    createConversation,
+    deleteConversation,
+    prependConversationOptimistic,
+    refreshConversations,
+  } = useConversations({
+    agentId: page.id,
+    currentConversationId,
+    // Enabled on the chat tab too (not just history) so the header can show the
+    // active conversation's share state and let the owner toggle it in place.
+    enabled: activeTab === 'history' || activeTab === 'chat',
+    onConversationLoad: (conversationId, messages) => {
+      // Only reached via the undo-triggered reload path (onUndoApplied below)
+      // — history-select goes straight through setIdentity, letting the
+      // load-on-select effect below do the (one, authoritative) fetch. Doesn't
+      // touch activeTab/skipLoadEffectRef: an undo can land while the user is
+      // on a different tab, and currentConversationId isn't changing here so
+      // the load-on-select effect won't double-fire regardless.
+      void loadMessagesForConversation(conversationId, messages);
+    },
+    onConversationLoadError: (_conversationId, error) => {
+      // The conversation list fetch failed — show the error inline without
+      // clearing existing messages (caller's toast already announced the failure).
+      setMessagesLoadError(error);
+    },
+    onConversationCreate: (conversationId) => {
+      // createConversation() already generated this id synchronously and
+      // called this callback before its persist POST resolves — adopt it
+      // immediately so a send fired right after "New Chat" can't race.
+      skipLoadEffectRef.current = conversationId;
+      setIdentity(conversationId);
+      setMessages([]);
+      setActiveTab('chat');
+    },
+    onConversationDelete: () => {
+      setIdentity(`${page.id}-default`);
+      setMessages([]);
+    },
+  });
+
+  // Toggle share status for a conversation the user owns
+  const toggleConversationShare = useCallback(async (conversationId: string, isShared: boolean) => {
+    try {
+      const response = await fetchWithAuth(
+        `/api/ai/page-agents/${page.id}/conversations/${conversationId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isShared }),
+        }
+      );
+      if (!response.ok) {
+        toast.error('Failed to update conversation sharing');
+        return;
+      }
+      refreshConversations();
+    } catch {
+      toast.error('Failed to update conversation sharing');
+    }
+  }, [page.id, refreshConversations]);
+
+  // The active conversation's metadata (share state, ownership), derived from the
+  // conversation list. Null for the page-scoped placeholder id (no persisted
+  // conversation yet) — the header toggle is hidden until the first message lands.
+  const currentConversation = useMemo(
+    () => conversations.find((c) => c.id === currentConversationId) ?? null,
+    [conversations, currentConversationId],
+  );
+
+  // A real conversation can become active without ever entering the cached list:
+  // the first message on a fresh page creates it, but private conversations are
+  // not broadcast and the stream-completion path doesn't refresh the list. Since
+  // the list is now fetched on the chat tab, a fresh page caches [] up-front;
+  // without this, the header share toggle never appears and opening History
+  // reuses that stale empty cache. Pull the list once per id that's missing from
+  // it so both the header and History reflect the just-created conversation.
+  const syncedConversationRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentConversationId) return;
+    if (isPlaceholderConversationId(currentConversationId, page.id)) return;
+    if (conversations.some((c) => c.id === currentConversationId)) return;
+    if (syncedConversationRef.current === currentConversationId) return;
+    syncedConversationRef.current = currentConversationId;
+    refreshConversations();
+  }, [currentConversationId, conversations, page.id, refreshConversations]);
 
   // Find in page
   const findQuery = useFindStore((s) => s.query);
@@ -426,13 +512,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     checkPermissions();
   }, [user?.id, page.id]);
 
-  // Initialize chat
+  // Load agent config (independent of conversation identity resolution, which
+  // useConversationIdentity/resolveConversation handles above).
   useEffect(() => {
     const controller = new AbortController();
-
-    const initializeChat = async () => {
+    (async () => {
       try {
-        // Load agent config
         const agentConfigResponse = await fetchWithAuth(`/api/pages/${page.id}/agent-config`, {
           signal: controller.signal,
         });
@@ -442,75 +527,32 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           if (config.aiProvider) setSelectedProvider(config.aiProvider);
           if (config.aiModel) setSelectedModel(config.aiModel);
         }
-
-        // Try to load the most recent existing conversation
-        try {
-          const listResponse = await fetchWithAuth(
-            `/api/ai/page-agents/${page.id}/conversations?pageSize=1`,
-            { signal: controller.signal }
-          );
-          if (listResponse.ok) {
-            const { conversations: list } = (await listResponse.json()) as ConversationListResponse;
-            if (list && list.length > 0) {
-              const conv = list[0];
-              const msgResponse = await fetchWithAuth(
-                `/api/ai/page-agents/${page.id}/conversations/${conv.id}/messages`,
-                { signal: controller.signal }
-              );
-              // undefined = fetch failed; keep undefined so loadMessagesForConversation
-              // takes the network path and shows the error banner on failure.
-              const loaded = msgResponse.ok
-                ? (((await msgResponse.json()) as ConversationMessagesResponse).messages ?? [])
-                : undefined;
-              if (controller.signal.aborted) return;
-              // Supply pre-fetched messages directly to the one-writer path and suppress
-              // the load-on-select effect so we don't re-fetch what we just loaded.
-              // Only suppress when the fetch actually succeeded (loaded !== undefined).
-              if (loaded !== undefined) {
-                skipLoadEffectRef.current = conv.id;
-              }
-              setCurrentConversationId(conv.id);
-              void loadMessagesForConversation(conv.id, loaded);
-              setIsInitialized(true);
-              return;
-            }
-          }
-        } catch (err) {
-          if (controller.signal.aborted) return;
-          console.warn('Failed to load conversations on init, using page-scoped default:', err);
-        }
-
-        if (controller.signal.aborted) return;
-        // No persisted conversations exist yet. Derive a stable ID from the page so
-        // concurrent openers share the same conversation before either sends a message.
-        // The conversation is anchored in the DB once the first message is saved.
-        setCurrentConversationId(`${page.id}-default`);
-        setMessages([]);
-        setIsInitialized(true);
       } catch (error) {
         if (controller.signal.aborted) return;
-        console.error('Failed to initialize chat:', error);
-        setMessages([]);
-        setIsInitialized(true);
+        console.error('Failed to load agent config:', error);
       }
-    };
-
-    setIsInitialized(false);
-    setCurrentConversationId(null);
-    initializeChat();
+    })();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page.id]);
 
   // Load-on-select guarantee: whenever currentConversationId changes to a real
-  // (non-placeholder) id, reload the latest messages from the DB. This fires for
-  // conversation switches triggered from sources other than the init / history-select
-  // paths (which use the preloaded fast-path and set skipLoadEffectRef to opt out).
+  // (non-placeholder) id, reload the latest messages from the DB — unless
+  // resolveConversation already prefetched them for this exact id (init path)
+  // or the caller opted out via skipLoadEffectRef (new-conversation path,
+  // which has no messages to fetch yet). History-select also funnels through
+  // here now — one authoritative fetch path for every conversation switch.
   useEffect(() => {
     if (!currentConversationId) return;
-    if (currentConversationId === `${page.id}-default`) return;
+    if (isPlaceholderConversationId(currentConversationId, page.id)) return;
     if (skipLoadEffectRef.current === currentConversationId) {
       skipLoadEffectRef.current = null; // consume the skip token
+      return;
+    }
+    if (preloadedMessagesRef.current?.id === currentConversationId) {
+      const preloaded = preloadedMessagesRef.current.messages;
+      preloadedMessagesRef.current = null;
+      void loadMessagesForConversation(currentConversationId, preloaded);
       return;
     }
     void loadMessagesForConversation(currentConversationId);
@@ -616,7 +658,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
       if (!stream || stream.parts.length === 0) return;
 
-      if (currentConversationId === `${page.id}-default`) {
+      if (isPlaceholderConversationId(currentConversationId, page.id)) {
         const { parts, conversationId: streamConvId } = stream;
         fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations?pageSize=1`)
           .then(async (res) => {
@@ -625,7 +667,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             const data = (await res.json()) as ConversationListResponse;
             const persisted = data.conversations?.[0];
             if (!persisted || persisted.id !== streamConvId) return;
-            setCurrentConversationId(persisted.id);
+            // This is a background reconciliation, not a user action — unlike
+            // create/select, it must not clobber an identity the user has
+            // since moved on to (e.g. via New Chat or history-select) while
+            // this fetch was in flight. Only apply if still on the same
+            // placeholder that triggered it.
+            if (!isPlaceholderConversationId(currentConversationIdRef.current, page.id)) return;
+            setIdentity(persisted.id);
             setMessages((prev) =>
               prev.some((m) => m.id === messageId)
                 ? prev
@@ -689,6 +737,17 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // HANDLERS
   // ============================================
 
+  // Adopt the selected id immediately — before any fetch even starts — so a
+  // send fired right after clicking a history item can't race and land under
+  // the previous conversation. The load-on-select effect (keyed on
+  // currentConversationId) does the actual fetch once identity updates —
+  // the same single, stale-guarded path used on init, so there's no separate
+  // loadConversation/onConversationLoad indirection to race against it.
+  const handleSelectConversation = useCallback((conversationId: string) => {
+    setIdentity(conversationId);
+    setActiveTab('chat');
+  }, [setIdentity]);
+
   const buildFreshPageContext = useCallback(() => {
     const treeCacheKey = `/api/drives/${encodeURIComponent(driveId)}/pages`;
     const treeCacheValue = cache.get(treeCacheKey) as { data?: TreePage[] } | undefined;
@@ -714,7 +773,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const trimmed = input.trim();
     const files = getFilesForSend();
     if (!trimmed && files.length === 0) return;
-    if (!currentConversationId) return;
+    if (!canSendMessage) return;
 
     // Start context fetch eagerly — runs in parallel with input clear so the
     // async wait doesn't delay sendMessage (and the optimistic bubble).
@@ -747,6 +806,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     input,
     attachments.length,
     currentConversationId,
+    canSendMessage,
     buildFreshPageContext,
     getFilesForSend,
     clearInputDraft,
@@ -767,7 +827,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       return;
     }
     if (!text.trim()) return;
-    if (!currentConversationId) return;
+    if (!canSendMessage) return;
 
     const contextPromise = buildFreshPageContext();
     wrapSend(async () => {
@@ -791,6 +851,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }, [
     isReadOnly,
     currentConversationId,
+    canSendMessage,
     buildFreshPageContext,
     sendMessage,
     page.id,
@@ -964,6 +1025,22 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
         {/* Chat Tab */}
         <TabsContent value="chat" className="flex flex-col flex-1 overflow-hidden relative">
+          {/* Inline error shown when resolving which conversation to show fails — a
+              transient network error must never be silently treated as "no
+              conversations exist" and replaced with a fresh, disconnected one. */}
+          {conversationResolveError && (
+            <div className="flex items-center justify-between gap-2 px-4 py-2 bg-destructive/10 text-destructive text-sm border-b border-destructive/20">
+              <span className="truncate">Failed to load this conversation: {conversationResolveError}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                onClick={retryResolveConversation}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
           {/* Inline error shown when a message-load fails — never silently blank. */}
           {messagesLoadError && (
             <div className="flex items-center justify-between gap-2 px-4 py-2 bg-destructive/10 text-destructive text-sm border-b border-destructive/20">
@@ -992,7 +1069,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             onStop={effectiveStop}
             isStreaming={effectiveIsStreaming}
             isLoading={isLoading}
-            disabled={!isAnyProviderConfigured}
+            disabled={!isAnyProviderConfigured || !canSendMessage}
             placeholder={isReadOnly ? 'View only - cannot send messages' : 'Message AI...'}
             driveId={driveId}
             error={error}
@@ -1076,7 +1153,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           <PageAgentHistoryTab
             conversations={conversations}
             currentConversationId={currentConversationId}
-            onSelectConversation={loadConversation}
+            onSelectConversation={handleSelectConversation}
             onCreateNew={() => createConversation()}
             onDeleteConversation={deleteConversation}
             onToggleShare={toggleConversationShare}

@@ -28,6 +28,12 @@ export function getPresignedUrlTtl(mimeType: string): number {
   return 900;
 }
 
+/** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
+export function toContentHash(storagePath: string): string {
+  const m = storagePath.match(/^files\/([a-f0-9]{64})\/original$/i);
+  return m ? m[1].toLowerCase() : storagePath;
+}
+
 export async function generatePresignedUrl(
   contentHash: string,
   preset?: string,

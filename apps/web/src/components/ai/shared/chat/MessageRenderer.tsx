@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
-import { ToolCallRenderer } from './tool-calls';
+import { ToolCallRenderer, ToolRunGroup } from './tool-calls';
 
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
@@ -12,8 +12,9 @@ import { useAuth } from '@/hooks/useAuth';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useGroupedParts } from './useGroupedParts';
+import { useToolCallOpenState } from './useToolCallOpenState';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
 import { ImageMessageContent } from './ImageMessageContent';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 
@@ -256,9 +257,10 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // Standard Message Rendering
   // ============================================
   const groupedParts = useGroupedParts(message.parts);
+  const { getToolCallOpen, setToolCallOpen } = useToolCallOpenState();
 
   // Check if this message has tool calls (for showing undo button on assistant messages)
-  const hasToolCalls = message.role === 'assistant' && groupedParts.some(isProcessedToolPart);
+  const hasToolCalls = message.role === 'assistant' && groupedParts.some(g => isProcessedToolPart(g) || isToolRunGroupPart(g));
 
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
@@ -381,6 +383,16 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 parts={group.parts}
               />
             );
+          } else if (isToolRunGroupPart(group)) {
+            return (
+              <div key={`${message.id}-toolrun-${index}`} className="mr-2 sm:mr-8">
+                <ToolRunGroup
+                  parts={group.parts}
+                  getToolCallOpen={getToolCallOpen}
+                  setToolCallOpen={setToolCallOpen}
+                />
+              </div>
+            );
           } else if (isProcessedToolPart(group)) {
             return (
               <div key={`${message.id}-tool-${index}`} className="mr-2 sm:mr-8">
@@ -393,6 +405,8 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                     output: group.output,
                     state: group.state,
                   }}
+                  open={getToolCallOpen(group.toolCallId)}
+                  onOpenChange={(next) => setToolCallOpen(group.toolCallId, next)}
                 />
               </div>
             );

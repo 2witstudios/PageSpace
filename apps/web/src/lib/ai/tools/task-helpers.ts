@@ -182,7 +182,7 @@ export async function fetchEnrichedTasks(parentPageId: string) {
     with: {
       assignee: { columns: { id: true, name: true, image: true } },
       assigneeAgent: { columns: { id: true, title: true, type: true } },
-      page: { columns: { title: true } },
+      page: { columns: { title: true, content: true } },
       assignees: {
         with: {
           user: { columns: { id: true, name: true } },

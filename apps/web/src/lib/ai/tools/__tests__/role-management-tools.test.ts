@@ -397,16 +397,21 @@ describe('role-management-tools', () => {
       expect(result.success).toBe(false);
     });
 
-    it('merges the page grant into role.permissions for an admin', async () => {
+    it('sends a single-page permissionsPatch for an admin', async () => {
       mockCheckAccess.mockResolvedValueOnce(adminAccess);
       mockGetRole.mockResolvedValueOnce(
         makeRole({ permissions: { existing: { canView: true, canEdit: false, canShare: false } } })
       );
       mockFindPage.mockResolvedValueOnce({ id: 'page1', driveId: 'drive1' } as never);
-      mockUpdateRole.mockImplementationOnce(async (_d, _r, patch) => ({
-        role: makeRole({ permissions: patch.permissions }),
+      mockUpdateRole.mockResolvedValueOnce({
+        role: makeRole({
+          permissions: {
+            existing: { canView: true, canEdit: false, canShare: false },
+            page1: { canView: true, canEdit: true, canShare: false },
+          },
+        }),
         wasDefault: false,
-      }));
+      });
 
       const result = await roleManagementTools.set_role_page_permissions.execute!(
         input,
@@ -414,11 +419,10 @@ describe('role-management-tools', () => {
       ) as { success: boolean };
 
       expect(result.success).toBe(true);
+      // permissionsPatch merges just this page atomically inside updateDriveRole
+      // — not a full `permissions` replace computed from the getRoleById read.
       expect(mockUpdateRole).toHaveBeenCalledWith('drive1', 'role1', {
-        permissions: {
-          existing: { canView: true, canEdit: false, canShare: false },
-          page1: { canView: true, canEdit: true, canShare: false },
-        },
+        permissionsPatch: { page1: { canView: true, canEdit: true, canShare: false } },
       });
     });
 
@@ -510,10 +514,10 @@ describe('role-management-tools', () => {
           },
         })
       );
-      mockUpdateRole.mockImplementationOnce(async (_d, _r, patch) => ({
-        role: makeRole({ permissions: patch.permissions }),
+      mockUpdateRole.mockResolvedValueOnce({
+        role: makeRole({ permissions: { page2: { canView: true, canEdit: false, canShare: false } } }),
         wasDefault: false,
-      }));
+      });
 
       const result = await roleManagementTools.remove_role_page_permissions.execute!(
         { driveId: 'drive1', roleId: 'role1', pageId: 'page1' },
@@ -521,8 +525,10 @@ describe('role-management-tools', () => {
       ) as { success: boolean };
 
       expect(result.success).toBe(true);
+      // permissionsPatch with a null entry prunes just this page atomically —
+      // not a full `permissions` replace computed from the getRoleById read.
       expect(mockUpdateRole).toHaveBeenCalledWith('drive1', 'role1', {
-        permissions: { page2: { canView: true, canEdit: false, canShare: false } },
+        permissionsPatch: { page1: null },
       });
     });
 

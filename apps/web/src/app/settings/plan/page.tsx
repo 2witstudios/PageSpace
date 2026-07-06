@@ -1,13 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ArrowLeft, CheckCircle, XCircle, Loader2 } from 'lucide-react';
-import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, getCachedCSRFToken } from '@/lib/auth/auth-fetch';
 import { StripeProvider } from '@/components/billing/StripeProvider';
 import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm';
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
@@ -55,6 +55,22 @@ export default function PlanPage() {
   // Ref to track subscriptionId for cleanup (avoids stale closure)
   const subscriptionIdRef = useRef<string | null>(null);
 
+  // Stable reference: a fresh object here on every render makes <Elements> keep
+  // re-syncing with Stripe.js, which can loop with its hidden-frame lifecycle
+  const stripeElementsOptions = useMemo(() => (
+    clientSecret
+      ? {
+          clientSecret,
+          appearance: {
+            theme: (resolvedTheme === 'dark' ? 'night' : 'stripe') as 'night' | 'stripe',
+            variables: {
+              colorPrimary: resolvedTheme === 'dark' ? '#818cf8' : '#0F172A',
+            },
+          },
+        }
+      : undefined
+  ), [clientSecret, resolvedTheme]);
+
   const success = searchParams.get('success');
   const canceled = searchParams.get('canceled');
 
@@ -93,11 +109,8 @@ export default function PlanPage() {
     const handleBeforeUnload = () => {
       if (!subscriptionIdRef.current) return;
 
-      // Get CSRF token from cookie
-      const csrfToken = document.cookie
-        .split('; ')
-        .find((row) => row.startsWith('csrf_token='))
-        ?.split('=')[1];
+      // Reuse the already-fetched in-memory CSRF token (there's no time to await a fresh one here)
+      const csrfToken = getCachedCSRFToken();
 
       // Use fetch with keepalive - continues after page unloads
       fetch('/api/stripe/cancel-checkout', {
@@ -341,15 +354,7 @@ export default function PlanPage() {
             )}
             <StripeProvider
               key={clientSecret}
-              options={{
-                clientSecret,
-                appearance: {
-                  theme: resolvedTheme === 'dark' ? 'night' : 'stripe',
-                  variables: {
-                    colorPrimary: resolvedTheme === 'dark' ? '#818cf8' : '#0F172A',
-                  },
-                },
-              }}
+              options={stripeElementsOptions}
             >
               <EmbeddedCheckoutForm
                 plan={checkoutPlan}
@@ -411,7 +416,7 @@ export default function PlanPage() {
                 </thead>
                 <tbody>
                   <tr className="border-b">
-                    <td className="py-4 pr-6">Monthly AI credits</td>
+                    <td className="py-4 pr-6">Monthly credits</td>
                     {plans.map((plan) => (
                       <td key={plan.id} className="text-center py-4 px-4 font-semibold">
                         {formatCreditCount(plan.limits.monthlyCreditsCents)} credits/mo

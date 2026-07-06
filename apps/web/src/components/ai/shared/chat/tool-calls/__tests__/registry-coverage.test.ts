@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { toolRenderers, SPECIAL_HANDLED_TOOLS, CLI_TOOL_NAMES } from '../registry';
+import { DIFF_TOOL_NAMES } from '../tool-significance';
 
 /**
  * Coverage guard: every AI tool must have a rich renderer.
@@ -66,5 +67,49 @@ describe('tool renderer coverage', () => {
     const cliToolSet = new Set<string>(CLI_TOOL_NAMES);
     const orphanRegistry = Object.keys(toolRenderers).filter((name) => !known.has(name) && !cliToolSet.has(name));
     expect(orphanRegistry, `Registry entries for non-existent tools: ${orphanRegistry.join(', ')}`).toEqual([]);
+  });
+});
+
+/**
+ * Cross-check: tool-significance.ts's DIFF_TOOL_NAMES documents itself as the
+ * "single source of truth" for which tools always render a diff (and are
+ * therefore never folded into a ToolRunGroup) — but nothing imports it into
+ * registry.tsx, so the claim was previously unenforced. This scans
+ * registry.tsx's own source so the two can't silently drift apart: adding a
+ * tool to DIFF_TOOL_NAMES without wiring RichDiffRenderer (or vice versa)
+ * fails this test.
+ */
+describe('DIFF_TOOL_NAMES <-> RichDiffRenderer cross-check', () => {
+  const registrySourcePath = path.resolve(__dirname, '../registry.tsx');
+  const registrySource = readFileSync(registrySourcePath, 'utf8');
+
+  function extractRendererBody(toolName: string): string | null {
+    const lines = registrySource.split('\n');
+    const keyLineRe = new RegExp(`^ {2}${toolName}: `);
+    const startIdx = lines.findIndex((line) => keyLineRe.test(line));
+    if (startIdx === -1) return null;
+
+    const nextKeyOrEndRe = /^ {2}[a-zA-Z_]+: |^\};/;
+    let endIdx = lines.length;
+    for (let i = startIdx + 1; i < lines.length; i++) {
+      if (nextKeyOrEndRe.test(lines[i])) {
+        endIdx = i;
+        break;
+      }
+    }
+    return lines.slice(startIdx, endIdx).join('\n');
+  }
+
+  it('every DIFF_TOOL_NAMES entry has a registry.tsx renderer that uses RichDiffRenderer', () => {
+    const missing = [...DIFF_TOOL_NAMES].filter((name) => {
+      const body = extractRendererBody(name);
+      return !body || !body.includes('RichDiffRenderer');
+    });
+    expect(
+      missing,
+      `DIFF_TOOL_NAMES (tool-significance.ts) claims these tools always render a diff, ` +
+        `but their registry.tsx renderer doesn't reference RichDiffRenderer: ${missing.join(', ')}.\n` +
+        'Either wire up RichDiffRenderer for them in registry.tsx, or remove them from DIFF_TOOL_NAMES.'
+    ).toEqual([]);
   });
 });

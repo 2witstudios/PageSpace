@@ -7,9 +7,14 @@ import {
   type TerminalSessionRecord,
 } from '../terminal-session-manager';
 import type { SandboxClient } from '../session-manager';
+import { resolveSandboxNetworkOptions } from '../network-options';
 
 const SECRET = 'x'.repeat(32);
 const NOW = new Date('2026-06-01T12:00:00.000Z');
+
+// Default passing full-egress gate (the gate is required; these tests exercise
+// non-gate paths). Containment-gate behaviour has its own suite.
+const passGate = async (): Promise<{ ok: true }> => ({ ok: true });
 
 const namespacing = { tenantId: 't1', driveId: 'd1', pageId: 'p1' };
 const actor = { userId: 'u1', ...namespacing };
@@ -213,7 +218,7 @@ describe('acquireTerminalSandbox', () => {
       ...actor,
       canRun: true,
       pageId: '',
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: false, reason: 'error' });
   });
@@ -224,7 +229,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: '' },
+      deps: { store, client, now: () => NOW, secret: '', checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: false, reason: 'error' });
   });
@@ -235,7 +240,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: false });
     if (result.ok) expect(result.sessionKey).toBe(keyFor());
@@ -249,7 +254,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     if (result.ok) expect(result.sessionKey).toBe(keyFor());
@@ -267,7 +272,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     // getOrCreate handles the VM-gone case transparently — no explicit remove + re-provision.
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
@@ -285,7 +290,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store: failingStore.store, client, now: () => NOW, secret: SECRET },
+      deps: { store: failingStore.store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
     expect(result.ok).toBe(false);
@@ -299,7 +304,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: false,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: false, reason: 'deny' });
     expect(calls.get).toEqual([]);
@@ -317,7 +322,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
@@ -332,13 +337,15 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.getOrCreate).toHaveLength(1);
     expect(calls.getOrCreate[0].options).toMatchObject({ egressMode: 'open' });
     // The tight SANDBOX_EGRESS_ALLOWLIST must NOT appear on the terminal path.
     expect(calls.getOrCreate[0].options).not.toHaveProperty('egressAllowlist');
+    // Sourced from the shared resolver (one network posture for agent + terminal).
+    expect(calls.getOrCreate[0].options).toEqual(resolveSandboxNetworkOptions({ surface: 'terminal' }));
   });
 
   it('reconnects also use egressMode: open via getOrCreate (applies policy on every hand-back, not just fresh provisions)', async () => {
@@ -349,7 +356,7 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toHaveLength(1);
@@ -367,11 +374,70 @@ describe('acquireTerminalSandbox', () => {
     const result = await acquireTerminalSandbox({
       ...actor,
       canRun: true,
-      deps: { store, client, now: () => NOW, secret: SECRET },
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new', resumed: true });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(storeCalls.remove).toBe(0);
     expect(storeCalls.touch).toBe(1);
+  });
+});
+
+describe('acquireTerminalSandbox — full-egress containment gate', () => {
+  it('refuses with containment_unverified when the gate denies, never provisioning', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: {
+        store,
+        client,
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: false, reason: 'containment_unverified' }),
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: 'containment_unverified' });
+    expect(calls.getOrCreate).toEqual([]);
+  });
+
+  it('provisions when the containment gate passes', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: {
+        store,
+        client,
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: true }),
+      },
+    });
+    expect(result).toMatchObject({ ok: true, resumed: false });
+    expect(calls.getOrCreate).toHaveLength(1);
+  });
+
+  it('on RECONNECT (resume) of an existing session, must STILL gate — getOrCreate can recreate a destroyed VM with open egress', async () => {
+    // The reconnect path uses getOrCreate (which re-provisions a vanished VM), so it
+    // must be gated too, or a warm/hibernating terminal could mint a fresh
+    // open-egress VM after SANDBOX_CONTAINMENT_VERIFIED is turned off.
+    const { store } = makeStore(seedRecord());
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      canRun: true,
+      deps: {
+        store,
+        client,
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: false, reason: 'containment_unverified' }),
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: 'containment_unverified' });
+    expect(calls.getOrCreate).toEqual([]);
   });
 });

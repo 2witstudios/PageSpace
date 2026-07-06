@@ -12,16 +12,7 @@ import { useEffect, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { toast } from 'sonner';
 import { useSocketStore } from '@/stores/useSocketStore';
-
-interface AccessRevokedPayload {
-  room: string;
-  reason: 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked' | 'page_private';
-  metadata?: {
-    driveId?: string;
-    pageId?: string;
-    driveName?: string;
-  };
-}
+import type { AccessRevokedPayload } from '@/lib/websocket/socket-utils';
 
 /**
  * Determines if the user is currently viewing the revoked resource

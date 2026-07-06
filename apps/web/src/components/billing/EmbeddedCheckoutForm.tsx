@@ -51,6 +51,7 @@ export function EmbeddedCheckoutForm({
   const elements = useElements();
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [elementReady, setElementReady] = useState(false);
 
   // Format amount in cents to currency string
   const formatAmount = (cents: number) => {
@@ -204,6 +205,10 @@ export function EmbeddedCheckoutForm({
               applePay: 'never',
             },
           }}
+          onReady={() => setElementReady(true)}
+          onLoadError={(event) => {
+            setError(event.error?.message || 'Failed to load payment form. Please try again.');
+          }}
         />
       </div>
 
@@ -228,7 +233,7 @@ export function EmbeddedCheckoutForm({
         </Button>
         <Button
           type="submit"
-          disabled={!stripe || processing}
+          disabled={!stripe || processing || !elementReady}
           className="flex-1"
         >
           {processing ? (

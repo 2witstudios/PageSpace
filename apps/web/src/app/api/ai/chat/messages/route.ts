@@ -51,7 +51,7 @@ export async function GET(request: Request) {
     );
 
     // Convert to UIMessage format with tool calls and results
-    const messages = dbMessages.map(convertDbMessageToUIMessage);
+    const messages = await Promise.all(dbMessages.map(convertDbMessageToUIMessage));
 
     auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'message', resourceId: pageId, details: {
       source: 'ai-chat',

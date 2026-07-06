@@ -65,7 +65,10 @@ import {
   useChatStop,
   useSendHandoff,
   useStreamRecovery,
+  buildChatConfig,
+  AGENT_CHAT_ID,
   LocationContext,
+  buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
@@ -103,7 +106,7 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   const { chatConfig: globalChatConfig, setIsStreaming: setGlobalIsStreaming, setStopStreaming: setGlobalStopStreaming } = useGlobalChatConfig();
   const { isStreaming: contextIsStreaming, stopStreaming: contextStopStreaming } = useGlobalChatStream();
-  const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, createNewConversation, refreshSignal, rejoinGlobalStream } = useGlobalChatConversation();
+  const { currentConversationId: globalConversationId, isInitialized: globalIsInitialized, isMessagesLoading: globalIsMessagesLoading, initialMessages: globalInitialMessages, createNewConversation, refreshSignal, rejoinGlobalStream } = useGlobalChatConversation();
 
   // ============================================
   // AGENT STORE - for agent selection and conversation management
@@ -114,6 +117,8 @@ const GlobalAssistantView: React.FC = () => {
   const agentConversationId = usePageAgentDashboardStore((state) => state.conversationId);
   const agentInitialMessages = usePageAgentDashboardStore((state) => state.conversationMessages);
   const agentIsLoading = usePageAgentDashboardStore((state) => state.isConversationLoading);
+  const agentIsMessagesLoading = usePageAgentDashboardStore((state) => state.isConversationMessagesLoading);
+  const agentConversationLoadSignal = usePageAgentDashboardStore((state) => state.conversationLoadSignal);
   const setAgentStoreMessages = usePageAgentDashboardStore((state) => state.setConversationMessages);
   const createAgentConversation = usePageAgentDashboardStore((state) => state.createNewConversation);
   const loadMostRecentConversation = usePageAgentDashboardStore((state) => state.loadMostRecentConversation);
@@ -284,16 +289,14 @@ const GlobalAssistantView: React.FC = () => {
   const agentChatConfig = useMemo(() => {
     if (!selectedAgent || !agentConversationId || !agentTransport) return null;
 
-    return {
-      id: agentConversationId,
-      messages: agentInitialMessages,
+    return buildChatConfig({
+      id: AGENT_CHAT_ID,
       transport: agentTransport,
-      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Agent Chat error:', error);
       },
-    };
-  }, [selectedAgent, agentConversationId, agentTransport, agentInitialMessages]);
+    });
+  }, [selectedAgent, agentConversationId, agentTransport]);
 
   // Global mode chat
   const {
@@ -389,7 +392,12 @@ const GlobalAssistantView: React.FC = () => {
   // Global mode: use globalIsInitialized from context
   const agentIsInitialized = selectedAgent ? (!!agentConversationId && !agentIsLoading) : false;
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
-  const isLoading = !isInitialized;
+  // Identity can be 'ready' (isInitialized true) while messages for the
+  // conversation just switched to are still in flight — decoupled from
+  // identity resolution so a switch doesn't flash the previous conversation's
+  // messages under the new one with no loading indicator.
+  const isMessagesLoading = selectedAgent ? agentIsMessagesLoading : globalIsMessagesLoading;
+  const isLoading = !isInitialized || isMessagesLoading;
 
   // ============================================
   // MESSAGE ACTIONS (shared hook)
@@ -704,6 +712,37 @@ const GlobalAssistantView: React.FC = () => {
     };
   }, [selectedAgent, agentStatus, agentStop, agentConversationId, setAgentStopStreaming]);
 
+  // Agent-mode load-on-select guarantee: the store's conversationLoadSignal
+  // fires on explicit load/create (not on streaming updates). We use it rather
+  // than watching conversationMessages directly because the store receives
+  // bidirectional writes during streaming — watching the array would clobber
+  // in-progress parts. With stable useChat id, setMessages has no competing
+  // store recreation, so this is the sole message writer on load.
+  //
+  // Seeded to `null` (not the current signal value) so a remount with an
+  // already-selected agent/conversation still applies messages to the fresh
+  // useChat instance. usePageAgentDashboardStore is a module-level singleton
+  // that outlives this component's mount — seeding to the live value would
+  // make the effect wrongly believe "nothing changed" on first render after
+  // navigating away and back, leaving the freshly mounted chat blank.
+  const prevAgentLoadSignalRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (agentConversationLoadSignal === prevAgentLoadSignalRef.current) return;
+    prevAgentLoadSignalRef.current = agentConversationLoadSignal;
+    if (selectedAgent && agentConversationId) {
+      setAgentMessages(agentInitialMessages);
+    }
+  }, [agentConversationLoadSignal, selectedAgent, agentConversationId, agentInitialMessages, setAgentMessages]);
+
+  // Global-mode load-on-select guarantee: apply messages from context whenever
+  // they change (loadConversation or createNewConversation ran). With a stable
+  // useChat id, setMessages is the sole writer — no race with store recreation.
+  useEffect(() => {
+    if (selectedAgent) return;
+    if (!globalIsInitialized || !globalConversationId) return;
+    setGlobalLocalMessages(globalInitialMessages);
+  }, [globalInitialMessages, globalIsInitialized, globalConversationId, selectedAgent, setGlobalLocalMessages]);
+
   // Agent-mode multiplayer wiring (Tasks 2 + 5 + 6). No-op when selectedAgent
   // is null. Encapsulates page-room subscription, stream bootstrap/socket
   // events, dashboard-store stop-slot single-writer claim, channel-id-keyed
@@ -772,15 +811,16 @@ const GlobalAssistantView: React.FC = () => {
           webSearchEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
-      : {
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
           showPageTree,
-          locationContext: locationContext || undefined,
+          locationContext,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-        };
+          mcpTools: mcpToolSchemas,
+        });
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body: requestBody }));
@@ -803,15 +843,16 @@ const GlobalAssistantView: React.FC = () => {
           webSearchEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
-      : {
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
           showPageTree,
-          locationContext: locationContext || undefined,
+          locationContext,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-        };
+          mcpTools: mcpToolSchemas,
+        });
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     wrapSend(() => sendMessage({ text }, { body: requestBody }));
@@ -975,7 +1016,7 @@ const GlobalAssistantView: React.FC = () => {
         onStop={effectiveStop}
         isStreaming={effectiveIsStreaming}
         isLoading={isLoading}
-        disabled={!isAnyProviderConfigured}
+        disabled={!isAnyProviderConfigured || !isInitialized}
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
         driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id}
         crossDrive={!selectedAgent}

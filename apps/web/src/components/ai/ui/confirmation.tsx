@@ -3,7 +3,7 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils/index";
-import type { ExtendedToolState } from "@/types/ai-sdk-extensions";
+import type { ToolUIPart } from "ai";
 import {
   type ComponentProps,
   createContext,
@@ -41,7 +41,7 @@ type ToolUIPartApproval =
 
 type ConfirmationContextValue = {
   approval: ToolUIPartApproval;
-  state: ExtendedToolState;
+  state: ToolUIPart["state"];
 };
 
 const ConfirmationContext = createContext<ConfirmationContextValue | null>(
@@ -60,7 +60,7 @@ const useConfirmation = () => {
 
 export type ConfirmationProps = ComponentProps<typeof Alert> & {
   approval?: ToolUIPartApproval;
-  state: ExtendedToolState;
+  state: ToolUIPart["state"];
 };
 
 export const Confirmation = ({

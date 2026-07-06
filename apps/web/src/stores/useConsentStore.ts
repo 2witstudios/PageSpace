@@ -13,7 +13,11 @@ import {
   type ConsentState,
   type ConsentCategory,
 } from '@pagespace/lib/consent';
-import { readCookieValue, buildConsentCookieString } from '@/lib/consent/cookie-utils';
+import {
+  readCookieValue,
+  buildConsentCookieString,
+  buildExpireHostOnlyConsentCookieString,
+} from '@/lib/consent/cookie-utils';
 
 const ONE_YEAR_SECONDS = 365 * 24 * 60 * 60;
 
@@ -27,10 +31,21 @@ function readConsentFromCookie(): ConsentState {
 
 function persistConsentToCookie(state: ConsentState): void {
   if (typeof document === 'undefined') return;
+  const domain = process.env.NEXT_PUBLIC_COOKIE_DOMAIN;
+  // When a registrable domain is configured, expire any pre-existing host-only consent
+  // cookie FIRST. The browser keeps host-only and domain-scoped cookies of the same name
+  // side-by-side, and readCookieValue would return the stale host-only one — so we delete
+  // it (host-only delete = no domain attr) before writing the new domain-scoped value below.
+  if (domain) {
+    document.cookie = buildExpireHostOnlyConsentCookieString(CONSENT_COOKIE_NAME);
+  }
+  // Scope the cookie to the registrable domain (same as the theme cookie) so consent is
+  // shared across pagespace.ai subdomains / auth redirects instead of re-prompting per host.
   document.cookie = buildConsentCookieString(
     CONSENT_COOKIE_NAME,
     serializeConsentState(state),
     ONE_YEAR_SECONDS,
+    domain,
   );
   window.dispatchEvent(new CustomEvent(CONSENT_CHANGED_EVENT, { detail: state }));
 }

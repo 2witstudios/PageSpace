@@ -35,7 +35,7 @@ import { LocationContext } from '@/lib/ai/shared';
 import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
 import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
-import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -186,6 +186,8 @@ const SidebarChatTab: React.FC = () => {
   const {
     currentConversationId: globalConversationId,
     isInitialized: globalIsInitialized,
+    isMessagesLoading: globalIsMessagesLoading,
+    initialMessages: globalInitialMessages,
     createNewConversation: createGlobalConversation,
     refreshSignal,
     rejoinGlobalStream,
@@ -208,6 +210,7 @@ const SidebarChatTab: React.FC = () => {
     conversationId: agentConversationId,
     initialMessages: agentInitialMessages,
     isInitialized: agentIsInitialized,
+    isMessagesLoading: agentIsMessagesLoading,
     selectAgent,
     createNewConversation: createAgentConversation,
     refreshConversation: refreshAgentConversation,
@@ -224,17 +227,15 @@ const SidebarChatTab: React.FC = () => {
   const agentChatConfig = useMemo(() => {
     if (!selectedAgent || !agentConversationId || !agentTransport) return null;
 
-    return {
-      id: agentConversationId,
-      messages: agentInitialMessages,
+    return buildChatConfig({
+      id: SIDEBAR_AGENT_CHAT_ID,
       transport: agentTransport,
-      experimental_throttle: 100,
       onError: (error: Error) => {
         console.error('Sidebar Agent Chat error:', error);
         toast.error('Chat error. Please try again.');
       },
-    };
-  }, [selectedAgent, agentConversationId, agentTransport, agentInitialMessages]);
+    });
+  }, [selectedAgent, agentConversationId, agentTransport]);
 
   // ============================================
   // Sidebar Chat (custom hook - unified interface)
@@ -267,6 +268,11 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
+  // Identity can be 'ready' (isInitialized true) while messages for the
+  // conversation just switched to are still in flight — decoupled from
+  // identity resolution so a switch doesn't flash the previous conversation's
+  // messages under the new one with no loading indicator.
+  const isMessagesLoading = selectedAgent ? agentIsMessagesLoading : globalIsMessagesLoading;
   const assistantName = selectedAgent ? selectedAgent.title : 'Global Assistant';
   const displayIsStreaming = selectedAgent
     ? (isStreaming || dashboardIsStreaming)
@@ -596,20 +602,6 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, loadGlobalMessages]);
 
-  // Load-on-select guarantee for global mode (1B).
-  //
-  // Whenever the active global conversation changes (or the context finishes
-  // initialising), explicitly fetch the latest DB messages and write them
-  // directly to the useChat instance via setGlobalMessages. This does NOT rely
-  // on GlobalChatContext seeding useChat via chatConfig.messages (which only
-  // fires on the useChat `id` prop changing — a path prone to timing gaps when
-  // the conversation id is the same across refreshes).
-  useEffect(() => {
-    if (selectedAgent) return; // agent mode handled by useAgentChannelMultiplayer
-    if (!globalIsInitialized || !globalConversationId) return;
-    loadGlobalMessages(globalConversationId);
-  }, [globalConversationId, globalIsInitialized, selectedAgent, loadGlobalMessages]);
-
   // ============================================
   // Effects: UI State
   // ============================================
@@ -720,6 +712,34 @@ const SidebarChatTab: React.FC = () => {
     loadGlobalMessages(globalConversationId);
   }, [selectedAgent, globalConversationId, globalIsInitialized, loadGlobalMessages]);
 
+  // Load-on-select guarantee for global mode: with a stable useChat id,
+  // surfaces must explicitly re-apply messages on conversation load/reselect.
+  // The sidebar re-fetches via loadGlobalMessages (includes stale-request
+  // guard + own-stream reconciliation). Seeded to `null` so the initial-mount
+  // load is also covered by this effect (avoids a second, redundant effect).
+  const prevSidebarGlobalMessagesRef = useRef<UIMessage[] | null>(null);
+  useEffect(() => {
+    if (globalInitialMessages === prevSidebarGlobalMessagesRef.current) return;
+    prevSidebarGlobalMessagesRef.current = globalInitialMessages;
+    if (!selectedAgent && globalIsInitialized && globalConversationId) {
+      loadGlobalMessages(globalConversationId);
+    }
+  }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, loadGlobalMessages]);
+
+  // Load-on-select guarantee for agent mode: with a stable useChat id, the
+  // sidebar's agent Chat instance is never recreated on conversation switch,
+  // so usePageAgentSidebarState's fetched messages must be explicitly applied
+  // via setMessages. Seeded to `null` so the initial-mount/agent-select load
+  // is also covered by this effect.
+  const prevSidebarAgentMessagesRef = useRef<UIMessage[] | null>(null);
+  useEffect(() => {
+    if (agentInitialMessages === prevSidebarAgentMessagesRef.current) return;
+    prevSidebarAgentMessagesRef.current = agentInitialMessages;
+    if (selectedAgent) {
+      setMessages(agentInitialMessages);
+    }
+  }, [agentInitialMessages, selectedAgent, setMessages]);
+
   const handleNewConversation = useCallback(async () => {
     try {
       if (selectedAgent) {
@@ -752,14 +772,15 @@ const SidebarChatTab: React.FC = () => {
           locationContext: locationContext || undefined,
           enabledTools: selectedAgent.enabledTools,
         }
-      : {
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
           showPageTree,
-          locationContext: locationContext || undefined,
+          locationContext,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
-        };
+        });
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body }));
@@ -801,14 +822,15 @@ const SidebarChatTab: React.FC = () => {
           locationContext: locationContext || undefined,
           enabledTools: selectedAgent.enabledTools,
         }
-      : {
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
           showPageTree,
-          locationContext: locationContext || undefined,
+          locationContext,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
-        };
+        });
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     wrapSend(() => sendMessage({ text }, { body }));
@@ -1005,15 +1027,14 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
 
   // Use messages from the useChat hook directly for both modes.
-  // Previously used contextMessages for global mode, but this added an extra layer of
-  // indirection through sync effects that could cause race conditions and state snapping.
-  // The useChat hook with the same ID shares state via SWR, so all components see the same messages.
+  // useChat instances are independent (no shared state). GlobalAssistantView and
+  // SidebarChatTab each manage their own useChat and sync via explicit fetch + setMessages.
   const displayMessages = messages;
 
   // ============================================
   // Render
   // ============================================
-  if (!isInitialized) {
+  if (!isInitialized || isMessagesLoading) {
     return (
       <div className="flex flex-col h-full p-4">
         <div className="flex-grow flex items-center justify-center">

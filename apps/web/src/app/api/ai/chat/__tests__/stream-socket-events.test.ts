@@ -56,7 +56,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
   isMCPAuthResult: vi.fn((r: { tokenType?: string }) => r?.tokenType === 'mcp'),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
-  getAllowedDriveIds: vi.fn(() => undefined),
+  getAllowedDriveIds: vi.fn(() => []),
+  isScopedMCPAuth: vi.fn(() => false),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -157,6 +158,7 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
+  filterToolsForMcpScope: vi.fn().mockReturnValue({}),
   buildPageAITools: vi.fn().mockReturnValue({}),
 }));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({

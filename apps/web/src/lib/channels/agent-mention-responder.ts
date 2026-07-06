@@ -21,6 +21,19 @@ import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
+import type { ChannelMessageAiMeta } from '@pagespace/db/schema/chat';
+import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
+import { generatePresignedUrl, getPresignedUrlTtl, toContentHash } from '@/lib/presigned-url';
+import { isAllowedImageType } from '@/lib/validation/image-validation';
+import {
+  buildRecentImageFileParts,
+  MAX_RECENT_IMAGE_ATTACHMENT_SIZE_BYTES,
+  type ImageFilePart,
+  type RecentImageFileCandidate,
+} from '@/lib/channels/build-recent-image-file-parts';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
 
@@ -28,10 +41,21 @@ const CONTEXT_MESSAGE_LIMIT = 12;
 const MESSAGE_SNIPPET_LIMIT = 320;
 const TRANSCRIPT_CHAR_LIMIT = 5000;
 
-interface MentionedAgent {
+export interface MentionedAgent {
   id: string;
   title: string;
   enabledTools: string[] | null;
+  /** Whether this agent's configured model (falling back to DEFAULT_MODEL) supports vision. */
+  hasVision: boolean;
+}
+
+export interface RecentChannelMessage {
+  content: string;
+  createdAt: Date;
+  user: { name: string | null } | null;
+  aiMeta: ChannelMessageAiMeta | null;
+  fileId: string | null;
+  attachmentMeta: AttachmentMeta | null;
 }
 
 export interface TriggerMentionedAgentResponsesParams {
@@ -147,7 +171,7 @@ function buildLocationContext(params: TriggerMentionedAgentResponsesParams): Too
   };
 }
 
-async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]> {
+export async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]> {
   const processed = processMentionsInMessage(content);
   if (processed.mentions.length === 0) {
     return [];
@@ -176,6 +200,8 @@ async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]
       id: true,
       title: true,
       enabledTools: true,
+      aiProvider: true,
+      aiModel: true,
     },
   });
 
@@ -195,10 +221,124 @@ async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]
       id: page.id,
       title: page.title || 'Agent',
       enabledTools: Array.isArray(page.enabledTools) ? page.enabledTools : null,
+      hasVision: hasVisionCapability(page.aiModel || DEFAULT_MODEL),
     });
   }
 
   return orderedAgents;
+}
+
+export async function fetchRecentChannelMessages(channelId: string): Promise<RecentChannelMessage[]> {
+  return db.query.channelMessages.findMany({
+    where: and(eq(channelMessages.pageId, channelId), eq(channelMessages.isActive, true)),
+    columns: {
+      content: true,
+      createdAt: true,
+      aiMeta: true,
+      fileId: true,
+      attachmentMeta: true,
+    },
+    with: {
+      user: {
+        columns: {
+          name: true,
+        },
+      },
+    },
+    orderBy: [desc(channelMessages.createdAt)],
+    limit: CONTEXT_MESSAGE_LIMIT,
+  });
+}
+
+/**
+ * Resolve recent channel image attachments into presigned, access-checked
+ * file parts for ask_agent. Skips the S3/DB round-trips entirely when no
+ * eligible agent can view images (nothing would ever consume the result).
+ *
+ * Everything security-relevant — storage key, mime type, size, and the drive
+ * used for the access check — comes from the `files` row, never from the
+ * message's `attachmentMeta` (client-supplied at message-POST time, so a
+ * crafted message could otherwise pair an accessible fileId with a forged
+ * contentHash and mint a presigned URL for an arbitrary object).
+ * `attachmentMeta` is used only for the display filename.
+ */
+async function resolveImageAttachmentsForContext(
+  userId: string,
+  contextMessages: RecentChannelMessage[]
+): Promise<ImageFilePart[]> {
+  // Dedup by fileId, keeping each file's MOST RECENT mention: re-sharing the
+  // same screenshot across several of the last 12 messages must not both
+  // (a) redo the access-check/presign per repeat, and (b) crowd out distinct
+  // older images from the eventual 5-slot cap with copies of one image.
+  // Map.delete+set (rather than a plain overwrite) moves the re-seen key to
+  // the end of iteration order, so final ordering reflects last-seen position.
+  const latestByFileId = new Map<string, RecentChannelMessage & { fileId: string }>();
+  for (const message of contextMessages) {
+    if (!message.fileId) continue;
+    const withFileId = message as RecentChannelMessage & { fileId: string };
+    latestByFileId.delete(message.fileId);
+    latestByFileId.set(message.fileId, withFileId);
+  }
+
+  if (latestByFileId.size === 0) {
+    return [];
+  }
+
+  const fileRows = await db.query.files.findMany({
+    where: inArray(files.id, [...latestByFileId.keys()]),
+    columns: { id: true, driveId: true, sizeBytes: true, mimeType: true, storagePath: true },
+  });
+  const filesById = new Map(fileRows.map((file) => [file.id, file]));
+
+  const candidates: RecentImageFileCandidate[] = await Promise.all(
+    [...latestByFileId.values()].map(async (message) => {
+      const file = filesById.get(message.fileId);
+      const filename = message.attachmentMeta?.originalName || 'attachment';
+
+      // Missing row, a non-image mime type, an oversized file, or a stub row
+      // with no blob ever persisted (storagePath null — see reap-orphaned-files)
+      // can never become a valid file part, so skip the per-file
+      // access-check/signing work up front rather than signing a dead URL.
+      if (
+        !file ||
+        !file.storagePath ||
+        !file.mimeType ||
+        !isAllowedImageType(file.mimeType) ||
+        file.sizeBytes > MAX_RECENT_IMAGE_ATTACHMENT_SIZE_BYTES
+      ) {
+        return {
+          fileId: message.fileId,
+          url: '',
+          mimeType: file?.mimeType ?? null,
+          filename,
+          sizeBytes: file?.sizeBytes ?? 0,
+          accessible: false,
+        };
+      }
+
+      const accessible = await canUserAccessFile(userId, file.id, file.driveId);
+      const url = accessible
+        ? await generatePresignedUrl(
+            toContentHash(file.storagePath),
+            'original',
+            getPresignedUrlTtl(file.mimeType),
+            undefined,
+            file.mimeType
+          )
+        : '';
+
+      return {
+        fileId: file.id,
+        url,
+        mimeType: file.mimeType,
+        filename,
+        sizeBytes: file.sizeBytes,
+        accessible,
+      };
+    })
+  );
+
+  return buildRecentImageFileParts(candidates);
 }
 
 function canAgentSendChannelMessages(enabledTools: string[] | null): boolean {
@@ -362,26 +502,7 @@ export async function triggerMentionedAgentResponses(
       return;
     }
 
-    const recentMessages = await db.query.channelMessages.findMany({
-      where: and(
-        eq(channelMessages.pageId, params.channelId),
-        eq(channelMessages.isActive, true)
-      ),
-      columns: {
-        content: true,
-        createdAt: true,
-        aiMeta: true,
-      },
-      with: {
-        user: {
-          columns: {
-            name: true,
-          },
-        },
-      },
-      orderBy: [desc(channelMessages.createdAt)],
-      limit: CONTEXT_MESSAGE_LIMIT,
-    });
+    const recentMessages = await fetchRecentChannelMessages(params.channelId);
 
     // Decrypt PII at the edge (GDPR #965) so the agent transcript shows plaintext
     // sender names (legacy plaintext passes through unchanged).
@@ -408,9 +529,29 @@ export async function triggerMentionedAgentResponses(
     const commandContext = buildCommandPromptSection(commandPlan);
     const commandExecution = commandPlan ? commandExecutionDataFromPlan(commandPlan) : undefined;
 
+    // Only worth resolving presigned URLs/access checks when at least one
+    // eligible agent can actually view images. Resolution failure (S3
+    // misconfigured, transient DB error) must degrade to text-only, not
+    // abort every mentioned agent's reply — this call sits ahead of the
+    // per-agent try/catch below, so an uncaught throw here would propagate
+    // to the function-level catch and silence the whole mention entirely.
+    let imageAttachments: ImageFilePart[] = [];
+    if (eligibleAgents.some((agent) => agent.hasVision)) {
+      try {
+        imageAttachments = await resolveImageAttachmentsForContext(params.userId, contextMessages);
+      } catch (error) {
+        channelMentionLogger.error(
+          'Failed to resolve recent channel image attachments; continuing with text-only replies',
+          error instanceof Error ? error : undefined,
+          { channelId: params.channelId, sourceMessageId: params.sourceMessageId }
+        );
+      }
+    }
+
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
+
         const rawAskResult: unknown = await askAgentExecute(
           {
             agentPath: `/${agent.title}`,
@@ -425,6 +566,7 @@ export async function triggerMentionedAgentResponses(
               ...(commandContext ? ['', commandContext] : []),
             ].join('\n'),
             conversationId: mentionConversationId,
+            ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
           },
           {
             toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,

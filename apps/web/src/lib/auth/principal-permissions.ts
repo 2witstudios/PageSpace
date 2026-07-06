@@ -1,9 +1,11 @@
 /**
  * Principal-aware permission dispatch.
  *
- * A request principal is either a user (session auth, or an unscoped MCP token
- * acting as its owning user) or an "app member" (a drive-scoped MCP token with
- * an mcp_token_drives row per drive).
+ * A request principal is either a user (session auth, an unscoped MCP token,
+ * or an account-scoped OAuth token acting as its owning user) or an "app
+ * member" (a drive-scoped MCP token with an mcp_token_drives row per drive,
+ * or a drive-scoped OAuth access token carrying an equivalent DriveScopeRow[]
+ * — see ADR 0002 Decision 2).
  *
  * Model: a key is the user it belongs to, narrowed by scope, optionally
  * weakened by an explicit role. Scope rows default to role NULL = INHERIT (the
@@ -37,8 +39,12 @@ import {
   getAppDriveMembership,
   getAppAccessiblePagesInDrive,
   hasAppDriveMembership,
+  getScopedAccessLevel,
+  getScopedDriveMembership,
+  getScopedAccessiblePagesInDrive,
+  hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
-import { isMCPAuthResult, type AuthResult, type MCPAuthResult } from './index';
+import { isMCPAuthResult, isOAuthAuthResult, type AuthResult, type MCPAuthResult, type OAuthAuthResult } from './index';
 
 /**
  * A scoped MCP token acts as an app member (its allowedDriveIds are exactly its
@@ -48,6 +54,15 @@ export function isScopedMCPAuth(auth: AuthResult): auth is MCPAuthResult {
   return isMCPAuthResult(auth) && auth.allowedDriveIds.length > 0;
 }
 
+/**
+ * A drive-scoped OAuth access token (any scope short of `account`) acts as an
+ * app member, exactly like a scoped MCP token — an account-scoped OAuth token
+ * is a full-user credential and acts as the user instead.
+ */
+export function isScopedOAuthAuth(auth: AuthResult): auth is OAuthAuthResult {
+  return isOAuthAuthResult(auth) && !auth.scopes.account;
+}
+
 export async function getPrincipalAccessLevel(
   auth: AuthResult,
   pageId: string,
@@ -55,12 +70,19 @@ export async function getPrincipalAccessLevel(
   if (isScopedMCPAuth(auth)) {
     return getAppAccessLevel(auth.tokenId, pageId);
   }
+  if (isScopedOAuthAuth(auth)) {
+    return getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
+  }
   return getUserAccessLevel(auth.userId, pageId);
 }
 
 export async function canPrincipalViewPage(auth: AuthResult, pageId: string): Promise<boolean> {
   if (isScopedMCPAuth(auth)) {
     const level = await getAppAccessLevel(auth.tokenId, pageId);
+    return level?.canView ?? false;
+  }
+  if (isScopedOAuthAuth(auth)) {
+    const level = await getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
     return level?.canView ?? false;
   }
   return canUserViewPage(auth.userId, pageId);
@@ -71,12 +93,20 @@ export async function canPrincipalEditPage(auth: AuthResult, pageId: string): Pr
     const level = await getAppAccessLevel(auth.tokenId, pageId);
     return level?.canEdit ?? false;
   }
+  if (isScopedOAuthAuth(auth)) {
+    const level = await getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
+    return level?.canEdit ?? false;
+  }
   return canUserEditPage(auth.userId, pageId);
 }
 
 export async function canPrincipalDeletePage(auth: AuthResult, pageId: string): Promise<boolean> {
   if (isScopedMCPAuth(auth)) {
     const level = await getAppAccessLevel(auth.tokenId, pageId);
+    return level?.canDelete ?? false;
+  }
+  if (isScopedOAuthAuth(auth)) {
+    const level = await getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
     return level?.canDelete ?? false;
   }
   return canUserDeletePage(auth.userId, pageId);
@@ -87,6 +117,10 @@ export async function canPrincipalSharePage(auth: AuthResult, pageId: string): P
     const level = await getAppAccessLevel(auth.tokenId, pageId);
     return level?.canShare ?? false;
   }
+  if (isScopedOAuthAuth(auth)) {
+    const level = await getScopedAccessLevel(auth.driveScopes, auth.userId, pageId);
+    return level?.canShare ?? false;
+  }
   return canUserSharePage(auth.userId, pageId);
 }
 
@@ -94,12 +128,18 @@ export async function isPrincipalDriveMember(auth: AuthResult, driveId: string):
   if (isScopedMCPAuth(auth)) {
     return hasAppDriveMembership(auth.tokenId, driveId);
   }
+  if (isScopedOAuthAuth(auth)) {
+    return hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
+  }
   return isUserDriveMember(auth.userId, driveId);
 }
 
 export async function getPrincipalDriveAccess(auth: AuthResult, driveId: string): Promise<boolean> {
   if (isScopedMCPAuth(auth)) {
     return hasAppDriveMembership(auth.tokenId, driveId);
+  }
+  if (isScopedOAuthAuth(auth)) {
+    return hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId);
   }
   return getUserDriveAccess(auth.userId, driveId);
 }
@@ -112,6 +152,12 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
     if (membership.role === null) return isDriveOwnerOrAdmin(auth.userId, driveId);
     return membership.role === 'OWNER' || membership.role === 'ADMIN';
   }
+  if (isScopedOAuthAuth(auth)) {
+    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    if (!membership) return false;
+    if (membership.role === null) return isDriveOwnerOrAdmin(auth.userId, driveId);
+    return membership.role === 'ADMIN';
+  }
   return isDriveOwnerOrAdmin(auth.userId, driveId);
 }
 
@@ -121,6 +167,9 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
  */
 export async function getPrincipalDriveIds(auth: AuthResult): Promise<string[]> {
   if (isScopedMCPAuth(auth)) {
+    return auth.allowedDriveIds;
+  }
+  if (isScopedOAuthAuth(auth)) {
     return auth.allowedDriveIds;
   }
   return getDriveIdsForUser(auth.userId);
@@ -134,6 +183,9 @@ export async function getPrincipalAccessiblePagesInDrive(
   if (isScopedMCPAuth(auth)) {
     return getAppAccessiblePagesInDrive(auth.tokenId, driveId);
   }
+  if (isScopedOAuthAuth(auth)) {
+    return getScopedAccessiblePagesInDrive(auth.driveScopes, auth.userId, driveId);
+  }
   return getUserAccessiblePagesInDriveWithDetails(auth.userId, driveId);
 }
 
@@ -146,7 +198,7 @@ export async function getPrincipalBatchPagePermissions(
   auth: AuthResult,
   pageIds: string[],
 ): Promise<Map<string, PermissionLevel>> {
-  if (!isScopedMCPAuth(auth)) {
+  if (!isScopedMCPAuth(auth) && !isScopedOAuthAuth(auth)) {
     return getBatchPagePermissions(auth.userId, pageIds);
   }
 
@@ -162,7 +214,9 @@ export async function getPrincipalBatchPagePermissions(
   // drives stay denied.
   const requested = new Set(pageIds);
   for (const driveId of auth.allowedDriveIds) {
-    const accessible = await getAppAccessiblePagesInDrive(auth.tokenId, driveId);
+    const accessible = isScopedMCPAuth(auth)
+      ? await getAppAccessiblePagesInDrive(auth.tokenId, driveId)
+      : await getScopedAccessiblePagesInDrive((auth as OAuthAuthResult).driveScopes, auth.userId, driveId);
     for (const page of accessible) {
       if (requested.has(page.id)) {
         results.set(page.id, { ...page.permissions });

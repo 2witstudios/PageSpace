@@ -20,12 +20,39 @@ import { resolvePathWithinSync } from '../../security/path-validator';
 export const SANDBOX_ROOT = '/workspace';
 
 /**
+ * Strip a literal, undecoded `/workspace` prefix from `userPath`, tolerating
+ * any number of separating slashes (e.g. a doubled `/workspace//x`), and
+ * return the root-relative remainder. Returns `userPath` unchanged if it
+ * isn't actually rooted at the sandbox root — `/workspace-evil/x` shares a
+ * textual prefix but is a different path, not a prefix match, and must still
+ * fall through to `resolvePathWithinSync`'s absolute-path rejection.
+ */
+function stripSandboxRootPrefix(userPath: string): string {
+  if (!userPath.startsWith(SANDBOX_ROOT)) {
+    return userPath;
+  }
+  const rest = userPath.slice(SANDBOX_ROOT.length);
+  if (rest.length > 0 && !rest.startsWith('/')) {
+    return userPath;
+  }
+  let i = 0;
+  while (rest[i] === '/') i++;
+  return rest.slice(i);
+}
+
+/**
  * Resolve an agent-supplied, sandbox-root-relative path to an absolute path
  * inside the sandbox, or `null` if it escapes the root or is otherwise invalid.
+ *
+ * A literal, undecoded `/workspace` prefix is treated as equivalent to the
+ * same relative path — the sandbox root isn't something an absolute path can
+ * "escape". Only that exact prefix is special-cased; any other absolute path
+ * (or an attempt to smuggle the prefix via encoding) falls through unchanged
+ * to `resolvePathWithinSync`, which still rejects it.
  */
 export function resolveSandboxPath(userPath: string): string | null {
   if (typeof userPath !== 'string' || userPath.length === 0) {
     return null;
   }
-  return resolvePathWithinSync(SANDBOX_ROOT, userPath);
+  return resolvePathWithinSync(SANDBOX_ROOT, stripSandboxRootPrefix(userPath));
 }

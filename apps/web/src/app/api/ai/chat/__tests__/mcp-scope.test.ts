@@ -17,6 +17,8 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result: any) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  getAllowedDriveIds: vi.fn(() => []),
+  isScopedMCPAuth: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -130,6 +132,7 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
+  filterToolsForMcpScope: vi.fn().mockReturnValue({}),
   buildPageAITools: vi.fn().mockReturnValue({}),
 }));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({

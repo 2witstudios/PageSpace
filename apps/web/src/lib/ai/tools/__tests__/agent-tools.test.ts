@@ -29,6 +29,9 @@ vi.mock('@pagespace/lib/repositories/agent-repository', () => ({
     findById: vi.fn(),
   },
 }));
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  checkDriveAccess: vi.fn(),
+}));
 
 vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: vi.fn(),
@@ -54,11 +57,13 @@ vi.mock('../../core/ai-tools', () => ({
 import { agentTools } from '../agent-tools';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { agentRepository } from '@pagespace/lib/repositories/agent-repository';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 
 const mockAgentRepository = vi.mocked(agentRepository);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
+const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
 const mockBroadcastPageEvent = vi.mocked(broadcastPageEvent);
 
 describe('agent-tools', () => {
@@ -126,6 +131,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 1,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
@@ -167,6 +173,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 1,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
@@ -210,6 +217,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 2,
       };
       const updatedMockAgent = {
@@ -285,6 +293,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 3,
       };
       const updatedMockAgent = {
@@ -352,6 +361,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 1,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
@@ -394,6 +404,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 1,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
@@ -429,6 +440,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 1,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
@@ -464,6 +476,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 1,
       };
       const updatedMockAgent = {
@@ -513,6 +526,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 4,
       };
       mockAgentRepository.findById.mockResolvedValue(mockAgent);
@@ -562,6 +576,90 @@ describe('agent-tools', () => {
       );
     });
 
+    it('rejects a non-owner attempt to change userScopedAccess', async () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        userScopedAccess: false,
+        revision: 1,
+      };
+      mockAgentRepository.findById.mockResolvedValue(mockAgent);
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: true, isMember: true, drive: null });
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        agentTools.update_agent_config.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', userScopedAccess: true },
+          context
+        )
+      ).rejects.toThrow('Only the drive owner can change this agent\'s user-scoped access setting');
+
+      expect(mockCheckDriveAccess).toHaveBeenCalledWith('drive-1', 'user-123');
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('allows the drive owner to enable userScopedAccess', async () => {
+      const mockAgent = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        userScopedAccess: false,
+        revision: 1,
+      };
+      const updatedMockAgent = { ...mockAgent, userScopedAccess: true, revision: 2 };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce(updatedMockAgent);
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, drive: null });
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', userScopedAccess: true },
+        context
+      );
+
+      expect(result).toMatchObject({ success: true, updatedFields: expect.arrayContaining(['userScopedAccess']) });
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageId: 'agent-1',
+          updates: expect.objectContaining({ userScopedAccess: true }),
+        })
+      );
+    });
+
     it('throws error when agent is deleted during mutation', async () => {
       // Arrange
       const mockAgent = {
@@ -578,6 +676,7 @@ describe('agent-tools', () => {
         includeDrivePrompt: false,
         includePageTree: false,
         pageTreeScope: null,
+        userScopedAccess: false,
         revision: 1,
       };
       // First call returns the agent, second call (after mutation) returns null

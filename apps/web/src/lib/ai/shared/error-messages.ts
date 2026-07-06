@@ -22,7 +22,7 @@ export type AIErrorKind =
 // specific phrases — NOT bare substrings. `limit` alone would misclassify
 // "context window limit exceeded" as a transient rate limit, and `ai credits`
 // alone would route any message merely mentioning credits to the buy-more CTA.
-const OUT_OF_CREDITS_PATTERNS = [/\bout_of_credits\b/, /\b402\b/, /\bout of ai credits\b/];
+const OUT_OF_CREDITS_PATTERNS = [/\bout_of_credits\b/, /\b402\b/, /\bout of credits\b/];
 const IN_FLIGHT_PATTERNS = [/\btoo_many_in_flight\b/, /\bin[-\s]flight\b/];
 const RATE_LIMIT_PATTERNS = [
   /\brate limit\b/,
@@ -59,7 +59,7 @@ export function getAIErrorMessage(errorMessage: string | undefined): string {
     case 'auth':
       return 'Authentication failed. Please refresh the page and try again.';
     case 'out_of_credits':
-      return "You've used up your AI credits. Buy more credits or wait for your monthly allowance to reset.";
+      return "You've used up your credits. Buy more credits or wait for your monthly allowance to reset.";
     case 'too_many_in_flight':
       return 'Too many AI requests are running at once. Wait for one to finish, then try again.';
     case 'rate_limit':

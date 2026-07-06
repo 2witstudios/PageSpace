@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions, validateDriveWidePermissions } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -98,7 +98,7 @@ export async function PATCH(
     }
 
     const body = await request.json();
-    const { name, description, color, isDefault, permissions, driveWidePermissions } = body;
+    const { name, description, color, isDefault, permissions, permissionsPatch, driveWidePermissions } = body;
 
     // Validate name length if provided
     if (name !== undefined) {
@@ -108,21 +108,34 @@ export async function PATCH(
       }
     }
 
+    if (permissions !== undefined && permissionsPatch !== undefined) {
+      return NextResponse.json({ error: 'Cannot specify both permissions and permissionsPatch' }, { status: 400 });
+    }
+
     // Validate permissions structure if provided
     if (permissions !== undefined && !validateRolePermissions(permissions)) {
       return NextResponse.json({ error: 'Invalid permissions structure' }, { status: 400 });
     }
 
-    if (driveWidePermissions !== undefined && !validateDriveWidePermissions(driveWidePermissions)) {
-      return NextResponse.json({ error: 'Invalid driveWidePermissions structure' }, { status: 400 });
+    // permissionsPatch is a read-merge-write per-page patch: unlike `permissions`
+    // (a full-map replace), pages not named in the patch are left untouched — a
+    // single-page PATCH can never wipe another page's grant. `null` prunes a
+    // page's override rather than persisting an explicit all-false entry.
+    if (permissionsPatch !== undefined && !validateRolePermissionsPatch(permissionsPatch)) {
+      return NextResponse.json({ error: 'Invalid permissionsPatch structure' }, { status: 400 });
     }
 
+    // Forward permissionsPatch to the service untouched: updateDriveRole
+    // merges it against the role row it locks inside its transaction. Merging
+    // here against the unlocked `existingRole` read above would reintroduce
+    // the read-modify-write race the patch input exists to prevent.
     const { role: updatedRole } = await updateDriveRole(driveId, roleId, {
       name,
       description,
       color,
       isDefault,
       permissions,
+      ...(permissionsPatch !== undefined && { permissionsPatch }),
       ...(driveWidePermissions !== undefined && { driveWidePermissions }),
     });
 
@@ -140,7 +153,9 @@ export async function PATCH(
       roleId,
       roleName: updatedRole.name,
       driveId,
-      permissions: permissions ? summarizePermissions(permissions) : undefined,
+      permissions: (permissions !== undefined || permissionsPatch !== undefined)
+        ? summarizePermissions(updatedRole.permissions)
+        : undefined,
       previousPermissions: summarizePermissions(existingRole.permissions),
       driveWidePermissions: driveWidePermissions !== undefined ? (driveWidePermissions ?? null) : undefined,
       previousDriveWidePermissions: existingRole.driveWidePermissions ?? null,

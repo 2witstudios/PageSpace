@@ -205,3 +205,30 @@ describe('runGitInSandbox', () => {
     expect(slots.released).toBe(slots.acquired);
   });
 });
+
+describe('runGitInSandbox — injection seam (screenOutput, fail-open)', () => {
+  it('screens git stdout AND stderr through deps.screenOutput before returning to the model', async () => {
+    const { sandbox } = makeSandbox({
+      runCommand: async () => ({ exitCode: 0, stdout: 'log out', stderr: 'log err' }),
+    });
+    const { deps } = makeDeps({
+      reconnect: async () => sandbox,
+      screenOutput: async (t) => `[SCREENED]${t}`,
+    });
+    const result = await runGitInSandbox({ cmd: 'git', args: ['log'], ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    if (result.success) {
+      expect(result.stdout).toBe('[SCREENED]log out');
+      expect(result.stderr).toBe('[SCREENED]log err');
+    }
+  });
+
+  it('given NO screenOutput hook, git output passes through unchanged (seam disabled)', async () => {
+    const { sandbox } = makeSandbox({
+      runCommand: async () => ({ exitCode: 0, stdout: 'plain', stderr: '' }),
+    });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const result = await runGitInSandbox({ cmd: 'git', args: ['log'], ctx: makeCtx(), deps });
+    if (result.success) expect(result.stdout).toBe('plain');
+  });
+});

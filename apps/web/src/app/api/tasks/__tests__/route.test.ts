@@ -45,7 +45,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed', title: 'title', parentId: 'parentId' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: { assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt', description: 'description' },
+  taskItems: { assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt', description: 'description', completedAt: 'completedAt' },
   taskLists: { id: 'id', pageId: 'pageId' },
   taskStatusConfigs: { taskListId: 'taskListId' },
 }));
@@ -103,6 +103,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isNull } from '@pagespace/db/operators';
+import { taskItems } from '@pagespace/db/schema/tasks';
 
 // ============================================================================
 // Test Helpers
@@ -146,6 +148,7 @@ const createPageFixture = (overrides: Partial<{
   includePageTree: false,
   pageTreeScope: 'children' as const,
   toolExposureMode: 'upfront' as const,
+  userScopedAccess: false,
   fileSize: null,
   mimeType: null,
   originalFileName: null,
@@ -430,6 +433,55 @@ describe('GET /api/tasks', () => {
       const body = await response.json();
 
       expect(body.pagination.hasMore).toBe(true);
+    });
+  });
+
+  describe('completion default (parity with internal get_assigned_tasks)', () => {
+    beforeEach(() => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' }),
+      ]);
+      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
+        createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
+      ]);
+    });
+
+    it('excludes completed tasks by default when no status/statusGroup filter is given', async () => {
+      const request = new Request('https://example.com/api/tasks?context=user');
+      await GET(request);
+
+      expect(isNull).toHaveBeenCalledWith(taskItems.completedAt);
+    });
+
+    it('does not exclude completed tasks when includeCompleted=true', async () => {
+      const request = new Request('https://example.com/api/tasks?context=user&includeCompleted=true');
+      await GET(request);
+
+      const completedAtCalls = vi.mocked(isNull).mock.calls.filter(([col]) => col === taskItems.completedAt);
+      expect(completedAtCalls).toHaveLength(0);
+    });
+
+    it('does not add the completedAt exclusion when an explicit status filter is given', async () => {
+      const request = new Request('https://example.com/api/tasks?context=user&status=completed');
+      await GET(request);
+
+      const completedAtCalls = vi.mocked(isNull).mock.calls.filter(([col]) => col === taskItems.completedAt);
+      expect(completedAtCalls).toHaveLength(0);
+    });
+
+    it('does not add the completedAt exclusion when statusGroup is explicitly provided', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' }),
+      ]);
+      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
+        createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
+      ]);
+
+      const request = new Request('https://example.com/api/tasks?context=user&statusGroup=completed');
+      await GET(request);
+
+      const completedAtCalls = vi.mocked(isNull).mock.calls.filter(([col]) => col === taskItems.completedAt);
+      expect(completedAtCalls).toHaveLength(0);
     });
   });
 

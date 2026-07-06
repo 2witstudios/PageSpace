@@ -1057,6 +1057,14 @@ class AuthFetch {
     this.csrfTokenPromise = null;
   }
 
+  /**
+   * Synchronously returns the in-memory CSRF token, if one has already been fetched.
+   * For use in contexts that can't await (e.g. a `beforeunload` handler).
+   */
+  getCachedCSRFToken(): string | null {
+    return this.csrfToken;
+  }
+
   // Helper method for JSON requests
   async fetchJSON<T = unknown>(url: string, options?: FetchOptions): Promise<T> {
     const response = await this.fetch(url, {
@@ -1174,6 +1182,9 @@ export const refreshAuthSession = () =>
 
 export const isSystemSuspended = () =>
   getAuthFetch().isSystemSuspended();
+
+export const getCachedCSRFToken = () =>
+  getAuthFetch().getCachedCSRFToken();
 
 export const getSuspendTime = () =>
   getAuthFetch().getSuspendTime();

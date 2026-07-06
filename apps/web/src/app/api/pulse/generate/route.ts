@@ -117,21 +117,27 @@ export async function POST(req: Request) {
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const startOfToday = getStartOfTodayInTimezone(userTimezone);
 
-    // Get user's drives
-    const userDrives = await db
-      .select({ driveId: driveMembers.driveId })
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt)
-      ));
+    // Get user's drives, and the pages the user is actually permitted to view
+    // (owner | drive-admin | explicit page permission | default member read).
+    // Drive membership alone does NOT grant access to every page in a drive, so
+    // Pulse must scope all page content, diffs, and per-page activity to this
+    // set or it leaks restricted pages. Task scoping below reuses the same set
+    // rather than a driveId-based filter: it already covers owner access (no
+    // accepted drive_members row required — that row is only lazily backfilled
+    // on first drive access) and explicit page-level grants with no drive
+    // membership at all, and excludes trashed pages and pages in trashed drives.
+    const [userDrives, accessiblePagesList] = await Promise.all([
+      db
+        .select({ driveId: driveMembers.driveId })
+        .from(driveMembers)
+        .where(and(
+          eq(driveMembers.userId, userId),
+          isNotNull(driveMembers.acceptedAt)
+        )),
+      accessiblePageIds(userId),
+    ]);
     const driveIds = userDrives.map(d => d.driveId);
-
-    // Pages the user is actually permitted to view (owner | drive-admin |
-    // explicit page permission). Drive membership alone does NOT grant access
-    // to every page in a drive, so Pulse must scope all page content, diffs,
-    // and per-page activity to this set or it leaks restricted pages.
-    const accessiblePages = new Set(await accessiblePageIds(userId));
+    const accessiblePages = new Set(accessiblePagesList);
 
     // ========================================
     // 1. WORKSPACE CONTEXT
@@ -536,7 +542,8 @@ export async function POST(req: Request) {
         and(
           or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
           ne(taskItems.status, 'completed'),
-          lt(taskItems.dueDate, startOfToday)
+          lt(taskItems.dueDate, startOfToday),
+          inArray(taskItems.pageId, accessiblePagesList)
         )
       )
       .orderBy(desc(taskItems.priority))
@@ -551,7 +558,8 @@ export async function POST(req: Request) {
           or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
           ne(taskItems.status, 'completed'),
           gte(taskItems.dueDate, startOfToday),
-          lt(taskItems.dueDate, endOfToday)
+          lt(taskItems.dueDate, endOfToday),
+          inArray(taskItems.pageId, accessiblePagesList)
         )
       )
       .limit(5);

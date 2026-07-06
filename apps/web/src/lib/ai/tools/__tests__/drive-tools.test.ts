@@ -6,14 +6,19 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       drives: { findFirst: vi.fn() },
     },
+    select: vi.fn(),
+    selectDistinct: vi.fn(),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  ne: vi.fn(),
+  isNotNull: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', ownerId: 'ownerId' },
+  pages: { id: 'id', driveId: 'driveId' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -50,6 +55,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   isValidDriveHomePage: vi.fn(),
   updateDrive: vi.fn(),
   allocatePublishSubdomain: vi.fn().mockResolvedValue('test-drive'),
+  listAccessibleDrives: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
@@ -66,6 +72,7 @@ vi.mock('../actor-permissions', async (importOriginal) => {
   return {
     ...actual,
     canActorManageDrive: vi.fn().mockResolvedValue(true),
+    resolveActingAgentId: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -76,8 +83,9 @@ vi.mock('@/lib/canvas/publish-page', () => ({
 import { driveTools } from '../drive-tools';
 import { db } from '@pagespace/db/db';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
-import { getDriveById, isValidDriveHomePage, updateDrive } from '@pagespace/lib/services/drive-service';
+import { getDriveById, isValidDriveHomePage, updateDrive, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
+import { resolveActingAgentId } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockDb = vi.mocked(db);
@@ -103,9 +111,10 @@ describe('drive-tools', () => {
     });
 
     it('scopes to the agent\'s drives when called by a page-agent', async () => {
+      vi.mocked(resolveActingAgentId).mockResolvedValueOnce('agent_1');
       vi.mocked(listAgentDrives).mockResolvedValue([
-        { driveId: 'd1', driveName: 'Home', driveSlug: 'home', role: 'ADMIN', customRoleId: null, isHome: true },
-        { driveId: 'd2', driveName: 'Hub', driveSlug: 'hub', role: 'MEMBER', customRoleId: null, isHome: false },
+        { driveId: 'd1', driveName: 'Home', driveSlug: 'home', role: 'ADMIN', customRoleId: null, isHome: true, includeContext: false },
+        { driveId: 'd2', driveName: 'Hub', driveSlug: 'hub', role: 'MEMBER', customRoleId: null, isHome: false, includeContext: false },
       ]);
 
       const context = {
@@ -125,6 +134,33 @@ describe('drive-tools', () => {
       expect(result.drives.map((d) => d.id)).toEqual(['d1', 'd2']);
       // The user-scoped DB query path must not be used for an agent actor.
       expect(mockDb.query.drives.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the user-scoped drive list for an agent with userScopedAccess', async () => {
+      // resolveActingAgentId resolves to undefined when the agent has opted into
+      // user-scoped reach, so the tool falls through to the user-scoped path.
+      vi.mocked(resolveActingAgentId).mockResolvedValueOnce(undefined);
+      vi.mocked(listAccessibleDrives).mockResolvedValueOnce([
+        { id: 'du1', name: 'User Drive', slug: 'user-drive' } as never,
+      ]);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user_1',
+          chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
+        } as ToolExecutionContext,
+      };
+
+      const result = await driveTools.list_drives.execute!({}, context) as {
+        drives: Array<{ id: string; slug: string; title: string }>;
+      };
+
+      expect(listAccessibleDrives).toHaveBeenCalledWith('user_1');
+      // The membership-scoped agent path must not be used.
+      expect(listAgentDrives).not.toHaveBeenCalled();
+      expect(result.drives.map((d) => d.id)).toEqual(['du1']);
     });
   });
 
@@ -166,6 +202,59 @@ describe('drive-tools', () => {
       await expect(
         driveTools.create_drive.execute!({ name: 'Personal' }, context)
       ).rejects.toThrow('Cannot create a drive named "Personal"');
+    });
+
+    it('blocks a page-agent without user-scoped access from creating a drive', async () => {
+      vi.mocked(resolveActingAgentId).mockResolvedValue('agent_1');
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user_1',
+          chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
+        } as ToolExecutionContext,
+      };
+
+      await expect(
+        driveTools.create_drive.execute!({ name: 'Test Drive' }, context)
+      ).rejects.toThrow('cannot create new drives');
+    });
+
+    it('lets a page-agent with user-scoped access past the membership gate', async () => {
+      // resolveActingAgentId resolves to undefined once the agent has opted
+      // into user-scoped reach, so the create_drive gate lets the call through.
+      vi.mocked(resolveActingAgentId).mockResolvedValue(undefined);
+
+      const context = {
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user_1',
+          chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
+        } as ToolExecutionContext,
+      };
+
+      // Empty name still fails downstream validation, proving the agent gate
+      // let this request through rather than blocking it earlier.
+      await expect(
+        driveTools.create_drive.execute!({ name: '' }, context)
+      ).rejects.toThrow('Drive name is required');
+    });
+
+    it('does not block a plain user (non-agent) call at the agent gate', async () => {
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      // Empty name still fails downstream validation, proving the plain-user
+      // call passed the agent gate (resolveActingAgentId resolves to
+      // undefined — there's no agentPageId to resolve) rather than being
+      // blocked by it.
+      await expect(
+        driveTools.create_drive.execute!({ name: '' }, context)
+      ).rejects.toThrow('Drive name is required');
     });
   });
 

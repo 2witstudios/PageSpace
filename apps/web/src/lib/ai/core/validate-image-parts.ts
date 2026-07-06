@@ -10,9 +10,10 @@ import {
   isAllowedImageType,
   extractBase64DataUrl,
 } from '@/lib/validation/image-validation';
+import { parseChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
 
-const MAX_FILE_PARTS_PER_MESSAGE = 5;
-const MAX_DATA_URL_LENGTH = 4 * 1024 * 1024; // 4MB per data URL
+export const MAX_FILE_PARTS_PER_MESSAGE = 5;
+export const MAX_DATA_URL_LENGTH = 4 * 1024 * 1024; // 4MB per data URL
 
 export interface FilePartValidationResult {
   valid: boolean;
@@ -52,7 +53,10 @@ export function hasFileParts(message: UIMessage): boolean {
 }
 
 /**
- * Validate all file parts in a user message.
+ * Validate all file parts in a message. Named for its original call site (validating the
+ * caller's own user message before inference); the checks below are structural and apply
+ * to a message's file parts regardless of role, so callers may also use it on assistant
+ * messages that carry file parts (e.g. resent history) to close the same bypass.
  * Checks:
  * 1. File part count limit
  * 2. Per-image data URL size limit
@@ -81,6 +85,25 @@ export function validateUserMessageFileParts(
     const part = fileParts[i];
     const url = part.url;
     const filename = part.filename || `image-${i + 1}`;
+
+    // A file part without a string url is malformed input, not a crash: callers (the
+    // OpenAI-compat route especially) accept arbitrary client-built parts arrays, so
+    // this must reject cleanly instead of throwing on url.length/parseChatAttachmentStorageKey below.
+    if (typeof url !== 'string') {
+      return {
+        valid: false,
+        error: `Image "${filename}" is missing a valid url`,
+        filePartCount: fileParts.length,
+      };
+    }
+
+    // Already-persisted attachment echoed back by the client (e.g. resend/regenerate
+    // resubmitting history that now carries a presigned chat-attachment GET URL instead
+    // of the original data: URL) — it was validated when first uploaded, so skip the
+    // new-upload checks below rather than rejecting it as an invalid data URL.
+    if (parseChatAttachmentStorageKey(url)) {
+      continue;
+    }
 
     // Size check
     if (url.length > MAX_DATA_URL_LENGTH) {

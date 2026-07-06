@@ -110,6 +110,7 @@ type PageLookupResult = {
   includePageTree: boolean;
   pageTreeScope: PageTreeScope | null;
   toolExposureMode: 'upfront' | 'search';
+  userScopedAccess: boolean;
   fileSize: number | null;
   mimeType: string | null;
   originalFileName: string | null;
@@ -153,6 +154,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   includePageTree: false,
   pageTreeScope: 'children',
   toolExposureMode: 'upfront',
+  userScopedAccess: false,
   fileSize: null,
   mimeType: null,
   originalFileName: null,

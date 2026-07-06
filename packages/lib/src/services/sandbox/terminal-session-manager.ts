@@ -1,6 +1,8 @@
 import { createHmac } from 'crypto';
-import { SANDBOX_RESOURCE_CAPS } from './execution-policy';
 import type { SandboxCreateOptions } from './sandbox-options';
+import { resolveSandboxNetworkOptions } from './network-options';
+import { getConfiguredEgressIpTag } from './egress-ip';
+import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
 import type { SandboxClient } from './session-manager';
 import { loggers } from '../../logging/logger-config';
 
@@ -116,12 +118,19 @@ export interface AcquireTerminalSandboxInput {
     client: SandboxClient;
     now: () => Date;
     secret: string;
+    /**
+     * REQUIRED full-egress enablement gate, consulted when provisioning a FRESH
+     * terminal. The terminal runs OPEN egress, so this gate is mandatory: if it
+     * refuses, no VM is created. Required (not optional) so a caller can never
+     * silently bypass containment by forgetting to wire it.
+     */
+    checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   };
 }
 
 export type AcquireTerminalSandboxResult =
   | { ok: true; sandboxId: string; sessionKey: string; resumed: boolean }
-  | { ok: false; reason: 'deny' | 'provision_failed' | 'error'; cause?: unknown };
+  | { ok: false; reason: 'deny' | 'provision_failed' | 'error' | FullEgressDenialReason; cause?: unknown };
 
 async function safeStop(client: SandboxClient, sandboxId: string): Promise<boolean> {
   try {
@@ -148,13 +157,17 @@ async function safeTouch(store: TerminalSessionStore, sessionKey: string, now: D
   }
 }
 
-// Applied on every hand-back (fresh + reconnect) so the open egress policy is
-// always current — handles both normal reconnects and the migration path for
-// sessions created before this egress change was deployed.
-const TERMINAL_SANDBOX_OPTIONS: SandboxCreateOptions = {
-  egressMode: 'open',
-  caps: SANDBOX_RESOURCE_CAPS,
-};
+// Resolved at provision time (not module load) so the configured dedicated
+// egress-IP tag (`SANDBOX_EGRESS_IP_TAG`) is picked up even when set after import.
+// Shared `resolveSandboxNetworkOptions` so agent + terminal share one network
+// posture (open egress, same caps, same internal-surface deny). Applied on every
+// hand-back (fresh + reconnect) so the open egress policy is always current.
+function terminalSandboxOptions(): SandboxCreateOptions {
+  return resolveSandboxNetworkOptions({
+    surface: 'terminal',
+    egressIpTag: getConfiguredEgressIpTag(),
+  });
+}
 
 async function provisionFreshTerminal({
   key,
@@ -164,7 +177,15 @@ async function provisionFreshTerminal({
   input: AcquireTerminalSandboxInput;
 }): Promise<AcquireTerminalSandboxResult> {
   const { deps, pageId, userId, driveId } = input;
-  const options = TERMINAL_SANDBOX_OPTIONS;
+
+  // Full-egress containment gate (fresh provisioning only) — MANDATORY. The
+  // terminal runs OPEN egress; if the gate refuses, no VM is created.
+  const enablement = await deps.checkFullEgressEnablement();
+  if (!enablement.ok) {
+    return { ok: false, reason: enablement.reason };
+  }
+
+  const options = terminalSandboxOptions();
 
   let sandboxId: string;
   try {
@@ -230,8 +251,17 @@ export async function acquireTerminalSandbox(
     // path (ensureSpriteAwake), so a hibernated terminal's `bash` spawn lands on
     // an awake VM instead of racing a cold-start drop.
     const reconnectExisting = async (): Promise<AcquireTerminalSandboxResult> => {
+      // Reconnect uses getOrCreate, which RE-PROVISIONS a vanished/reaped VM under
+      // the same name — i.e. it can mint a FRESH open-egress VM. So the containment
+      // gate must run here too, not only on the fresh-create path; otherwise a warm
+      // or hibernating terminal would bypass containment after
+      // SANDBOX_CONTAINMENT_VERIFIED is turned off.
+      const enablement = await deps.checkFullEgressEnablement();
+      if (!enablement.ok) {
+        return { ok: false, reason: enablement.reason };
+      }
       try {
-        const handle = await deps.client.getOrCreate({ name: key, options: TERMINAL_SANDBOX_OPTIONS });
+        const handle = await deps.client.getOrCreate({ name: key, options: terminalSandboxOptions() });
         await safeTouch(deps.store, key, deps.now());
         return { ok: true, sandboxId: handle.sandboxId, sessionKey: key, resumed: true };
       } catch (error) {

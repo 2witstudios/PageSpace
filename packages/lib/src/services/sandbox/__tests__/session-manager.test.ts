@@ -10,6 +10,10 @@ import { deriveSessionKey } from '../session-key';
 const SECRET = 'x'.repeat(32);
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
+// Default passing full-egress gate for acquire tests (the gate is required; these
+// tests exercise the non-gate paths). Containment-gate behaviour has its own suite.
+const passGate = async (): Promise<{ ok: true }> => ({ ok: true });
+
 const namespacing = { tenantId: 't1', driveId: 'd1', conversationId: 'c1' };
 const actor = { userId: 'u1', ...namespacing };
 
@@ -92,7 +96,7 @@ describe('acquireConversationSandbox', () => {
     const { client, calls } = makeClient();
     const result = await acquireConversationSandbox({
       ...actor,
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
@@ -104,7 +108,7 @@ describe('acquireConversationSandbox', () => {
     const { client, calls } = makeClient();
     const result = await acquireConversationSandbox({
       ...actor,
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
     expect(calls.get).toEqual(['sbx-existing']);
@@ -123,6 +127,7 @@ describe('acquireConversationSandbox', () => {
         authorize: async () => ({ ok: false, reason: 'insufficient_role' }),
         now: () => NOW,
         secret: SECRET,
+        checkFullEgressEnablement: passGate,
       },
     });
     expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
@@ -141,7 +146,7 @@ describe('acquireConversationSandbox', () => {
     const result = await acquireConversationSandbox({
       ...actor,
       hardExpiryMs: 5 * 60 * 1000,
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.stop).toEqual(['sbx-existing']);
@@ -155,7 +160,7 @@ describe('acquireConversationSandbox', () => {
     const { client, calls } = makeClient({ get: async () => null });
     const result = await acquireConversationSandbox({
       ...actor,
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(storeCalls.remove).toBe(1);
@@ -172,7 +177,7 @@ describe('acquireConversationSandbox', () => {
     });
     const result = await acquireConversationSandbox({
       ...actor,
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause });
     expect(storeCalls.save).toBe(0);
@@ -192,6 +197,7 @@ describe('acquireConversationSandbox', () => {
         authorize: async () => ({ ok: true }),
         now: () => NOW,
         secret: SECRET,
+        checkFullEgressEnablement: passGate,
       },
     });
     expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
@@ -208,7 +214,7 @@ describe('acquireConversationSandbox', () => {
     const { client, calls } = makeClient();
     const result = await acquireConversationSandbox({
       ...actor,
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toMatchObject({ ok: false, reason: 'error' });
     expect(result.ok).toBe(false);
@@ -225,7 +231,7 @@ describe('acquireConversationSandbox', () => {
     const { client } = makeClient();
     const result = await acquireConversationSandbox({
       ...actor,
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
   });
@@ -237,26 +243,25 @@ describe('acquireConversationSandbox', () => {
       tenantId: 't1',
       conversationId: 'c1',
       userId: 'u1',
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.getOrCreate.length).toBe(1);
   });
 
-  it('agent path: provisions with the tight SANDBOX_EGRESS_ALLOWLIST and no egressMode (open mode must NOT bleed into agent sandbox)', async () => {
+  it('agent path: provisions with OPEN egress via the shared resolver (full-egress unification)', async () => {
     const { store } = makeStore();
     const { client, calls } = makeClient();
     const result = await acquireConversationSandbox({
       ...actor,
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
     expect(calls.getOrCreate).toHaveLength(1);
-    // Must use the tight named allowlist, not open egress.
+    // Agent sandbox now uses full (open) egress — the boundary is verified
+    // containment + microVM isolation, not the old tight allowlist.
     const { options } = calls.getOrCreate[0];
-    expect(options.egressMode).toBeUndefined();
-    expect(Array.isArray(options.egressAllowlist)).toBe(true);
-    expect((options.egressAllowlist as string[]).length).toBeGreaterThan(0);
+    expect(options.egressMode).toBe('open');
   });
 
   it('given an empty session secret, should deny without provisioning (fail closed)', async () => {
@@ -264,7 +269,7 @@ describe('acquireConversationSandbox', () => {
     const { client, calls } = makeClient();
     const result = await acquireConversationSandbox({
       ...actor,
-      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: '' },
+      deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: '', checkFullEgressEnablement: passGate },
     });
     expect(result.ok).toBe(false);
     expect(calls.getOrCreate).toEqual([]);
@@ -343,5 +348,45 @@ describe('teardownConversationSandbox', () => {
     // link so a retry or the idle reaper can reclaim it.
     expect(result).toEqual({ torn: false });
     expect(storeCalls.remove).toBe(0);
+  });
+});
+
+describe('acquireConversationSandbox — full-egress containment gate', () => {
+  it('given the enablement check refuses (unverified containment), should deny with containment_unverified and never provision', async () => {
+    const { store, calls: storeCalls } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireConversationSandbox({
+      ...actor,
+      deps: {
+        store,
+        client,
+        authorize: async () => ({ ok: true }),
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: false, reason: 'containment_unverified' }),
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: 'containment_unverified' });
+    // The boundary is unproven — no VM is ever created.
+    expect(calls.getOrCreate).toEqual([]);
+    expect(storeCalls.save).toBe(0);
+  });
+
+  it('given the enablement check passes (verified containment), should provision normally', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireConversationSandbox({
+      ...actor,
+      deps: {
+        store,
+        client,
+        authorize: async () => ({ ok: true }),
+        now: () => NOW,
+        secret: SECRET,
+        checkFullEgressEnablement: async () => ({ ok: true }),
+      },
+    });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
   });
 });

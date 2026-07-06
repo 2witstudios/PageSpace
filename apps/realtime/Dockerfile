@@ -12,6 +12,8 @@ COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
+COPY packages/sdk/package.json ./packages/sdk/
+COPY packages/cli/package.json ./packages/cli/
 COPY apps/admin/package.json ./apps/admin/
 COPY apps/android/package.json ./apps/android/
 COPY apps/atlas/package.json ./apps/atlas/
@@ -48,6 +50,8 @@ COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=builder /app/package.json /app/bun.lock ./
 COPY --from=builder /app/packages/db/package.json ./packages/db/
 COPY --from=builder /app/packages/lib/package.json ./packages/lib/
+COPY --from=builder /app/packages/sdk/package.json ./packages/sdk/
+COPY --from=builder /app/packages/cli/package.json ./packages/cli/
 COPY --from=builder /app/apps/admin/package.json ./apps/admin/
 COPY --from=builder /app/apps/android/package.json ./apps/android/
 COPY --from=builder /app/apps/atlas/package.json ./apps/atlas/

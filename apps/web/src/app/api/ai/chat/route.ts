@@ -27,7 +27,7 @@ import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -51,10 +51,12 @@ import { planCommandExecution } from '@/lib/ai/core/command-resolver';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
-import { filterToolsForReadOnly } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
+import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
@@ -338,6 +340,32 @@ export async function POST(request: Request) {
       }
     }
 
+    // Fetch context from any other drives this agent is a member of with
+    // includeContext enabled (excludes the home drive, covered above).
+    // Filtered to the caller's MCP drive scope so a token scoped to only the
+    // agent's home drive can't pull another member drive's prompt through
+    // this path (the tool layer enforces the same ceiling for actor-driven
+    // reads; this is the equivalent for a value the route reads directly).
+    let memberDriveContextPrefix = '';
+    try {
+      const allowedDriveIds = getAllowedDriveIds(authResult);
+      const allContextDrives = await getAgentContextDrives(chatId);
+      const contextDrives = allowedDriveIds.length > 0
+        ? allContextDrives.filter((d) => allowedDriveIds.includes(d.driveId))
+        : allContextDrives;
+      if (contextDrives.length > 0) {
+        memberDriveContextPrefix = contextDrives
+          .map((d) => `## DRIVE CONTEXT: ${d.driveName}\n\n${d.drivePrompt}\n\n---\n\n`)
+          .join('');
+        loggers.ai.debug('AI Page Chat API: Including member-drive context', {
+          driveCount: contextDrives.length,
+        });
+      }
+    } catch (error) {
+      loggers.ai.error('AI Page Chat API: Failed to fetch member-drive context', error as Error);
+      // Continue without member-drive context on error
+    }
+
     loggers.ai.debug('AI Page Chat API: Using custom agent configuration', {
       hasCustomSystemPrompt: !!customSystemPrompt,
       pageName: page.title,
@@ -607,8 +635,12 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Step 1: Apply isReadOnly filter to PageSpace baseline tools.
-    const baseTools = filterToolsForReadOnly(pageSpaceTools, readOnlyMode);
+    // Step 1: Apply isReadOnly filter, then hide account-level-only tools
+    // (e.g. create_drive) from drive-scoped MCP tokens' tool list.
+    const baseTools = filterToolsForMcpScope(
+      filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
+      isScopedMCPAuth(authResult)
+    );
 
     // Step 2: Extract web_search so it can be handled as a runtime-toggle override
     // independently of the per-agent allowlist.
@@ -793,6 +825,17 @@ export async function POST(request: Request) {
     // Always inject the finish tool so the model can signal task completion
     filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
+    // Guard against a stale read_page tool-result (image bytes delivered on an
+    // earlier turn when the model had vision) being re-embedded as an image when
+    // convertToModelMessages re-converts history for a model that no longer has
+    // vision. Must run before prepareHistoryForModel/finishModelRequest below.
+    if (filteredTools.read_page) {
+      filteredTools = {
+        ...filteredTools,
+        read_page: guardReadPageToolForVision(filteredTools.read_page, hasVisionCapability(resolvedModelName ?? currentModel)),
+      };
+    }
+
     // Build system prompt BEFORE history loading so its token estimate is
     // available for prepareConversationContext's context-window budget math.
 
@@ -856,6 +899,11 @@ export async function POST(request: Request) {
       );
     }
 
+    // Cross-drive membership context applies uniformly regardless of whether
+    // a custom system prompt is set (unlike drivePromptPrefix above, which is
+    // only prepended in the customSystemPrompt branch).
+    systemPrompt = memberDriveContextPrefix + systemPrompt;
+
     // Build timestamp system prompt for temporal awareness
     const userTimezone = user?.timezone ?? undefined;
     const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
@@ -902,7 +950,7 @@ export async function POST(request: Request) {
       ))
       .orderBy(chatMessages.createdAt);
 
-    const conversationHistory: UIMessage[] = dbMessages.map(msg =>
+    const conversationHistory: UIMessage[] = await Promise.all(dbMessages.map(msg =>
       convertDbMessageToUIMessage({
         id: msg.id,
         pageId: msg.pageId,
@@ -916,7 +964,7 @@ export async function POST(request: Request) {
         editedAt: msg.editedAt,
         messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
       })
-    );
+    ));
 
     loggers.ai.debug('AI Chat API: Loaded conversation from database', {
       messageCount: conversationHistory.length,
@@ -938,7 +986,7 @@ export async function POST(request: Request) {
       user: user ? { id: user.id, role: user.role } : null,
     });
     const { scheduleCompaction } = prepared;
-    const { modelMessages, stableBoundaryIndex } = finishModelRequest({
+    const { modelMessages, stableBoundaryIndex } = await finishModelRequest({
       prepared,
       tools: filteredTools,
     });

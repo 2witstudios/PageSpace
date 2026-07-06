@@ -22,7 +22,7 @@ export interface SessionRecord {
   tokenHash: string;
   tokenVersion: number;
   adminRoleVersion: number;
-  type: 'user' | 'service' | 'mcp' | 'device';
+  type: 'user' | 'service' | 'mcp' | 'device' | 'socket';
   scopes: string[];
   expiresAt: Date;
   lastUsedAt: Date | null;

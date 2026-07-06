@@ -1,12 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -21,15 +29,18 @@ import {
   AlertDescription,
 } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertTriangle, ArrowLeft, Shield, Code2 } from 'lucide-react';
+import { Trash2, Copy, Plus, Eye, EyeOff, Key, Terminal, Check, Download, AlertTriangle, ArrowLeft, Shield, Code2, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { useRouter } from 'next/navigation';
-import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface DriveScope {
   id: string;
   name: string;
+  role: 'ADMIN' | 'MEMBER' | null;
+  customRoleId?: string | null;
+  customRoleName?: string | null;
 }
 
 interface MCPToken {
@@ -49,6 +60,79 @@ interface Drive {
   id: string;
   name: string;
   slug: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+}
+
+interface DriveRoleOption {
+  id: string;
+  name: string;
+  color?: string | null;
+}
+
+interface DriveRoleSelection {
+  role: 'ADMIN' | 'MEMBER' | null;
+  customRoleId?: string | null;
+}
+
+const INHERIT_VALUE = 'INHERIT';
+const ADMIN_VALUE = 'ADMIN';
+const MEMBER_VALUE = 'MEMBER';
+
+function selectValueForRole(selection: DriveRoleSelection | undefined): string {
+  if (!selection || selection.role === null) return INHERIT_VALUE;
+  if (selection.role === 'ADMIN') return ADMIN_VALUE;
+  if (selection.customRoleId) return selection.customRoleId;
+  return MEMBER_VALUE;
+}
+
+function roleSelectionFromValue(value: string): DriveRoleSelection {
+  if (value === INHERIT_VALUE) return { role: null, customRoleId: null };
+  if (value === ADMIN_VALUE) return { role: 'ADMIN', customRoleId: null };
+  if (value === MEMBER_VALUE) return { role: 'MEMBER', customRoleId: null };
+  return { role: 'MEMBER', customRoleId: value };
+}
+
+function DriveRoleSelect({
+  driveId,
+  driveName,
+  callerRole,
+  selection,
+  roles,
+  onChange,
+}: {
+  driveId: string;
+  driveName: string;
+  callerRole: 'OWNER' | 'ADMIN' | 'MEMBER';
+  selection: DriveRoleSelection | undefined;
+  roles: DriveRoleOption[] | undefined;
+  onChange: (driveId: string, value: string) => void;
+}) {
+  const currentValue = selectValueForRole(selection);
+  // Always render the currently-selected option even if the caller's ceiling would
+  // otherwise hide it (e.g. Admin was granted earlier while the caller had a higher
+  // role and they've since been downgraded to Member) — otherwise Radix Select shows
+  // a blank trigger instead of the token's actual, still-in-effect scope.
+  const showAdmin = callerRole !== 'MEMBER' || currentValue === ADMIN_VALUE;
+  return (
+    <Select value={currentValue} onValueChange={(value) => onChange(driveId, value)}>
+      <SelectTrigger className="h-8 text-xs w-full" aria-label={`Role for ${driveName}`}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={INHERIT_VALUE}>Inherit my access</SelectItem>
+        {showAdmin && <SelectItem value={ADMIN_VALUE}>Admin</SelectItem>}
+        <SelectItem value={MEMBER_VALUE}>Member</SelectItem>
+        {roles && roles.length > 0 && (
+          <>
+            <SelectSeparator />
+            {roles.map((role) => (
+              <SelectItem key={role.id} value={role.id}>{role.name}</SelectItem>
+            ))}
+          </>
+        )}
+      </SelectContent>
+    </Select>
+  );
 }
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -179,16 +263,48 @@ export default function MCPSettingsView() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newTokenName, setNewTokenName] = useState('');
   const [selectedDriveIds, setSelectedDriveIds] = useState<string[]>([]);
+  const [newDriveRoles, setNewDriveRoles] = useState<Record<string, DriveRoleSelection>>({});
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingTokenId, setEditingTokenId] = useState<string | null>(null);
+  const [editingTokenWasUnscoped, setEditingTokenWasUnscoped] = useState(false);
+  const [editSelectedDriveIds, setEditSelectedDriveIds] = useState<string[]>([]);
+  const [editDriveRoles, setEditDriveRoles] = useState<Record<string, DriveRoleSelection>>({});
+  const [editingScopes, setEditingScopes] = useState(false);
+  const [driveRolesByDriveId, setDriveRolesByDriveId] = useState<Record<string, DriveRoleOption[]>>({});
+  const loadedRoleDriveIdsRef = useRef<Set<string>>(new Set());
   const [newToken, setNewToken] = useState<NewToken | null>(null);
   const [showNewToken, setShowNewToken] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedToken, setSelectedToken] = useState('');
   const [tokenMap, setTokenMap] = useState<Map<string, string>>(new Map());
+  const [setupStyle, setSetupStyle] = useState<'global' | 'npx'>('global');
 
   useEffect(() => {
     loadTokens();
     loadDrives();
   }, []);
+
+  const ensureDriveRolesLoaded = async (driveId: string) => {
+    if (loadedRoleDriveIdsRef.current.has(driveId)) return;
+    loadedRoleDriveIdsRef.current.add(driveId);
+    try {
+      const response = await fetchWithAuth(`/api/drives/${driveId}/roles`);
+      if (response.ok) {
+        const { roles } = await response.json();
+        setDriveRolesByDriveId(prev => ({
+          ...prev,
+          [driveId]: (roles as { id: string; name: string; color: string | null }[]).map(role => ({
+            id: role.id,
+            name: role.name,
+            color: role.color,
+          })),
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading drive roles:', error);
+      loadedRoleDriveIdsRef.current.delete(driveId);
+    }
+  };
 
   const loadTokens = async () => {
     try {
@@ -220,6 +336,25 @@ export default function MCPSettingsView() {
     }
   };
 
+  const buildDriveScopes = (
+    driveIds: string[],
+    roleSelections: Record<string, DriveRoleSelection>
+  ): DriveScope[] =>
+    driveIds.map(id => {
+      const drive = drives.find(d => d.id === id);
+      const selection = roleSelections[id] ?? { role: null, customRoleId: null };
+      const customRole = selection.customRoleId
+        ? driveRolesByDriveId[id]?.find(r => r.id === selection.customRoleId)
+        : undefined;
+      return {
+        id,
+        name: drive?.name || 'Unknown',
+        role: selection.role,
+        customRoleId: selection.customRoleId ?? null,
+        customRoleName: customRole?.name ?? null,
+      };
+    });
+
   const createToken = async () => {
     if (!newTokenName.trim()) {
       toast.error('Please enter a name for the token');
@@ -228,9 +363,15 @@ export default function MCPSettingsView() {
 
     setCreating(true);
     try {
-      const payload: { name: string; driveIds?: string[] } = { name: newTokenName.trim() };
+      const payload: {
+        name: string;
+        drives?: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[];
+      } = { name: newTokenName.trim() };
       if (selectedDriveIds.length > 0) {
-        payload.driveIds = selectedDriveIds;
+        payload.drives = selectedDriveIds.map(id => {
+          const selection = newDriveRoles[id] ?? { role: null, customRoleId: null };
+          return { id, role: selection.role, customRoleId: selection.customRoleId ?? undefined };
+        });
       }
 
       const token = await post<NewToken>('/api/auth/mcp-tokens', payload);
@@ -239,10 +380,7 @@ export default function MCPSettingsView() {
       const tokenWithScopes: MCPToken = {
         ...token,
         isScoped: selectedDriveIds.length > 0,
-        driveScopes: selectedDriveIds.map(id => {
-          const drive = drives.find(d => d.id === id);
-          return { id, name: drive?.name || 'Unknown' };
-        }),
+        driveScopes: buildDriveScopes(selectedDriveIds, newDriveRoles),
       };
 
       setNewToken(token);
@@ -254,6 +392,7 @@ export default function MCPSettingsView() {
       }
       setNewTokenName('');
       setSelectedDriveIds([]);
+      setNewDriveRoles({});
       setCreateDialogOpen(false);
       setShowNewToken(true);
       toast.success('MCP token created successfully');
@@ -266,11 +405,15 @@ export default function MCPSettingsView() {
   };
 
   const toggleDriveSelection = (driveId: string) => {
-    setSelectedDriveIds(prev =>
-      prev.includes(driveId)
-        ? prev.filter(id => id !== driveId)
-        : [...prev, driveId]
-    );
+    setSelectedDriveIds(prev => {
+      if (prev.includes(driveId)) return prev.filter(id => id !== driveId);
+      ensureDriveRolesLoaded(driveId);
+      return [...prev, driveId];
+    });
+  };
+
+  const setNewDriveRole = (driveId: string, value: string) => {
+    setNewDriveRoles(prev => ({ ...prev, [driveId]: roleSelectionFromValue(value) }));
   };
 
   const deleteToken = async (tokenId: string) => {
@@ -285,6 +428,80 @@ export default function MCPSettingsView() {
     }
   };
 
+  const openEditDialog = (token: MCPToken) => {
+    setEditingTokenId(token.id);
+    setEditingTokenWasUnscoped(!token.isScoped);
+    setEditSelectedDriveIds(token.driveScopes.map(scope => scope.id));
+    const roles: Record<string, DriveRoleSelection> = {};
+    token.driveScopes.forEach(scope => {
+      roles[scope.id] = { role: scope.role, customRoleId: scope.customRoleId ?? null };
+      ensureDriveRolesLoaded(scope.id);
+    });
+    setEditDriveRoles(roles);
+    setEditDialogOpen(true);
+  };
+
+  const toggleEditDriveSelection = (driveId: string) => {
+    setEditSelectedDriveIds(prev => {
+      if (prev.includes(driveId)) return prev.filter(id => id !== driveId);
+      ensureDriveRolesLoaded(driveId);
+      return [...prev, driveId];
+    });
+  };
+
+  const setEditDriveRole = (driveId: string, value: string) => {
+    setEditDriveRoles(prev => ({ ...prev, [driveId]: roleSelectionFromValue(value) }));
+  };
+
+  const updateTokenScopes = async () => {
+    if (!editingTokenId) return;
+
+    // This token currently has access to ALL drives (unscoped). Saving with no
+    // drives selected would silently convert it to a NO-access token instead of
+    // preserving all-drives access — require explicit confirmation for that case.
+    if (editingTokenWasUnscoped && editSelectedDriveIds.length === 0) {
+      const confirmed = window.confirm(
+        'This token currently has access to ALL your drives. Saving with no drives ' +
+        'selected will restrict it to NO drives, not leave it unrestricted. Continue?'
+      );
+      if (!confirmed) return;
+    }
+
+    setEditingScopes(true);
+    try {
+      const driveScopesPayload = editSelectedDriveIds.map(id => {
+        const selection = editDriveRoles[id] ?? { role: null, customRoleId: null };
+        return { id, role: selection.role, customRoleId: selection.customRoleId ?? undefined };
+      });
+
+      await patch<{ id: string; name: string; driveScopes: { id: string; name: string }[] }>(
+        `/api/auth/mcp-tokens/${editingTokenId}`,
+        { drives: driveScopesPayload }
+      );
+
+      // PATCH always sends an explicit drives array, so the token is always scoped
+      // afterward (even [] means "scoped to zero drives", not "unscoped") — unlike
+      // createToken()'s conditional isScoped, which reflects an omitted drives field.
+      const nextDriveScopes = buildDriveScopes(editSelectedDriveIds, editDriveRoles);
+      setTokens(prev => prev.map(t =>
+        t.id === editingTokenId
+          ? { ...t, driveScopes: nextDriveScopes, isScoped: true }
+          : t
+      ));
+      setEditDialogOpen(false);
+      setEditingTokenId(null);
+      setEditingTokenWasUnscoped(false);
+      setEditSelectedDriveIds([]);
+      setEditDriveRoles({});
+      toast.success('Token scopes updated successfully');
+    } catch (error) {
+      console.error('Error updating MCP token scopes:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update token scopes');
+    } finally {
+      setEditingScopes(false);
+    }
+  };
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     toast.success('Token copied to clipboard');
@@ -292,27 +509,29 @@ export default function MCPSettingsView() {
 
 
 
-  const generateConfig = () => {
+  const generateConfig = (style: 'global' | 'npx' = setupStyle) => {
     const token = selectedToken || '<YOUR_PAGESPACE_MCP_TOKEN_HERE>';
+    const launch = style === 'npx'
+      ? { command: "npx", args: ["-y", "@pagespace/cli", "pagespace-mcp"] }
+      : { command: "pagespace", args: ["mcp"] };
     const config = {
       mcpServers: {
         "pagespace": {
-          command: "npx",
-          args: ["-y", "pagespace-mcp@latest"],
+          ...launch,
           env: {
             PAGESPACE_API_URL: "https://pagespace.ai",
-            PAGESPACE_AUTH_TOKEN: token
+            PAGESPACE_TOKEN: token
           }
         }
       }
     };
-    
+
     return JSON.stringify(config, null, 2);
   };
 
-  const copyConfig = async () => {
+  const copyConfig = async (style: 'global' | 'npx') => {
     try {
-      await navigator.clipboard.writeText(generateConfig());
+      await navigator.clipboard.writeText(generateConfig(style));
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       toast.success("Configuration copied to clipboard");
@@ -320,6 +539,85 @@ export default function MCPSettingsView() {
       console.error('Failed to copy:', err);
     }
   };
+
+  const renderTokenSelectStep = (stepNumber: number) => (
+    <div className="space-y-2">
+      <p className="text-sm font-medium">{stepNumber}. Configure Claude with your MCP token</p>
+      <div className="flex items-center gap-2">
+        <Label htmlFor="token-select" className="text-sm">Select token:</Label>
+        <select
+          id="token-select"
+          className="flex h-9 w-64 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors"
+          value={selectedToken}
+          onChange={(e) => setSelectedToken(e.target.value)}
+        >
+          <option value="">Choose a token...</option>
+          {tokens.map((token) => {
+            const actualToken = tokenMap.get(token.id);
+            return (
+              <option
+                key={token.id}
+                value={actualToken || ''}
+                disabled={!actualToken}
+              >
+                {token.name} {!actualToken && '(token value not available)'}
+              </option>
+            );
+          })}
+        </select>
+      </div>
+      {selectedToken && (
+        <p className="text-xs text-muted-foreground">
+          ✓ Token selected and will be inserted into the configuration below
+        </p>
+      )}
+      {!selectedToken && tokens.length > 0 && (
+        <Alert className="mt-2">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            <strong>Note:</strong> For security reasons, existing token values cannot be retrieved.
+            Only newly created tokens in this session can be selected. To use an existing token,
+            you&apos;ll need to create a new one.
+          </AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+
+  const renderConfigStep = (style: 'global' | 'npx', stepNumber: number) => (
+    <>
+      <Label className="text-sm">{stepNumber}. Copy this configuration to your Claude settings:</Label>
+      <div className="relative">
+        <pre className="rounded-lg bg-muted p-4 overflow-x-auto text-xs">
+          <code className="font-mono">{generateConfig(style)}</code>
+        </pre>
+        <div className="absolute top-2 right-2 flex gap-1">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => copyConfig(style)}
+          >
+            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const blob = new Blob([generateConfig(style)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'mcp-config.json';
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            <Download className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+    </>
+  );
 
   if (loading) {
     return (
@@ -344,8 +642,11 @@ export default function MCPSettingsView() {
         </Button>
         <h1 className="text-3xl font-bold mb-6">MCP Integration</h1>
         <p className="mb-8 text-muted-foreground">
-          Create and manage MCP (Model Context Protocol) tokens for Claude Code and Claude Desktop integration.
-          These tokens allow external tools to read and edit your documents.
+          Connect Claude Code, Claude Desktop, and other MCP clients to PageSpace. For your own
+          machine, the <code className="rounded bg-muted px-1">pagespace</code> CLI&apos;s{' '}
+          <code className="rounded bg-muted px-1">pagespace login</code> is the fastest path — no
+          token to copy. The tokens below are for agents, CI, and service accounts, or whenever you
+          want access scoped to specific drives.
         </p>
       </div>
 
@@ -410,6 +711,7 @@ export default function MCPSettingsView() {
               if (!open) {
                 setNewTokenName('');
                 setSelectedDriveIds([]);
+                setNewDriveRoles({});
               }
             }}>
             <DialogTrigger asChild>
@@ -454,20 +756,34 @@ export default function MCPSettingsView() {
                   </p>
 
                   {drives.length > 0 && (
-                    <div className="border rounded-md p-3 max-h-48 overflow-y-auto space-y-2">
+                    <div className="border rounded-md p-3 max-h-64 overflow-y-auto space-y-3">
                       {drives.map((drive) => (
-                        <div key={drive.id} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={`drive-${drive.id}`}
-                            checked={selectedDriveIds.includes(drive.id)}
-                            onCheckedChange={() => toggleDriveSelection(drive.id)}
-                          />
-                          <label
-                            htmlFor={`drive-${drive.id}`}
-                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                          >
-                            {drive.name}
-                          </label>
+                        <div key={drive.id} className="space-y-1">
+                          <div className="flex items-center space-x-2">
+                            <Checkbox
+                              id={`drive-${drive.id}`}
+                              checked={selectedDriveIds.includes(drive.id)}
+                              onCheckedChange={() => toggleDriveSelection(drive.id)}
+                            />
+                            <label
+                              htmlFor={`drive-${drive.id}`}
+                              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer flex-1"
+                            >
+                              {drive.name}
+                            </label>
+                          </div>
+                          {selectedDriveIds.includes(drive.id) && (
+                            <div className="pl-6">
+                              <DriveRoleSelect
+                                driveId={drive.id}
+                                driveName={drive.name}
+                                callerRole={drive.role}
+                                selection={newDriveRoles[drive.id]}
+                                roles={driveRolesByDriveId[drive.id]}
+                                onChange={setNewDriveRole}
+                              />
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -478,7 +794,10 @@ export default function MCPSettingsView() {
                       variant="ghost"
                       size="sm"
                       className="text-xs"
-                      onClick={() => setSelectedDriveIds([])}
+                      onClick={() => {
+                        setSelectedDriveIds([]);
+                        setNewDriveRoles({});
+                      }}
                     >
                       Clear selection (allow all drives)
                     </Button>
@@ -542,23 +861,129 @@ export default function MCPSettingsView() {
                     </div>
                     {token.driveScopes && token.driveScopes.length > 0 && (
                       <div className="text-xs text-muted-foreground">
-                        Access: {token.driveScopes.map(d => d.name).join(', ')}
+                        Access: {token.driveScopes.map(d => {
+                          const roleLabel = d.role === 'ADMIN'
+                            ? 'Admin'
+                            : d.customRoleName || (d.role === 'MEMBER' ? 'Member' : null);
+                          return roleLabel ? `${d.name} (${roleLabel})` : d.name;
+                        }).join(', ')}
                       </div>
                     )}
                   </div>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => deleteToken(token.id)}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label="Edit token scopes"
+                      onClick={() => openEditDialog(token)}
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => deleteToken(token.id)}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
                 </div>
               </Card>
             ))}
           </div>
         )}
       </section>
+
+      {/* Edit Token Scopes */}
+      <Dialog open={editDialogOpen} onOpenChange={(open) => {
+          setEditDialogOpen(open);
+          if (!open) {
+            setEditingTokenId(null);
+            setEditingTokenWasUnscoped(false);
+            setEditSelectedDriveIds([]);
+            setEditDriveRoles({});
+          }
+        }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Token Drive Scopes</DialogTitle>
+            <DialogDescription>
+              Change which drives this token can access.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Shield className="h-4 w-4 text-muted-foreground" />
+                <Label>Drive Access Scope</Label>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {editSelectedDriveIds.length === 0
+                  ? editingTokenWasUnscoped
+                    ? 'This token currently has access to ALL your drives. Selecting none and saving will restrict it to NO drives, not leave it unrestricted.'
+                    : 'This token will have access to 0 drives.'
+                  : `This token will only have access to ${editSelectedDriveIds.length} selected drive${editSelectedDriveIds.length === 1 ? '' : 's'}.`}
+              </p>
+
+              {drives.length > 0 && (
+                <div className="border rounded-md p-3 max-h-64 overflow-y-auto space-y-3">
+                  {drives.map((drive) => (
+                    <div key={drive.id} className="space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`edit-drive-${drive.id}`}
+                          checked={editSelectedDriveIds.includes(drive.id)}
+                          onCheckedChange={() => toggleEditDriveSelection(drive.id)}
+                        />
+                        <label
+                          htmlFor={`edit-drive-${drive.id}`}
+                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer flex-1"
+                        >
+                          {drive.name}
+                        </label>
+                      </div>
+                      {editSelectedDriveIds.includes(drive.id) && (
+                        <div className="pl-6">
+                          <DriveRoleSelect
+                            driveId={drive.id}
+                            driveName={drive.name}
+                            callerRole={drive.role}
+                            selection={editDriveRoles[drive.id]}
+                            roles={driveRolesByDriveId[drive.id]}
+                            onChange={setEditDriveRole}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {editSelectedDriveIds.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => {
+                    setEditSelectedDriveIds([]);
+                    setEditDriveRoles({});
+                  }}
+                >
+                  Clear selection (revoke all access)
+                </Button>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={updateTokenScopes} disabled={editingScopes}>
+              {editingScopes ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Quick Setup */}
       <Card>
@@ -572,107 +997,61 @@ export default function MCPSettingsView() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="space-y-2">
-            <p className="text-sm font-medium">1. Install the MCP server</p>
-            <div className="relative">
-              <pre className="rounded-lg bg-muted p-3 overflow-x-auto">
-                <code className="font-mono text-sm">npm install -g pagespace-mcp@latest</code>
-              </pre>
-              <Button
-                size="sm"
-                variant="outline"
-                className="absolute top-2 right-2"
-                onClick={() => {
-                  navigator.clipboard.writeText("npm install -g pagespace-mcp@latest");
-                  toast.success("Command copied to clipboard");
-                }}
-              >
-                <Copy className="h-3 w-3" />
-              </Button>
-            </div>
-          </div>
+          <Tabs value={setupStyle} onValueChange={(value) => setSetupStyle(value as 'global' | 'npx')}>
+            <TabsList>
+              <TabsTrigger value="global">Global install</TabsTrigger>
+              <TabsTrigger value="npx">No install (npx)</TabsTrigger>
+            </TabsList>
 
-          <div className="space-y-2">
-            <p className="text-sm font-medium">2. Configure Claude with your MCP token</p>
-            
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="token-select" className="text-sm">Select token:</Label>
-                <select 
-                  id="token-select"
-                  className="flex h-9 w-64 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors"
-                  value={selectedToken}
-                  onChange={(e) => setSelectedToken(e.target.value)}
-                >
-                  <option value="">Choose a token...</option>
-                  {tokens.map((token) => {
-                    const actualToken = tokenMap.get(token.id);
-                    return (
-                      <option 
-                        key={token.id} 
-                        value={actualToken || ''} 
-                        disabled={!actualToken}
-                      >
-                        {token.name} {!actualToken && '(token value not available)'}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-              {selectedToken && (
+            <TabsContent value="global" className="space-y-6 pt-4">
+              <div className="space-y-2">
+                <p className="text-sm font-medium">1. Install the pagespace CLI</p>
+                <div className="relative">
+                  <pre className="rounded-lg bg-muted p-3 overflow-x-auto">
+                    <code className="font-mono text-sm">npm install -g @pagespace/cli</code>
+                  </pre>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="absolute top-2 right-2"
+                    onClick={() => {
+                      navigator.clipboard.writeText("npm install -g @pagespace/cli");
+                      toast.success("Command copied to clipboard");
+                    }}
+                  >
+                    <Copy className="h-3 w-3" />
+                  </Button>
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  ✓ Token selected and will be inserted into the configuration below
+                  This installs <code className="rounded bg-muted px-1">pagespace mcp</code>, which the
+                  config below points at. Run <code className="rounded bg-muted px-1">pagespace login</code>{' '}
+                  once to authenticate in your browser — afterward you can remove{' '}
+                  <code className="rounded bg-muted px-1">PAGESPACE_TOKEN</code> from the config below and
+                  the MCP will reuse your stored credential.
                 </p>
-              )}
-              {!selectedToken && tokens.length > 0 && (
-                <Alert className="mt-2">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertDescription>
-                    <strong>Note:</strong> For security reasons, existing token values cannot be retrieved. 
-                    Only newly created tokens in this session can be selected. To use an existing token, 
-                    you&apos;ll need to create a new one.
-                  </AlertDescription>
-                </Alert>
-              )}
-            </div>
-            
-            
-            {/* Configuration display */}
-            <div className="space-y-2">
-              <Label className="text-sm">3. Copy this configuration to your Claude settings:</Label>
-            </div>
-            
-            <div className="relative">
-              <pre className="rounded-lg bg-muted p-4 overflow-x-auto text-xs">
-                <code className="font-mono">{generateConfig()}</code>
-              </pre>
-              <div className="absolute top-2 right-2 flex gap-1">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={copyConfig}
-                >
-                  {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    const blob = new Blob([generateConfig()], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'mcp-config.json';
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  }}
-                >
-                  <Download className="h-3 w-3" />
-                </Button>
               </div>
-            </div>
-          </div>
 
+              {renderTokenSelectStep(2)}
+
+              <div className="space-y-2">
+                {renderConfigStep('global', 3)}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="npx" className="space-y-6 pt-4">
+              <p className="text-xs text-muted-foreground">
+                No install step — <code className="rounded bg-muted px-1">npx</code> fetches{' '}
+                <code className="rounded bg-muted px-1">@pagespace/cli</code> on demand each time the MCP
+                client launches it.
+              </p>
+
+              {renderTokenSelectStep(1)}
+
+              <div className="space-y-2">
+                {renderConfigStep('npx', 2)}
+              </div>
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
 

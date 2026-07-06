@@ -7,26 +7,48 @@ import { pages, chatMessages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
-import { getActorAccessiblePagesInDrive, canActorViewPage, canActorAccessDrive } from './actor-permissions';
+import { getActorAccessiblePagesInDrive, canActorViewPage, canActorAccessDrive, canActorManageDrive } from './actor-permissions';
 import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
-import { serializePageContentForAI } from '../core/page-serializer';
+import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
+import { fetchCachedImagePreset } from '../core/image-preset-fetch';
+import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
+import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+
+const pageReadLogger = loggers.ai.child({ module: 'page-read-tools' });
+
+// Batching raw content onto list_pages has no pagination to lean on (recursive
+// listing is already unbounded), so this caps how many pages can have content
+// fetched in one call. Chosen to comfortably cover a single small-to-medium
+// folder/audit pass while keeping the batched content query and payload size bounded.
+const MAX_CONTENT_INCLUDE_PAGES = 50;
+
+// The page-count cap above bounds how many pages get content, but not how
+// large any single page is — a folder of 50 long CODE/DOCUMENT pages could
+// still return a multi-megabyte response. Clip each page's content (in the
+// same truncate-and-report spirit as read_conversation's message truncation,
+// though the mechanics differ — see the newline-boundary cut below) so one
+// huge page can't blow up the whole batch; callers needing the rest can
+// resume with read_page's lineStart/lineEnd.
+const MAX_CONTENT_CHARS_PER_PAGE = 8000;
 
 export const pageReadTools = {
   /**
    * Explore the folder structure and find content within a workspace
    */
   list_pages: tool({
-    description: 'List pages at a location in a workspace. Defaults to direct children of the drive root (ls-style). Pass parentId to navigate into a folder. Set recursive: true to return the full subtree. Each result includes hasChildren so you know whether to drill in further.',
+    description: 'List pages at a location in a workspace. Defaults to direct children of the drive root (ls-style). Pass parentId to navigate into a folder. Set recursive: true to return the full subtree. Each result includes hasChildren so you know whether to drill in further. Pass include: "content" to batch each page\'s content into the response instead of calling read_page per page — capped at ' + MAX_CONTENT_INCLUDE_PAGES + ' pages per call.',
     inputSchema: z.object({
       driveSlug: z.string().optional().describe('The human-readable slug of the drive (for semantic understanding)'),
       driveId: z.string().describe('The unique ID of the drive (used for operations)'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
+      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response instead of calling read_page per page. Content over ${MAX_CONTENT_CHARS_PER_PAGE} characters is clipped (contentClipped: true) — resume with read_page's lineStart at contentClippedAfterLine + 1. CHANNEL/TASK_LIST/FILE pages get a short summary instead of content.`),
     }),
-    execute: async ({ driveSlug, driveId, parentId, recursive = false }, { experimental_context: context }) => {
+    execute: async ({ driveSlug, driveId, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -81,6 +103,10 @@ export const pageReadTools = {
           hasChildren: boolean;
           isTaskLinked: boolean;
           path: string;
+          content?: string;
+          contentOmitted?: string;
+          contentClipped?: boolean;
+          contentClippedAfterLine?: number;
         }
 
         let resultPages: PageEntry[];
@@ -118,6 +144,55 @@ export const pageReadTools = {
           resultPages = collectSubtree(parentId ?? null);
         }
 
+        // Batch content onto the result set in one additional query, rather than
+        // making callers do N read_page calls. There's no pagination anywhere on
+        // this endpoint to lean on for a size limit, so cap explicitly here and
+        // report what was dropped instead of silently truncating.
+        let contentTruncated = false;
+        let contentClippedCount = 0;
+        if (include === 'content' && resultPages.length > 0) {
+          const pagesForContent = resultPages.slice(0, MAX_CONTENT_INCLUDE_PAGES);
+          contentTruncated = resultPages.length > MAX_CONTENT_INCLUDE_PAGES;
+
+          // Type is already known from resultPages, so split up front: structured
+          // types (CHANNEL/TASK_LIST/FILE) never need their content column fetched
+          // at all, and the query below only runs for the text-serializable subset.
+          const textEntries = pagesForContent.filter(entry => {
+            if (isTextSerializablePageType(entry.type)) return true;
+            entry.contentOmitted = `${entry.type} pages return structured data, not inline text — use read_page with this page's ID instead.`;
+            return false;
+          });
+
+          if (textEntries.length > 0) {
+            const contentRows = await db
+              .select({ id: pages.id, content: pages.content, contentMode: pages.contentMode })
+              .from(pages)
+              .where(inArray(pages.id, textEntries.map(p => p.id)));
+            const contentMap = new Map(contentRows.map(r => [r.id, r]));
+
+            for (const entry of textEntries) {
+              const row = contentMap.get(entry.id);
+              if (!row) continue;
+              const fullContent = serializePageContentForAI({ type: entry.type, ...row });
+              if (fullContent.length > MAX_CONTENT_CHARS_PER_PAGE) {
+                // Cut at the last newline within the budget rather than an arbitrary
+                // character offset, so we don't split a UTF-16 surrogate pair or sever
+                // an HTML tag mid-way. Falls back to a hard cut only when the window
+                // has no newline at all (e.g. one huge minified line).
+                const hardCut = fullContent.slice(0, MAX_CONTENT_CHARS_PER_PAGE);
+                const lastNewline = hardCut.lastIndexOf('\n');
+                const clipped = lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut;
+                entry.content = clipped;
+                entry.contentClipped = true;
+                entry.contentClippedAfterLine = clipped.split('\n').length;
+                contentClippedCount++;
+              } else {
+                entry.content = fullContent;
+              }
+            }
+          }
+        }
+
         const driveLabel = driveSlug || driveId;
         const breadcrumb = buildBreadcrumb(parentId);
         const location = parentId ? buildPath(parentId) : `/${driveLabel}`;
@@ -131,13 +206,26 @@ export const pageReadTools = {
           pages: resultPages,
           count: resultPages.length,
           totalInDrive: visiblePages.length,
+          ...(include === 'content' && {
+            contentIncluded: true,
+            contentPageCap: MAX_CONTENT_INCLUDE_PAGES,
+            contentTruncated,
+            contentCharCapPerPage: MAX_CONTENT_CHARS_PER_PAGE,
+            contentClippedCount,
+          }),
           summary: recursive
             ? `Found ${resultPages.length} page${resultPages.length === 1 ? '' : 's'} in "${driveLabel}" (full tree)`
             : `Found ${resultPages.length} page${resultPages.length === 1 ? '' : 's'} in "${locationLabel}"`,
           nextSteps: resultPages.length > 0 ? [
-            'Use read_page with a page ID to read its content',
+            ...(include === 'content' ? [] : ['Use read_page with a page ID to read its content']),
             'Pass parentId with a folder ID to navigate into it',
             'Use create_page to add new content',
+            ...(contentTruncated ? [
+              `Content was only included for the first ${MAX_CONTENT_INCLUDE_PAGES} of ${resultPages.length} pages — the rest have no "content" field. Narrow with parentId or call read_page directly for the remaining pages.`,
+            ] : []),
+            ...(contentClippedCount > 0 ? [
+              `${contentClippedCount} page${contentClippedCount === 1 ? '' : 's'} had content clipped near the ${MAX_CONTENT_CHARS_PER_PAGE}-character mark (contentClipped: true) — each clipped entry's contentClippedAfterLine tells you where it stopped, so call read_page with lineStart: contentClippedAfterLine + 1 on that page to continue.`,
+            ] : []),
           ] : [`"${locationLabel}" is empty — use create_page to add content`],
         };
       } catch (error) {
@@ -158,6 +246,7 @@ export const pageReadTools = {
       lineStart: z.number().int().optional().describe('Start line number (1-indexed, inclusive). Omit to start from beginning.'),
       lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end.'),
     }),
+    toModelOutput: ({ output }) => toModelOutputForReadPage(output),
     execute: async ({ title, pageId, lineStart, lineEnd }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
@@ -223,29 +312,46 @@ export const pageReadTools = {
                 };
               }
               
-              // Model supports vision - return metadata about the visual content
+              // Model supports vision - try to deliver actual image bytes from the
+              // processor's cached presets. Falls back to metadata-only (today's
+              // behavior) when no preset in the fallback chain is usable.
+              if (page.contentHash) {
+                const deliveredImage = await fetchCachedImagePreset(
+                  page.contentHash,
+                  page.mimeType || 'application/octet-stream'
+                );
+                if (deliveredImage) {
+                  return {
+                    success: true,
+                    type: 'visual_content_delivered',
+                    pageId: page.id,
+                    title: page.title,
+                    mimeType: deliveredImage.mediaType,
+                    originalMimeType: page.mimeType || 'application/octet-stream',
+                    message: `Delivered visual content: "${page.title}" (${deliveredImage.mediaType})`,
+                    imageBase64: deliveredImage.base64,
+                    sizeBytes: page.fileSize || 0,
+                    metadata: {
+                      processingStatus: 'visual',
+                      originalFileName: page.originalFileName,
+                      presetUsed: deliveredImage.preset
+                    }
+                  };
+                }
+              }
+
               // Use page metadata instead of loading the full content
-              return {
-                success: true,
-                type: 'visual_content_metadata',
+              return buildVisualContentMetadata({
                 pageId: page.id,
                 title: page.title,
-                message: `Found visual content: "${page.title}" (${page.mimeType || 'unknown type'})`,
                 mimeType: page.mimeType || 'unknown',
                 sizeBytes: page.fileSize || 0,
-                summary: `This is a visual file that requires vision capabilities to process`,
-                stats: {
-                  documentType: 'VISUAL',
-                  mimeType: page.mimeType || 'unknown',
-                  sizeBytes: page.fileSize || 0,
-                  sizeMB: page.fileSize ? (page.fileSize / 1024 / 1024).toFixed(2) : '0'
-                },
                 metadata: {
                   requiresVisionModel: true,
                   processingStatus: 'visual',
                   originalFileName: page.originalFileName
                 }
-              };
+              });
             
             case 'failed':
               return {
@@ -265,25 +371,17 @@ export const pageReadTools = {
 
         // Handle TASK_LIST pages - return structured task data
         if (page.type === 'TASK_LIST') {
-          // Find or create task_list record for this page
-          let taskList = await db.query.taskLists.findFirst({
-            where: eq(taskLists.pageId, page.id),
+          // Find or create task_list record for this page, seeding default status
+          // configs alongside it so the DB is never left half-initialized.
+          const taskList = await ensureTaskListForPage(db, {
+            pageId: page.id,
+            title: page.title,
+            userId,
+            metadata: {
+              createdAt: new Date().toISOString(),
+              autoCreated: true,
+            },
           });
-
-          if (!taskList) {
-            // Auto-create task_list record
-            const [newTaskList] = await db.insert(taskLists).values({
-              userId,
-              pageId: page.id,
-              title: page.title,
-              status: 'pending',
-              metadata: {
-                createdAt: new Date().toISOString(),
-                autoCreated: true,
-              },
-            }).returning();
-            taskList = newTaskList;
-          }
 
           // Get all non-trashed tasks ordered by position. Title lives on the linked page.
           const tasks = await db
@@ -313,6 +411,19 @@ export const pageReadTools = {
             where: eq(taskStatusConfigs.taskListId, taskList.id),
             orderBy: [asc(taskStatusConfigs.position)],
           });
+
+          // Legacy task_lists row (e.g. seeded by a pre-fix lazy-init path) with no
+          // configs — backfill now instead of leaving it half-initialized forever.
+          // Best-effort: this read already has a correct in-memory fallback
+          // (DEFAULT_TASK_STATUSES below), so a transient backfill failure must not
+          // fail the whole read — it'll simply retry on the next read of this page.
+          if (statusConfigs.length === 0) {
+            try {
+              await seedDefaultTaskStatusConfigs(db, taskList.id);
+            } catch (error) {
+              pageReadLogger.error('Failed to backfill default task status configs', error as Error);
+            }
+          }
 
           const availableStatuses = statusConfigs.length > 0
             ? statusConfigs.map(c => ({
@@ -752,8 +863,10 @@ export const pageReadTools = {
       }
 
       try {
-        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
-          throw new Error(`You don't have access to the "${driveSlug}" workspace`);
+        // Trash listing requires drive owner/admin — mirrors GET
+        // /api/drives/[driveId]/trash, which gates on the same bar.
+        if (!await canActorManageDrive(context as ToolExecutionContext, driveId)) {
+          throw new Error(`Only drive owners and admins can view the "${driveSlug}" workspace's trash`);
         }
 
         // Get all trashed pages in the drive (flat list)
@@ -771,6 +884,7 @@ export const pageReadTools = {
 
         // Define proper type for formatted output
         interface FormattedTrashNode {
+          id: string;
           title: string;
           type: string;
           trashedAt: Date | null;
@@ -784,9 +898,10 @@ export const pageReadTools = {
         // Type for tree nodes (pages with children)
         type TreeNode = typeof trashedPages[0] & { children: TreeNode[] };
 
-        // Helper function to format the tree for AI understanding  
+        // Helper function to format the tree for AI understanding
         const formatForAI = (nodes: TreeNode[], depth = 0): FormattedTrashNode[] => {
           return nodes.map(node => ({
+            id: node.id,
             title: node.title,
             type: node.type,
             trashedAt: node.trashedAt,

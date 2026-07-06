@@ -11,6 +11,7 @@ import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
+import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getStartOfTodayInTimezone, normalizeTimezone } from '@/lib/ai/core/timestamp-utils';
 
@@ -85,15 +86,14 @@ export async function GET(req: Request) {
     const endOfWeek = new Date(startOfWeek.getTime() + 7 * 24 * 60 * 60 * 1000);
 
     // Phase 1: Fire all independent queries in parallel
-    // Task queries, summary, drives, and conversations are all independent
+    // Summary, drives, and conversations are all independent. Task counts depend
+    // on driveIds (to scope by membership and exclude trashed pages), so they
+    // move to Phase 2 below.
     const [
       summaryResult,
       userDrives,
-      tasksOverdueResult,
-      tasksDueTodayResult,
-      tasksDueThisWeekResult,
-      tasksCompletedThisWeekResult,
       userConversations,
+      accessiblePagesList,
     ] = await Promise.all([
       // Latest pulse summary
       db.select()
@@ -108,48 +108,6 @@ export async function GET(req: Request) {
           eq(driveMembers.userId, userId),
           isNotNull(driveMembers.acceptedAt)
         )),
-      // Tasks overdue
-      db.select({ count: count() })
-        .from(taskItems)
-        .where(
-          and(
-            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-            ne(taskItems.status, 'completed'),
-            lt(taskItems.dueDate, startOfToday)
-          )
-        ),
-      // Tasks due today
-      db.select({ count: count() })
-        .from(taskItems)
-        .where(
-          and(
-            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-            ne(taskItems.status, 'completed'),
-            gte(taskItems.dueDate, startOfToday),
-            lt(taskItems.dueDate, endOfToday)
-          )
-        ),
-      // Tasks due this week
-      db.select({ count: count() })
-        .from(taskItems)
-        .where(
-          and(
-            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-            ne(taskItems.status, 'completed'),
-            gte(taskItems.dueDate, startOfToday),
-            lt(taskItems.dueDate, endOfWeek)
-          )
-        ),
-      // Tasks completed this week
-      db.select({ count: count() })
-        .from(taskItems)
-        .where(
-          and(
-            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
-            eq(taskItems.status, 'completed'),
-            gte(taskItems.completedAt, startOfWeek)
-          )
-        ),
       // User conversations
       db.select({ id: dmConversations.id })
         .from(dmConversations)
@@ -159,14 +117,19 @@ export async function GET(req: Request) {
             eq(dmConversations.participant2Id, userId)
           )
         ),
+      // Pages the user is actually permitted to view (owner | drive-admin |
+      // explicit page permission | default member read) — the same canonical
+      // access-control primitive used elsewhere in Pulse (generate/cron) for
+      // content scoping. Task counts below scope to this set rather than
+      // driveIds: it already covers owner access (no accepted drive_members
+      // row required — that row is only lazily backfilled on first drive
+      // access) and explicit page-level grants with no drive membership at
+      // all, and excludes trashed pages and pages in trashed drives.
+      accessiblePageIds(userId),
     ]);
 
     const latestSummary = summaryResult[0] ?? null;
     const driveIds = userDrives.map(d => d.driveId);
-    const [tasksOverdue] = tasksOverdueResult;
-    const [tasksDueToday] = tasksDueTodayResult;
-    const [tasksDueThisWeek] = tasksDueThisWeekResult;
-    const [tasksCompletedThisWeek] = tasksCompletedThisWeekResult;
 
     // Phase 2: Queries that depend on driveIds or conversationIds
     const calendarVisibility = driveIds.length > 0
@@ -190,6 +153,10 @@ export async function GET(req: Request) {
       pendingInvitesArr,
       pagesTodayArr,
       pagesWeekArr,
+      tasksOverdueResult,
+      tasksDueTodayResult,
+      tasksDueThisWeekResult,
+      tasksCompletedThisWeekResult,
     ] = await Promise.all([
       // Unread messages — exclude thread replies (parentId IS NOT NULL) so the
       // pulse unread count matches the inbox unread count. Thread replies live
@@ -254,6 +221,52 @@ export async function GET(req: Request) {
               )
             )
         : Promise.resolve([{ count: 0 }]),
+      // Tasks overdue
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            lt(taskItems.dueDate, startOfToday),
+            inArray(taskItems.pageId, accessiblePagesList)
+          )
+        ),
+      // Tasks due today
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            gte(taskItems.dueDate, startOfToday),
+            lt(taskItems.dueDate, endOfToday),
+            inArray(taskItems.pageId, accessiblePagesList)
+          )
+        ),
+      // Tasks due this week
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            ne(taskItems.status, 'completed'),
+            gte(taskItems.dueDate, startOfToday),
+            lt(taskItems.dueDate, endOfWeek),
+            inArray(taskItems.pageId, accessiblePagesList)
+          )
+        ),
+      // Tasks completed this week
+      db.select({ count: count() })
+        .from(taskItems)
+        .where(
+          and(
+            or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
+            eq(taskItems.status, 'completed'),
+            gte(taskItems.completedAt, startOfWeek),
+            inArray(taskItems.pageId, accessiblePagesList)
+          )
+        ),
     ]);
 
     const unreadCount = unreadResult[0]?.count ?? 0;
@@ -261,6 +274,10 @@ export async function GET(req: Request) {
     const [pendingInvitesResult] = pendingInvitesArr;
     const pagesUpdatedToday = pagesTodayArr[0]?.count ?? 0;
     const pagesUpdatedThisWeek = pagesWeekArr[0]?.count ?? 0;
+    const [tasksOverdue] = tasksOverdueResult;
+    const [tasksDueToday] = tasksDueTodayResult;
+    const [tasksDueThisWeek] = tasksDueThisWeekResult;
+    const [tasksCompletedThisWeek] = tasksCompletedThisWeekResult;
 
     // Determine if summary is stale
     const isStale = latestSummary

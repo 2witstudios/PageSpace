@@ -1,5 +1,5 @@
 /**
- * Agent git/GitHub tools: all 26 tools running inside a sandbox.
+ * Agent git/GitHub tools: all 34 tools running inside a sandbox.
  *
  * Pure factory — no DB imports, no Sprites SDK. Production wiring lives in
  * `sandbox-git-tools-runtime.ts`. Each tool's execute handler:
@@ -19,6 +19,7 @@ import { z } from 'zod';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { runGitInSandbox } from '@pagespace/lib/services/sandbox/git-tool-runners';
+import { resolveSandboxPath, SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import { MAX_PATH_LENGTH, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
 import type { ToolExecutionContext } from '../core/types';
 
@@ -86,6 +87,24 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     runGitInSandbox({ cmd, args, cwd, ctx, deps: gitRunDeps });
 
   /**
+   * Resolves `git_clone`/`git_init`'s optional destination `path` (defaulting to
+   * `SANDBOX_ROOT`), returning a ready-made `path_escape` denial on failure —
+   * the only two tools here that take a destination `path` rather than a `cwd`.
+   */
+  const resolveDestinationPath = (
+    path: string | undefined,
+  ): { ok: true; path: string } | { ok: false; error: { success: false; error: string; reason: 'path_escape' } } => {
+    const resolved = path !== undefined ? resolveSandboxPath(path) : SANDBOX_ROOT;
+    if (!resolved) {
+      return {
+        ok: false,
+        error: { success: false, error: 'The path is invalid or escapes the sandbox root.', reason: 'path_escape' },
+      };
+    }
+    return { ok: true, path: resolved };
+  };
+
+  /**
    * For remote/gh tools: pre-checks the GitHub token before opening a sandbox.
    * Passes the already-resolved token to `runGitInSandbox` to avoid a second DB fetch.
    */
@@ -112,7 +131,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   // ── Repo + config ───────────────────────────────────────────────────────
 
   const gitClone = tool({
-    description: 'Clone a GitHub repository into the sandbox. Use HTTPS URLs only.',
+    description:
+      'Clone a GitHub repository into the sandbox. Use HTTPS URLs only. Fetches all branch refs (even with depth) so later-created branches get proper origin tracking refs — required for git_push -u and gh_pr_create to work.',
     inputSchema: z.object({
       repo_url: z
         .string()
@@ -123,25 +143,39 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
         ),
       path: z.string().optional(),
       depth: z.number().int().positive().optional(),
-    }),
+    })
+      .strict(),
     execute: async ({ repo_url, path, depth }, options) => {
       if (!repo_url.startsWith('https://')) {
         return { success: false as const, error: 'Only HTTPS URLs are supported for git clone.' };
       }
+      const resolved = resolveDestinationPath(path);
+      if (!resolved.ok) return resolved.error;
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      const args = ['clone', ...(depth ? ['--depth', String(depth)] : []), repo_url, path ?? '.'];
+      // `--depth` implies `--single-branch`, which writes a narrow fetch refspec
+      // (`+refs/heads/<branch>:...`) into .git/config — that leaves later-created
+      // branches without an origin tracking ref, breaking `push -u` and PR creation.
+      // `--no-single-branch` keeps the wildcard `+refs/heads/*:refs/remotes/origin/*`.
+      const args = [
+        'clone',
+        ...(depth ? ['--no-single-branch', '--depth', String(depth)] : []),
+        repo_url,
+        resolved.path,
+      ];
       return git('git', args, opened.ctx);
     },
   });
 
   const gitInit = tool({
     description: 'Initialize a new git repository in the sandbox.',
-    inputSchema: z.object({ path: z.string().optional() }),
+    inputSchema: z.object({ path: z.string().optional() }).strict(),
     execute: async ({ path }, options) => {
+      const resolved = resolveDestinationPath(path);
+      if (!resolved.ok) return resolved.error;
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['init', path ?? '.'], opened.ctx);
+      return git('git', ['init', resolved.path], opened.ctx);
     },
   });
 
@@ -152,7 +186,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       value: z.string(),
       global: z.boolean().optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ key, value, global: isGlobal, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
@@ -169,7 +204,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
         .url()
         .refine((u) => u.startsWith('https://'), 'Only HTTPS remote URLs are supported'),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ name, url, cwd }, options) => {
       if (!url.startsWith('https://')) {
         return { success: false as const, error: 'Only HTTPS URLs are supported for git remote add.' };
@@ -184,7 +220,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   const gitStatus = tool({
     description: 'Show the working tree status in porcelain format.',
-    inputSchema: z.object({ path: z.string().optional(), cwd: cwdField }),
+    inputSchema: z.object({ path: z.string().optional(), cwd: cwdField }).strict(),
     execute: async ({ path, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
@@ -193,11 +229,40 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   });
 
   const gitDiff = tool({
-    description: 'Show changes in the working tree or staged changes.',
-    inputSchema: z.object({ staged: z.boolean().optional(), path: z.string().optional(), cwd: cwdField }),
-    execute: async ({ staged, path, cwd }, options) => {
+    description:
+      'Show changes in the working tree, staged changes, or between two refs. Pass base + head to diff between branches/commits (e.g. base: "origin/master", head: "HEAD"). Uses three-dot diff (merge-base to head) so only changes unique to head are shown. Falls back to working-tree diff when neither is given.',
+    inputSchema: z
+      .object({
+        staged: z.boolean().optional(),
+        path: z.string().optional(),
+        base: z
+          .string()
+          .optional()
+          .describe('Base ref to diff from (e.g. "origin/master", "HEAD~1")'),
+        head: z
+          .string()
+          .optional()
+          .describe('Head ref to diff to (defaults to HEAD when base is given)'),
+        cwd: cwdField,
+      })
+      .strict()
+      .refine((d) => !d.head || d.base, {
+        message: 'head requires base — diffing to a head ref without a base has no meaning',
+      })
+      .refine((d) => !d.staged || !d.base, {
+        message: 'staged and base are mutually exclusive — use staged for --cached or base for ref diff',
+      }),
+    execute: async ({ staged, path, base, head, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
+      if (base) {
+        return git(
+          'git',
+          ['diff', `${base}...${head ?? 'HEAD'}`, ...(path ? ['--', path] : [])],
+          opened.ctx,
+          cwd,
+        );
+      }
       return git(
         'git',
         ['diff', ...(staged ? ['--cached'] : []), ...(path ? ['--', path] : [])],
@@ -211,6 +276,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     description: 'Stage files for commit.',
     inputSchema: z
       .object({ paths: z.array(z.string()).optional(), all: z.boolean().optional(), cwd: cwdField })
+      .strict()
       .refine((d) => d.all || (d.paths && d.paths.length > 0), {
         message: 'Provide paths or set all: true',
       }),
@@ -230,7 +296,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       mode: z.enum(['soft', 'mixed', 'hard']),
       ref: z.string().optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ mode, ref, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
@@ -244,7 +311,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       action: z.enum(['push', 'pop', 'list', 'drop']),
       message: z.string().optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ action, message, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
@@ -264,7 +332,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       message: z.string().min(1),
       amend: z.boolean().optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ message, amend, cwd }, options) => {
       if (!message) {
         return { success: false as const, error: 'commit message is required' };
@@ -287,7 +356,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       path: z.string().optional(),
       oneline: z.boolean().optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ n, path, oneline, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
@@ -312,7 +382,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       branch: z.string().min(1),
       strategy: z.enum(['merge', 'squash', 'ff-only']).optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ branch, strategy, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
@@ -324,7 +395,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   const gitRebase = tool({
     description: 'Rebase onto a branch or ref. Non-interactive only.',
-    inputSchema: z.object({ branch_or_ref: z.string().min(1), cwd: cwdField }),
+    inputSchema: z.object({ branch_or_ref: z.string().min(1), cwd: cwdField }).strict(),
     execute: async ({ branch_or_ref, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
@@ -334,7 +405,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   const gitCheckout = tool({
     description: 'Switch branches or create a new one.',
-    inputSchema: z.object({ ref: z.string().min(1), create: z.boolean().optional(), cwd: cwdField }),
+    inputSchema: z
+      .object({ ref: z.string().min(1), create: z.boolean().optional(), cwd: cwdField })
+      .strict(),
     execute: async ({ ref, create, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
@@ -346,6 +419,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     description: 'List, create, or delete branches.',
     inputSchema: z
       .object({ action: z.enum(['list', 'create', 'delete']), name: z.string().optional(), cwd: cwdField })
+      .strict()
       .refine((d) => d.action === 'list' || !!d.name, { message: 'name required for create/delete' }),
     execute: async ({ action, name, cwd }, options) => {
       if ((action === 'create' || action === 'delete') && !name) {
@@ -363,7 +437,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   const gitFetch = tool({
     description: 'Fetch from a remote. Requires a connected GitHub account.',
-    inputSchema: z.object({ remote: z.string().optional(), branch: z.string().optional(), cwd: cwdField }),
+    inputSchema: z
+      .object({ remote: z.string().optional(), branch: z.string().optional(), cwd: cwdField })
+      .strict(),
     execute: async ({ remote, branch, cwd }, options) =>
       withToken(options, (ctx, token) =>
         gitR('git', ['fetch', remote ?? 'origin', ...(branch ? [branch] : [])], ctx, token, cwd),
@@ -377,7 +453,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       branch: z.string().optional(),
       rebase: z.boolean().optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ remote, branch, rebase, cwd }, options) =>
       withToken(options, (ctx, token) =>
         gitR(
@@ -399,7 +476,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       force: z.boolean().optional(),
       set_upstream: z.boolean().optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ remote, branch, force, set_upstream, cwd }, options) => {
       // Force-push is fine for a feature/PR branch, but never the default branch.
       // A push forces when the `force` flag is set OR the refspec is `+`-prefixed
@@ -431,7 +509,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
           [
             'push',
             ...(force ? ['--force-with-lease'] : []),
-            ...(set_upstream ? ['-u'] : []),
+            ...(set_upstream !== false ? ['-u'] : []),
             remote ?? 'origin',
             ...(branch ? [branch] : []),
           ],
@@ -446,16 +524,19 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   // ── GitHub PRs (token required) ─────────────────────────────────────────
 
   const ghPrCreate = tool({
-    description: 'Create a pull request. Requires a connected GitHub account.',
+    description:
+      'Create a pull request. Requires a connected GitHub account. head defaults to the current branch; pass it to name the PR head branch explicitly (bypasses the local upstream-tracking check).',
     inputSchema: z.object({
       title: z.string().min(1),
       body: z.string(),
       base: z.string().optional(),
+      head: z.string().optional(),
       draft: z.boolean().optional(),
       labels: z.array(z.string()).optional(),
       cwd: cwdField,
-    }),
-    execute: async ({ title, body, base, draft, labels, cwd }, options) => {
+    })
+      .strict(),
+    execute: async ({ title, body, base, head, draft, labels, cwd }, options) => {
       if (!title) {
         return { success: false as const, error: 'title is required' };
       }
@@ -467,6 +548,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
             '--title', title,
             '--body', body,
             ...(base ? ['--base', base] : []),
+            ...(head ? ['--head', head] : []),
             ...(draft ? ['--draft'] : []),
             ...(labels?.length ? ['--label', labels.join(',')] : []),
           ],
@@ -484,7 +566,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       state: z.enum(['open', 'closed', 'merged', 'all']).optional(),
       limit: z.number().int().positive().max(100).optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ state, limit, cwd }, options) =>
       withToken(options, (ctx, token) =>
         gitR(
@@ -503,8 +586,10 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   });
 
   const ghPrView = tool({
-    description: 'View a pull request. Requires a connected GitHub account.',
-    inputSchema: z.object({ number: z.number().int().positive().optional(), cwd: cwdField }),
+    description: 'View a pull request with CI status, review state, and file change counts. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive().optional(), cwd: cwdField })
+      .strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
         gitR(
@@ -512,8 +597,38 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
           [
             'pr', 'view',
             ...(number ? [String(number)] : []),
-            '--json', 'number,title,body,state,url,headRefName,baseRefName,mergeable',
+            '--json', 'number,title,body,state,url,headRefName,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,reviewDecision,isDraft',
           ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghPrDiff = tool({
+    description:
+      'Get the server-side diff for a pull request. Always merge-base correct, unaffected by local clone depth. Prefer this over git_diff for PR review. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive().optional(), cwd: cwdField })
+      .strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR('gh', ['pr', 'diff', ...(number ? [String(number)] : []), '--color', 'never'], ctx, token, cwd),
+      ),
+  });
+
+  const ghPrChecks = tool({
+    description:
+      'List CI check statuses for a pull request (name, state, link). Each check is PASS/FAIL/PENDING/SKIP. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive().optional(), cwd: cwdField })
+      .strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          ['pr', 'checks', ...(number ? [String(number)] : []), '--json', 'name,state,startedAt,completedAt,link'],
           ctx,
           token,
           cwd,
@@ -527,7 +642,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       number: z.number().int().positive().optional(),
       strategy: z.enum(['merge', 'squash', 'rebase']),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ number, strategy, cwd }, options) =>
       withToken(options, (ctx, token) =>
         gitR(
@@ -547,9 +663,138 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   const ghPrCheckout = tool({
     description: 'Check out a pull request locally. Requires a connected GitHub account.',
-    inputSchema: z.object({ number: z.number().int().positive(), cwd: cwdField }),
+    inputSchema: z.object({ number: z.number().int().positive(), cwd: cwdField }).strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) => gitR('gh', ['pr', 'checkout', String(number)], ctx, token, cwd)),
+  });
+
+  const ghPrReview = tool({
+    description:
+      'Submit a review on a pull request: approve, request changes, or leave a comment. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        number: z.number().int().positive(),
+        action: z.enum(['approve', 'request_changes', 'comment']),
+        body: z.string().optional().describe('Review body / comment text'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ number, action, body, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'pr', 'review', String(number),
+            ...(action === 'approve' ? ['--approve'] : action === 'request_changes' ? ['--request-changes'] : ['--comment']),
+            ...(body ? ['--body', body] : []),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghPrClose = tool({
+    description: 'Close a pull request with an optional comment. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        number: z.number().int().positive(),
+        comment: z.string().optional().describe('Comment to post when closing'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ number, comment, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          ['pr', 'close', String(number), ...(comment ? ['--comment', comment] : [])],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghPrReopen = tool({
+    description: 'Reopen a closed pull request. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive(), cwd: cwdField })
+      .strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR('gh', ['pr', 'reopen', String(number)], ctx, token, cwd),
+      ),
+  });
+
+  const ghPrReady = tool({
+    description: 'Mark a draft pull request as ready for review. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive(), cwd: cwdField })
+      .strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR('gh', ['pr', 'ready', String(number)], ctx, token, cwd),
+      ),
+  });
+
+  // ── GitHub Actions / CI ───────────────────────────────────────────────
+
+  const ghRunList = tool({
+    description:
+      'List GitHub Actions workflow runs. Use to check CI status after pushing or to find failing runs. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        branch: z.string().optional(),
+        limit: z.number().int().positive().max(50).optional(),
+        status: z.enum(['queued', 'in_progress', 'completed']).optional(),
+        event: z.string().optional().describe('Filter by trigger event (e.g. "pull_request", "push")'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ branch, limit, status, event, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'run', 'list',
+            '--limit', String(limit ?? 10),
+            ...(branch ? ['--branch', branch] : []),
+            ...(status ? ['--status', status] : []),
+            ...(event ? ['--event', event] : []),
+            '--json', 'databaseId,status,conclusion,name,headBranch,event,createdAt,displayTitle',
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghRunView = tool({
+    description:
+      'View details of a specific GitHub Actions run including job-level pass/fail status. Pass log: true to include logs for failed jobs (can be large). Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        runId: z.number().int().positive().describe('Run databaseId from gh_run_list'),
+        log: z.boolean().optional().describe('Include logs for failed jobs'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ runId, log, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'run', 'view', String(runId),
+            ...(log ? ['--log-failed'] : []),
+            ...(log ? [] : ['--json', 'databaseId,status,conclusion,name,headBranch,displayTitle,jobs']),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
   });
 
   // ── GitHub Issues (token required) ──────────────────────────────────────
@@ -561,7 +806,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       body: z.string(),
       labels: z.array(z.string()).optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ title, body, labels, cwd }, options) => {
       if (!title) {
         return { success: false as const, error: 'title is required' };
@@ -589,7 +835,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       state: z.enum(['open', 'closed', 'all']).optional(),
       limit: z.number().int().positive().max(100).optional(),
       cwd: cwdField,
-    }),
+    })
+      .strict(),
     execute: async ({ state, limit, cwd }, options) =>
       withToken(options, (ctx, token) =>
         gitR(
@@ -609,7 +856,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   const ghIssueView = tool({
     description: 'View an issue. Requires a connected GitHub account.',
-    inputSchema: z.object({ number: z.number().int().positive(), cwd: cwdField }),
+    inputSchema: z.object({ number: z.number().int().positive(), cwd: cwdField }).strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
         gitR(
@@ -648,8 +895,16 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
     gh_pr_create: ghPrCreate,
     gh_pr_list: ghPrList,
     gh_pr_view: ghPrView,
+    gh_pr_diff: ghPrDiff,
+    gh_pr_checks: ghPrChecks,
     gh_pr_merge: ghPrMerge,
     gh_pr_checkout: ghPrCheckout,
+    gh_pr_review: ghPrReview,
+    gh_pr_close: ghPrClose,
+    gh_pr_reopen: ghPrReopen,
+    gh_pr_ready: ghPrReady,
+    gh_run_list: ghRunList,
+    gh_run_view: ghRunView,
     gh_issue_create: ghIssueCreate,
     gh_issue_list: ghIssueList,
     gh_issue_view: ghIssueView,

@@ -400,9 +400,10 @@ export async function PATCH(
 }
 
 /**
- * DELETE /api/calendar/events/[eventId]/attendees
+ * DELETE /api/calendar/events/[eventId]/attendees?userId=<targetUserId>
  *
- * Remove an attendee from the event (only creator can remove others, anyone can remove themselves)
+ * Remove an attendee from the event (only creator can remove others, anyone can remove themselves).
+ * The `userId` query parameter is required — there is no fallback to the caller.
  */
 export async function DELETE(
   request: Request,
@@ -416,7 +417,14 @@ export async function DELETE(
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
-  const targetUserId = searchParams.get('userId') || userId;
+  const targetUserId = searchParams.get('userId');
+
+  if (!targetUserId) {
+    return NextResponse.json(
+      { error: 'userId query parameter is required' },
+      { status: 400 }
+    );
+  }
 
   try {
     // Verify event exists

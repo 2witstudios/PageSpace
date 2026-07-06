@@ -12,7 +12,8 @@ export async function GET(req: Request) {
       return Response.json({ error: 'No session found' }, { status: 401 });
     }
 
-    const sessionClaims = await sessionService.validateSession(sessionToken);
+    // CSRF tokens are only meaningful for browser sessions.
+    const sessionClaims = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
     if (!sessionClaims) {
       return Response.json({ error: 'Invalid or expired session' }, { status: 401 });
     }
