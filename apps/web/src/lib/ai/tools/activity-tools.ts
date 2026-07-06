@@ -7,6 +7,8 @@ import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers } from '@pagespace/db/schema/members';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import {
   groupActivitiesForDiff,
@@ -417,7 +419,8 @@ When summarizing multiple changes, group them thematically and describe the over
           .from(users)
           .where(eq(users.id, userId))
           .limit(1);
-        const currentUserEmail = currentUserRow?.email ?? null;
+        // Decrypt the stored email so it compares to the plaintext actorEmail.
+        const currentUserEmail = currentUserRow ? await decryptField(currentUserRow.email) : null;
         // Get last visit time if needed
         let lastVisitTime: Date | undefined;
         if (since === 'last_visit') {
@@ -645,8 +648,15 @@ When summarizing multiple changes, group them thematically and describe the over
         // `limit` — the feed may be incomplete and the caller should know.
         const scanCeilingReached = scanned >= MAX_SCANNED && collected.length < limit;
 
-        // Honor the caller's requested cap on VISIBLE rows.
-        const visibleActivities = collected.slice(0, limit);
+        // Honor the caller's requested cap on VISIBLE rows. Decrypt PII at the
+        // edge (GDPR #965) so the joined actor name/email are plaintext for every
+        // downstream consumer (legacy plaintext passes through unchanged).
+        const visibleActivities = await Promise.all(
+          collected.slice(0, limit).map(async (a) => ({
+            ...a,
+            user: a.user ? await decryptUserRow(a.user) : a.user,
+          })),
+        );
 
         // Build actor index for deduplication (saves tokens by not repeating actor info)
         // Store actor reference directly so count updates are shared

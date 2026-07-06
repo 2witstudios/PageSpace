@@ -13,6 +13,7 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
+import { decryptUserRow } from '../../auth/user-repository';
 
 type DB = NodePgDatabase<Record<string, unknown>>;
 
@@ -212,7 +213,8 @@ export async function collectUserProfile(database: DB, userId: string): Promise<
     .where(eq(users.id, userId))
     .limit(1);
 
-  return result[0] ?? null;
+  // Decrypt PII at the edge so the export contains plaintext email/name.
+  return result[0] ? decryptUserRow(result[0]) : null;
 }
 
 export async function collectUserDrives(database: DB, userId: string): Promise<UserDriveExport[]> {

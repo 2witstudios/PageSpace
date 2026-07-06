@@ -6,6 +6,7 @@ import { userProfiles } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { userEmailMatch, decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
   checkDistributedRateLimit,
@@ -88,15 +89,17 @@ export async function GET(request: Request) {
     // searching `bob@example.com` while bob holds only a pending invite from
     // another drive used to get a clickable result and could fall into the
     // userId path which auto-accepts. Temp users now stay invisible.
-    const emailResults = await db.select({
+    const emailRows = await db.select({
       userId: users.id,
       email: users.email,
       name: users.name,
       emailVerified: users.emailVerified,
     })
     .from(users)
-    .where(and(eq(users.email, query), isNotNull(users.emailVerified)))
+    .where(and(userEmailMatch(query), isNotNull(users.emailVerified)))
     .limit(1);
+    // Decrypt PII at the edge so the exact-email match surfaces plaintext name/email.
+    const emailResults = await decryptUserRows(emailRows);
 
     // Combine results, avoiding duplicates
     const userMap = new Map<string, ReturnType<typeof buildPublicProfileResult>>();

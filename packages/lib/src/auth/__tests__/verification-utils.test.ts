@@ -37,12 +37,15 @@ vi.mock('@pagespace/db/schema/auth', () => ({
   users: {
     id: 'id',
     email: 'email',
+    emailBidx: 'emailBidx',
     emailVerified: 'emailVerified',
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_f, _v) => ({ _f, _v })),
   and: vi.fn((...args: unknown[]) => args),
+  // The encryption-aware lookup edge composes a dual blind-index/raw-email match.
+  or: vi.fn((...args: unknown[]) => ({ op: 'or', args })),
   isNull: vi.fn((f) => ({ isNull: f })),
 }));
 

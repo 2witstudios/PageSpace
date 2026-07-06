@@ -79,7 +79,6 @@
       "entry": [
         "src/index.ts",
         "src/migrate.ts",
-        "src/promote-admin.ts",
         "src/server.ts",
         "src/test/factories.ts",
         "vitest.config.ts"

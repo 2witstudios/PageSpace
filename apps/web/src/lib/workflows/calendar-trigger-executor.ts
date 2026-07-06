@@ -4,6 +4,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { eventAttendees } from '@pagespace/db/schema/calendar'
 import { workflows } from '@pagespace/db/schema/workflows';
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import type { CalendarEvent } from '@pagespace/db/schema/calendar'
 import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from './workflow-executor';
@@ -149,11 +150,12 @@ async function buildTriggerPrompt(workflowPrompt: string, event: CalendarEvent):
   if (event.location) parts.push(`Location: ${event.location}`);
 
   // Attendees
-  const attendees = await db
+  // Decrypt PII at the edge so the attendee list in the prompt is plaintext.
+  const attendees = await decryptUserRows(await db
     .select({ name: users.name, email: users.email })
     .from(eventAttendees)
     .innerJoin(users, eq(eventAttendees.userId, users.id))
-    .where(eq(eventAttendees.eventId, event.id));
+    .where(eq(eventAttendees.eventId, event.id)));
 
   if (attendees.length > 0) {
     parts.push(`Attendees: ${attendees.map(a => a.name || a.email).join(', ')}`);

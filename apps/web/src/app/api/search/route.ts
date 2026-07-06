@@ -4,6 +4,7 @@ import { eq, and, or, ilike, inArray, SQL } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { userProfiles } from '@pagespace/db/schema/members';
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { verifyAuth } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -352,7 +353,7 @@ export async function GET(request: Request) {
 
     // 3. Search users (with public profiles) - multi-word support
     const userCondition = buildMultiWordUserCondition(trimmedQuery);
-    const profileResults = await db.select({
+    const profileResults = await decryptUserRows(await db.select({
       userId: userProfiles.userId,
       username: userProfiles.username,
       displayName: userProfiles.displayName,
@@ -367,7 +368,7 @@ export async function GET(request: Request) {
         userCondition
       )
     )
-    .limit(10);
+    .limit(10));
 
     // Add user results (calculate score inline for consistency)
     for (const profile of profileResults) {

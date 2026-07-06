@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -249,7 +250,16 @@ export function EmbeddedCheckoutForm({
 
       {/* Terms */}
       <p className="text-xs text-muted-foreground text-center">
-        By subscribing, you agree to our terms of service. You can cancel anytime.
+        By subscribing, you agree to our terms of service. You can cancel anytime. Payment is
+        processed by Stripe. See our{' '}
+        <Link href="/privacy" className="underline hover:text-foreground">
+          Privacy Policy
+        </Link>{' '}
+        and{' '}
+        <Link href="/subprocessors" className="underline hover:text-foreground">
+          Subprocessors
+        </Link>{' '}
+        page.
       </p>
     </form>
   );
