@@ -48,6 +48,10 @@ propagation delay, since the submit endpoint re-reads status on every request.
   provider or `@pagespace/sdk` would imply. See `packages/db/src/schema/form-targets.ts`.
 - Origin/Referer headers are never the authorization decision — only the
   token hash lookup is (`apps/web/src/app/api/public/forms/[token]/submit/route.ts`).
+- CORS is wide open (`Access-Control-Allow-Origin: *`) for the same reason:
+  the submitting page's origin is unbounded by design (any published-site
+  host or custom domain) and carries no authorization weight, so there's
+  nothing an origin restriction would protect that the token doesn't already.
 - Every accepted submission is attributed to the form's owning `createdBy`
   with `changeGroupType: 'automation'`, going through the same
   `applyPageMutation` activity-logging pipeline as any other page edit — so
@@ -65,3 +69,7 @@ propagation delay, since the submit endpoint re-reads status on every request.
   overwrite it.
 - No visual form builder — forms are hand-authored HTML (by a human or an AI
   agent), never a drag-and-drop UI.
+- No header-drift detection — `fields[i]` maps to sheet column `i` fixed at
+  provisioning time and is never re-derived from the sheet's live header row.
+  If someone manually edits or reorders the header row afterward, submissions
+  keep writing to the original columns with no detection or warning.

@@ -37,7 +37,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-import { POST } from '../route';
+import { POST, OPTIONS } from '../route';
 
 const fields = [
   { name: 'name', label: 'Name', type: 'text' as const, required: true },
@@ -201,6 +201,34 @@ describe('POST /api/public/forms/[token]/submit', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).not.toContain('DB connection');
+    });
+  });
+
+  describe('CORS (submitting page is on a different origin by design)', () => {
+    it('answers the preflight OPTIONS request with matching CORS headers', () => {
+      const response = OPTIONS();
+
+      expect(response.status).toBe(204);
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(response.headers.get('Access-Control-Allow-Methods')).toContain('POST');
+      expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Content-Type');
+    });
+
+    it('sets Access-Control-Allow-Origin on a successful POST response', async () => {
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      const response = await POST(request, params());
+
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    });
+
+    it('sets Access-Control-Allow-Origin on an error POST response too (e.g. 404)', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue(null);
+
+      const request = createRequest({ name: 'Ada', email: 'ada@example.com' });
+      const response = await POST(request, params());
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
     });
   });
 });

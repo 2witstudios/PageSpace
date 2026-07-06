@@ -34,8 +34,10 @@ export const formTargets = pgTable('form_targets', {
   action: text('action', { enum: ['sheet:append'] }).notNull().default('sheet:append'),
 
   // Ordered — fields[i] always maps to sheet column i, fixed at provisioning
-  // time. Never re-derived from the sheet's live header row (see field-schema
-  // note in canvas-forms.md): drift is detected and logged, not auto-remapped.
+  // time. Never re-derived from the sheet's live header row, so manually
+  // editing/reordering the header row after provisioning silently desyncs it
+  // from this mapping — no drift detection exists (v1 limitation, see
+  // canvas-forms.md).
   fields: jsonb('fields').notNull().$type<FormFieldDef[]>(),
 
   headerRow: integer('header_row').notNull().default(1),
