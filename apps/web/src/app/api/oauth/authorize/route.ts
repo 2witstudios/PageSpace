@@ -152,10 +152,11 @@ const approvalSchema = z.object({
   scope: z.string(),
   state: z.string().optional(),
   action: z.enum(['approve', 'deny']),
-  // Required only for action=approve (checked explicitly below, not via zod,
-  // so a malformed approve body still reports the same validation errors it
-  // always has — denial never needs a step-up, it only narrows access).
-  stepUpToken: z.string().min(1).optional(),
+  // Required only for action=approve (checked explicitly below via the
+  // falsy check, not `.min(1)` here — an empty string must fail that same
+  // check identically to an absent field, not surface as a distinct
+  // zod-shaped 400 that tells an attacker the field was present but empty).
+  stepUpToken: z.string().optional(),
 });
 
 export async function POST(req: NextRequest) {

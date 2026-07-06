@@ -455,6 +455,18 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
     expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
   });
 
+  it('reports an empty-string stepUpToken with the exact same error shape as a missing one — no validation oracle', async () => {
+    const { stepUpToken: _omit, ...withoutStepUp } = approvalBody;
+    const missingRes = await POST(postRequest(withoutStepUp) as never);
+    const emptyRes = await POST(postRequest({ ...withoutStepUp, stepUpToken: '' }) as never);
+
+    expect(emptyRes.status).toBe(missingRes.status);
+    expect(emptyRes.status).toBe(401);
+    expect(await emptyRes.json()).toEqual(await missingRes.json());
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
+  });
+
   it('returns 401 when the step-up grant fails to consume, never minting a code', async () => {
     vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: false, error: { code: 'STEP_UP_REQUIRED' } } as never);
 
