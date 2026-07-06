@@ -145,19 +145,35 @@ blind index is `lower(trim(email))` everywhere (edge + backfill).
 
 Each step is reversible and never leaves auth in a broken state:
 
-1. **Deploy the migration** (`0175_sharp_tiger_shark`, additive/nullable — safe).
+1. **Deploy the migration** (`0175_sharp_tiger_shark`, additive/nullable — safe). ✅ **Done** —
+   merged in #1715, 2026-06-25.
 2. **Deploy this cutover** with `ENCRYPTION_KEY` set and `PII_ENCRYPTION_ENABLED`
    UNSET. New/updated rows now get `emailBidx`; reads are dual-lookup; values stay
    plaintext (staged). Verify auth (magic-link, passkey, OAuth, account, invites,
-   Stripe) end-to-end.
+   Stripe) end-to-end. ✅ **Done** — #1728 merged + auto-deployed 2026-07-06. Pre-existing
+   `ENCRYPTION_KEY` (live since #1715's audit-IP encryption) confirmed present on
+   `pagespace-web`/`pagespace-realtime`/`pagespace-admin`; a digest mismatch on
+   `pagespace-admin` (stale value from initial provisioning, never previously
+   exercised for this purpose) was found and corrected before proceeding —
+   `fly secrets list` only shows digests, so the fix was reading the live value
+   via `fly ssh console -a pagespace-web -C "printenv ENCRYPTION_KEY"` and staging
+   it onto `pagespace-admin`. `realtime`/`processor` don't write `users` and don't
+   need `PII_ENCRYPTION_ENABLED`.
 3. **Turn on ciphertext writes:** set `PII_ENCRYPTION_ENABLED=true`. New/updated
    rows now store ciphertext `email`/`name` + `emailBidx`; existing rows remain
-   plaintext-but-readable (mixed state is safe). Verify again.
+   plaintext-but-readable (mixed state is safe). Verify again. ✅ **Done** —
+   `pagespace-web` + `pagespace-admin`, 2026-07-06. Verified via magic-link send
+   (200, unchanged response shape) + prod logs (no decrypt/auth errors).
 4. **Run the backfill:** set `PII_ENCRYPTION_CUTOVER_DEPLOYED=true` (the script's
    hard gate) and run `scripts/backfill-user-pii-encryption.ts` dry-run, then live.
    It encrypts existing rows and populates `emailBidx` idempotently/resumably.
+   ✅ **Done** — 2026-07-06, run against prod via `fly proxy` (DB is Fly-internal-only).
+   Dry-run: 224 would-encrypt / 0 already-encrypted. Live: 224 encrypted / 0 errors.
+   Re-ran dry-run after: 0 would-encrypt / 224 already-encrypted (idempotency confirmed).
 5. **(Later PR)** after 100% backfilled + verified, retire the raw-email fallback
    and drop the raw `email` unique constraint in favor of `users_email_bidx_idx`.
+   **Not done** — no urgency, dual lookup works indefinitely; do this once confident
+   no legacy-plaintext edge cases remain.
 
 ## Out of scope for this design (tracked elsewhere in the epic)
 
