@@ -196,6 +196,7 @@ export const githubProvider: IntegrationProviderConfig = {
         config: {
           method: 'GET',
           pathTemplate: '/repos/{owner}/{repo}/contents/{path}',
+          rawPathParams: ['path'],
           queryParams: {
             ref: { $param: 'ref' },
           },
@@ -1687,6 +1688,7 @@ export const githubProvider: IntegrationProviderConfig = {
         config: {
           method: 'PUT',
           pathTemplate: '/repos/{owner}/{repo}/contents/{path}',
+          rawPathParams: ['path'],
           bodyTemplate: {
             message: { $param: 'message' },
             content: { $param: 'content' },
@@ -1748,6 +1750,7 @@ export const githubProvider: IntegrationProviderConfig = {
         config: {
           method: 'DELETE',
           pathTemplate: '/repos/{owner}/{repo}/contents/{path}',
+          rawPathParams: ['path'],
           bodyTemplate: {
             message: { $param: 'message' },
             sha: { $param: 'sha' },

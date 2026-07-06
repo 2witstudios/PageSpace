@@ -410,6 +410,22 @@ describe('githubProvider', () => {
       expect(tool.outputTransform!.mapping).toHaveProperty('encoding');
       expect(tool.outputTransform!.mapping).toHaveProperty('sha');
     });
+
+    it('given a path containing "../" segments, should throw rather than escape the declared repo', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const input = {
+        owner: 'acme',
+        repo: 'webapp',
+        path: '../../other-org/other-repo/contents/secret.txt',
+      };
+
+      expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
+    });
+
+    it('given the tool config, should declare rawPathParams: ["path"]', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      expect(config.rawPathParams).toEqual(['path']);
+    });
   });
 
   describe('get_repo_tree tool', () => {
@@ -954,6 +970,24 @@ describe('githubProvider', () => {
 
       expect(JSON.parse(result.body!).sha).toBe('blob123');
     });
+
+    it('given a path containing "../" segments, should throw rather than write to a different repo', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const input = {
+        owner: 'acme',
+        repo: 'webapp',
+        path: '../../other-org/other-repo/contents/secret.txt',
+        message: 'evil commit',
+        content: 'aGVsbG8=',
+      };
+
+      expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
+    });
+
+    it('given the tool config, should declare rawPathParams: ["path"]', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      expect(config.rawPathParams).toEqual(['path']);
+    });
   });
 
   describe('delete_file tool', () => {
@@ -984,6 +1018,24 @@ describe('githubProvider', () => {
       expect(body.message).toBe('chore: remove legacy module');
       expect(body.sha).toBe('blob123');
       expect(body.branch).toBe('cleanup');
+    });
+
+    it('given a path containing "../" segments, should throw rather than delete from a different repo', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const input = {
+        owner: 'acme',
+        repo: 'webapp',
+        path: '../../other-org/other-repo/contents/secret.txt',
+        message: 'evil delete',
+        sha: 'blob123',
+      };
+
+      expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
+    });
+
+    it('given the tool config, should declare rawPathParams: ["path"]', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      expect(config.rawPathParams).toEqual(['path']);
     });
   });
 
