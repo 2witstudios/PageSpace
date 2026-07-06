@@ -80,50 +80,57 @@ function toHostCredential(value: HostCredential): HostCredential {
   };
 }
 
+/**
+ * The parse/migrate constructors below build objects via `Object.fromEntries`
+ * rather than `hosts[key] = value` assignment: JSON keys are arbitrary
+ * strings, and assigning to a key named `__proto__` would silently set the
+ * object's prototype instead of creating the own data property the lookup
+ * functions above (`Object.hasOwn`) expect.
+ */
+
 /** Validates + copies a raw v1 `hosts` object (one unnamed credential per host). */
 function parseHostsV1(rawHosts: Record<string, unknown>): Record<string, HostCredential> {
-  const hosts: Record<string, HostCredential> = {};
-  for (const [host, value] of Object.entries(rawHosts)) {
-    if (!isHostCredential(value)) {
-      throw new CredentialsFileFormatError(`Credentials file entry for host "${host}" is malformed.`);
-    }
-    hosts[host] = toHostCredential(value);
-  }
-  return hosts;
+  return Object.fromEntries(
+    Object.entries(rawHosts).map(([host, value]) => {
+      if (!isHostCredential(value)) {
+        throw new CredentialsFileFormatError(`Credentials file entry for host "${host}" is malformed.`);
+      }
+      return [host, toHostCredential(value)];
+    }),
+  );
 }
 
 /** Pure: folds each v1 host credential into that host's "default" profile. */
 function migrateHostsV1ToV2(hostsV1: Readonly<Record<string, HostCredential>>): Record<string, HostProfiles> {
-  const hosts: Record<string, HostProfiles> = {};
-  for (const [host, credential] of Object.entries(hostsV1)) {
-    hosts[host] = { profiles: { [DEFAULT_PROFILE_NAME]: credential } };
-  }
-  return hosts;
+  return Object.fromEntries(
+    Object.entries(hostsV1).map(([host, credential]) => [host, { profiles: { [DEFAULT_PROFILE_NAME]: credential } }]),
+  );
 }
 
 /** Validates + copies a raw v2 `hosts` object (nested `{ profiles: { [name]: HostCredential } }`). */
 function parseHostsV2(rawHosts: Record<string, unknown>): Record<string, HostProfiles> {
-  const hosts: Record<string, HostProfiles> = {};
-  for (const [host, value] of Object.entries(rawHosts)) {
-    if (typeof value !== 'object' || value === null) {
-      throw new CredentialsFileFormatError(`Credentials file entry for host "${host}" is malformed.`);
-    }
-    const rawProfiles = (value as Record<string, unknown>).profiles;
-    if (typeof rawProfiles !== 'object' || rawProfiles === null) {
-      throw new CredentialsFileFormatError(`Credentials file entry for host "${host}" is missing a "profiles" object.`);
-    }
-    const profiles: Record<string, HostCredential> = {};
-    for (const [profileName, profileValue] of Object.entries(rawProfiles as Record<string, unknown>)) {
-      if (!isHostCredential(profileValue)) {
-        throw new CredentialsFileFormatError(
-          `Credentials file entry for host "${host}" profile "${profileName}" is malformed.`,
-        );
+  return Object.fromEntries(
+    Object.entries(rawHosts).map(([host, value]) => {
+      if (typeof value !== 'object' || value === null) {
+        throw new CredentialsFileFormatError(`Credentials file entry for host "${host}" is malformed.`);
       }
-      profiles[profileName] = toHostCredential(profileValue);
-    }
-    hosts[host] = { profiles };
-  }
-  return hosts;
+      const rawProfiles = (value as Record<string, unknown>).profiles;
+      if (typeof rawProfiles !== 'object' || rawProfiles === null) {
+        throw new CredentialsFileFormatError(`Credentials file entry for host "${host}" is missing a "profiles" object.`);
+      }
+      const profiles = Object.fromEntries(
+        Object.entries(rawProfiles as Record<string, unknown>).map(([profileName, profileValue]) => {
+          if (!isHostCredential(profileValue)) {
+            throw new CredentialsFileFormatError(
+              `Credentials file entry for host "${host}" profile "${profileName}" is malformed.`,
+            );
+          }
+          return [profileName, toHostCredential(profileValue)];
+        }),
+      );
+      return [host, { profiles }];
+    }),
+  );
 }
 
 export function parseCredentialsFile(raw: string): CredentialsFile {
@@ -156,8 +163,19 @@ export function serializeCredentialsFile(file: CredentialsFile): string {
   return `${JSON.stringify(file, null, 2)}\n`;
 }
 
+/**
+ * Every host/profile lookup below is an `Object.hasOwn` check, never a bare
+ * bracket/`in` read: profile names are user-supplied (`--profile`,
+ * `--save-as-profile`), and a name like `__proto__` or `toString` would
+ * otherwise resolve to `Object.prototype` members instead of stored data.
+ */
+function ownHostProfiles(file: CredentialsFile, host: string): Readonly<Record<string, HostCredential>> | null {
+  return Object.hasOwn(file.hosts, host) ? file.hosts[host]!.profiles : null;
+}
+
 export function getHost(file: CredentialsFile, host: string, profile: string = DEFAULT_PROFILE_NAME): HostCredential | null {
-  return file.hosts[host]?.profiles[profile] ?? null;
+  const profiles = ownHostProfiles(file, host);
+  return profiles !== null && Object.hasOwn(profiles, profile) ? profiles[profile]! : null;
 }
 
 export function upsertHost(
@@ -166,7 +184,7 @@ export function upsertHost(
   credential: HostCredential,
   profile: string = DEFAULT_PROFILE_NAME,
 ): CredentialsFile {
-  const existingProfiles = file.hosts[host]?.profiles ?? {};
+  const existingProfiles = ownHostProfiles(file, host) ?? {};
   return {
     version: 2,
     hosts: {
@@ -177,12 +195,12 @@ export function upsertHost(
 }
 
 export function removeHost(file: CredentialsFile, host: string, profile: string = DEFAULT_PROFILE_NAME): CredentialsFile {
-  const existing = file.hosts[host];
-  if (!existing || !(profile in existing.profiles)) {
+  const existingProfiles = ownHostProfiles(file, host);
+  if (existingProfiles === null || !Object.hasOwn(existingProfiles, profile)) {
     return file;
   }
 
-  const remainingProfiles = { ...existing.profiles };
+  const remainingProfiles = { ...existingProfiles };
   delete remainingProfiles[profile];
 
   const hosts = { ...file.hosts };
@@ -197,7 +215,7 @@ export function removeHost(file: CredentialsFile, host: string, profile: string 
 /** Lists every host that has the given profile stored (defaults to "default") — never the full token. */
 export function listSummaries(file: CredentialsFile, profile: string = DEFAULT_PROFILE_NAME): readonly CredentialSummary[] {
   return Object.entries(file.hosts)
-    .filter(([, hostProfiles]) => profile in hostProfiles.profiles)
+    .filter(([, hostProfiles]) => Object.hasOwn(hostProfiles.profiles, profile))
     .map(([host, hostProfiles]) => ({ host, tokenPrefix: tokenPrefix(hostProfiles.profiles[profile]!.refreshToken) }))
     .sort((a, b) => a.host.localeCompare(b.host));
 }

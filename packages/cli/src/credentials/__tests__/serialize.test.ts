@@ -229,6 +229,72 @@ describe('named profiles (v2)', () => {
   });
 });
 
+describe('prototype-named profiles are ordinary data, never Object.prototype lookups', () => {
+  const PROTOTYPE_NAMES = ['__proto__', 'constructor', 'toString'] as const;
+
+  it('getHost returns null (not a prototype member) for a prototype-named profile that was never stored', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    for (const name of PROTOTYPE_NAMES) {
+      expect(getHost(file, 'pagespace.ai', name)).toBeNull();
+    }
+  });
+
+  it('getHost returns null for a prototype-named host that was never stored', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      expect(getHost(emptyCredentialsFile(), name)).toBeNull();
+    }
+  });
+
+  it('stores and reads back a prototype-named profile like any other name', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A, name);
+      expect(getHost(file, 'pagespace.ai', name)).toEqual(CRED_A);
+    }
+  });
+
+  it('removeHost of a never-stored prototype-named profile is a no-op that keeps the host', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    for (const name of PROTOTYPE_NAMES) {
+      expect(removeHost(file, 'pagespace.ai', name)).toEqual(file);
+    }
+  });
+
+  it('removeHost drops a stored prototype-named profile, leaving siblings intact', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      let file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+      file = upsertHost(file, 'pagespace.ai', CRED_B, name);
+      const next = removeHost(file, 'pagespace.ai', name);
+      expect(getHost(next, 'pagespace.ai', name)).toBeNull();
+      expect(getHost(next, 'pagespace.ai')).toEqual(CRED_A);
+    }
+  });
+
+  it('listSummaries neither crashes nor reports hosts for a never-stored prototype-named profile', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    for (const name of PROTOTYPE_NAMES) {
+      expect(listSummaries(file, name)).toEqual([]);
+    }
+  });
+
+  it('listSummaries reports a stored prototype-named profile normally', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_B, name);
+      expect(listSummaries(file, name)).toEqual([{ host: 'pagespace.ai', tokenPrefix: tokenPrefix(CRED_B.refreshToken) }]);
+    }
+  });
+
+  it('round-trips a prototype-named profile through serialize/parse without corrupting the object', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A, name);
+      const reparsed = parseCredentialsFile(serializeCredentialsFile(file));
+      expect(getHost(reparsed, 'pagespace.ai', name)).toEqual(CRED_A);
+      // Own data property, not a polluted prototype slot that a bracket read
+      // only appears to find.
+      expect(Object.hasOwn(reparsed.hosts['pagespace.ai']!.profiles, name)).toBe(true);
+    }
+  });
+});
+
 describe('listSummaries', () => {
   it('exposes host + tokenPrefix only, sorted by host, never the full token', () => {
     let file: CredentialsFile = emptyCredentialsFile();
