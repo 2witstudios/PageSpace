@@ -5,7 +5,7 @@ Canonical requirements + file paths for the three Terminal epics. The PageSpace 
 ## Model (settled)
 
 - **Terminal** — the top-level surface/product (right-sidebar workspace; long-term: files left / splittable terminals middle / navigator right = Projects(git) → Branches(docker) → terminals(agent sessions), PurePoint-shaped). A Terminal is page-backed.
-- **Machine** — the substrate a Terminal runs on. Sprite today, Modal for beefy/GPU later. Abstracted behind a substrate seam; never a user-facing tier. Persistent + installable: hibernates, filesystem preserved. The value over throwaway code-exec is "my tools are already installed."
+- **Machine = a Sprite** — the two are the same thing. A Machine IS a Sprite with a PERSISTENT filesystem (hibernate + preserved fs), so installed tools stick ("my tools are already installed"). Modal is only a future option for beefy/GPU machines; the substrate seam is optional, not a layer over Sprites. Never a user-facing tier.
 - **Agents use Terminals.** Global assistant + page agents reference a Machine and run their code-exec tools there. Multiple machines: the agent holds an ACTIVE machine as state and moves between them with a `switch_machine` tool; a `list_machines` tool (mirrors `list_pages`) reports its configured machines + which is active + an optional description. The agent is BLIND to warm state — no running/hibernated exposed; waking is transparent on switch/use.
 - **Scope = page permissions.** A Terminal/Machine is a resource governed by page access — no per-drive/per-user scoping model. (The earlier "Sandboxes Per Drive" rearchitecture is abandoned; this replaces it.)
 - **Billing:** meter Machine active runtime at a floor of 1.5× actual substrate cost through the credits pipeline, to the owner.
