@@ -28,6 +28,34 @@ describe('resolvePublishedMeta — title', () => {
     const meta = resolvePublishedMeta({ body: BODY });
     expect(meta.title).toBeUndefined();
   });
+
+  it('falls back to the canvas og:title when no override is set', () => {
+    const meta = resolvePublishedMeta({
+      canvasMeta: { ogTitle: 'Canvas Title' },
+      pageTitle: 'Page',
+      body: BODY,
+    });
+    expect(meta.title).toBe('Canvas Title');
+  });
+
+  it('prefers the override title over the canvas og:title', () => {
+    const meta = resolvePublishedMeta({
+      override: { title: 'Override' },
+      canvasMeta: { ogTitle: 'Canvas Title' },
+      pageTitle: 'Page',
+      body: BODY,
+    });
+    expect(meta.title).toBe('Override');
+  });
+
+  it('falls back to the page title when the canvas og:title is blank/whitespace', () => {
+    const meta = resolvePublishedMeta({
+      canvasMeta: { ogTitle: '   ' },
+      pageTitle: 'Page',
+      body: BODY,
+    });
+    expect(meta.title).toBe('Page');
+  });
 });
 
 describe('resolvePublishedMeta — ogImageUrl', () => {

@@ -12,7 +12,7 @@ import { defaultBuildEnv, type SandboxRunDeps } from '@pagespace/lib/services/sa
 import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
 import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
-import { buildRealSandboxRunDeps, resolveSandboxActorContext } from './sandbox-tools-runtime';
+import { buildRealSandboxRunDeps, resolveSandboxActorContext, machineDirectory } from './sandbox-tools-runtime';
 import { createSandboxGitTools } from './sandbox-git-tools';
 
 function buildGitSandboxRunDeps(): GitSandboxRunDeps {
@@ -38,5 +38,6 @@ export function buildGitSandboxTools(): Record<string, Tool> {
         agentPageId: ctx.agentPageId,
         tier: ctx.tier,
       }),
+    machines: machineDirectory,
   });
 }

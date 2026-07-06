@@ -2,7 +2,7 @@
  * Provider-neutral execution-client contract.
  *
  * PR2 defined the minimal `SandboxClient` lifecycle seam (getOrCreate / get /
- * stop) in `session-manager`. The tools need to actually run commands and touch
+ * stop) in `terminal-session-manager`. The tools need to actually run commands and touch
  * files, so this module extends that seam with an execution surface —
  * `ExecutableSandbox` — kept deliberately provider-agnostic. The concrete driver
  * (Fly Sprites today) implements `ExecSandboxClient`; the runners depend only on
@@ -10,7 +10,7 @@
  * layer.
  */
 
-import type { SandboxClient, SandboxHandle } from '../session-manager';
+import type { SandboxClient, SandboxHandle } from '../terminal-session-manager';
 import type { SandboxCreateOptions } from '../sandbox-options';
 
 /** Result of a single command run inside the sandbox. */

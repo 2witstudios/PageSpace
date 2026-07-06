@@ -4,6 +4,7 @@ import {
   extractAndStripOgMeta,
   rewriteCanvasAssets,
   rewriteInterPageLinksForDrive,
+  resolveUploadedImageAssetUrl,
 } from '../asset-pipeline';
 
 vi.mock('server-only', () => ({}));
@@ -105,6 +106,7 @@ const mockDb = {
   query: {
     pages: {
       findMany: vi.fn(),
+      findFirst: vi.fn(),
     },
   },
 };
@@ -503,6 +505,25 @@ describe('extractAndStripOgMeta', () => {
     expect(meta.ogImageUrl).toBe(IMG);
   });
 
+  it('extracts og:title and removes the tag from html', () => {
+    const { meta, html } = extractAndStripOgMeta(`<p>hi</p><meta property="og:title" content="My Custom Title">`);
+    expect(meta.ogTitle).toBe('My Custom Title');
+    expect(html).not.toContain('og:title');
+    expect(html).toContain('<p>hi</p>');
+  });
+
+  it('extracts og:title when content attribute comes before property', () => {
+    const { meta } = extractAndStripOgMeta(`<meta content="My Custom Title" property="og:title">`);
+    expect(meta.ogTitle).toBe('My Custom Title');
+  });
+
+  it('keeps only the first og:title when multiple are present', () => {
+    const { meta } = extractAndStripOgMeta(
+      `<meta property="og:title" content="First"><meta property="og:title" content="Second">`
+    );
+    expect(meta.ogTitle).toBe('First');
+  });
+
   it('extracts og:description and removes the tag', () => {
     const { meta, html } = extractAndStripOgMeta('<meta property="og:description" content="My page">');
     expect(meta.ogDescription).toBe('My page');
@@ -540,5 +561,108 @@ describe('extractAndStripOgMeta', () => {
     const { meta, html } = extractAndStripOgMeta('');
     expect(meta).toEqual({});
     expect(html).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveUploadedImageAssetUrl — used by OG image / favicon "pick a file" flows
+// ---------------------------------------------------------------------------
+
+describe('resolveUploadedImageAssetUrl', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    canUserViewPage.mockResolvedValue(true);
+  });
+
+  it('given a viewable image page with a contentHash, resolves and copies it to a durable CDN URL', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1',
+      driveId: 'drive-1',
+      contentHash: HASH_A,
+      mimeType: 'image/png',
+      extractionMetadata: null,
+    });
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBe(`https://cdn.example.com/assets/${HASH_A}`);
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    expect(copyObjectToPublishBucket).toHaveBeenCalledWith({
+      id: 'file-1',
+      kind: 'view',
+      sourceKey: `files/${HASH_A}/original`,
+      assetKey: `assets/${HASH_A}`,
+      contentType: 'image/png',
+    });
+  });
+
+  it('returns null when the page does not exist', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue(undefined);
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'missing', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+  });
+
+  it('returns null when the caller cannot view the referenced page', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'drive-1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
+    });
+    canUserViewPage.mockResolvedValue(false);
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+  });
+
+  it('returns null when the page has no resolvable contentHash', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'drive-1', contentHash: null, mimeType: 'image/png', extractionMetadata: null,
+    });
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+  });
+
+  it('returns null when the permission check itself throws', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'drive-1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
+    });
+    canUserViewPage.mockRejectedValue(new Error('permission service down'));
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+  });
+
+  it('returns null when the file belongs to a different drive than the one being configured, even if the caller can view it', async () => {
+    // A user can have view access to a page shared with them individually in
+    // an unrelated drive (page-level permission) — that isn't consent to make
+    // it publicly served as another drive's OG image/favicon.
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'other-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
+    });
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+  });
+
+  it('excludes trashed pages from the lookup', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue(undefined); // simulates the isTrashed filter excluding the row
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+    expect(mockDb.query.pages.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { kind: 'and', conds: [expect.objectContaining({ val: 'file-1' }), expect.objectContaining({ val: false })] },
+      }),
+    );
   });
 });

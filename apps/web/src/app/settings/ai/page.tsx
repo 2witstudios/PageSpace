@@ -8,6 +8,7 @@ import { CheckCircle2, ArrowLeft, Server } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { TerminalAccessCard } from './TerminalAccessCard';
 
 interface ProviderAvailability {
   isAvailable: boolean;
@@ -90,6 +91,8 @@ export default function AiSettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      <TerminalAccessCard />
     </div>
   );
 }

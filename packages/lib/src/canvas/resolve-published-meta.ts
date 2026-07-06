@@ -27,7 +27,7 @@ export interface ResolvePublishedMetaInput {
   /** The live page title, used when no title override is set. */
   pageTitle?: string | null;
   /** OG meta the author embedded in the canvas (`<meta property="og:*">`). */
-  canvasMeta?: { ogImageUrl?: string | null; ogDescription?: string | null } | null;
+  canvasMeta?: { ogTitle?: string | null; ogImageUrl?: string | null; ogDescription?: string | null } | null;
   /** Drive-level default share image, used when neither override nor canvas set one. */
   driveDefaultOgImageUrl?: string | null;
   /** Rendered page body, used to derive a description when nothing else supplies one. */
@@ -57,8 +57,8 @@ function clean(value: string | null | undefined): string | undefined {
  * Resolve the effective SEO metadata for a published canvas page from the layered
  * sources, applying a fixed precedence:
  *
- *   title       = override.title          → pageTitle
- *   ogImageUrl  = override.ogImageUrl      → canvasMeta.ogImageUrl → driveDefaultOgImageUrl
+ *   title       = override.title          → canvasMeta.ogTitle       → pageTitle
+ *   ogImageUrl  = override.ogImageUrl      → canvasMeta.ogImageUrl    → driveDefaultOgImageUrl
  *   description = override.description      → canvasMeta.ogDescription → deriveDescription(body)
  *   robots      = noindex ? 'noindex' : 'index, follow'
  *
@@ -67,7 +67,7 @@ function clean(value: string | null | undefined): string | undefined {
 export function resolvePublishedMeta(input: ResolvePublishedMetaInput): ResolvedPublishedMeta {
   const { override, noindex, pageTitle, canvasMeta, driveDefaultOgImageUrl, body } = input;
 
-  const title = clean(override?.title) ?? clean(pageTitle);
+  const title = clean(override?.title) ?? clean(canvasMeta?.ogTitle) ?? clean(pageTitle);
 
   const ogImageUrl =
     clean(override?.ogImageUrl) ??

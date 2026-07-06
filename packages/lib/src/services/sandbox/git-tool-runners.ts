@@ -82,10 +82,10 @@ export async function runGitInSandbox({
     const acquired = await deps.acquireSandbox({
       tenantId: ctx.tenantId,
       driveId: ctx.driveId,
-      conversationId: ctx.conversationId,
       userId: ctx.userId,
       requestOrigin: ctx.requestOrigin,
       agentPageId: ctx.agentPageId,
+      activeMachine: ctx.activeMachine,
     });
     if (!acquired.ok) {
       return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };

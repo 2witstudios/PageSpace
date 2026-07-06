@@ -3,8 +3,42 @@ import type { SandboxCreateOptions } from './sandbox-options';
 import { resolveSandboxNetworkOptions } from './network-options';
 import { getConfiguredEgressIpTag } from './egress-ip';
 import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
-import type { SandboxClient } from './session-manager';
 import { loggers } from '../../logging/logger-config';
+
+/** Minimal sandbox handle the lifecycle needs. */
+export interface SandboxHandle {
+  sandboxId: string;
+}
+
+/**
+ * The provider-agnostic slice of the sandbox client this layer drives, injected
+ * so this lifecycle owns no execution path (the Fly Sprites driver implements
+ * it). `getOrCreate` auto-resumes by `name` (the session key); `get` reconnects
+ * to a known id (null if it has vanished); `stop` tears down.
+ */
+export interface SandboxClient {
+  getOrCreate(args: { name: string; options: SandboxCreateOptions }): Promise<SandboxHandle>;
+  get(args: { sandboxId: string }): Promise<SandboxHandle | null>;
+  stop(args: { sandboxId: string }): Promise<void>;
+}
+
+/**
+ * Read the session-key secret. Returns '' (→ fail-closed deny) when unset, so a
+ * missing secret disables sandbox acquisition rather than throwing at the call
+ * site.
+ *
+ * Read directly from `process.env`, NOT via `getValidatedEnv()`: this runs in the
+ * realtime service too (terminal session keys), whose lean env does not satisfy
+ * the full web schema — `getValidatedEnv()` would throw there, blanking the
+ * secret and denying every terminal.
+ */
+export function getSandboxSessionSecret(): string {
+  const secret = process.env.SANDBOX_SESSION_SECRET ?? '';
+  // The web schema enforces >=32 chars; realtime bypasses full validation, so guard
+  // here — a too-short secret weakens the session-key HMAC. Treat it as unset
+  // (fail-closed) rather than deriving keys from a weak secret.
+  return secret.length >= 32 ? secret : '';
+}
 
 export interface TerminalSessionKeyInput {
   tenantId: string;

@@ -1,5 +1,5 @@
 {
-  "id": "32011374-7120-4f9c-a677-58f4da45169f",
+  "id": "cd07758e-394c-4f50-9ae4-0e06c6a0fe50",
   "prevId": "ab7ec046-15c3-479b-aa82-222d450c5c4a",
   "version": "7",
   "dialect": "postgresql",
@@ -1645,6 +1645,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "not_found_page_id": {
+          "name": "not_found_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_favicon_url": {
+          "name": "publish_favicon_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1721,6 +1733,19 @@
           "tableTo": "pages",
           "columnsFrom": [
             "homePageId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "drives_not_found_page_id_pages_id_fk": {
+          "name": "drives_not_found_page_id_pages_id_fk",
+          "tableFrom": "drives",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "not_found_page_id"
           ],
           "columnsTo": [
             "id"
@@ -17084,13 +17109,6 @@
         },
         "is_primary": {
           "name": "is_primary",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "platform_owned": {
-          "name": "platform_owned",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,

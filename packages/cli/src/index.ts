@@ -248,8 +248,39 @@ export {
   tokensCreateHandler,
 } from './commands/tokens/create.js';
 export type { BuildTokenScopeResult, ResolveTokenProfileNameResult, TokensCreateHandlerDeps } from './commands/tokens/create.js';
-export { tokensListHandler } from './commands/tokens/list.js';
-export { tokensRevokeHandler } from './commands/tokens/revoke.js';
+export { tokensList, tokensListHandler } from './commands/tokens/list.js';
+export { tokensRevoke, tokensRevokeHandler } from './commands/tokens/revoke.js';
+
+// `pagespace keys` (Phase 9 task 5) — the guided TUI wizard plus its
+// flag-based `create`/`list`/`revoke` aliases (`router/routes.ts` documents
+// the coexist-with-`tokens` design decision). `logic.ts` is the pure
+// decision-logic layer the wizard's `@clack/prompts` effects shell calls
+// into; `wizard.ts` is that effects shell.
+export {
+  availableMenuChoices,
+  buildWizardScope,
+  driveMultiSelectOptions,
+  driveRoleChoiceToScopeArg,
+  keySelectOptions,
+  menuSelectOptions,
+  NON_INTERACTIVE_KEYS_MESSAGE,
+  preselectedDriveIds,
+  renderKeysTable,
+  roleSelectOptions,
+  shouldOfferRevokeOldKey,
+} from './commands/keys/logic.js';
+export type {
+  CustomRoleOption,
+  DriveOption,
+  DriveRoleChoice,
+  DriveRoleSelection,
+  KeyDriveScope,
+  KeySummary,
+  SelectOption,
+  WizardMenuChoice,
+} from './commands/keys/logic.js';
+export { keysListHandler, keysRevokeHandler } from './commands/keys/aliases.js';
+export { createKeysHandler, keysHandler } from './commands/keys/wizard.js';
 
 // Legacy `PAGESPACE_AUTH_TOKEN` env var support (Phase 6 task 1) — folded
 // into `run.ts`'s single auth-resolution path, never a second one.

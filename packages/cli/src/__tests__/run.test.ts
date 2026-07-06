@@ -236,6 +236,65 @@ describe('run', () => {
     });
   });
 
+  describe('"pagespace keys" (Phase 9 task 5) is auth-exempt, coexisting with (not superseding) "tokens *"', () => {
+    it('bare "keys" reaches keysHandler with zero stored credentials — fails closed on non-TTY, never on the ambient-credential gate', async () => {
+      const deps = makeDeps(['keys']); // makeDeps never sets isTTY, so it defaults to false (fail-closed)
+      const code = await run(deps);
+      expect(code).not.toBe(EXIT_SUCCESS);
+      expect(deps.stderr.lines.join('')).toContain('interactive terminal');
+      expect(deps.stderr.lines.join('')).not.toContain('No explicit credential found');
+    });
+
+    it('never touches the ambient stored profile as a side effect for a non-TTY "keys" invocation', async () => {
+      let networkCalls = 0;
+      vi.stubGlobal(
+        'fetch',
+        (async () => {
+          networkCalls += 1;
+          throw new Error('non-TTY "keys" must never touch the ambient credential');
+        }) as unknown as typeof fetch,
+      );
+      try {
+        const store = createFakeCredentialStore();
+        await store.set('https://pagespace.ai', {
+          refreshToken: 'ps_rt_personal_secret',
+          clientId: 'cli',
+          scopes: ['manage_keys', 'offline_access'],
+          createdAt: new Date(0).toISOString(),
+        }, 'default');
+
+        const deps = { ...makeDeps(['keys']), credentialStore: store };
+        await run(deps);
+
+        expect(networkCalls).toBe(0);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('"keys list" and "keys revoke" never receive the ambient-credential-gate error, unlike "tokens list"/"tokens revoke"', async () => {
+      const keysListDeps = makeDeps(['keys', 'list']);
+      await run(keysListDeps);
+      expect(keysListDeps.stderr.lines.join('')).not.toContain('No explicit credential found');
+
+      const keysRevokeDeps = makeDeps(['keys', 'revoke', 'tok_1', '--yes']);
+      await run(keysRevokeDeps);
+      expect(keysRevokeDeps.stderr.lines.join('')).not.toContain('No explicit credential found');
+    });
+
+    it('"tokens list" and "tokens revoke" remain explicit-credential-only — the coexist design decision, not a regression', async () => {
+      const tokensListDeps = makeDeps(['tokens', 'list']);
+      const listCode = await run(tokensListDeps);
+      expect(listCode).not.toBe(EXIT_SUCCESS);
+      expect(tokensListDeps.stderr.lines.join('')).toContain('No explicit credential found');
+
+      const tokensRevokeDeps = makeDeps(['tokens', 'revoke', 'tok_1', '--yes']);
+      const revokeCode = await run(tokensRevokeDeps);
+      expect(revokeCode).not.toBe(EXIT_SUCCESS);
+      expect(tokensRevokeDeps.stderr.lines.join('')).toContain('No explicit credential found');
+    });
+  });
+
   it('resolves the profile from --profile and looks up the credential store under that profile name', async () => {
     const profilesSeen: Array<string | undefined> = [];
     const store = {

@@ -10,7 +10,7 @@
  *   2. inline command/path policy BEFORE any VM work — a blocked command never
  *      provisions a sandbox, and a blocked command is audited as an anomaly;
  *   3. quota — reserve a per-tier concurrency slot (the only cost ceiling here);
- *   4. `acquireConversationSandbox` (authz + lifecycle, re-authz on resume) and
+ *   4. `acquireMachineSandbox` (authz + lifecycle, re-authz on resume) and
  *      reconnect to the executable handle;
  *   5. run / write / read against the injected sandbox client;
  *   6. truncate untrusted output to the policy cap;
@@ -32,7 +32,12 @@ import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { applyEdit } from './edit-file';
 import { buildSandboxEnv } from './sandbox-env';
 import { getValidatedEnv } from '../../config/env-validation';
-import type { AcquireSandboxInput, AcquireSandboxResult } from './session-manager';
+import {
+  resolveMachinePageId,
+  type AcquireMachineSandboxInput,
+  type AcquireMachineSandboxResult,
+  type MachineRefLike,
+} from './machine-session';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 
@@ -53,6 +58,8 @@ export interface SandboxActorContext {
   aiProvider?: string;
   aiModel?: string;
   tier: SubscriptionTier;
+  /** The ACTIVE machine this call routes to (Terminal epics); undefined defaults to 'own'. */
+  activeMachine?: MachineRefLike;
 }
 
 export interface SandboxQuotaDeps {
@@ -61,10 +68,56 @@ export interface SandboxQuotaDeps {
   releaseSlot: (args: { userId: string }) => void;
 }
 
+/**
+ * Metering seam for a machine run's active-runtime cost (Terminal Epic 3).
+ * Optional — omitting it disables metering (no hold, no charge), mirroring
+ * every other optional seam in this file (`screenOutput`, `notifyTerminalActivity`).
+ *
+ * The hold->settle protocol mirrors the voice STT recipe
+ * (apps/web/src/app/api/voice/transcribe/route.ts): `gate` places a flat-estimate
+ * hold BEFORE the machine is acquired (the real active-window duration isn't known
+ * until the run ends); `trackUsage` settles the hold to the real cost and hands off
+ * its release to the credit pipeline on a SUCCESSFUL run only; `releaseHold` is the
+ * safety net for every other exit (denial, thrown error, timeout) so a failed run
+ * never strands a hold against the payer's spendable balance.
+ */
+export interface SandboxBillingDeps {
+  /**
+   * Resolves who pays for THIS run (Terminal Epic 3 owner-pays) — the
+   * referenced machine's actual page owner when resolvable, else the acting
+   * tenantId. The one seam payer resolution goes through; see
+   * `terminal-payer.ts`'s `resolveTerminalPayerId`.
+   */
+  resolvePayerId: (input: { tenantId: string; machinePageId?: string }) => Promise<string>;
+  /** Places a flat-estimate hold for this payer before the machine run begins. */
+  gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
+  /** Settles the hold to the real active-window cost. Only called on a successful run. */
+  trackUsage: (input: { payerId: string; holdId?: string; activeSeconds: number; pageId?: string }) => Promise<void>;
+  /** Releases a hold without billing. Called on every exit that never reaches `trackUsage`. */
+  releaseHold: (holdId: string) => Promise<void>;
+}
+
+/**
+ * A single bash command + its output, for streaming into the referenced
+ * Terminal's live PTY/output feed (Terminal Epic 1 T1.5 activity visibility) —
+ * so a human watching a Terminal page sees the agent's work as it happens.
+ */
+export interface TerminalActivityNotification {
+  /** The machine's identifying page (resolveMachinePageId's output). */
+  pageId: string;
+  driveId?: string;
+  tenantId: string;
+  command: string;
+  output: string;
+  exitCode: number;
+  /** Human-facing label for who ran this (actor display name or email). */
+  agentLabel: string;
+}
+
 export interface SandboxRunDeps {
   isEnabled: () => boolean;
-  /** Pre-bound `acquireConversationSandbox` (lifecycle deps already injected). */
-  acquireSandbox: (input: Omit<AcquireSandboxInput, 'deps'>) => Promise<AcquireSandboxResult>;
+  /** Pre-bound `acquireMachineSandbox` (lifecycle deps already injected). */
+  acquireSandbox: (input: Omit<AcquireMachineSandboxInput, 'deps'>) => Promise<AcquireMachineSandboxResult>;
   /** Reconnect to the executable handle for an acquired sandbox id. */
   reconnect: (sandboxId: string) => Promise<ExecutableSandbox | null>;
   quota: SandboxQuotaDeps;
@@ -78,6 +131,19 @@ export interface SandboxRunDeps {
    * unchanged (seam disabled).
    */
   screenOutput?: (text: string) => Promise<string>;
+  /**
+   * Optional activity-visibility seam (Terminal Epic 1 T1.5): streams a
+   * successful bash run's command + output into the referenced Terminal's
+   * live feed. Best-effort — a failure here must never affect the tool
+   * result, and omitting it simply disables the feed (no Terminal epic
+   * consumer wired yet, or the machine has no live watcher).
+   */
+  notifyTerminalActivity?: (input: TerminalActivityNotification) => Promise<void>;
+  /**
+   * Optional metering seam (Terminal Epic 3): meters this run's active-runtime
+   * cost against the machine's payer. Omitted -> unmetered (no hold, no charge).
+   */
+  billing?: SandboxBillingDeps;
   now: () => Date;
   logger?: {
     warn?: (message: string, metadata?: Record<string, unknown>) => void;
@@ -109,7 +175,8 @@ function safeLogWarn(
 // Acquisition reasons that represent expected policy/authz outcomes (warn-level)
 // vs infra failures that are genuinely unexpected (error-level).
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
+  'machine_runtime_exceeded',
 ]);
 
 
@@ -119,6 +186,9 @@ export type SandboxToolDenialReason =
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
+  | 'no_machine'
+  | 'machine_runtime_exceeded'
+  | 'credit_exhausted'
   | 'concurrency_limit'
   | 'empty_command'
   | 'command_too_large'
@@ -129,26 +199,25 @@ export type SandboxToolDenialReason =
   | 'edit_no_match'
   | 'edit_not_unique'
   | 'provision_failed'
-  | 'provision_rate_limited'
   | 'execution_failed'
   | 'not_found'
   | 'error';
 
 export type BashToolResult =
   | { success: true; stdout: string; stderr: string; exitCode: number; truncated: boolean }
-  | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
+  | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type WriteFileToolResult =
   | { success: true; path: string; bytesWritten: number }
-  | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
+  | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type ReadFileToolResult =
   | { success: true; path: string; content: string; truncated: boolean }
-  | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
+  | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type EditFileToolResult =
   | { success: true; path: string; replacements: number }
-  | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
+  | { success: false; error: string; reason: SandboxToolDenialReason };
 
 const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
@@ -156,6 +225,10 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
+  no_machine: 'No machine is configured for this run.',
+  machine_runtime_exceeded:
+    'This machine has been running continuously for too long. Wait for it to go idle, or switch to a different machine.',
+  credit_exhausted: 'Insufficient credits to run this machine.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
   empty_command: 'No command was provided.',
   command_too_large: 'The command is too large.',
@@ -167,7 +240,6 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   edit_no_match: 'The oldString was not found in the file. Read the file and copy the exact text to replace.',
   edit_not_unique: 'The oldString is not unique in the file. Include more surrounding context, or set replaceAll to replace every occurrence.',
   provision_failed: 'Could not provision a sandbox for this run.',
-  provision_rate_limited: 'The sandbox service is busy (rate limited). Retry shortly.',
   execution_failed: 'Command execution failed or timed out.',
   not_found: 'File not found.',
   error: 'Code execution could not be completed.',
@@ -175,21 +247,20 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
 
 function fail(
   reason: SandboxToolDenialReason,
-  retryAfter?: number,
-): { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number } {
-  return { success: false, error: DENIAL_MESSAGES[reason], reason, ...(retryAfter ? { retryAfter } : {}) };
+): { success: false; error: string; reason: SandboxToolDenialReason } {
+  return { success: false, error: DENIAL_MESSAGES[reason], reason };
 }
 
 function acquireRequest(
   ctx: SandboxActorContext,
-): Omit<AcquireSandboxInput, 'deps'> {
+): Omit<AcquireMachineSandboxInput, 'deps'> {
   return {
     tenantId: ctx.tenantId,
     driveId: ctx.driveId,
-    conversationId: ctx.conversationId,
     userId: ctx.userId,
     requestOrigin: ctx.requestOrigin,
     agentPageId: ctx.agentPageId,
+    activeMachine: ctx.activeMachine,
   };
 }
 
@@ -225,17 +296,31 @@ async function safeAudit(
   }
 }
 
+// Best-effort, fire-and-forget: a failing/missing activity feed must never
+// affect the bash tool's result — it is a visibility nicety, not a safety gate.
+async function safeNotifyTerminalActivity(
+  deps: SandboxRunDeps,
+  input: TerminalActivityNotification,
+): Promise<void> {
+  if (!deps.notifyTerminalActivity) return;
+  try {
+    await deps.notifyTerminalActivity(input);
+  } catch {
+    // Intentionally swallowed.
+  }
+}
+
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
-function reasonFromAcquire(result: Extract<AcquireSandboxResult, { ok: false }>): SandboxToolDenialReason {
+function reasonFromAcquire(result: Extract<AcquireMachineSandboxResult, { ok: false }>): SandboxToolDenialReason {
   switch (result.reason) {
     case 'app_admin_required':
     case 'no_drive_access':
     case 'insufficient_role':
     case 'no_agent_access':
+    case 'no_machine':
     case 'provision_failed':
+    case 'machine_runtime_exceeded':
       return result.reason;
-    case 'rate_limited':
-      return 'provision_rate_limited';
     case 'kill_switch_off':
       return 'kill_switch_off';
     default:
@@ -249,6 +334,50 @@ const anomalyForExit = (exitCode: number): CodeExecutionAnomaly | undefined => {
   return exitCode === 137 ? 'timeout' : 'nonzero_exit';
 };
 
+type MeteredResult<S> =
+  | ({ success: true } & S)
+  | { success: false; error: string; reason: SandboxToolDenialReason };
+
+/**
+ * Wraps a machine op with active-runtime metering (Terminal Epic 3). Places a
+ * flat-estimate hold for the payer BEFORE `run` (which acquires the machine and
+ * executes the op), then on a SUCCESSFUL result settles the hold to the real
+ * active-window cost (wall-clock from just before `run` to just after it
+ * resolves). Any other exit — denial, thrown error, timeout — releases the hold
+ * without billing: the run never reached a confirmed successful completion, so
+ * there is nothing to charge (mirrors the voice STT recipe's `holdHandedOff`
+ * safety net). Skipped entirely (no hold, no charge) when `deps.billing` is
+ * unset — an unmetered deployment behaves exactly as before this seam existed.
+ */
+async function withMachineBilling<S>(
+  ctx: SandboxActorContext,
+  deps: SandboxRunDeps,
+  run: () => Promise<MeteredResult<S>>,
+): Promise<MeteredResult<S>> {
+  const billing = deps.billing;
+  if (!billing) return run();
+
+  const machinePageId = resolveMachinePageId({ agentPageId: ctx.agentPageId, activeMachine: ctx.activeMachine });
+  const payerId = await billing.resolvePayerId({ tenantId: ctx.tenantId, machinePageId });
+  const gate = await billing.gate({ payerId });
+  if (!gate.allowed) return fail('credit_exhausted');
+
+  const holdId = gate.holdId;
+  const startedAt = deps.now().getTime();
+  let handedOff = false;
+  try {
+    const result = await run();
+    if (result.success) {
+      handedOff = true;
+      const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
+      await billing.trackUsage({ payerId, holdId, activeSeconds, pageId: machinePageId });
+    }
+    return result;
+  } finally {
+    if (holdId && !handedOff) void billing.releaseHold(holdId).catch(() => {});
+  }
+}
+
 /**
  * Shared preamble: enforce quota and acquire a live, authorized executable
  * sandbox. Returns the handle plus a `release` thunk the caller MUST invoke in
@@ -260,8 +389,8 @@ async function openSession(
   ctx: SandboxActorContext,
   deps: SandboxRunDeps,
 ): Promise<
-  | { ok: true; sandbox: ExecutableSandbox; release: () => void }
-  | { ok: false; reason: SandboxToolDenialReason; retryAfter?: number }
+  | { ok: true; sandbox: ExecutableSandbox; release: () => void; pageId?: string }
+  | { ok: false; reason: SandboxToolDenialReason }
 > {
   if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
     return { ok: false, reason: 'concurrency_limit' };
@@ -278,7 +407,7 @@ async function openSession(
       } else {
         safeLogError(deps.logger, 'Sandbox acquisition failed', context);
       }
-      return { ok: false, reason: reasonFromAcquire(acquired), retryAfter: acquired.retryAfterSeconds };
+      return { ok: false, reason: reasonFromAcquire(acquired) };
     }
     const sandbox = await deps.reconnect(acquired.sandboxId);
     if (!sandbox) {
@@ -291,7 +420,12 @@ async function openSession(
       });
       return { ok: false, reason: 'provision_failed' };
     }
-    return { ok: true, sandbox, release: () => deps.quota.releaseSlot({ userId: ctx.userId }) };
+    return {
+      ok: true,
+      sandbox,
+      release: () => deps.quota.releaseSlot({ userId: ctx.userId }),
+      pageId: acquired.pageId,
+    };
   } catch (error) {
     safeLogError(
       deps.logger,
@@ -354,8 +488,14 @@ export async function runBashInSandbox({
     resolvedCwd = candidate;
   }
 
+  return withMachineBilling<{
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    truncated: boolean;
+  }>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
-  if (!session.ok) return fail(session.reason, session.retryAfter);
+  if (!session.ok) return fail(session.reason);
 
   try {
     const startedAt = deps.now();
@@ -406,6 +546,27 @@ export async function runBashInSandbox({
       durationMs,
       anomaly: anomalyForExit(run.exitCode),
     });
+    if (session.pageId) {
+      // Fire-and-forget: this is a visibility nicety over a network hop to
+      // another service, not a safety gate. Awaiting it would tie every
+      // successful bash call's latency to the terminal-activity feed's
+      // availability (up to its own request timeout) for no benefit — the
+      // tool result below does not depend on it. safeNotifyTerminalActivity
+      // already swallows its own errors, so this can never surface as an
+      // unhandled rejection.
+      void safeNotifyTerminalActivity(deps, {
+        pageId: session.pageId,
+        driveId: ctx.driveId,
+        tenantId: ctx.tenantId,
+        command,
+        output: [stdout.text, stderr.text].filter((text) => text.length > 0).join('\n'),
+        exitCode: run.exitCode,
+        // No display name is set for a plain email fallback — a raw email
+        // address is PII and this feed is visible to every viewer with edit
+        // access to the Terminal page, not just the acting user.
+        agentLabel: ctx.actorDisplayName ?? 'AI agent',
+      });
+    }
     return {
       success: true,
       stdout: stdout.text,
@@ -416,6 +577,7 @@ export async function runBashInSandbox({
   } finally {
     session.release();
   }
+  });
 }
 
 export async function writeSandboxFile({
@@ -444,8 +606,9 @@ export async function writeSandboxFile({
   const bytes = Buffer.byteLength(content, 'utf8');
   if (bytes > MAX_WRITE_BYTES) return fail('content_too_large');
 
+  return withMachineBilling<{ path: string; bytesWritten: number }>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
-  if (!session.ok) return fail(session.reason, session.retryAfter);
+  if (!session.ok) return fail(session.reason);
 
   try {
     const startedAt = deps.now();
@@ -471,6 +634,7 @@ export async function writeSandboxFile({
   } finally {
     session.release();
   }
+  });
 }
 
 export async function readSandboxFile({
@@ -495,8 +659,9 @@ export async function readSandboxFile({
     return fail('path_escape');
   }
 
+  return withMachineBilling<{ path: string; content: string; truncated: boolean }>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
-  if (!session.ok) return fail(session.reason, session.retryAfter);
+  if (!session.ok) return fail(session.reason);
 
   try {
     const startedAt = deps.now();
@@ -546,6 +711,7 @@ export async function readSandboxFile({
   } finally {
     session.release();
   }
+  });
 }
 
 export async function editSandboxFile({
@@ -576,8 +742,9 @@ export async function editSandboxFile({
     return fail('path_escape');
   }
 
+  return withMachineBilling<{ path: string; replacements: number }>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
-  if (!session.ok) return fail(session.reason, session.retryAfter);
+  if (!session.ok) return fail(session.reason);
 
   try {
     const startedAt = deps.now();
@@ -622,6 +789,7 @@ export async function editSandboxFile({
   } finally {
     session.release();
   }
+  });
 }
 
 /**

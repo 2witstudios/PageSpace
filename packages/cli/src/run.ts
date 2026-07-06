@@ -15,6 +15,8 @@ import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
 import { tokensCreateHandler } from './commands/tokens/create.js';
+import { keysListHandler, keysRevokeHandler } from './commands/keys/aliases.js';
+import { keysHandler } from './commands/keys/wizard.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
 import { resolveConfig } from './config/resolve.js';
@@ -60,10 +62,18 @@ export interface RunDependencies {
  * credential into content access), and `enforceAuth` is what actually
  * materializes and validates whichever explicit source WAS given.
  *
- * Phase 9 task 5's future `pagespace keys` TUI handler belongs in this set
- * too, once it exists — it will manage its own credentials the same way
- * `login`/`tokens create` do. Do not add a placeholder for it now; there is
- * no `keysHandler` on this branch yet.
+ * Phase 9 task 5's `pagespace keys` TUI (`keysHandler`) belongs here for the
+ * same reason: like `login`/`tokens create`, it's the whole point of a bare
+ * `pagespace login`'s ambient `manage_keys`-scoped credential — it lists,
+ * mints (via the same browser-consent flow `tokens create` uses), and
+ * revokes keys through `ctx.sdk` itself, with zero extra setup. `keysListHandler`/
+ * `keysRevokeHandler` (`commands/keys/aliases.ts`) are exempted alongside it
+ * for the identical reason — but note they are DISTINCT handler references
+ * from `tokensListHandler`/`tokensRevokeHandler`, specifically so exempting
+ * the `keys` surface does not also exempt `tokens list`/`tokens revoke`,
+ * which stay explicit-credential-only (see `router/routes.ts`'s `keys` vs
+ * `tokens` design note). `keys create` needs no separate entry: it registers
+ * the exact same `tokensCreateHandler` reference already listed below.
  */
 const AUTH_EXEMPT_HANDLERS = new Set([
   helpHandler,
@@ -71,6 +81,9 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   logoutHandler,
   whoamiHandler,
   tokensCreateHandler,
+  keysHandler,
+  keysListHandler,
+  keysRevokeHandler,
 ]);
 
 export async function run(deps: RunDependencies): Promise<ExitCode> {

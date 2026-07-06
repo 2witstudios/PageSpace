@@ -22,6 +22,8 @@ export const drives = pgTable('drives', {
   publishSubdomain: text('publishSubdomain').unique(), // Globally-unique subdomain for published pages; set on first publish
   homePageId: text('homePageId').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }), // Drive landing page shown at drive root
   publishDefaultOgImageUrl: text('publish_default_og_image_url'), // Drive-wide default social share image for published pages lacking their own
+  notFoundPageId: text('not_found_page_id').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }), // Canvas page rendered as the published site's 404.html; falls back to the generic branded 404 when unset
+  publishFaviconUrl: text('publish_favicon_url'), // Drive-wide favicon override for published pages lacking their own <link rel="icon">
 }, (table) => {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),
@@ -52,6 +54,8 @@ export const pages = pgTable('pages', {
   pageTreeScope: text('pageTreeScope', { enum: ['children', 'drive'] }).default('children'), // Scope of page tree to include
   toolExposureMode: text('toolExposureMode', { enum: ['upfront', 'search'] }).default('upfront').notNull(), // How tools are exposed to AI_CHAT agents: all schemas upfront, or core tools + tool_search/execute_tool
   userScopedAccess: boolean('userScopedAccess').default(false).notNull(), // AI_CHAT agents only, owner-toggled: when true, actor-permission helpers fall back to the invoking user's own access instead of this agent's drive memberships
+  terminalAccess: boolean('terminalAccess').default(false).notNull(), // AI_CHAT agents only: whether this agent may use terminal/machine tools
+  machines: jsonb('machines'), // MachineRef[]; configured machines for this agent, machines[0] is the default active machine
   // File-specific fields
   fileSize: real('fileSize'),
   mimeType: text('mimeType'),

@@ -1293,8 +1293,64 @@
     {
       "idx": 184,
       "version": "7",
-      "when": 1783371566880,
-      "tag": "0184_bright_scourge",
+      "when": 1783362912794,
+      "tag": "0184_heavy_ravenous",
+      "breakpoints": true
+    },
+    {
+      "idx": 185,
+      "version": "7",
+      "when": 1783314772463,
+      "tag": "0185_lucky_stryfe",
+      "breakpoints": true
+    },
+    {
+      "idx": 186,
+      "version": "7",
+      "when": 1783322461166,
+      "tag": "0186_past_jubilee",
+      "breakpoints": true
+    },
+    {
+      "idx": 187,
+      "version": "7",
+      "when": 1783326708771,
+      "tag": "0187_new_human_cannonball",
+      "breakpoints": true
+    },
+    {
+      "idx": 188,
+      "version": "7",
+      "when": 1783335633839,
+      "tag": "0188_busy_loners",
+      "breakpoints": true
+    },
+    {
+      "idx": 189,
+      "version": "7",
+      "when": 1783338155352,
+      "tag": "0189_sour_gamma_corps",
+      "breakpoints": true
+    },
+    {
+      "idx": 190,
+      "version": "7",
+      "when": 1783339634383,
+      "tag": "0190_empty_the_watchers",
+      "breakpoints": true
+    },
+    {
+      "idx": 191,
+      "version": "7",
+      "when": 1783353566001,
+      "tag": "0191_adorable_meltdown",
+      "breakpoints": true
+    },
+    {
+      "idx": 192,
+      "version": "7",
+      "when": 1783376059325,
+      "tag": "0192_tough_dorian_gray",
       "breakpoints": true
     }
   ]

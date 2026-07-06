@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback } from 'react';
+import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -7,14 +7,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench } from 'lucide-react';
+import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare, ArrowUp, ArrowDown, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { useForm, Controller } from 'react-hook-form';
+import { useForm, useFieldArray, useFormState, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import Link from 'next/link';
 import { AI_PROVIDERS, getVisibleProviders } from '@/lib/ai/core/ai-providers-config';
 import { getRoleColorClasses } from '@/lib/utils';
 import { AgentDrivesCard } from './AgentDrivesCard';
+import { useEditingStore } from '@/stores/useEditingStore';
+import type { MachineRef } from '@/lib/repositories/page-agent-repository';
+
+// The Terminal tool group: gated behind the Terminal Access toggle below and
+// hidden from the Default Tools list when access is off. switch_machine/
+// list_machines are named ahead of their registration landing in ai-tools.ts
+// so this list needs no changes once they ship.
+const TERMINAL_TOOL_NAMES = new Set(['bash', 'writeFile', 'readFile', 'editFile', 'switch_machine', 'list_machines']);
 
 interface AgentConfig {
   systemPrompt: string;
@@ -29,6 +37,9 @@ interface AgentConfig {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
+  terminalAccess?: boolean;
+  machines?: MachineRef[];
+  availableTerminals?: Array<{ id: string; title: string }>;
 }
 
 interface AgentMembership {
@@ -107,6 +118,8 @@ interface FormData {
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive';
   toolExposureMode: 'upfront' | 'search';
+  terminalAccess: boolean;
+  machines: MachineRef[];
 }
 
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
@@ -126,6 +139,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   const [membershipUserRole, setMembershipUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
   const [membershipSaving, setMembershipSaving] = useState(false);
+  const [selectedTerminalId, setSelectedTerminalId] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -201,7 +215,14 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       includePageTree: config?.includePageTree ?? false,
       pageTreeScope: config?.pageTreeScope ?? 'children',
       toolExposureMode: config?.toolExposureMode ?? 'upfront',
+      terminalAccess: config?.terminalAccess ?? false,
+      machines: config?.machines ?? [],
     }
+  });
+
+  const { fields: machineFields, append: appendMachine, remove: removeMachine, move: moveMachine } = useFieldArray({
+    control,
+    name: 'machines',
   });
 
   // Reset form when config changes
@@ -218,6 +239,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         includePageTree: config.includePageTree ?? false,
         pageTreeScope: config.pageTreeScope ?? 'children',
         toolExposureMode: config.toolExposureMode ?? 'upfront',
+        terminalAccess: config.terminalAccess ?? false,
+        machines: config.machines ?? [],
       });
     }
   }, [config, reset, selectedProvider, selectedModel]);
@@ -301,6 +324,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
         includePageTree: data.includePageTree,
         pageTreeScope: data.pageTreeScope,
+        terminalAccess: data.terminalAccess,
+        machines: data.machines,
       };
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
@@ -315,6 +340,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
         includePageTree: data.includePageTree,
         pageTreeScope: data.pageTreeScope,
+        terminalAccess: data.terminalAccess,
+        machines: data.machines,
       } as AgentConfig;
       onConfigUpdate(updatedConfig);
       toast.success('Agent configuration saved successfully');
@@ -350,17 +377,48 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProvider]); // Only selectedProvider - fetch functions are stable, models checked inline
 
+  // Watch enabledTools for the count display
+  const enabledTools = watch('enabledTools', []);
+  const terminalAccess = watch('terminalAccess', false);
+
+  const visibleTools = useMemo(
+    () => (config?.availableTools || []).filter(
+      (tool) => terminalAccess || !TERMINAL_TOOL_NAMES.has(tool.name)
+    ),
+    [config, terminalAccess]
+  );
+
   const handleSelectAllTools = () => {
-    const allToolNames = config?.availableTools.map(tool => tool.name) || [];
-    setValue('enabledTools', allToolNames);
+    setValue('enabledTools', visibleTools.map(tool => tool.name));
   };
 
   const handleDeselectAllTools = () => {
     setValue('enabledTools', []);
   };
 
-  // Watch enabledTools for the count display
-  const enabledTools = watch('enabledTools', []);
+  const availableTerminalsById = useMemo(
+    () => new Map((config?.availableTerminals || []).map((t) => [t.id, t])),
+    [config]
+  );
+  const usedTerminalIds = useMemo(
+    () => new Set(machineFields.filter((m) => m.kind === 'existing').map((m) => m.terminalId)),
+    [machineFields]
+  );
+  const hasOwnMachine = machineFields.some((m) => m.kind === 'own');
+  const terminalOptions = (config?.availableTerminals || []).filter((t) => !usedTerminalIds.has(t.id));
+
+  // Register with useEditingStore while dirty so SWR doesn't revalidate this
+  // page mid-edit and clobber unsaved changes.
+  const { isDirty: formIsDirty } = useFormState({ control });
+  useEffect(() => {
+    const componentId = `page-agent-settings-${pageId}`;
+    if (formIsDirty) {
+      useEditingStore.getState().startEditing(componentId, 'form', { pageId });
+    } else {
+      useEditingStore.getState().endEditing(componentId);
+    }
+    return () => { useEditingStore.getState().endEditing(componentId); };
+  }, [formIsDirty, pageId]);
 
   if (!config) {
     return (
@@ -595,6 +653,134 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
           )}
         </Card>
 
+        {/* Terminal Access */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TerminalSquare className="h-5 w-5" />
+                <div>
+                  <CardTitle className="text-lg">Terminal Access</CardTitle>
+                  <CardDescription>
+                    Let this agent run commands on a persistent Machine and move between Machines.
+                  </CardDescription>
+                </div>
+              </div>
+              <Controller
+                name="terminalAccess"
+                control={control}
+                render={({ field }) => (
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={(checked) => {
+                      field.onChange(checked);
+                      if (!checked) return;
+                      if (machineFields.length === 0) appendMachine({ kind: 'own' });
+                    }}
+                  />
+                )}
+              />
+            </div>
+          </CardHeader>
+          {terminalAccess && (
+            <CardContent className="space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-2 block">Machines</label>
+                <p className="text-xs text-muted-foreground mb-3">
+                  The agent moves between these with switch_machine. The first Machine is the default active one.
+                </p>
+                {machineFields.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No machines configured yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {machineFields.map((field, index) => {
+                      const label = field.kind === 'own'
+                        ? 'Own machine'
+                        : availableTerminalsById.get(field.terminalId)?.title ?? 'Unknown terminal';
+                      return (
+                        <div
+                          key={field.id}
+                          className="flex items-center justify-between rounded-lg border px-3 py-2"
+                        >
+                          <div className="flex items-center gap-2">
+                            {index === 0 && <Badge variant="outline">Default</Badge>}
+                            <span className="text-sm font-medium">{label}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              disabled={index === 0}
+                              onClick={() => moveMachine(index, index - 1)}
+                              aria-label="Move machine up"
+                            >
+                              <ArrowUp className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              disabled={index === machineFields.length - 1}
+                              onClick={() => moveMachine(index, index + 1)}
+                              aria-label="Move machine down"
+                            >
+                              <ArrowDown className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeMachine(index)}
+                              aria-label="Remove machine"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={hasOwnMachine}
+                  onClick={() => appendMachine({ kind: 'own' })}
+                >
+                  Add own machine
+                </Button>
+                <Select value={selectedTerminalId} onValueChange={setSelectedTerminalId} disabled={terminalOptions.length === 0}>
+                  <SelectTrigger className="h-8 w-56 text-sm">
+                    <SelectValue placeholder={terminalOptions.length === 0 ? 'No more terminals to add' : 'Use existing machine…'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {terminalOptions.map((terminal) => (
+                      <SelectItem key={terminal.id} value={terminal.id}>
+                        {terminal.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!selectedTerminalId}
+                  onClick={() => {
+                    appendMachine({ kind: 'existing', terminalId: selectedTerminalId });
+                    setSelectedTerminalId('');
+                  }}
+                >
+                  Add
+                </Button>
+              </div>
+            </CardContent>
+          )}
+        </Card>
+
         {/* Drive Membership */}
         <Card>
           <CardHeader>
@@ -707,40 +893,51 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               <Controller
                 name="enabledTools"
                 control={control}
-                render={({ field: { value = [], onChange } }) => (
-                  <div className="space-y-3">
-                    {config.availableTools.map((tool) => (
-                      <div key={tool.name} className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50">
-                        <Checkbox
-                          id={tool.name}
-                          checked={value.includes(tool.name)}
-                          onCheckedChange={(checked) => {
-                            const newValue = checked
-                              ? [...value, tool.name]
-                              : value.filter(t => t !== tool.name);
-                            onChange(newValue);
-                          }}
-                          className="mt-1"
-                        />
-                        <div className="flex-1">
-                          <label 
-                            htmlFor={tool.name}
-                            className="text-sm font-medium cursor-pointer"
-                          >
-                            {tool.name}
-                          </label>
-                          <p className="text-xs text-muted-foreground">
-                            {tool.description}
-                          </p>
-                        </div>
+                render={({ field: { value = [], onChange } }) => {
+                  const toolRow = (tool: { name: string; description: string }) => (
+                    <div key={tool.name} className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50">
+                      <Checkbox
+                        id={tool.name}
+                        checked={value.includes(tool.name)}
+                        onCheckedChange={(checked) => {
+                          const newValue = checked
+                            ? [...value, tool.name]
+                            : value.filter(t => t !== tool.name);
+                          onChange(newValue);
+                        }}
+                        className="mt-1"
+                      />
+                      <div className="flex-1">
+                        <label
+                          htmlFor={tool.name}
+                          className="text-sm font-medium cursor-pointer"
+                        >
+                          {tool.name}
+                        </label>
+                        <p className="text-xs text-muted-foreground">
+                          {tool.description}
+                        </p>
                       </div>
-                    ))}
-                  </div>
-                )}
+                    </div>
+                  );
+                  const terminalTools = visibleTools.filter((tool) => TERMINAL_TOOL_NAMES.has(tool.name));
+                  const otherTools = visibleTools.filter((tool) => !TERMINAL_TOOL_NAMES.has(tool.name));
+                  return (
+                    <div className="space-y-3">
+                      {terminalTools.length > 0 && (
+                        <>
+                          <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">Terminal</p>
+                          {terminalTools.map(toolRow)}
+                        </>
+                      )}
+                      {otherTools.map(toolRow)}
+                    </div>
+                  );
+                }}
               />
             </ScrollArea>
             <p className="text-xs text-muted-foreground mt-2">
-              Selected {enabledTools.length} of {config.availableTools.length} tools
+              Selected {enabledTools.length} of {visibleTools.length} tools
             </p>
           </CardContent>
         </Card>

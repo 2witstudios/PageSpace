@@ -119,6 +119,8 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
   publishSubdomain: null,
   homePageId: null,
   publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
 });
 
 const mockWorkflow = {

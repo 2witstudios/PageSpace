@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml } from '../site-files';
+import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml, resolveFaviconTags } from '../site-files';
 
 describe('buildRobotsTxt', () => {
   it('given a sitemap URL, allows all crawling and references the sitemap', () => {
@@ -104,5 +104,29 @@ describe('buildNotFoundHtml', () => {
     const html = buildNotFoundHtml({ siteName: '<script>alert(1)</script>' });
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;');
+  });
+});
+
+describe('resolveFaviconTags', () => {
+  const DEFAULT_BASE = 'https://pagespace.ai';
+
+  it('prefers the page author\'s own <link rel="icon"> tag over everything else', () => {
+    const tags = resolveFaviconTags('https://acme.example/icon.png', 'https://drive.example/icon.png', DEFAULT_BASE);
+    expect(tags).toEqual({ faviconHref: 'https://acme.example/icon.png' });
+  });
+
+  it('falls back to the drive favicon setting when the page has no icon tag', () => {
+    const tags = resolveFaviconTags(undefined, 'https://drive.example/icon.png', DEFAULT_BASE);
+    expect(tags).toEqual({ faviconHref: 'https://drive.example/icon.png' });
+  });
+
+  it('falls back to the default favicon base when neither page nor drive set one', () => {
+    const tags = resolveFaviconTags(undefined, null, DEFAULT_BASE);
+    expect(tags).toEqual({ faviconBaseUrl: DEFAULT_BASE });
+  });
+
+  it('treats an undefined drive favicon the same as null', () => {
+    const tags = resolveFaviconTags(undefined, undefined, DEFAULT_BASE);
+    expect(tags).toEqual({ faviconBaseUrl: DEFAULT_BASE });
   });
 });
