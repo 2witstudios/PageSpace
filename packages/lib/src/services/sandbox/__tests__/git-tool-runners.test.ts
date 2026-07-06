@@ -97,6 +97,25 @@ describe('runGitInSandbox', () => {
     expect(runCommandCalls[0].args).toEqual(['status']);
   });
 
+  it('given a ctx with an activeMachine set, should thread it onto the acquireSandbox request', async () => {
+    const seen: unknown[] = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async (input) => {
+        seen.push(input);
+        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+      },
+    });
+    await runGitInSandbox({
+      cmd: 'git',
+      args: ['status'],
+      ctx: makeCtx({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+      deps,
+    });
+    expect(seen).toEqual([
+      expect.objectContaining({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+    ]);
+  });
+
   it('injects GH_TOKEN and GITHUB_TOKEN when resolver returns a token', async () => {
     const { deps, runCommandCalls } = makeDepsWithSpy('ghp_abc123');
     await runGitInSandbox({ cmd: 'gh', args: ['pr', 'list'], ctx: makeCtx(), deps });

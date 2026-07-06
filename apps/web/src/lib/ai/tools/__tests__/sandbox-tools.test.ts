@@ -313,6 +313,29 @@ describe('createSandboxTools', () => {
       expect(rawContext.activeMachine).toBeUndefined();
     });
 
+    it('given a switch_machine call followed by bash, should route the acquire request to the switched machine', async () => {
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+        describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
+        isMachineAccessible: async () => true,
+      };
+      const seenAcquisitions: unknown[] = [];
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async (input) => {
+        seenAcquisitions.push(input);
+        return { ok: true, sandboxId: 'sbx', resumed: false };
+      };
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+      const rawContext: ToolExecutionContext = { userId: 'u1' };
+
+      await exec(tools.switch_machine, { machine: 't1' }, rawContext);
+      await exec(tools.bash, { command: 'echo hi' }, rawContext);
+
+      expect(seenAcquisitions).toEqual([
+        expect.objectContaining({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+      ]);
+    });
+
     it('inputSchema: should reject an empty machine id', () => {
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines: okMachines() });
       const schema = tools.switch_machine.inputSchema as { safeParse: (v: unknown) => { success: boolean } };

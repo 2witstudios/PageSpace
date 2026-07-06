@@ -342,11 +342,6 @@
       "import": "./dist/services/sandbox/audit.js",
       "require": "./dist/services/sandbox/audit.js"
     },
-    "./services/sandbox/session-key": {
-      "types": "./dist/services/sandbox/session-key.d.ts",
-      "import": "./dist/services/sandbox/session-key.js",
-      "require": "./dist/services/sandbox/session-key.js"
-    },
     "./services/sandbox/lifecycle": {
       "types": "./dist/services/sandbox/lifecycle.d.ts",
       "import": "./dist/services/sandbox/lifecycle.js",
@@ -382,20 +377,15 @@
       "import": "./dist/services/sandbox/egress-ip.js",
       "require": "./dist/services/sandbox/egress-ip.js"
     },
-    "./services/sandbox/session-store": {
-      "types": "./dist/services/sandbox/session-store.d.ts",
-      "import": "./dist/services/sandbox/session-store.js",
-      "require": "./dist/services/sandbox/session-store.js"
-    },
-    "./services/sandbox/session-manager": {
-      "types": "./dist/services/sandbox/session-manager.d.ts",
-      "import": "./dist/services/sandbox/session-manager.js",
-      "require": "./dist/services/sandbox/session-manager.js"
-    },
     "./services/sandbox/terminal-session-manager": {
       "types": "./dist/services/sandbox/terminal-session-manager.d.ts",
       "import": "./dist/services/sandbox/terminal-session-manager.js",
       "require": "./dist/services/sandbox/terminal-session-manager.js"
+    },
+    "./services/sandbox/machine-session": {
+      "types": "./dist/services/sandbox/machine-session.d.ts",
+      "import": "./dist/services/sandbox/machine-session.js",
+      "require": "./dist/services/sandbox/machine-session.js"
     },
     "./services/sandbox/command-policy": {
       "types": "./dist/services/sandbox/command-policy.d.ts",
@@ -1399,23 +1389,17 @@
       "services/sandbox/audit": [
         "./dist/services/sandbox/audit.d.ts"
       ],
-      "services/sandbox/session-key": [
-        "./dist/services/sandbox/session-key.d.ts"
-      ],
       "services/sandbox/lifecycle": [
         "./dist/services/sandbox/lifecycle.d.ts"
       ],
       "services/sandbox/sandbox-options": [
         "./dist/services/sandbox/sandbox-options.d.ts"
       ],
-      "services/sandbox/session-store": [
-        "./dist/services/sandbox/session-store.d.ts"
-      ],
-      "services/sandbox/session-manager": [
-        "./dist/services/sandbox/session-manager.d.ts"
-      ],
       "services/sandbox/terminal-session-manager": [
         "./dist/services/sandbox/terminal-session-manager.d.ts"
+      ],
+      "services/sandbox/machine-session": [
+        "./dist/services/sandbox/machine-session.d.ts"
       ],
       "services/sandbox/command-policy": [
         "./dist/services/sandbox/command-policy.d.ts"

@@ -101,11 +101,8 @@ export interface MachineDescriptor {
 /**
  * Resolves an actor's configured machines and their metadata/accessibility.
  * `PageAgentConfig.terminalAccess`/`machines` (apps/web/src/lib/repositories/
- * page-agent-repository.ts) is the canonical config source, but wiring it
- * into `ToolExecutionContext` per-turn is the sibling "route tools to the
- * active machine" PR's job — until that lands, production wires
- * `listMachines` to a fixed `[{ kind: 'own' }]` (every actor has exactly one
- * machine).
+ * page-agent-repository.ts) is the canonical config source; production wires
+ * `listMachines` to it (`createMachineDirectory` in sandbox-tools-runtime.ts).
  */
 export interface MachineDirectoryDeps {
   /** List this actor's configured machines; machines[0] is the default active machine. */
@@ -123,9 +120,8 @@ export interface MachineDirectoryDeps {
  * Resolves the ACTIVE machine for a run: the switched machine if one is set
  * and still configured, otherwise the configured default (machines[0]).
  * Terminal tools (bash/file/git) call this to determine which machine's
- * session to operate on — the actual session-acquisition routing to a
- * non-'own' machine is the sibling "Route tools to the active machine" PR;
- * this is the seam it reads from.
+ * session to operate on — `resolveMachinePageId` (packages/lib/services/
+ * sandbox/machine-session.ts) then keys the persistent session by it.
  */
 export async function resolveActiveMachine(
   rawContext: ToolExecutionContext | undefined,
@@ -180,8 +176,8 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
   // quota) BEFORE delegating to the runner — a denial returns a safe error and
   // never reaches provisioning. The runner re-enforces every check; this is the
   // defence-in-depth chokepoint at the tool boundary. Also resolves the ACTIVE
-  // machine and threads it onto the ctx handed to the runner — the seam the
-  // sibling session-acquisition PR reads from to route to a non-'own' machine.
+  // machine and threads it onto the ctx handed to the runner, which routes the
+  // session acquisition to that machine's persistent Sprite (machine-session.ts).
   const open = async (
     options: unknown,
   ): Promise<

@@ -125,6 +125,33 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
+  it('given a ctx with an activeMachine set, should thread it onto the acquireSandbox request', async () => {
+    const seen: unknown[] = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async (input) => {
+        seen.push(input);
+        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+      },
+    });
+    await runBashInSandbox({
+      command: 'echo hi',
+      ctx: makeCtx({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+      deps,
+    });
+    expect(seen).toEqual([
+      expect.objectContaining({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+    ]);
+  });
+
+  it('given no_machine from acquire (e.g. an "own" machine with no backing page), should deny no_machine and release the slot', async () => {
+    const { deps, slots } = makeDeps({
+      acquireSandbox: async () => ({ ok: false, reason: 'no_machine' }),
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'no_machine' });
+    expect(slots.released).toBe(1);
+  });
+
   it('given an authz denial from acquire and a throwing logger, should still release the slot and map the reason', async () => {
     const { deps, slots } = makeDeps({
       acquireSandbox: async () => ({ ok: false, reason: 'insufficient_role' }),

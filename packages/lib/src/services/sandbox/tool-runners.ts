@@ -10,7 +10,7 @@
  *   2. inline command/path policy BEFORE any VM work — a blocked command never
  *      provisions a sandbox, and a blocked command is audited as an anomaly;
  *   3. quota — reserve a per-tier concurrency slot (the only cost ceiling here);
- *   4. `acquireConversationSandbox` (authz + lifecycle, re-authz on resume) and
+ *   4. `acquireMachineSandbox` (authz + lifecycle, re-authz on resume) and
  *      reconnect to the executable handle;
  *   5. run / write / read against the injected sandbox client;
  *   6. truncate untrusted output to the policy cap;
@@ -32,7 +32,7 @@ import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { applyEdit } from './edit-file';
 import { buildSandboxEnv } from './sandbox-env';
 import { getValidatedEnv } from '../../config/env-validation';
-import type { AcquireSandboxInput, AcquireSandboxResult } from './session-manager';
+import type { AcquireMachineSandboxInput, AcquireMachineSandboxResult, MachineRefLike } from './machine-session';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 
@@ -53,6 +53,8 @@ export interface SandboxActorContext {
   aiProvider?: string;
   aiModel?: string;
   tier: SubscriptionTier;
+  /** The ACTIVE machine this call routes to (Terminal epics); undefined defaults to 'own'. */
+  activeMachine?: MachineRefLike;
 }
 
 export interface SandboxQuotaDeps {
@@ -63,8 +65,8 @@ export interface SandboxQuotaDeps {
 
 export interface SandboxRunDeps {
   isEnabled: () => boolean;
-  /** Pre-bound `acquireConversationSandbox` (lifecycle deps already injected). */
-  acquireSandbox: (input: Omit<AcquireSandboxInput, 'deps'>) => Promise<AcquireSandboxResult>;
+  /** Pre-bound `acquireMachineSandbox` (lifecycle deps already injected). */
+  acquireSandbox: (input: Omit<AcquireMachineSandboxInput, 'deps'>) => Promise<AcquireMachineSandboxResult>;
   /** Reconnect to the executable handle for an acquired sandbox id. */
   reconnect: (sandboxId: string) => Promise<ExecutableSandbox | null>;
   quota: SandboxQuotaDeps;
@@ -109,7 +111,7 @@ function safeLogWarn(
 // Acquisition reasons that represent expected policy/authz outcomes (warn-level)
 // vs infra failures that are genuinely unexpected (error-level).
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
 ]);
 
 
@@ -119,6 +121,7 @@ export type SandboxToolDenialReason =
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
+  | 'no_machine'
   | 'concurrency_limit'
   | 'empty_command'
   | 'command_too_large'
@@ -129,26 +132,25 @@ export type SandboxToolDenialReason =
   | 'edit_no_match'
   | 'edit_not_unique'
   | 'provision_failed'
-  | 'provision_rate_limited'
   | 'execution_failed'
   | 'not_found'
   | 'error';
 
 export type BashToolResult =
   | { success: true; stdout: string; stderr: string; exitCode: number; truncated: boolean }
-  | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
+  | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type WriteFileToolResult =
   | { success: true; path: string; bytesWritten: number }
-  | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
+  | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type ReadFileToolResult =
   | { success: true; path: string; content: string; truncated: boolean }
-  | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
+  | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type EditFileToolResult =
   | { success: true; path: string; replacements: number }
-  | { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number };
+  | { success: false; error: string; reason: SandboxToolDenialReason };
 
 const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
@@ -156,6 +158,7 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
+  no_machine: 'No machine is configured for this run.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
   empty_command: 'No command was provided.',
   command_too_large: 'The command is too large.',
@@ -167,7 +170,6 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   edit_no_match: 'The oldString was not found in the file. Read the file and copy the exact text to replace.',
   edit_not_unique: 'The oldString is not unique in the file. Include more surrounding context, or set replaceAll to replace every occurrence.',
   provision_failed: 'Could not provision a sandbox for this run.',
-  provision_rate_limited: 'The sandbox service is busy (rate limited). Retry shortly.',
   execution_failed: 'Command execution failed or timed out.',
   not_found: 'File not found.',
   error: 'Code execution could not be completed.',
@@ -175,21 +177,20 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
 
 function fail(
   reason: SandboxToolDenialReason,
-  retryAfter?: number,
-): { success: false; error: string; reason: SandboxToolDenialReason; retryAfter?: number } {
-  return { success: false, error: DENIAL_MESSAGES[reason], reason, ...(retryAfter ? { retryAfter } : {}) };
+): { success: false; error: string; reason: SandboxToolDenialReason } {
+  return { success: false, error: DENIAL_MESSAGES[reason], reason };
 }
 
 function acquireRequest(
   ctx: SandboxActorContext,
-): Omit<AcquireSandboxInput, 'deps'> {
+): Omit<AcquireMachineSandboxInput, 'deps'> {
   return {
     tenantId: ctx.tenantId,
     driveId: ctx.driveId,
-    conversationId: ctx.conversationId,
     userId: ctx.userId,
     requestOrigin: ctx.requestOrigin,
     agentPageId: ctx.agentPageId,
+    activeMachine: ctx.activeMachine,
   };
 }
 
@@ -226,16 +227,15 @@ async function safeAudit(
 }
 
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
-function reasonFromAcquire(result: Extract<AcquireSandboxResult, { ok: false }>): SandboxToolDenialReason {
+function reasonFromAcquire(result: Extract<AcquireMachineSandboxResult, { ok: false }>): SandboxToolDenialReason {
   switch (result.reason) {
     case 'app_admin_required':
     case 'no_drive_access':
     case 'insufficient_role':
     case 'no_agent_access':
+    case 'no_machine':
     case 'provision_failed':
       return result.reason;
-    case 'rate_limited':
-      return 'provision_rate_limited';
     case 'kill_switch_off':
       return 'kill_switch_off';
     default:
@@ -261,7 +261,7 @@ async function openSession(
   deps: SandboxRunDeps,
 ): Promise<
   | { ok: true; sandbox: ExecutableSandbox; release: () => void }
-  | { ok: false; reason: SandboxToolDenialReason; retryAfter?: number }
+  | { ok: false; reason: SandboxToolDenialReason }
 > {
   if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
     return { ok: false, reason: 'concurrency_limit' };
@@ -278,7 +278,7 @@ async function openSession(
       } else {
         safeLogError(deps.logger, 'Sandbox acquisition failed', context);
       }
-      return { ok: false, reason: reasonFromAcquire(acquired), retryAfter: acquired.retryAfterSeconds };
+      return { ok: false, reason: reasonFromAcquire(acquired) };
     }
     const sandbox = await deps.reconnect(acquired.sandboxId);
     if (!sandbox) {
@@ -355,7 +355,7 @@ export async function runBashInSandbox({
   }
 
   const session = await openSession(ctx, deps);
-  if (!session.ok) return fail(session.reason, session.retryAfter);
+  if (!session.ok) return fail(session.reason);
 
   try {
     const startedAt = deps.now();
@@ -445,7 +445,7 @@ export async function writeSandboxFile({
   if (bytes > MAX_WRITE_BYTES) return fail('content_too_large');
 
   const session = await openSession(ctx, deps);
-  if (!session.ok) return fail(session.reason, session.retryAfter);
+  if (!session.ok) return fail(session.reason);
 
   try {
     const startedAt = deps.now();
@@ -496,7 +496,7 @@ export async function readSandboxFile({
   }
 
   const session = await openSession(ctx, deps);
-  if (!session.ok) return fail(session.reason, session.retryAfter);
+  if (!session.ok) return fail(session.reason);
 
   try {
     const startedAt = deps.now();
@@ -577,7 +577,7 @@ export async function editSandboxFile({
   }
 
   const session = await openSession(ctx, deps);
-  if (!session.ok) return fail(session.reason, session.retryAfter);
+  if (!session.ok) return fail(session.reason);
 
   try {
     const startedAt = deps.now();

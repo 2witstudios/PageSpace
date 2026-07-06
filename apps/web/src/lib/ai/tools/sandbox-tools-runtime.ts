@@ -28,11 +28,11 @@ import {
   heuristicInjectionClassifier,
 } from '@pagespace/lib/services/sandbox/injection-seam';
 import {
-  acquireConversationSandbox,
   getSandboxSessionSecret,
-} from '@pagespace/lib/services/sandbox/session-manager';
+  createDbTerminalSessionStore,
+} from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
-import { createDbSandboxSessionStore } from '@pagespace/lib/services/sandbox/session-store';
 import {
   acquireCodeExecutionSlot,
   releaseCodeExecutionSlot,
@@ -46,16 +46,17 @@ import type { PageType } from '@pagespace/lib/utils/enums';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext } from './sandbox-tools';
 import { canActorViewPage } from './actor-permissions';
+import { pageAgentRepository, type MachineRef } from '@/lib/repositories/page-agent-repository';
 import type { ToolExecutionContext } from '../core/types';
 
 // The session store and Sprites client are process-wide singletons: the store
 // reconnects to one DB pool and the client is stateless. Both are built lazily
 // so importing this module does no DB or SDK work at load.
-let storePromise: ReturnType<typeof createDbSandboxSessionStore> | null = null;
+let storePromise: ReturnType<typeof createDbTerminalSessionStore> | null = null;
 let sandboxClientPromise: Promise<ExecSandboxClient> | null = null;
 
 function getStore() {
-  storePromise ??= createDbSandboxSessionStore();
+  storePromise ??= createDbTerminalSessionStore();
   return storePromise;
 }
 
@@ -106,7 +107,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
   return {
     isEnabled: isCodeExecutionEnabled,
     acquireSandbox: async (input) =>
-      acquireConversationSandbox({
+      acquireMachineSandbox({
         ...input,
         deps: {
           store: await getStore(),
@@ -291,32 +292,49 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
 export interface MachineDirectoryRuntimeDeps {
   findPage: (pageId: string) => Promise<{ title: string; type: string } | undefined>;
   canViewPage: (rawContext: ToolExecutionContext, pageId: string) => Promise<boolean>;
+  /** `PageAgentConfig.terminalAccess`/`machines` — the canonical config source. */
+  getAgentConfig: (agentPageId: string) => Promise<{ terminalAccess: boolean; machines: MachineRef[] } | null>;
 }
 
 const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
   findPage: async (pageId) =>
     db.query.pages.findFirst({ where: eq(pages.id, pageId), columns: { title: true, type: true } }),
   canViewPage: canActorViewPage,
+  getAgentConfig: (agentPageId) => pageAgentRepository.getAgentById(agentPageId),
 };
+
+/**
+ * Resolves an agent's configured machine list for `listMachines`. No
+ * `agentPageId` means the global assistant — it has no per-page config
+ * surface yet (see tasks/terminal.md's "global-assistant parallel" follow-on),
+ * so it defaults to a single own machine. A page agent's list is gated by
+ * `terminalAccess` (default off → no machines); `machines[0]` is the default
+ * active machine, falling back to 'own' if `terminalAccess` is on but no
+ * machine has been configured yet.
+ */
+async function resolveConfiguredMachines(
+  agentPageId: string | undefined,
+  deps: MachineDirectoryRuntimeDeps,
+): Promise<MachineRef[]> {
+  if (!agentPageId) return [{ kind: 'own' }];
+  const agent = await deps.getAgentConfig(agentPageId);
+  if (!agent?.terminalAccess) return [];
+  return agent.machines.length > 0 ? agent.machines : [{ kind: 'own' }];
+}
+
+function activeMachineAgentPageId(rawContext: ToolExecutionContext | undefined): string | undefined {
+  return rawContext?.chatSource?.agentPageId ?? rawContext?.parentAgentId;
+}
 
 /**
  * Factory for the machine directory, with injected deps for testing. The
  * default export (`machineDirectory`) wires the real DB.
- *
- * `PageAgentConfig.terminalAccess`/`machines` (apps/web/src/lib/repositories/
- * page-agent-repository.ts) is the canonical config source, but reading it
- * per-turn into `ToolExecutionContext` is the sibling "route tools to the
- * active machine" PR's job — until that lands, `listMachines` always returns
- * `[{ kind: 'own' }]` (every actor has exactly one configured machine). The
- * 'existing' branches below are exercised today only via the pure factory's
- * unit tests (injected fakes); they'll become reachable once that PR wires a
- * real `machines[]` source into `ToolExecutionContext`.
  */
 export function createMachineDirectory(
   deps: MachineDirectoryRuntimeDeps = defaultMachineDirectoryDeps,
 ): MachineDirectoryDeps {
   return {
-    listMachines: async () => [{ kind: 'own' }],
+    listMachines: (rawContext) => resolveConfiguredMachines(activeMachineAgentPageId(rawContext), deps),
     describeMachine: async (_rawContext, machine) => {
       if (machine.kind === 'own') return { name: 'My Machine' };
       const page = await deps.findPage(machine.terminalId);
