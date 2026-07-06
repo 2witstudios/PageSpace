@@ -38,7 +38,8 @@
     "test:infra": "cd infrastructure && bunx vitest run",
     "test:infra:runtime": "cd infrastructure && bunx vitest run scripts/__tests__/image-runtime.test.ts --timeout 120000",
     "test:security": "./scripts/test-security.sh",
-    "setup:admin": "bun scripts/setup-onprem-admin.ts"
+    "setup:admin": "bun scripts/setup-onprem-admin.ts",
+    "promote-admin": "bun scripts/promote-admin.ts"
   },
   "devDependencies": {
     "@pagespace/db": "workspace:*",
