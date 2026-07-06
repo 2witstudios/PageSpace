@@ -39,6 +39,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   prints a one-line migration notice to stderr. See the
   [migration guide](packages/cli/docs/migrating-from-pagespace-mcp.md).
 
+### Security
+
+- **`pagespace tokens create` now requires browser consent** — minting a scoped credential from
+  the CLI opens the same OAuth consent screen `pagespace login` uses, scoped to the requested
+  drive(s), instead of POSTing directly to the token-minting API with whatever ambient credential
+  was on hand. That direct-POST path let a script or agent with shell access mint itself a new
+  token unattended; it's gone. The resulting credential is stored locally under a named profile
+  (`--save-as-profile`, defaulting to the drive id) rather than printed, so it isn't a source for a
+  portable secret — mint one of those from **Settings → MCP** instead.
+
 ### Fixed
 
 - **`pagespace login` no longer hangs after a successful login** — the post-login identity

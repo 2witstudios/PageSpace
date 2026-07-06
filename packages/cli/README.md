@@ -2,7 +2,8 @@
 
 The `pagespace` command-line client — a thin verb layer over `@pagespace/sdk`. `pagespace login`
 replaces hand-minted `mcp_*` tokens with a real OAuth 2.1 credential; `pagespace tokens create`
-mints scoped agent tokens from the terminal instead of Settings → MCP.
+mints a drive-scoped credential from the terminal through the same browser consent screen —
+minting a token is never a silent, agent-runnable call.
 
 ## Install
 
@@ -49,10 +50,14 @@ until the login completes.
 - **`pagespace logout [--host <url>] [--all] [--force]`** — clears the stored credential for one
   host, or every host with `--all`.
 - **`pagespace whoami [--json]`** — prints the identity the current credential resolves to.
-- **`pagespace tokens create --name <name> [--drive <id> [--role member|admin|<roleId>]]...`** —
-  mints a scoped `mcp_*` token (the credential to use for agents, CI, and service accounts, since
-  `pagespace login` needs a browser). `pagespace tokens list [--json]` and
-  `pagespace tokens revoke <tokenId>` manage existing ones.
+- **`pagespace tokens create --drive <id> --role member|admin|<roleId> [--drive <id> --role ...] [--save-as-profile <name>] [--yes]`** —
+  opens the same browser consent screen `pagespace login` uses, scoped to the given drive(s), and
+  stores the resulting credential under a named profile (`--save-as-profile`, defaulting to the
+  drive id when only one drive is given) instead of the `pagespace login` default profile. There
+  is no non-interactive way to mint a token from the CLI — for a portable credential to hand to a
+  CI job or service account, mint one from **Settings → MCP** in the app instead.
+  `pagespace tokens list [--json]` and `pagespace tokens revoke <tokenId>` manage tokens minted
+  either way.
 
 ### Credential precedence
 
@@ -82,7 +87,7 @@ Every command follows `pagespace <resource> <verb> [args] [flags]`.
 | `models` | `list` |
 | `activity` | `<driveId>` |
 | `channels` | `send <channelId> <message>` |
-| `tokens` | `create --name <name> [--drive <id>]`, `list`, `revoke <tokenId> [--yes]` |
+| `tokens` | `create --drive <id> --role member\|admin\|<roleId> [--save-as-profile <name>] [--yes]`, `list`, `revoke <tokenId> [--yes]` |
 
 Every command supports `--json` (machine-readable output on stdout, nothing else) and `--host
 <url>` / `--token <token>` (override the resolved config for that one call).
@@ -111,11 +116,11 @@ path.
 }
 ```
 
-Mint the token with `pagespace tokens create --name "Claude Code" --drive <driveId>` (see
-[Auth](#auth)) — the token method and the Settings → MCP web token page are both fully supported,
-not deprecated. If you've already run `pagespace login` on this machine, the `env` block is
-optional: `pagespace-mcp` picks up the stored credential the same way every other `pagespace`
-command does.
+Mint the portable `mcp_...` token above from **Settings → MCP** in the app — `pagespace tokens
+create` (see [Auth](#auth)) stores its credential locally under a named profile instead of
+printing a copyable secret, so it isn't the right tool for populating another machine's `env`
+block. If you've already run `pagespace login` on this machine, the `env` block is optional:
+`pagespace-mcp` picks up the stored credential the same way every other `pagespace` command does.
 
 **After a global install**, use the `pagespace` bin directly instead:
 

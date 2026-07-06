@@ -241,7 +241,13 @@ export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } fr
 // commands have no auth wiring of their own.
 export { parseTokensCreateArgs, parseTokensRevokeArgs } from './commands/tokens/args.js';
 export type { CreateTokenArgs, DriveScopeArg, RevokeTokenArgs } from './commands/tokens/args.js';
-export { tokensCreateHandler } from './commands/tokens/create.js';
+export {
+  buildTokenScope,
+  createTokensCreateHandler,
+  resolveTokenProfileName,
+  tokensCreateHandler,
+} from './commands/tokens/create.js';
+export type { BuildTokenScopeResult, ResolveTokenProfileNameResult, TokensCreateHandlerDeps } from './commands/tokens/create.js';
 export { tokensListHandler } from './commands/tokens/list.js';
 export { tokensRevokeHandler } from './commands/tokens/revoke.js';
 

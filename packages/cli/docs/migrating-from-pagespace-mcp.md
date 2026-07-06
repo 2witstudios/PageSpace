@@ -83,15 +83,11 @@ New:
 
 ## Explicit-token variant (agents, CI, headless boxes)
 
-`pagespace login` needs a browser and isn't appropriate for CI or a service account. Mint a scoped
-token instead:
-
-```bash
-pagespace tokens create --name "CI bot" --drive <driveId>
-```
-
-This prints the token once. Wire it into the MCP config exactly like the old `PAGESPACE_AUTH_TOKEN`,
-just under the new variable name:
+`pagespace login` needs a browser and isn't appropriate for CI or a service account.
+`pagespace tokens create` also opens a browser now — minting a token is always a deliberate,
+human-approved consent step, on this CLI as much as on the web — so it isn't a source for a
+copy-pasteable secret either. For a headless box, mint a scoped token from **Settings → MCP** in
+the app instead, where a human is already in an authenticated browser tab:
 
 ```json
 {
@@ -100,7 +96,7 @@ just under the new variable name:
       "command": "pagespace",
       "args": ["mcp"],
       "env": {
-        "PAGESPACE_TOKEN": "<TOKEN_FROM_TOKENS_CREATE>"
+        "PAGESPACE_TOKEN": "<TOKEN_FROM_SETTINGS_MCP>"
       }
     }
   }
@@ -132,8 +128,8 @@ behaves exactly like `pagespace mcp` and honors your existing `PAGESPACE_API_URL
 ```
 
 This `pagespace-mcp` bin is itself a first-class, supported entry point — not a deprecated shim —
-so there's no pressure to move off it. Whenever it's convenient, `pagespace login` (or
-`pagespace tokens create` for CI) plus the plain `["mcp"]` args form is the same server with one
+so there's no pressure to move off it. Whenever it's convenient, `pagespace login` (for a person)
+or a Settings → MCP token (for CI) plus the plain `["mcp"]` args form is the same server with one
 fewer moving part, but staying on `pagespace-mcp` via `npx` is a perfectly fine destination too.
 
 ## What changed, mechanically
