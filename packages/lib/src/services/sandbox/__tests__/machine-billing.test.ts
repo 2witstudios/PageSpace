@@ -4,6 +4,10 @@ const mockDb = vi.hoisted(() => ({ select: vi.fn() }));
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'users.id', subscriptionTier: 'users.subscriptionTier' } }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id', driveId: 'pages.driveId' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+}));
 
 const mockCanConsumeAI = vi.hoisted(() => vi.fn());
 vi.mock('../../../billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
@@ -31,6 +35,48 @@ beforeEach(() => {
   mockCanConsumeAI.mockReset();
   mockReleaseHold.mockReset();
   mockTrackUsage.mockReset();
+});
+
+function mockPageOwnerRow(row: { ownerId: string } | undefined) {
+  mockDb.select.mockReturnValue({
+    from: () => ({
+      leftJoin: () => ({
+        where: () => ({
+          limit: async () => (row ? [row] : []),
+        }),
+      }),
+    }),
+  });
+}
+
+describe('defaultSandboxBillingDeps.resolvePayerId', () => {
+  it('falls back to tenantId when there is no machinePageId (no DB lookup performed)', async () => {
+    const result = await defaultSandboxBillingDeps.resolvePayerId({ tenantId: 'owner-1' });
+    expect(result).toBe('owner-1');
+    expect(mockDb.select).not.toHaveBeenCalled();
+  });
+
+  it("resolves to the referenced machine page's ACTUAL drive owner via the pages -> drives join, not the acting tenantId", async () => {
+    mockPageOwnerRow({ ownerId: 'real-owner' });
+
+    const result = await defaultSandboxBillingDeps.resolvePayerId({
+      tenantId: 'acting-user',
+      machinePageId: 'other-terminal-page',
+    });
+
+    expect(result).toBe('real-owner');
+  });
+
+  it('falls back to tenantId when the referenced page/drive cannot be resolved', async () => {
+    mockPageOwnerRow(undefined);
+
+    const result = await defaultSandboxBillingDeps.resolvePayerId({
+      tenantId: 'owner-1',
+      machinePageId: 'orphaned-page',
+    });
+
+    expect(result).toBe('owner-1');
+  });
 });
 
 describe('defaultSandboxBillingDeps.gate', () => {

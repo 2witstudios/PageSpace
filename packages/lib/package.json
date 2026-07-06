@@ -392,6 +392,16 @@
       "import": "./dist/services/sandbox/machine-billing.js",
       "require": "./dist/services/sandbox/machine-billing.js"
     },
+    "./services/sandbox/terminal-storage-reconcile": {
+      "types": "./dist/services/sandbox/terminal-storage-reconcile.d.ts",
+      "import": "./dist/services/sandbox/terminal-storage-reconcile.js",
+      "require": "./dist/services/sandbox/terminal-storage-reconcile.js"
+    },
+    "./services/sandbox/terminal-storage-billing": {
+      "types": "./dist/services/sandbox/terminal-storage-billing.d.ts",
+      "import": "./dist/services/sandbox/terminal-storage-billing.js",
+      "require": "./dist/services/sandbox/terminal-storage-billing.js"
+    },
     "./services/sandbox/command-policy": {
       "types": "./dist/services/sandbox/command-policy.d.ts",
       "import": "./dist/services/sandbox/command-policy.js",
