@@ -34,6 +34,11 @@ function makeDeps(token: string | null = 'ghp_test'): GitSandboxToolsDeps {
       actorEmail: 'u@test.com', tier: 'pro',
     }),
     gate: vi.fn().mockResolvedValue({ ok: true }),
+    machines: {
+      listMachines: vi.fn().mockResolvedValue([{ kind: 'own' }]),
+      describeMachine: vi.fn().mockResolvedValue({ name: 'My Machine' }),
+      isMachineAccessible: vi.fn().mockResolvedValue(true),
+    },
     _runCommandCalls: runCommandCalls,
   } as unknown as GitSandboxToolsDeps & { _runCommandCalls: typeof runCommandCalls };
 }

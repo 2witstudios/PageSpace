@@ -5,6 +5,7 @@
 
 import { ModelCapabilities } from './model-capabilities';
 import type { CommandExecutionData } from './command-processor';
+import type { MachineRef } from '../tools/machine-ref';
 
 export interface ToolExecutionContext {
   userId: string;
@@ -63,4 +64,13 @@ export interface ToolExecutionContext {
   // (channel agent replies): carried into the reply's aiMeta so the channel
   // renders the "Using /foo" / "Skipped /foo" indicator (UX spec §7).
   commandExecution?: CommandExecutionData;
+
+  // Terminal epics: the ACTIVE machine for this run's terminal tool group
+  // (bash/readFile/writeFile/editFile/git + switch_machine/list_machines).
+  // This context object is the SAME reference for every tool call within one
+  // streamText run (AI SDK threads it unchanged through the step loop), so
+  // switch_machine mutates this field in place and later tool calls in the
+  // same turn see the new active machine. Undefined means "not yet
+  // switched" — callers fall back to the configured machines[0].
+  activeMachine?: MachineRef;
 }
