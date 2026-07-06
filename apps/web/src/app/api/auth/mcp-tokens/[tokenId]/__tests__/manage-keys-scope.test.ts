@@ -1,11 +1,19 @@
 /**
- * Red-team test: a manage-keys-only OAuth credential (Phase 9, mintable today
- * via the manage_keys scope token — see ScopeSet.manageKeys) must be able to
- * reach mcp-tokens/[tokenId] (that is exactly what the scope grants), while a
- * drive-scoped OAuth credential must still be rejected exactly as before.
- * Uses the REAL rejectScopedOAuth/isScopedOAuthAuth/isManageKeysOnly
- * implementations (not mocked) so this fails if the carve-out regresses
- * either direction.
+ * Red-team test for the manage_keys-only OAuth carve-out (Phase 9 — see
+ * ScopeSet.manageKeys) against mcp-tokens/[tokenId].
+ *
+ * DELETE only narrows a credential's footprint (revocation, never escalation),
+ * so it is reachable by a manage_keys credential exactly as designed, while a
+ * drive-scoped OAuth credential is still rejected — this uses the REAL
+ * rejectScopedOAuth/isScopedOAuthAuth/isManageKeysOnly implementations (not
+ * mocked) so it fails if that carve-out regresses either direction.
+ *
+ * PATCH (updating a token's drive scopes) is credential *escalation*, which
+ * Phase 8's step-up gate requires for every caller regardless of credential
+ * shape — a manage_keys OAuth bearer token is itself an ambient secret, so it
+ * gets no exception. AUTH_OPTIONS_PATCH only allows 'session' here, so an
+ * oauth-shaped auth object (however it arrived) is stopped by the step-up
+ * gate before any scope check runs.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -114,7 +122,7 @@ describe('mcp-tokens/[tokenId] routes — manage_keys-only vs drive-scoped OAuth
   });
 
   describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
-    it('lets a manage_keys-only OAuth credential update drive scopes', async () => {
+    it('does not exempt a manage_keys-only OAuth credential from the step-up gate — no stepUpToken means 401, never a scope update', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(manageKeysScopedAuthResult());
 
       const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
@@ -123,12 +131,14 @@ describe('mcp-tokens/[tokenId] routes — manage_keys-only vs drive-scoped OAuth
         body: JSON.stringify({ driveIds: [] }),
       });
       const response = await PATCH(request, createContext());
+      const body = await response.json();
 
-      expect(response.status).toBe(200);
-      expect(sessionRepository.updateMcpTokenDriveScopes).toHaveBeenCalled();
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('step_up_required');
+      expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
     });
 
-    it('still rejects a drive-scoped OAuth credential, never reaching the repository', async () => {
+    it('still rejects a drive-scoped OAuth credential the same way — step-up gate fires before any scope check, never reaching the repository', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(DRIVE_SCOPED_OAUTH as never);
 
       const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
@@ -137,8 +147,10 @@ describe('mcp-tokens/[tokenId] routes — manage_keys-only vs drive-scoped OAuth
         body: JSON.stringify({ driveIds: [] }),
       });
       const response = await PATCH(request, createContext());
+      const body = await response.json();
 
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('step_up_required');
       expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
     });
   });
