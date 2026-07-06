@@ -618,6 +618,36 @@ describe('MCPSettingsView — edit token step-up fallback and resume', () => {
     await userEvent.click(saveButton);
     await waitFor(() => expect(startAuthentication).toHaveBeenCalledTimes(2));
   });
+
+  it('does not start a second step-up ceremony when Save Changes is clicked again while one is already in flight', async () => {
+    let resolveOptions!: (value: { options: { challenge: string }; challengeId: string }) => void;
+    const optionsPromise = new Promise<{ options: { challenge: string }; challengeId: string }>((resolve) => {
+      resolveOptions = resolve;
+    });
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') return optionsPromise;
+      throw new Error(`unexpected post to ${url}`);
+    });
+    await renderView();
+
+    await userEvent.click(within(getCardFor('Token A')).getByRole('button', { name: /edit token scopes/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit token drive scopes/i });
+    await userEvent.click(within(dialog).getByLabelText('Drive Two'));
+
+    const saveButton = within(dialog).getByRole('button', { name: /save changes/i });
+    // First click starts the ceremony; it hangs on the unresolved options call.
+    await userEvent.click(saveButton);
+    // The button is now disabled and reads "Confirming…" while the ceremony
+    // is in flight — a second click here must be a no-op, mirroring the
+    // createToken double-Enter test's assertion that only one request fires.
+    await userEvent.click(within(dialog).getByRole('button', { name: /confirming/i }));
+
+    expect(postMock).toHaveBeenCalledTimes(1);
+
+    resolveOptions({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+    await waitFor(() => expect(startAuthentication).toHaveBeenCalledTimes(1));
+    expect(patchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('MCPSettingsView — Quick MCP Setup', () => {

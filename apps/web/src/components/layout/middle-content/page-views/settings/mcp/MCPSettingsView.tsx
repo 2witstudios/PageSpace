@@ -584,6 +584,7 @@ export default function MCPSettingsView() {
   };
 
   const updateTokenScopes = async () => {
+    if (editingScopes || editStepUpStatus !== 'idle') return;
     if (!editingTokenId) return;
 
     // This token currently has access to ALL drives (unscoped). Saving with no
