@@ -45,6 +45,7 @@ const GROUP_DEFINITIONS: readonly GroupDefinition[] = [
   { key: 'search', title: 'Search', example: 'pagespace search text <query> --drive <id>', resources: ['search'] },
   { key: 'tasks', title: 'Tasks', example: 'pagespace tasks create <pageId> --title <title>', resources: ['tasks'] },
   { key: 'agents', title: 'Agents', example: 'pagespace agents ask <agentPageId> <message>', resources: ['agents', 'models'] },
+  { key: 'keys', title: 'Keys', example: 'pagespace keys', resources: ['keys'] },
   {
     key: 'tokens',
     title: 'Tokens',
