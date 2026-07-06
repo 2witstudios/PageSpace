@@ -29,7 +29,7 @@ export type ScopeSet = {
   // with `account` and any `drive:*` scope (see the manage_keys_conflict
   // check below); downstream fail-closed checks live in
   // apps/web/src/lib/auth/index.ts.
-  manageKeys?: boolean;
+  manageKeys: boolean;
 };
 
 export type ScopeError =

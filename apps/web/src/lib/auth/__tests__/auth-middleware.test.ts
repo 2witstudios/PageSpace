@@ -1179,7 +1179,7 @@ describe('Auth Middleware', () => {
           adminRoleVersion: 0,
           tokenType: 'oauth' as const,
           tokenId: 'oauth-token-id',
-          scopes: { account: true, offlineAccess: false, drives: new Map() },
+          scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false },
           driveScopes: [],
           allowedDriveIds: [],
         };

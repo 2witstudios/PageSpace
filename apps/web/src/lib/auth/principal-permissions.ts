@@ -44,7 +44,7 @@ import {
   getScopedAccessiblePagesInDrive,
   hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
-import { isMCPAuthResult, isOAuthAuthResult, type AuthResult, type MCPAuthResult, type OAuthAuthResult } from './index';
+import { isMCPAuthResult, isOAuthAuthResult, isManageKeysOnly, type AuthResult, type MCPAuthResult, type OAuthAuthResult } from './index';
 
 /**
  * A scoped MCP token acts as an app member (its allowedDriveIds are exactly its
@@ -67,6 +67,7 @@ export async function getPrincipalAccessLevel(
   auth: AuthResult,
   pageId: string,
 ): Promise<PermissionLevel | null> {
+  if (isManageKeysOnly(auth)) return null;
   if (isScopedMCPAuth(auth)) {
     return getAppAccessLevel(auth.tokenId, pageId);
   }
@@ -77,6 +78,7 @@ export async function getPrincipalAccessLevel(
 }
 
 export async function canPrincipalViewPage(auth: AuthResult, pageId: string): Promise<boolean> {
+  if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth)) {
     const level = await getAppAccessLevel(auth.tokenId, pageId);
     return level?.canView ?? false;
@@ -89,6 +91,7 @@ export async function canPrincipalViewPage(auth: AuthResult, pageId: string): Pr
 }
 
 export async function canPrincipalEditPage(auth: AuthResult, pageId: string): Promise<boolean> {
+  if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth)) {
     const level = await getAppAccessLevel(auth.tokenId, pageId);
     return level?.canEdit ?? false;
@@ -101,6 +104,7 @@ export async function canPrincipalEditPage(auth: AuthResult, pageId: string): Pr
 }
 
 export async function canPrincipalDeletePage(auth: AuthResult, pageId: string): Promise<boolean> {
+  if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth)) {
     const level = await getAppAccessLevel(auth.tokenId, pageId);
     return level?.canDelete ?? false;
@@ -113,6 +117,7 @@ export async function canPrincipalDeletePage(auth: AuthResult, pageId: string): 
 }
 
 export async function canPrincipalSharePage(auth: AuthResult, pageId: string): Promise<boolean> {
+  if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth)) {
     const level = await getAppAccessLevel(auth.tokenId, pageId);
     return level?.canShare ?? false;
@@ -125,6 +130,7 @@ export async function canPrincipalSharePage(auth: AuthResult, pageId: string): P
 }
 
 export async function isPrincipalDriveMember(auth: AuthResult, driveId: string): Promise<boolean> {
+  if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth)) {
     return hasAppDriveMembership(auth.tokenId, driveId);
   }
@@ -145,6 +151,7 @@ export async function getPrincipalDriveAccess(auth: AuthResult, driveId: string)
 }
 
 export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: string): Promise<boolean> {
+  if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth)) {
     const membership = await getAppDriveMembership(auth.tokenId, driveId);
     if (!membership) return false;
@@ -166,6 +173,7 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
  * (NOT intersected with the owning user's drives), otherwise the user's drives.
  */
 export async function getPrincipalDriveIds(auth: AuthResult): Promise<string[]> {
+  if (isManageKeysOnly(auth)) return [];
   if (isScopedMCPAuth(auth)) {
     return auth.allowedDriveIds;
   }
