@@ -876,6 +876,14 @@ describe('git_show', () => {
     const calls = getRunCalls(deps);
     expect(calls[0].args).toEqual(['show', '--stat', 'abc123', '--', 'src/foo.ts']);
   });
+
+  it('rejects a ref that looks like a flag', async () => {
+    const deps = makeDeps();
+    const { git_show } = createSandboxGitTools(deps);
+    const result = await git_show.execute!({ ref: '--exec=whoami' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
 });
 
 // ── git_blame ──────────────────────────────────────────────────────────────
@@ -974,6 +982,38 @@ describe('git_revert', () => {
     const { git_revert } = createSandboxGitTools(deps);
     const result = await git_revert.execute!({ sha: 'main' }, {} as never);
     expect(result).toMatchObject({ success: false });
+  });
+
+  it('builds --abort without requiring a sha', async () => {
+    const deps = makeDeps();
+    const { git_revert } = createSandboxGitTools(deps);
+    await git_revert.execute!({ action: 'abort' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toEqual(['revert', '--abort']);
+  });
+
+  it('builds --continue without requiring a sha', async () => {
+    const deps = makeDeps();
+    const { git_revert } = createSandboxGitTools(deps);
+    await git_revert.execute!({ action: 'continue' }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toEqual(['revert', '--continue']);
+  });
+
+  it('rejects a run without a sha', async () => {
+    const deps = makeDeps();
+    const { git_revert } = createSandboxGitTools(deps);
+    const result = await git_revert.execute!({}, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
+  it('supports mainline for reverting a merge commit', async () => {
+    const deps = makeDeps();
+    const { git_revert } = createSandboxGitTools(deps);
+    await git_revert.execute!({ sha: 'abc1234', mainline: 1 }, {} as never);
+    const calls = getRunCalls(deps);
+    expect(calls[0].args).toEqual(['revert', '--no-edit', '-m', '1', 'abc1234']);
   });
 });
 
@@ -1143,6 +1183,17 @@ describe('gh_workflow_run', () => {
     expect(parse({ workflow: 'ci.yml' }).success).toBe(false);
     expect(parse({ workflow: 'ci.yml', ref: 'main' }).success).toBe(true);
   });
+
+  it('rejects a workflow name that looks like a flag', async () => {
+    const deps = makeDeps();
+    const { gh_workflow_run } = createSandboxGitTools(deps);
+    const result = await gh_workflow_run.execute!(
+      { workflow: '--repo=other/repo', ref: 'main' },
+      {} as never,
+    );
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
 });
 
 // ── gh_issue lifecycle ─────────────────────────────────────────────────────
@@ -1215,6 +1266,14 @@ describe('gh_repo_view', () => {
     expect(calls[0].args.slice(0, 3)).toEqual(['repo', 'view', 'acme/webapp']);
     expect(calls[0].args[calls[0].args.indexOf('--json') + 1]).toContain('defaultBranchRef');
   });
+
+  it('rejects a repo that looks like a flag', async () => {
+    const deps = makeDeps();
+    const { gh_repo_view } = createSandboxGitTools(deps);
+    const result = await gh_repo_view.execute!({ repo: '--help' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
 });
 
 describe('gh_repo_list', () => {
@@ -1234,6 +1293,14 @@ describe('gh_repo_list', () => {
     expect(result).toMatchObject({ success: false });
     expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
+
+  it('rejects an owner that looks like a flag', async () => {
+    const deps = makeDeps();
+    const { gh_repo_list } = createSandboxGitTools(deps);
+    const result = await gh_repo_list.execute!({ owner: '--limit=999' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
 });
 
 describe('gh_repo_fork', () => {
@@ -1243,6 +1310,14 @@ describe('gh_repo_fork', () => {
     await gh_repo_fork.execute!({ repo: 'acme/webapp' }, {} as never);
     const calls = getRunCalls(deps);
     expect(calls[0].args).toEqual(['repo', 'fork', 'acme/webapp', '--clone=false', '--remote=false']);
+  });
+
+  it('rejects a repo that looks like a flag', async () => {
+    const deps = makeDeps();
+    const { gh_repo_fork } = createSandboxGitTools(deps);
+    const result = await gh_repo_fork.execute!({ repo: '--clone=true' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
 });
 
@@ -1269,6 +1344,17 @@ describe('gh_repo_create', () => {
     expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
 
+  it('rejects a name with a leading hyphen (flag injection)', async () => {
+    const deps = makeDeps();
+    const { gh_repo_create } = createSandboxGitTools(deps);
+    const result = await gh_repo_create.execute!(
+      { name: '--private', visibility: 'private' },
+      {} as never,
+    );
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+
   it('requires visibility in the schema', () => {
     const { gh_repo_create } = createSandboxGitTools(makeDeps());
     const parse = (gh_repo_create.inputSchema as { safeParse: (v: unknown) => { success: boolean } }).safeParse;
@@ -1278,13 +1364,15 @@ describe('gh_repo_create', () => {
 });
 
 describe('gh_search', () => {
-  it('uses issue-shaped json fields for prs', async () => {
+  it('uses issue-shaped json fields for prs, with query last after a "--" separator', async () => {
     const deps = makeDeps();
     const { gh_search } = createSandboxGitTools(deps);
     await gh_search.execute!({ type: 'prs', query: 'fix login repo:acme/webapp' }, {} as never);
     const calls = getRunCalls(deps);
-    expect(calls[0].args.slice(0, 3)).toEqual(['search', 'prs', 'fix login repo:acme/webapp']);
-    expect(calls[0].args[calls[0].args.indexOf('--json') + 1]).toBe('number,title,state,url,repository');
+    expect(calls[0].args).toEqual([
+      'search', 'prs', '--limit', '20', '--json', 'number,title,state,url,repository',
+      '--', 'fix login repo:acme/webapp',
+    ]);
   });
 
   it('uses code-shaped json fields for code', async () => {
@@ -1293,6 +1381,18 @@ describe('gh_search', () => {
     await gh_search.execute!({ type: 'code', query: 'useState repo:acme/webapp' }, {} as never);
     const calls = getRunCalls(deps);
     expect(calls[0].args[calls[0].args.indexOf('--json') + 1]).toBe('repository,path,url');
+  });
+
+  it('places a leading-hyphen query after the "--" separator rather than letting it be parsed as a flag', async () => {
+    const deps = makeDeps();
+    const { gh_search } = createSandboxGitTools(deps);
+    await gh_search.execute!({ type: 'code', query: '-1 test' }, {} as never);
+    const calls = getRunCalls(deps);
+    const dashDashIndex = calls[0].args.indexOf('--');
+    const queryIndex = calls[0].args.indexOf('-1 test');
+    expect(dashDashIndex).toBeGreaterThan(-1);
+    expect(queryIndex).toBe(dashDashIndex + 1);
+    expect(queryIndex).toBe(calls[0].args.length - 1);
   });
 });
 

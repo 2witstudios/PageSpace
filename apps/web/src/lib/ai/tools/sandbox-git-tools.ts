@@ -50,6 +50,12 @@ function isDeleteRefspec(refspec: string): boolean {
   return spec.includes(':') && spec.slice(0, spec.lastIndexOf(':')).trim() === '';
 }
 
+// A value starting with "-" passed as a bare positional CLI arg can be
+// reinterpreted as a flag by git/gh's argument parser (e.g. a ref of
+// "--exec=whoami"). Identifier-like params (refs, repo slugs, workflow names)
+// never legitimately start with "-", so reject rather than pass through.
+const startsLikeFlag = (value: string): boolean => value.startsWith('-');
+
 // Tool names returned by createSandboxGitTools, kept next to the factory so a
 // new tool is one glance away from being added here too. Consumed by
 // tool-filtering.ts to detect whether the sandbox git/gh toolkit is active —
@@ -427,14 +433,21 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
   const gitShow = tool({
     description:
       'Show a commit: message, author, and full diff (or --stat summary). Use with SHAs from git_log.',
-    inputSchema: z.object({
-      ref: z.string().min(1).optional().describe('Commit SHA or ref (defaults to HEAD)'),
-      stat: z.boolean().optional().describe('Show a diffstat summary instead of the full patch'),
-      path: z.string().optional().describe('Limit output to a single file path'),
-      cwd: cwdField,
-    })
-      .strict(),
+    inputSchema: z
+      .object({
+        ref: z.string().min(1).optional().describe('Commit SHA or ref (defaults to HEAD)'),
+        stat: z.boolean().optional().describe('Show a diffstat summary instead of the full patch'),
+        path: z.string().optional().describe('Limit output to a single file path'),
+        cwd: cwdField,
+      })
+      .strict()
+      .refine((d) => d.ref === undefined || !startsLikeFlag(d.ref), {
+        message: 'ref must not start with "-"',
+      }),
     execute: async ({ ref, stat, path, cwd }, options) => {
+      if (ref !== undefined && startsLikeFlag(ref)) {
+        return { success: false as const, error: 'ref must not start with "-"' };
+      }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
       return git(
@@ -548,17 +561,38 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
 
   const gitRevert = tool({
     description:
-      'Revert a single commit by creating a new commit that undoes it. Safe forward-fix — history is not rewritten. Takes one commit SHA (no ranges).',
+      'Revert a single commit by creating a new commit that undoes it. Safe forward-fix — history is not rewritten. Takes one commit SHA (no ranges). If a previous revert stopped on conflicts, use action "abort" to back out or "continue" after resolving. Reverting a merge commit requires "mainline" (the parent number to revert to).',
     inputSchema: z
       .object({
         sha: z
           .string()
-          .regex(/^[0-9a-f]{4,40}$/, 'sha must be a single lowercase commit SHA (no ranges or refs)'),
+          .regex(/^[0-9a-f]{4,40}$/, 'sha must be a single lowercase commit SHA (no ranges or refs)')
+          .optional()
+          .describe('Commit to revert (required unless aborting/continuing)'),
+        action: z
+          .enum(['run', 'abort', 'continue'])
+          .optional()
+          .describe('run (default) reverts a commit; abort/continue recover a conflicted revert'),
+        mainline: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Parent number to revert to; required when sha is a merge commit'),
         cwd: cwdField,
       })
-      .strict(),
-    execute: async ({ sha, cwd }, options) => {
-      if (!/^[0-9a-f]{4,40}$/.test(sha)) {
+      .strict()
+      .refine((d) => (d.action ?? 'run') !== 'run' || !!d.sha, {
+        message: 'sha is required when running a revert',
+      }),
+    execute: async ({ sha, action, mainline, cwd }, options) => {
+      const mode = action ?? 'run';
+      if (mode !== 'run') {
+        const opened = await open(options);
+        if (!opened.ok) return opened.error;
+        return git('git', ['revert', `--${mode}`], opened.ctx, cwd);
+      }
+      if (!sha || !/^[0-9a-f]{4,40}$/.test(sha)) {
         return {
           success: false as const,
           error: 'sha must be a single lowercase commit SHA (no ranges or refs)',
@@ -566,7 +600,12 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['revert', '--no-edit', sha], opened.ctx, cwd);
+      return git(
+        'git',
+        ['revert', '--no-edit', ...(mainline ? ['-m', String(mainline)] : []), sha],
+        opened.ctx,
+        cwd,
+      );
     },
   });
 
@@ -1207,6 +1246,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       if (!workflow || !ref) {
         return { success: false as const, error: 'workflow and ref are required' };
       }
+      if (startsLikeFlag(workflow)) {
+        return { success: false as const, error: 'workflow must not start with "-"' };
+      }
       const badInput = Object.keys(inputs ?? {}).find((k) => !/^[A-Za-z0-9_-]+$/.test(k));
       if (badInput !== undefined) {
         return {
@@ -1431,8 +1473,11 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
         cwd: cwdField,
       })
       .strict(),
-    execute: async ({ repo, cwd }, options) =>
-      withToken(options, (ctx, token) =>
+    execute: async ({ repo, cwd }, options) => {
+      if (repo !== undefined && startsLikeFlag(repo)) {
+        return { success: false as const, error: 'repo must not start with "-"' };
+      }
+      return withToken(options, (ctx, token) =>
         gitR(
           'gh',
           [
@@ -1444,7 +1489,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
           token,
           cwd,
         ),
-      ),
+      );
+    },
   });
 
   const ghRepoList = tool({
@@ -1457,8 +1503,11 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
         cwd: cwdField,
       })
       .strict(),
-    execute: async ({ owner, limit, cwd }, options) =>
-      withToken(options, (ctx, token) =>
+    execute: async ({ owner, limit, cwd }, options) => {
+      if (owner !== undefined && startsLikeFlag(owner)) {
+        return { success: false as const, error: 'owner must not start with "-"' };
+      }
+      return withToken(options, (ctx, token) =>
         gitR(
           'gh',
           [
@@ -1471,7 +1520,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
           token,
           cwd,
         ),
-      ),
+      );
+    },
   });
 
   const ghRepoFork = tool({
@@ -1487,6 +1537,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       if (!repo) {
         return { success: false as const, error: 'repo is required' };
       }
+      if (startsLikeFlag(repo)) {
+        return { success: false as const, error: 'repo must not start with "-"' };
+      }
       return withToken(options, (ctx, token) =>
         gitR('gh', ['repo', 'fork', repo, '--clone=false', '--remote=false'], ctx, token, cwd),
       );
@@ -1500,17 +1553,21 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       .object({
         name: z
           .string()
-          .regex(/^[A-Za-z0-9._-]+$/, 'name may contain only letters, digits, ".", "_", and "-"'),
+          .regex(
+            /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
+            'name must start with a letter or digit and may otherwise contain only letters, digits, ".", "_", and "-"',
+          ),
         visibility: z.enum(['private', 'public']),
         description: z.string().optional(),
         cwd: cwdField,
       })
       .strict(),
     execute: async ({ name, visibility, description, cwd }, options) => {
-      if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
         return {
           success: false as const,
-          error: 'name may contain only letters, digits, ".", "_", and "-"',
+          error:
+            'name must start with a letter or digit and may otherwise contain only letters, digits, ".", "_", and "-"',
         };
       }
       if (!visibility) {
@@ -1557,9 +1614,13 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
         gitR(
           'gh',
           [
-            'search', type, query,
+            'search', type,
             '--limit', String(limit ?? 20),
             '--json', jsonFields,
+            // query is genuine free text (may legitimately start with "-", e.g. "-1"
+            // or a search qualifier) — the "--" separator, not a regex reject, is
+            // what keeps gh from reinterpreting it as a flag.
+            '--', query,
           ],
           ctx,
           token,
