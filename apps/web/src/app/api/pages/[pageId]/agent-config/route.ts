@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, and, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
+import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
@@ -15,6 +16,7 @@ import { isMachineRefArray } from '@/lib/repositories/page-agent-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const MAX_MACHINES = 20;
 
 /**
  * GET - Get Page AI agent configuration
@@ -75,6 +77,23 @@ export async function GET(
       // Continue without drive prompt on error
     }
 
+    // Terminal pages in this drive the requesting user can see, for the
+    // "use existing machine" picker. Scoped to this page's own drive —
+    // additional agent drives are a separate follow-up.
+    let availableTerminals: Array<{ id: string; title: string }> = [];
+    try {
+      const accessiblePageIds = await getUserAccessiblePagesInDrive(userId, page.driveId);
+      if (accessiblePageIds.length > 0) {
+        availableTerminals = await db
+          .select({ id: pages.id, title: pages.title })
+          .from(pages)
+          .where(and(inArray(pages.id, accessiblePageIds), eq(pages.type, 'TERMINAL'), eq(pages.isTrashed, false)));
+      }
+    } catch (error) {
+      loggers.api.error('Error fetching available terminals:', error as Error);
+      // Continue with an empty list on error
+    }
+
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'agent_config', resourceId: pageId, details: { action: 'get_agent_config' } });
 
     return NextResponse.json({
@@ -93,6 +112,7 @@ export async function GET(
       toolExposureMode: page.toolExposureMode ?? 'upfront',
       terminalAccess: page.terminalAccess ?? false,
       machines: isMachineRefArray(page.machines) ? page.machines : [],
+      availableTerminals,
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -171,13 +191,36 @@ export async function PATCH(
       }
     }
 
-    // Validate machines shape: each entry is either `{ kind: 'own' }` or
-    // `{ kind: 'existing', terminalId }`; machines[0] is the default active machine.
-    if (machines !== undefined && !isMachineRefArray(machines)) {
-      return NextResponse.json(
-        { error: 'machines must be an array of MachineRef objects' },
-        { status: 400 }
-      );
+    // Validate machines: shape-check each entry (MachineRef contract), cap the
+    // array length, then verify every "existing" terminalId points to a
+    // non-trashed TERMINAL page the requesting user can access — mirrors the
+    // GET availableTerminals scoping, so a caller can't attach a Terminal
+    // outside their access via a direct API call.
+    if (machines !== undefined) {
+      if (!isMachineRefArray(machines) || machines.length > MAX_MACHINES) {
+        return NextResponse.json(
+          { error: `machines must be an array of MachineRef objects (max ${MAX_MACHINES})` },
+          { status: 400 }
+        );
+      }
+      const terminalIds = machines
+        .filter((m): m is { kind: 'existing'; terminalId: string } => m.kind === 'existing')
+        .map((m) => m.terminalId);
+      if (terminalIds.length > 0) {
+        const accessiblePageIds = new Set(await getUserAccessiblePagesInDrive(userId, page.driveId));
+        const validTerminals = await db
+          .select({ id: pages.id })
+          .from(pages)
+          .where(and(inArray(pages.id, terminalIds), eq(pages.type, 'TERMINAL'), eq(pages.isTrashed, false)));
+        const validIds = new Set(validTerminals.filter((t) => accessiblePageIds.has(t.id)).map((t) => t.id));
+        const invalidIds = terminalIds.filter((id) => !validIds.has(id));
+        if (invalidIds.length > 0) {
+          return NextResponse.json(
+            { error: `Invalid terminal reference(s): ${invalidIds.join(', ')}` },
+            { status: 400 }
+          );
+        }
+      }
     }
 
     // Validate the model selection against the real catalog (anti-hallucination).
@@ -194,20 +237,20 @@ export async function PATCH(
 
     // Update page configuration
     const updateData: Partial<typeof page> = {};
-    
+
     if (systemPrompt !== undefined) {
       updateData.systemPrompt = systemPrompt.trim() || null;
     }
-    
+
     if (enabledTools !== undefined) {
       // Preserve empty arrays - don't convert to null
       updateData.enabledTools = Array.isArray(enabledTools) ? enabledTools : null;
     }
-    
+
     if (aiProvider !== undefined) {
       updateData.aiProvider = aiProvider.trim() || null;
     }
-    
+
     if (aiModel !== undefined) {
       updateData.aiModel = aiModel.trim() || null;
     }
