@@ -723,3 +723,116 @@ describe('injection seam wiring (screenOutput, fail-open)', () => {
     if (result.success) expect(result.content).toBe('[SCREENED]file-contents');
   });
 });
+
+/** A clock that only advances when `advance()` is called — lets a test simulate
+ * exactly how long the "machine" was active without depending on how many
+ * incidental `now()` reads happen elsewhere (audit timestamps, etc). */
+function makeMutableClock(startMs: number) {
+  let t = startMs;
+  return { now: () => new Date(t), advance: (ms: number) => { t += ms; } };
+}
+
+function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
+  billing: NonNullable<SandboxRunDeps['billing']>;
+  gateCalls: Array<{ payerId: string }>;
+  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number }>;
+  releaseHoldCalls: string[];
+} {
+  const gateCalls: Array<{ payerId: string }> = [];
+  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number }> = [];
+  const releaseHoldCalls: string[] = [];
+  const billing: NonNullable<SandboxRunDeps['billing']> = {
+    gate: async (input) => {
+      gateCalls.push(input);
+      return { allowed: true, holdId: 'hold-1' };
+    },
+    trackUsage: async (input) => {
+      trackUsageCalls.push(input);
+    },
+    releaseHold: async (holdId) => {
+      releaseHoldCalls.push(holdId);
+    },
+    ...over,
+  };
+  return { billing, gateCalls, trackUsageCalls, releaseHoldCalls };
+}
+
+describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
+  it('given no billing deps, runs unmetered (no gate, no trackUsage, no releaseHold)', async () => {
+    const { deps } = makeDeps();
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+  });
+
+  it('places a hold BEFORE the machine is acquired, keyed to the resolved payerId', async () => {
+    const { billing, gateCalls } = makeBilling();
+    const { deps } = makeDeps({ billing });
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ tenantId: 'owner-42' }), deps });
+    expect(gateCalls).toEqual([{ payerId: 'owner-42' }]);
+  });
+
+  it('on a successful run, settles EXACTLY one usage row via trackUsage with the real active-window seconds and holdId, and never calls releaseHold', async () => {
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(5000); // the "machine" was active for 5s running this command
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
+    const { deps } = makeDeps({ billing, reconnect: async () => sandbox, now: clock.now });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ tenantId: 'owner-42' }), deps });
+
+    expect(result).toMatchObject({ success: true });
+    expect(trackUsageCalls).toEqual([{ payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 5 }]);
+    expect(releaseHoldCalls).toEqual([]);
+  });
+
+  it('given the gate denies (insufficient credits), fails credit_exhausted and never acquires the machine', async () => {
+    let acquireCalls = 0;
+    const { billing } = makeBilling({
+      gate: async () => ({ allowed: false, reason: 'insufficient_balance' }),
+    });
+    const { deps } = makeDeps({
+      billing,
+      acquireSandbox: async () => {
+        acquireCalls += 1;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'credit_exhausted' });
+    expect(acquireCalls).toBe(0);
+  });
+
+  it('given a forced execution error, releases the hold and records NO usage row (no ledger row)', async () => {
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        throw new Error('sandbox crashed');
+      },
+    });
+    const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
+    const { deps } = makeDeps({ billing, reconnect: async () => sandbox });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    expect(trackUsageCalls).toEqual([]);
+    expect(releaseHoldCalls).toEqual(['hold-1']);
+  });
+
+  it('given a quota concurrency denial AFTER the hold was placed, releases the hold with no usage row', async () => {
+    const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
+    const { deps } = makeDeps({
+      billing,
+      quota: { acquireSlot: () => false, releaseSlot: () => {} },
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'concurrency_limit' });
+    expect(trackUsageCalls).toEqual([]);
+    expect(releaseHoldCalls).toEqual(['hold-1']);
+  });
+});

@@ -16,6 +16,14 @@ export type TerminalSession = {
   closedFn: (exitCode: number) => void;
   scrollback: string[];
   scrollbackBytes: number;
+  /**
+   * Terminal Epic 3 metering (optional — set only when a `billing` seam is
+   * wired). `payerId` + `connectedAt` are always set together with `holdId` so
+   * the session's end hook can settle the active-runtime hold to its real cost.
+   */
+  payerId?: string;
+  holdId?: string;
+  connectedAt?: number;
 };
 
 export type TerminalSessionMap = {

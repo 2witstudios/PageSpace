@@ -35,6 +35,7 @@ import { getValidatedEnv } from '../../config/env-validation';
 import type { AcquireMachineSandboxInput, AcquireMachineSandboxResult, MachineRefLike } from './machine-session';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
+import { resolveTerminalPayerId } from '../../billing/terminal-payer';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
@@ -61,6 +62,28 @@ export interface SandboxQuotaDeps {
   /** Reserve an in-process concurrency slot; false when the tier ceiling is hit. */
   acquireSlot: (args: { userId: string; tier: SubscriptionTier }) => boolean;
   releaseSlot: (args: { userId: string }) => void;
+}
+
+/**
+ * Metering seam for a machine run's active-runtime cost (Terminal Epic 3).
+ * Optional — omitting it disables metering (no hold, no charge), mirroring
+ * every other optional seam in this file (`screenOutput`, `notifyTerminalActivity`).
+ *
+ * The hold->settle protocol mirrors the voice STT recipe
+ * (apps/web/src/app/api/voice/transcribe/route.ts): `gate` places a flat-estimate
+ * hold BEFORE the machine is acquired (the real active-window duration isn't known
+ * until the run ends); `trackUsage` settles the hold to the real cost and hands off
+ * its release to the credit pipeline on a SUCCESSFUL run only; `releaseHold` is the
+ * safety net for every other exit (denial, thrown error, timeout) so a failed run
+ * never strands a hold against the payer's spendable balance.
+ */
+export interface SandboxBillingDeps {
+  /** Places a flat-estimate hold for this payer before the machine run begins. */
+  gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
+  /** Settles the hold to the real active-window cost. Only called on a successful run. */
+  trackUsage: (input: { payerId: string; holdId?: string; activeSeconds: number }) => Promise<void>;
+  /** Releases a hold without billing. Called on every exit that never reaches `trackUsage`. */
+  releaseHold: (holdId: string) => Promise<void>;
 }
 
 /**
@@ -105,6 +128,11 @@ export interface SandboxRunDeps {
    * consumer wired yet, or the machine has no live watcher).
    */
   notifyTerminalActivity?: (input: TerminalActivityNotification) => Promise<void>;
+  /**
+   * Optional metering seam (Terminal Epic 3): meters this run's active-runtime
+   * cost against the machine's payer. Omitted -> unmetered (no hold, no charge).
+   */
+  billing?: SandboxBillingDeps;
   now: () => Date;
   logger?: {
     warn?: (message: string, metadata?: Record<string, unknown>) => void;
@@ -149,6 +177,7 @@ export type SandboxToolDenialReason =
   | 'no_agent_access'
   | 'no_machine'
   | 'machine_runtime_exceeded'
+  | 'credit_exhausted'
   | 'concurrency_limit'
   | 'empty_command'
   | 'command_too_large'
@@ -188,6 +217,7 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   no_machine: 'No machine is configured for this run.',
   machine_runtime_exceeded:
     'This machine has been running continuously for too long. Wait for it to go idle, or switch to a different machine.',
+  credit_exhausted: 'Insufficient credits to run this machine.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
   empty_command: 'No command was provided.',
   command_too_large: 'The command is too large.',
@@ -292,6 +322,49 @@ const anomalyForExit = (exitCode: number): CodeExecutionAnomaly | undefined => {
   // 128 + SIGKILL(9): the sandbox SIGKILLs on the timeout cap.
   return exitCode === 137 ? 'timeout' : 'nonzero_exit';
 };
+
+type MeteredResult<S> =
+  | ({ success: true } & S)
+  | { success: false; error: string; reason: SandboxToolDenialReason };
+
+/**
+ * Wraps a machine op with active-runtime metering (Terminal Epic 3). Places a
+ * flat-estimate hold for the payer BEFORE `run` (which acquires the machine and
+ * executes the op), then on a SUCCESSFUL result settles the hold to the real
+ * active-window cost (wall-clock from just before `run` to just after it
+ * resolves). Any other exit — denial, thrown error, timeout — releases the hold
+ * without billing: the run never reached a confirmed successful completion, so
+ * there is nothing to charge (mirrors the voice STT recipe's `holdHandedOff`
+ * safety net). Skipped entirely (no hold, no charge) when `deps.billing` is
+ * unset — an unmetered deployment behaves exactly as before this seam existed.
+ */
+async function withMachineBilling<S>(
+  ctx: SandboxActorContext,
+  deps: SandboxRunDeps,
+  run: () => Promise<MeteredResult<S>>,
+): Promise<MeteredResult<S>> {
+  const billing = deps.billing;
+  if (!billing) return run();
+
+  const payerId = resolveTerminalPayerId({ tenantId: ctx.tenantId });
+  const gate = await billing.gate({ payerId });
+  if (!gate.allowed) return fail('credit_exhausted');
+
+  const holdId = gate.holdId;
+  const startedAt = deps.now().getTime();
+  let handedOff = false;
+  try {
+    const result = await run();
+    if (result.success) {
+      handedOff = true;
+      const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
+      await billing.trackUsage({ payerId, holdId, activeSeconds });
+    }
+    return result;
+  } finally {
+    if (holdId && !handedOff) void billing.releaseHold(holdId).catch(() => {});
+  }
+}
 
 /**
  * Shared preamble: enforce quota and acquire a live, authorized executable
@@ -403,6 +476,12 @@ export async function runBashInSandbox({
     resolvedCwd = candidate;
   }
 
+  return withMachineBilling<{
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    truncated: boolean;
+  }>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
 
@@ -486,6 +565,7 @@ export async function runBashInSandbox({
   } finally {
     session.release();
   }
+  });
 }
 
 export async function writeSandboxFile({
@@ -514,6 +594,7 @@ export async function writeSandboxFile({
   const bytes = Buffer.byteLength(content, 'utf8');
   if (bytes > MAX_WRITE_BYTES) return fail('content_too_large');
 
+  return withMachineBilling<{ path: string; bytesWritten: number }>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
 
@@ -541,6 +622,7 @@ export async function writeSandboxFile({
   } finally {
     session.release();
   }
+  });
 }
 
 export async function readSandboxFile({
@@ -565,6 +647,7 @@ export async function readSandboxFile({
     return fail('path_escape');
   }
 
+  return withMachineBilling<{ path: string; content: string; truncated: boolean }>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
 
@@ -616,6 +699,7 @@ export async function readSandboxFile({
   } finally {
     session.release();
   }
+  });
 }
 
 export async function editSandboxFile({
@@ -646,6 +730,7 @@ export async function editSandboxFile({
     return fail('path_escape');
   }
 
+  return withMachineBilling<{ path: string; replacements: number }>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
 
@@ -692,6 +777,7 @@ export async function editSandboxFile({
   } finally {
     session.release();
   }
+  });
 }
 
 /**

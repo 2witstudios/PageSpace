@@ -16,6 +16,7 @@ import {
   isContainmentVerified,
 } from '@pagespace/lib/services/sandbox/containment';
 import { getSandboxSessionSecret, acquireTerminalSandbox, createDbTerminalSessionStore, deriveTerminalSessionKey } from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
@@ -161,7 +162,7 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
     },
   }).catch(() => {});
 
-  return { ok: true, sandboxId, sessionKey: sandboxResult.sessionKey, sprite, releaseSlot };
+  return { ok: true, sandboxId, sessionKey: sandboxResult.sessionKey, sprite, releaseSlot, payerId: tenantId };
 }
 
 /**
@@ -1060,6 +1061,9 @@ io.on('connection', (socket: AuthSocket) => {
     openShell: openPtyShell,
     checkAuth: makeTerminalCheckAuth,
     socket: socket as unknown as SocketLike,
+    // Terminal Epic 3: meter this PTY session's active-runtime cost against the
+    // machine's payer (the drive owner by default — see resolveTerminalPayerId).
+    billing: defaultSandboxBillingDeps,
   });
 
   socket.on('terminal:connect', (payload) => {

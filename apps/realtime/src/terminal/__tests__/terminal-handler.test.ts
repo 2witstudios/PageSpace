@@ -26,7 +26,27 @@ function makeSprite(sessions: Array<{ id: string; command: string; isActive: boo
 }
 
 function makeAuthSuccess(sessionKey = 'key1', sessions: Array<{ id: string; command: string; isActive: boolean; tty: boolean }> = []) {
-  return { ok: true as const, sandboxId: 'sbx1', sessionKey, sprite: makeSprite(sessions), releaseSlot: vi.fn() };
+  return {
+    ok: true as const,
+    sandboxId: 'sbx1',
+    sessionKey,
+    sprite: makeSprite(sessions),
+    releaseSlot: vi.fn(),
+    payerId: 'owner-1',
+  };
+}
+
+function makeBilling(over: Partial<{
+  gate: ReturnType<typeof vi.fn>;
+  trackUsage: ReturnType<typeof vi.fn>;
+  releaseHold: ReturnType<typeof vi.fn>;
+}> = {}) {
+  return {
+    gate: vi.fn().mockResolvedValue({ allowed: true, holdId: 'hold-1' }),
+    trackUsage: vi.fn().mockResolvedValue(undefined),
+    releaseHold: vi.fn().mockResolvedValue(undefined),
+    ...over,
+  };
 }
 
 const validPayload = { pageId: 'page1', cols: 80, rows: 24 };
@@ -384,6 +404,107 @@ describe('buildTerminalHandlers', () => {
 
       expect(shell.kill).not.toHaveBeenCalled();
       expect(sessionMap.getByKey('key1')).toBeDefined();
+    });
+  });
+
+  describe('machine billing (Terminal Epic 3)', () => {
+    it('given no billing dep, connects unmetered (no gate, no settle)', async () => {
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket });
+      await onConnect(validPayload);
+
+      expect(sessionMap.getByKey('key1')).toBeDefined();
+    });
+
+    it('places a hold for the resolved payerId BEFORE opening the shell', async () => {
+      const billing = makeBilling();
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket, billing });
+      await onConnect(validPayload);
+
+      expect(billing.gate).toHaveBeenCalledWith({ payerId: 'owner-1' });
+      expect(openShell).toHaveBeenCalled();
+      expect(sessionMap.getByKey('key1')).toMatchObject({ holdId: 'hold-1', payerId: 'owner-1' });
+    });
+
+    it('given the gate denies, emits terminal:error, releases the slot, and never opens a shell', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth.mockResolvedValue(auth);
+      const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'insufficient_balance' }) });
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket, billing });
+      await onConnect(validPayload);
+
+      expect(openShell).not.toHaveBeenCalled();
+      expect(auth.releaseSlot).toHaveBeenCalled();
+      expect(sessionMap.getBySocket('sock1')).toBeUndefined();
+      expect(socket.emit).toHaveBeenCalledWith('terminal:error', expect.objectContaining({ message: expect.any(String) }));
+    });
+
+    it('given openShell throws AFTER the hold was placed, releases the hold (safety net)', async () => {
+      const billing = makeBilling();
+      openShell = vi.fn().mockImplementation(() => { throw new Error('sprite unreachable'); }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket, billing });
+      await onConnect(validPayload);
+
+      expect(billing.releaseHold).toHaveBeenCalledWith('hold-1');
+      expect(billing.trackUsage).not.toHaveBeenCalled();
+    });
+
+    it('on natural shell exit, settles the hold to the real connected-window seconds and never releases it separately', async () => {
+      const billing = makeBilling();
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket, billing });
+      await onConnect(validPayload);
+
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+      await vi.advanceTimersByTimeAsync(7_000);
+      onExitArg(0);
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      const call = billing.trackUsage.mock.calls[0][0];
+      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+      expect(call.activeSeconds).toBeCloseTo(7, 0);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('key1')).toBeUndefined();
+    });
+
+    it('on idle-timeout reap after disconnect, settles the hold to the real active-window seconds', async () => {
+      const billing = makeBilling();
+      const { onConnect, onDisconnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket, billing });
+      await onConnect(validPayload);
+
+      onDisconnect();
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      const call = billing.trackUsage.mock.calls[0][0];
+      expect(call.payerId).toBe('owner-1');
+      expect(call.holdId).toBe('hold-1');
+      expect(call.activeSeconds).toBeCloseTo(DETACHED_IDLE_MS / 1000, 0);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+    });
+
+    it('on a re-auth failure kill, settles the hold rather than leaking it', async () => {
+      const billing = makeBilling();
+      const { onConnect } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket, billing });
+      await onConnect(validPayload);
+
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+    });
+
+    it('reattaching to a live session does NOT place a second hold', async () => {
+      const billing = makeBilling();
+      const { onConnect: connect1 } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket, billing });
+      await connect1(validPayload);
+      expect(billing.gate).toHaveBeenCalledTimes(1);
+
+      const socket2 = makeSocket('sock2');
+      checkAuth.mockResolvedValue(makeAuthSuccess('key1'));
+      const { onConnect: connect2 } = buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, billing });
+      await connect2(validPayload);
+
+      expect(billing.gate).toHaveBeenCalledTimes(1);
     });
   });
 });

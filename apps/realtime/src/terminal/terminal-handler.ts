@@ -3,13 +3,14 @@ import { MAX_SCROLLBACK_BYTES, DETACHED_IDLE_MS } from './terminal-session-map';
 import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import { pickShellSession } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import type { SandboxBillingDeps } from '@pagespace/lib/services/sandbox/tool-runners';
 import { validateTerminalConnectPayload, clampTerminalDimensions } from './validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 export const MAX_INPUT_BYTES = 4096;
 
 export type CheckAuthResult =
-  | { ok: true; sandboxId: string; sessionKey: string; sprite: SpriteInstanceLike; releaseSlot: () => void }
+  | { ok: true; sandboxId: string; sessionKey: string; sprite: SpriteInstanceLike; releaseSlot: () => void; payerId: string }
   | { ok: false; reason: string };
 
 export type CheckAuthFn = (args: { userId: string; pageId: string }) => Promise<CheckAuthResult>;
@@ -27,6 +28,12 @@ export type TerminalHandlerDeps = {
   openShell: OpenShellFn;
   checkAuth: CheckAuthFn;
   socket: SocketLike;
+  /**
+   * Optional metering seam (Terminal Epic 3): meters this PTY session's
+   * active-runtime cost against the machine's payer. Omitted -> unmetered (no
+   * hold, no charge) — mirrors the same optional seam in tool-runners.ts.
+   */
+  billing?: SandboxBillingDeps;
 };
 
 export type TerminalHandlers = {
@@ -46,7 +53,35 @@ export function appendScrollback(session: Pick<TerminalSession, 'scrollback' | '
   }
 }
 
-export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket }: TerminalHandlerDeps): TerminalHandlers {
+/**
+ * Ends a metered session: settles its hold to the real active-window cost
+ * (wall-clock from `connectedAt` to now) BEFORE removing it from the map, so a
+ * near-simultaneous reconnect can never observe a stale, already-billed
+ * session. Best-effort and fire-and-forget — a billing failure must never
+ * block session cleanup (mirrors every other billing seam's swallow-and-log
+ * behavior). No-op billing fields (unset `billing`, or no `holdId` because the
+ * session was never gated) mean nothing to settle.
+ */
+function endTerminalSession(
+  billing: SandboxBillingDeps | undefined,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  sessionKey: string,
+): void {
+  sessionMap.deleteByKey(sessionKey);
+  if (billing && session.holdId && session.payerId && session.connectedAt !== undefined) {
+    const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
+    void billing
+      .trackUsage({ payerId: session.payerId, holdId: session.holdId, activeSeconds })
+      .catch((error) => {
+        loggers.realtime.error('Terminal session billing settle failed', error instanceof Error ? error : new Error(String(error)), {
+          sessionKey,
+        });
+      });
+  }
+}
+
+export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket, billing }: TerminalHandlerDeps): TerminalHandlers {
   return {
     async onConnect(payload: unknown) {
       const validation = validateTerminalConnectPayload(payload);
@@ -96,12 +131,33 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
         existingSessionId = undefined;
       }
 
+      // Terminal Epic 3 metering: place a flat-estimate hold for this NEW
+      // machine-active window BEFORE opening the shell (hibernated/idle time
+      // between sessions is free). Settled at session end — see
+      // endTerminalSession. Deliberately NOT in checkAuth/makeTerminalCheckAuth:
+      // that also runs on every reattach and periodic re-auth tick below, which
+      // must never place a second hold for the same still-open session.
+      let holdId: string | undefined;
+      if (billing) {
+        const gateResult = await billing.gate({ payerId: authResult.payerId });
+        if (!gateResult.allowed) {
+          authResult.releaseSlot();
+          socket.emit('terminal:error', { message: 'Insufficient credits to open a terminal session.' });
+          return;
+        }
+        holdId = gateResult.holdId;
+      }
+      const connectedAt = Date.now();
+
       const session: TerminalSession = {
         command: null as unknown as PtyShell, // assigned below before any async
         sandboxId,
         sessionKey,
         sessionId: existingSessionId,
         releaseSlot: authResult.releaseSlot,
+        payerId: authResult.payerId,
+        holdId,
+        connectedAt,
         outputFn: (data) => socket.emit('terminal:output', { data }),
         closedFn: (exitCode) => socket.emit('terminal:closed', { exitCode }),
         scrollback: [],
@@ -127,11 +183,12 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
             session.releaseSlot();
             loggers.realtime.info('Terminal session closed', { exitCode, sandboxId, sessionKey });
             session.closedFn(exitCode);
-            sessionMap.deleteByKey(sessionKey);
+            endTerminalSession(billing, sessionMap, session, sessionKey);
           },
         });
       } catch {
         authResult.releaseSlot();
+        if (holdId) void billing?.releaseHold(holdId).catch(() => {});
         socket.emit('terminal:error', { message: 'Failed to open shell session' });
         return;
       }
@@ -150,7 +207,7 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
           if (liveSession.idleTimer !== undefined) clearTimeout(liveSession.idleTimer);
           liveSession.releaseSlot();
           liveSession.command.kill();
-          sessionMap.deleteByKey(sessionKey);
+          endTerminalSession(billing, sessionMap, liveSession, sessionKey);
           liveSession.closedFn(-2);
         } else {
           result.releaseSlot();
@@ -195,7 +252,7 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
         if (session.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
         session.releaseSlot();
         session.command.kill();
-        sessionMap.deleteByKey(sessionKey);
+        endTerminalSession(billing, sessionMap, session, sessionKey);
         loggers.realtime.info('Terminal session reaped (idle)', { sessionKey, sandboxId: session.sandboxId });
       }, DETACHED_IDLE_MS);
     },
