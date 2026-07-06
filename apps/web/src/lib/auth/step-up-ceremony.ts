@@ -7,9 +7,10 @@ import { post } from '@/lib/auth/auth-fetch';
  * Shared WebAuthn-attempt-then-magic-link-fallback flow (Phase 8 credential
  * minting security correction). `ConsentActions.tsx`, `ConnectedAppsList.tsx`,
  * and `MCPSettingsView.tsx` each gate a mutation behind a step-up grant and
- * previously carried near-identical copies of this ceremony — kept here once
- * so a future fix to the ceremony itself (as opposed to what each caller does
- * with the result) only has to land in one place.
+ * all call `attemptStepUp` (and its `readStepUpTokenFromHash`/
+ * `stripStepUpTokenFromHash` companions) from here — the one place a future
+ * fix to the ceremony itself (as opposed to what each caller does with the
+ * result) needs to land.
  *
  * Callers own the actionBinding shape and the "awaiting email" UI/state
  * (e.g. which grant/token is pending, whether to persist that across a

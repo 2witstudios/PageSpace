@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { del } from '@/lib/auth/auth-fetch';
-import { attemptStepUp } from '@/lib/auth/step-up-ceremony';
+import { attemptStepUp, readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
 import { useOAuthGrants, type OAuthGrant } from '@/hooks/useOAuthGrants';
-import { readStepUpTokenFromHash, stripStepUpTokenFromHash } from './step-up-hash';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';

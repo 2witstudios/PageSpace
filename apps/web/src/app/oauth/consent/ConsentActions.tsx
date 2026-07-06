@@ -2,12 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { post } from '@/lib/auth/auth-fetch';
-import { attemptStepUp } from '@/lib/auth/step-up-ceremony';
-import {
-  buildConsentActionBinding,
-  readStepUpTokenFromHash,
-  stripStepUpTokenFromHash,
-} from './consent-step-up';
+import { attemptStepUp, readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
+import { buildConsentActionBinding } from './consent-step-up';
 
 interface ConsentActionsProps {
   clientId: string;

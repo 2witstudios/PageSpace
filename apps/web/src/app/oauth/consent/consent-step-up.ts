@@ -1,9 +1,12 @@
 /**
- * Pure helpers for the consent screen's inline step-up ceremony
- * (Phase 8 task d2wicbqyia6u30axz8j2j4ab). Kept separate from
- * `ConsentActions.tsx` so the decision logic — what to bind on, how to read
- * a magic-link-carried token back out of the URL, how to recognize the
- * passkey-less fallback signal — is unit-testable without rendering React.
+ * Pure helper for the consent screen's inline step-up ceremony (Phase 8 task
+ * d2wicbqyia6u30axz8j2j4ab). Kept separate from `ConsentActions.tsx` so the
+ * decision logic — what the step-up grant is bound to — is unit-testable
+ * without rendering React. The ceremony itself (WebAuthn-attempt-then-magic-
+ * link-fallback, hash parsing, no-passkey detection) lives once in
+ * `@/lib/auth/step-up-ceremony` and is shared by every step-up call site —
+ * this module used to carry its own copies of those helpers, which is why a
+ * fix to that ceremony code once had to be manually re-verified per call site.
  */
 
 export interface ConsentActionBindingParams {
@@ -29,27 +32,3 @@ export const buildConsentActionBinding = ({
   scope,
   state: state ?? '',
 });
-
-const STEP_UP_TOKEN_PARAM = 'step_up_token';
-
-/**
- * The magic-link verify route hands the grant back in the URL *fragment*
- * (`#step_up_token=...`), not the query string — fragments never leave the
- * browser, so the token can't be captured by server/proxy access logs.
- */
-const parseHashParams = (hash: string): URLSearchParams =>
-  new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
-
-export const readStepUpTokenFromHash = (hash: string): string | null =>
-  parseHashParams(hash).get(STEP_UP_TOKEN_PARAM);
-
-/** Builds the fragment with `step_up_token` removed, so it doesn't linger in history. */
-export const stripStepUpTokenFromHash = (hash: string): string => {
-  const params = parseHashParams(hash);
-  params.delete(STEP_UP_TOKEN_PARAM);
-  const remaining = params.toString();
-  return remaining ? `#${remaining}` : '';
-};
-
-/** The `webauthn/options` route's signal that this user has no registered passkey. */
-export const isNoPasskeyError = (error: unknown): boolean => error instanceof Error && error.message === 'no_passkey';
