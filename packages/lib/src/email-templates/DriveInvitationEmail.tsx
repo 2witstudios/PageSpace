@@ -63,6 +63,14 @@ export function DriveInvitationEmail({
             <Text style={emailStyles.footerText}>
               You&apos;re receiving this email because you were added to a PageSpace workspace.
             </Text>
+            <Text style={emailStyles.footerText}>
+              PageSpace received your email address from {inviterName} to send you this invitation
+              — see our{' '}
+              <Link href="https://pagespace.ai/privacy" style={emailStyles.link}>
+                Privacy Policy
+              </Link>{' '}
+              for details.
+            </Text>
             {unsubscribeUrl && (
               <Text style={emailStyles.footerText}>
                 <Link href={unsubscribeUrl} style={emailStyles.link}>
