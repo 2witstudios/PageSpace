@@ -20,6 +20,7 @@ import {
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
 import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
+import type { MachineHost } from '@pagespace/lib/services/sandbox/machine-host';
 
 let cachedSdk: SpritesSdk | null = null;
 
@@ -36,11 +37,19 @@ async function getSpritesSDK(): Promise<SpritesSdk> {
 }
 
 export async function createProductionSpritesSandboxClient(): Promise<ExecSandboxClient> {
+  const host = await createProductionMachineHost();
+  return createExecClientFromMachineHost(host, { kind: 'sprite' });
+}
+
+/**
+ * The raw `MachineHost` (not re-adapted back to `ExecSandboxClient`), for
+ * callers that provision/attach/kill Sprites directly rather than through a
+ * page-keyed persistent session — e.g. the Branches tier
+ * (`services/machines/machine-branches.ts`), where each branch-terminal is
+ * its OWN Sprite, addressed by its own derived session key.
+ */
+export async function createProductionMachineHost(): Promise<MachineHost> {
   const sdk = await getSpritesSDK();
   const client = createSpritesSandboxClient({ sdk });
-  // Route through the MachineHost seam (Terminal Epic 2, T2.1) rather than
-  // handing the raw Sprite client straight to callers — the adapter re-expresses
-  // it as the same ExecSandboxClient shape, so nothing downstream changes.
-  const host = createSpriteMachineHost({ sdk, client });
-  return createExecClientFromMachineHost(host, { kind: 'sprite' });
+  return createSpriteMachineHost({ sdk, client });
 }

@@ -20,7 +20,15 @@
 import type { MachineHost, MachineHandle, MachineSubstrateSpec } from '../machine-host';
 import type { ExecSandboxClient, ExecutableSandbox } from './types';
 
-function adapt(handle: MachineHandle): ExecutableSandbox {
+/**
+ * Adapt a single `MachineHandle` into the `ExecutableSandbox` shape. Exported
+ * (not just used internally by `createExecClientFromMachineHost`) for callers
+ * that already hold a freshly-provisioned handle and want to drive it through
+ * an `ExecutableSandbox`-shaped helper (e.g. `runGitInSandbox`) without a
+ * round-trip through a `MachineHost.attach` lookup — see
+ * `services/machines/machine-branches.ts`.
+ */
+export function adaptMachineHandleToExecutableSandbox(handle: MachineHandle): ExecutableSandbox {
   return {
     sandboxId: handle.machineId,
     runCommand: (args) => handle.exec(args),
@@ -40,11 +48,11 @@ export function createExecClientFromMachineHost(
 ): ExecSandboxClient {
   return {
     async getOrCreate({ name, options }) {
-      return adapt(await host.provision({ name, substrate, options }));
+      return adaptMachineHandleToExecutableSandbox(await host.provision({ name, substrate, options }));
     },
     async get({ sandboxId }) {
       const handle = await host.attach({ machineId: sandboxId });
-      return handle ? adapt(handle) : null;
+      return handle ? adaptMachineHandleToExecutableSandbox(handle) : null;
     },
     async stop({ sandboxId }) {
       await host.kill({ machineId: sandboxId });
