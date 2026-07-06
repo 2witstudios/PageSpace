@@ -141,6 +141,7 @@ export async function isPrincipalDriveMember(auth: AuthResult, driveId: string):
 }
 
 export async function getPrincipalDriveAccess(auth: AuthResult, driveId: string): Promise<boolean> {
+  if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth)) {
     return hasAppDriveMembership(auth.tokenId, driveId);
   }
@@ -188,6 +189,7 @@ export async function getPrincipalAccessiblePagesInDrive(
   auth: AuthResult,
   driveId: string,
 ): Promise<PageWithPermissions[]> {
+  if (isManageKeysOnly(auth)) return [];
   if (isScopedMCPAuth(auth)) {
     return getAppAccessiblePagesInDrive(auth.tokenId, driveId);
   }

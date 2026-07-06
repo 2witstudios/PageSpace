@@ -445,4 +445,18 @@ describe('manage-keys-only credential — deny-first short-circuit', () => {
     expect(await getPrincipalDriveIds(auth)).toEqual([]);
     expect(getDriveIdsForUser).not.toHaveBeenCalled();
   });
+
+  it.each(cases)('getPrincipalDriveAccess denies (%s)', async (_label, auth) => {
+    expect(await getPrincipalDriveAccess(auth, DRIVE_ID)).toBe(false);
+    expect(getUserDriveAccess).not.toHaveBeenCalled();
+    expect(hasAppDriveMembership).not.toHaveBeenCalled();
+    expect(hasScopedDriveMembership).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('getPrincipalAccessiblePagesInDrive returns empty, never the owning user\'s pages (%s)', async (_label, auth) => {
+    expect(await getPrincipalAccessiblePagesInDrive(auth, DRIVE_ID)).toEqual([]);
+    expect(getUserAccessiblePagesInDriveWithDetails).not.toHaveBeenCalled();
+    expect(getAppAccessiblePagesInDrive).not.toHaveBeenCalled();
+    expect(getScopedAccessiblePagesInDrive).not.toHaveBeenCalled();
+  });
 });
