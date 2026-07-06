@@ -11,6 +11,12 @@
  * never depends on this one — this module already depends on it (for the
  * `help` route's own handler), and a two-way dependency between them would
  * be an import cycle.
+ *
+ * Adding a route here also means deciding whether its handler belongs in
+ * `run.ts`'s `AUTH_EXEMPT_HANDLERS` — see that set's doc comment. The default
+ * (not adding it) is safe: an omitted handler is simply gated and fails
+ * closed, so forgetting this only breaks that command for users who expect
+ * it to manage its own credentials, never leaks a credential.
  */
 import { activityHandler } from '../commands/activity.js';
 import { agentsAskHandler, agentsConfigHandler, agentsListHandler, modelsListHandler } from '../commands/agents.js';

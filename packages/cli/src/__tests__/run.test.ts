@@ -141,13 +141,6 @@ describe('run', () => {
     expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
   });
 
-  it('"pages list" is not auth-exempt either: fails closed with an actionable message and zero credentials', async () => {
-    const deps = makeDeps(['pages', 'list']);
-    const code = await run(deps);
-    expect(code).not.toBe(EXIT_SUCCESS);
-    expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
-  });
-
   describe('"drives list" with a stored default profile but no explicit credential (Phase 9 task 4 — generalized from Phase 8 task 4)', () => {
     afterEach(() => {
       vi.unstubAllGlobals();

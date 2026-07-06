@@ -47,24 +47,18 @@ export interface RunDependencies {
  * through its own browser-consent OAuth flow (Phase 8 task 2) and never
  * touches `ctx.sdk` either.
  *
- * This one set gates BOTH checks below — the ambient-credential-fallback
- * gate (which runs first) and `enforceAuth` (which runs second) — because
- * for every handler above, neither check's subject (the `source`/`auth`
- * built from `resolveAuth`'s flag > env > stored-profile precedence) is ever
- * consulted by that handler in the first place. Routing them through either
- * check would print this resolver's generic message (or attempt a redundant
- * refresh) ahead of their own, more specific handling, for no benefit — there
- * is nothing for either check to protect there.
- *
- * Every OTHER handler — including `mcp` — DOES eventually authenticate
- * through `ctx.sdk` when given a credential, so for them both checks matter:
- * the ambient gate refuses to even attempt that authentication on nothing
- * but a stored default/personal profile (originally Phase 8 task 4's
- * `mcp`-only gate, generalized here in Phase 9 task 4 to every command — a
- * coding agent with shell access must never be able to ride a human's
- * `pagespace login` credential into content access), and `enforceAuth` is
- * what actually materializes and validates whichever explicit source WAS
- * given.
+ * This set gates BOTH checks below — the ambient-credential-fallback gate
+ * (first) and `enforceAuth` (second) — for the handlers above, since neither
+ * check's subject (the `source`/`auth` built from `resolveAuth`'s flag > env
+ * > stored-profile precedence) is ever consulted by them. Every OTHER
+ * handler, including `mcp`, DOES eventually authenticate through `ctx.sdk`
+ * when given a credential, so both checks matter there: the ambient gate
+ * refuses to even attempt that authentication on nothing but a stored
+ * default/personal profile (originally Phase 8 task 4's `mcp`-only gate,
+ * generalized here in Phase 9 task 4 to every command — a coding agent with
+ * shell access must never be able to ride a human's `pagespace login`
+ * credential into content access), and `enforceAuth` is what actually
+ * materializes and validates whichever explicit source WAS given.
  *
  * Phase 9 task 5's future `pagespace keys` TUI handler belongs in this set
  * too, once it exists — it will manage its own credentials the same way
