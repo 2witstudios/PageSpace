@@ -1,18 +1,23 @@
 "use client";
 
 import { useState, useEffect, useRef, memo, useCallback } from "react";
-import { History, MessageSquare, Activity } from "lucide-react";
+import { useParams } from "next/navigation";
+import { History, MessageSquare, Activity, TerminalSquare } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useSidebarAgentStore } from "@/hooks/page-agents";
 import { useDashboardContext } from "@/hooks/useDashboardContext";
 import { usePageAgentDashboardStore, type SidebarTab } from "@/stores/page-agents";
+import { useTabsStore } from "@/stores/useTabsStore";
+import { useLayoutStore } from "@/stores/useLayoutStore";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useMobileKeyboard } from "@/hooks/useMobileKeyboard";
+import { PageType } from "@pagespace/lib/utils/enums";
 
 import SidebarChatTab from "./ai-assistant/SidebarChatTab";
 import SidebarHistoryTab from "./ai-assistant/SidebarHistoryTab";
 import SidebarActivityTab from "./ai-assistant/SidebarActivityTab";
+import TerminalNavigatorTab from "./TerminalNavigatorTab";
 
 export interface RightPanelProps {
   className?: string;
@@ -37,6 +42,7 @@ export interface RightPanelProps {
  */
 function RightPanel({ className, variant }: RightPanelProps) {
   const { isDashboardContext } = useDashboardContext();
+  const params = useParams();
 
   // Mobile keyboard support - adjust height when keyboard is open
   const { isOpen: isKeyboardOpen, height: keyboardHeight } = useMobileKeyboard();
@@ -47,12 +53,19 @@ function RightPanel({ className, variant }: RightPanelProps) {
   const dashboardAgent = usePageAgentDashboardStore((state) => state.selectedAgent);
   const dashboardActiveTab = usePageAgentDashboardStore((state) => state.activeTab);
   const setDashboardActiveTab = usePageAgentDashboardStore((state) => state.setActiveTab);
+  const rightSidebarOpen = useLayoutStore((state) => state.rightSidebarOpen);
 
   // On dashboard context, use the central agent store; otherwise use sidebar's own store
   const selectedAgent = isDashboardContext ? dashboardAgent : sidebarAgent;
 
   // Chat tab is only shown when NOT on dashboard context
   const showChatTab = !isDashboardContext;
+
+  // Terminal tab is only shown while the active page is a Terminal page —
+  // the panel otherwise has no page-type awareness.
+  const activeTabMeta = useTabsStore((state) => state.selectActiveTab(state));
+  const showTerminalTab = activeTabMeta?.pageType === PageType.TERMINAL;
+  const activeTerminalPageId = showTerminalTab ? (params.pageId as string | undefined) : undefined;
 
   // Local tab state for page context (independent from dashboard)
   const [localActiveTab, setLocalActiveTab] = useState<SidebarTab>(showChatTab ? "chat" : "history");
@@ -78,6 +91,20 @@ function RightPanel({ className, variant }: RightPanelProps) {
     }
     prevIsDashboardContext.current = isDashboardContext;
   }, [isDashboardContext]);
+
+  // Default the sidebar to the Terminal tab whenever a (different) Terminal
+  // page becomes active, but only if the sidebar is already open — opening it
+  // for the user would be a surprising side effect of navigation alone. When
+  // navigating away from a Terminal page, fall back off the now-hidden tab.
+  const prevTerminalPageId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (activeTerminalPageId && activeTerminalPageId !== prevTerminalPageId.current && rightSidebarOpen) {
+      setLocalActiveTab('terminal');
+    } else if (!activeTerminalPageId && prevTerminalPageId.current) {
+      setLocalActiveTab((tab) => (tab === 'terminal' ? 'chat' : tab));
+    }
+    prevTerminalPageId.current = activeTerminalPageId;
+  }, [activeTerminalPageId, rightSidebarOpen]);
 
   // Use appropriate tab state based on context
   const activeTab = isDashboardContext ? dashboardActiveTab : localActiveTab;
@@ -128,7 +155,7 @@ function RightPanel({ className, variant }: RightPanelProps) {
           <TabsList
             className={cn(
               "grid gap-1 px-1 py-1 w-full h-auto bg-transparent rounded-none",
-              showChatTab ? "grid-cols-3" : "grid-cols-2"
+              showTerminalTab ? "grid-cols-4" : showChatTab ? "grid-cols-3" : "grid-cols-2"
             )}
           >
             {showChatTab && (
@@ -174,6 +201,22 @@ function RightPanel({ className, variant }: RightPanelProps) {
                 )}
               />
             </TabsTrigger>
+
+            {showTerminalTab && (
+              <TabsTrigger
+                value="terminal"
+                className={triggerBaseStyles}
+              >
+                <TerminalSquare className="h-4 w-4" />
+                <span className="hidden @[180px]:inline">Terminal</span>
+                <div
+                  className={cn(
+                    "absolute bottom-0 left-1/2 h-0.5 w-1/2 -translate-x-1/2 bg-primary transition-opacity",
+                    activeTab === "terminal" ? "opacity-100" : "opacity-0"
+                  )}
+                />
+              </TabsTrigger>
+            )}
           </TabsList>
         </div>
 
@@ -218,6 +261,19 @@ function RightPanel({ className, variant }: RightPanelProps) {
           >
             <SidebarActivityTab />
           </TabsContent>
+
+          {showTerminalTab && activeTerminalPageId && (
+            <TabsContent
+              value="terminal"
+              forceMount
+              className={cn(
+                "h-full m-0 outline-none",
+                activeTab === "terminal" ? "flex flex-col" : "hidden"
+              )}
+            >
+              <TerminalNavigatorTab terminalId={activeTerminalPageId} />
+            </TabsContent>
+          )}
         </div>
       </Tabs>
     </aside>
