@@ -7,6 +7,7 @@ import {
   updateFormTargetStatus,
   getFormTargetById,
   FormTargetPageNotSheetError,
+  FormTargetAlreadyActiveError,
 } from '@/services/api/form-target-service';
 import { buildFormHtml } from '@pagespace/lib/forms/form-html';
 
@@ -25,6 +26,18 @@ const formFieldSchema = z.object({
   required: z.boolean().default(true),
 });
 
+// Exported (not just used inline) so tests can exercise validation directly —
+// the `ai` package's `tool()` wrapper doesn't expose zod's `.safeParse` in its
+// public type, even though the runtime schema is unchanged.
+export const formFieldsSchema = z
+  .array(formFieldSchema)
+  .min(1)
+  .max(20)
+  .refine(
+    (fields) => new Set(fields.map((field) => field.name)).size === fields.length,
+    { message: 'Field names must be unique — a duplicate name silently drops the earlier value on submit' }
+  );
+
 export const formTools = {
   provision_form_target: tool({
     description:
@@ -36,7 +49,7 @@ export const formTools = {
       'rows to this one sheet, nothing else.',
     inputSchema: z.object({
       sheetPageId: z.string().describe('The target SHEET page that will receive one new row per submission'),
-      fields: z.array(formFieldSchema).min(1).max(20),
+      fields: formFieldsSchema,
     }),
     execute: async ({ sheetPageId, fields }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -63,12 +76,13 @@ export const formTools = {
         return {
           success: true,
           formTargetId: formTarget.id,
+          pageId: sheetPageId,
           submitUrl,
           formHtml,
           message: `Form target provisioned on sheet "${sheetPageId}". Embed formHtml verbatim into the Canvas page.`,
         };
       } catch (error) {
-        if (error instanceof FormTargetPageNotSheetError) {
+        if (error instanceof FormTargetPageNotSheetError || error instanceof FormTargetAlreadyActiveError) {
           return { success: false, error: error.message };
         }
         throw error;
@@ -103,7 +117,7 @@ export const formTools = {
       }
 
       const updated = await updateFormTargetStatus({ formTargetId, status, statusReason: reason });
-      return { success: true, formTargetId: updated.id, status: updated.status };
+      return { success: true, formTargetId: updated.id, pageId: existing.pageId, status: updated.status };
     },
   }),
 };

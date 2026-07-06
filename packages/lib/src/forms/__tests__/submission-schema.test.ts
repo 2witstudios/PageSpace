@@ -58,4 +58,10 @@ describe('buildSubmissionSchema', () => {
     });
     expect(rejected.success).toBe(false);
   });
+
+  it('rejects a required field submitted as whitespace only', () => {
+    const schema = buildSubmissionSchema(fields);
+    const result = schema.safeParse({ name: '   ', email: 'ada@example.com' });
+    expect(result.success).toBe(false);
+  });
 });

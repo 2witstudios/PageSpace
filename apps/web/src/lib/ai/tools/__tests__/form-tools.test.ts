@@ -16,13 +16,14 @@ vi.mock('@/services/api/form-target-service', () => ({
   updateFormTargetStatus: mockUpdateFormTargetStatus,
   getFormTargetById: mockGetFormTargetById,
   FormTargetPageNotSheetError: class FormTargetPageNotSheetError extends Error {},
+  FormTargetAlreadyActiveError: class FormTargetAlreadyActiveError extends Error {},
 }));
 
 vi.mock('@pagespace/lib/forms/form-html', () => ({
   buildFormHtml: mockBuildFormHtml,
 }));
 
-import { formTools } from '../form-tools';
+import { formTools, formFieldsSchema } from '../form-tools';
 
 const context = (userId?: string) => ({
   toolCallId: '1',
@@ -73,6 +74,7 @@ describe('provision_form_target', () => {
     expect(result).toMatchObject({
       success: true,
       formTargetId: 'ft-1',
+      pageId: 'sheet-1',
       formHtml: '<form>...</form>',
     });
     if (!('submitUrl' in result)) throw new Error('Expected a submitUrl in the result');
@@ -80,6 +82,16 @@ describe('provision_form_target', () => {
     expect(mockCreateFormTarget).toHaveBeenCalledWith(
       expect.objectContaining({ sheetPageId: 'sheet-1', fields, createdBy: 'user-1' })
     );
+  });
+
+  it('rejects duplicate field names at the schema gate (FormData would silently drop one)', () => {
+    const duplicateFields = [
+      { name: 'name', label: 'Name', type: 'text' as const, required: true },
+      { name: 'name', label: 'Full Name', type: 'text' as const, required: true },
+    ];
+    const result = formFieldsSchema.safeParse(duplicateFields);
+
+    expect(result.success).toBe(false);
   });
 
   it('returns a structured error when the target page is not a SHEET', async () => {
@@ -95,6 +107,21 @@ describe('provision_form_target', () => {
     expect(result).toMatchObject({ success: false });
     if (!('error' in result)) throw new Error('Expected an error in the result');
     expect(result.error).toMatch(/not a SHEET/i);
+  });
+
+  it('returns a structured error when the sheet already has an active form target', async () => {
+    mockCanActorEditPage.mockResolvedValue(true);
+    const { FormTargetAlreadyActiveError } = await import('@/services/api/form-target-service');
+    mockCreateFormTarget.mockRejectedValue(new FormTargetAlreadyActiveError('Sheet "sheet-1" already has an active form target'));
+
+    const result = await formTools.provision_form_target.execute!(
+      { sheetPageId: 'sheet-1', fields },
+      context('user-1')
+    );
+
+    expect(result).toMatchObject({ success: false });
+    if (!('error' in result)) throw new Error('Expected an error in the result');
+    expect(result.error).toMatch(/already has an active form target/i);
   });
 });
 
@@ -154,6 +181,6 @@ describe('update_form_target_status', () => {
       status: 'paused',
       statusReason: 'spam spike',
     });
-    expect(result).toMatchObject({ success: true, status: 'paused' });
+    expect(result).toMatchObject({ success: true, status: 'paused', pageId: 'sheet-1' });
   });
 });

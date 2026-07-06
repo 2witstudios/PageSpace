@@ -55,6 +55,10 @@ describe('middleware — /api/public/forms carve-outs', () => {
     const response = await middleware(request);
 
     expect(response.status).not.toBe(401);
+    // createSecureResponse is mocked to always return 200, so the status
+    // check alone wouldn't catch the carve-out being removed — assert the
+    // session-cookie lookup itself was never reached.
+    expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
   });
 
   it('never blocks on origin validation for this route, even in blocking mode with an invalid origin', async () => {

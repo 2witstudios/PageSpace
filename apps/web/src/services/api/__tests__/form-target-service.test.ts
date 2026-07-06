@@ -4,14 +4,14 @@ import type { FormFieldDef } from '@pagespace/db/schema/form-targets';
 
 const mockFindById = vi.hoisted(() => vi.fn());
 const mockApplyPageMutation = vi.hoisted(() => vi.fn());
-const mockInsertValues = vi.hoisted(() => vi.fn());
-const mockInsertReturning = vi.hoisted(() => vi.fn());
 const mockSelectLimit = vi.hoisted(() => vi.fn());
 const mockUpdateReturning = vi.hoisted(() => vi.fn());
 const mockTransaction = vi.hoisted(() => vi.fn());
 const mockTxSelectFor = vi.hoisted(() => vi.fn());
 const mockTxSelectLimit = vi.hoisted(() => vi.fn());
 const mockTxUpdateWhere = vi.hoisted(() => vi.fn());
+const mockTxInsertValues = vi.hoisted(() => vi.fn());
+const mockTxInsertReturning = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/lib/repositories/page-repository', () => ({
   pageRepository: { findById: mockFindById },
@@ -36,16 +36,16 @@ const txMock = {
       where: mockTxUpdateWhere,
     })),
   })),
+  insert: vi.fn(() => ({
+    values: vi.fn((...args: unknown[]) => {
+      mockTxInsertValues(...args);
+      return { returning: mockTxInsertReturning };
+    }),
+  })),
 };
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
-    insert: vi.fn(() => ({
-      values: vi.fn((...args: unknown[]) => {
-        mockInsertValues(...args);
-        return { returning: mockInsertReturning };
-      }),
-    })),
     select: vi.fn(() => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
@@ -69,7 +69,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...conditions: unknown[]) => ({ and: conditions })),
 }));
 
-import { createFormTarget, lookupActiveFormTarget, updateFormTargetStatus, getFormTargetById, appendFormSubmission } from '../form-target-service';
+import { createFormTarget, lookupActiveFormTarget, updateFormTargetStatus, getFormTargetById, appendFormSubmission, FormTargetAlreadyActiveError } from '../form-target-service';
 import { PageRevisionMismatchError } from '../page-mutation-service';
 
 const fields: FormFieldDef[] = [
@@ -90,7 +90,8 @@ describe('createFormTarget', () => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue(sheetPage);
     mockApplyPageMutation.mockResolvedValue({ nextRevision: 2 });
-    mockInsertReturning.mockResolvedValue([
+    mockTransaction.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
+    mockTxInsertReturning.mockResolvedValue([
       {
         id: 'ft-1',
         tokenHash: 'hash',
@@ -107,7 +108,7 @@ describe('createFormTarget', () => {
     ]);
   });
 
-  it('writes the header row via applyPageMutation before creating the grant', async () => {
+  it('writes the header row and creates the grant in the same transaction (atomic)', async () => {
     await createFormTarget({
       sheetPageId: 'sheet-1',
       fields,
@@ -115,8 +116,9 @@ describe('createFormTarget', () => {
       mutationContext: { userId: 'user-1' },
     });
 
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(mockApplyPageMutation).toHaveBeenCalledWith(
-      expect.objectContaining({ pageId: 'sheet-1', operation: 'update' })
+      expect.objectContaining({ pageId: 'sheet-1', operation: 'update', tx: txMock })
     );
   });
 
@@ -128,13 +130,27 @@ describe('createFormTarget', () => {
       mutationContext: { userId: 'user-1' },
     });
 
-    expect(mockInsertValues).toHaveBeenCalledTimes(1);
-    const inserted = mockInsertValues.mock.calls[0][0];
+    expect(mockTxInsertValues).toHaveBeenCalledTimes(1);
+    const inserted = mockTxInsertValues.mock.calls[0][0];
     expect(inserted.tokenHash).toBeTypeOf('string');
     expect(inserted.tokenHash).toHaveLength(64); // sha3-256 hex
     expect(inserted.createdBy).toBe('user-1');
     expect(inserted.pageId).toBe('sheet-1');
     expect(inserted.driveId).toBe('drive-1');
+  });
+
+  it('throws FormTargetAlreadyActiveError when the sheet already has an active form target', async () => {
+    const conflictError = Object.assign(new Error('duplicate key'), { code: '23505' });
+    mockTxInsertReturning.mockRejectedValue(conflictError);
+
+    await expect(
+      createFormTarget({
+        sheetPageId: 'sheet-1',
+        fields,
+        createdBy: 'user-1',
+        mutationContext: { userId: 'user-1' },
+      })
+    ).rejects.toThrow(FormTargetAlreadyActiveError);
   });
 
   it('returns a raw token distinct from the stored hash', async () => {
@@ -310,6 +326,6 @@ describe('appendFormSubmission', () => {
       })
     ).rejects.toThrow(PageRevisionMismatchError);
 
-    expect(mockApplyPageMutation.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(mockApplyPageMutation).toHaveBeenCalledTimes(3);
   });
 });

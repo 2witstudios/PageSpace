@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, integer, jsonb, index } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, text, timestamp, integer, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
@@ -50,10 +50,21 @@ export const formTargets = pgTable('form_targets', {
   lastSubmittedAt: timestamp('last_submitted_at', { mode: 'date' }),
   submissionCount: integer('submission_count').notNull().default(0),
 }, (table) => ({
-  tokenHashIdx: index('form_targets_token_hash_idx').on(table.tokenHash),
+  // No separate index on tokenHash — .unique() already backs it with an
+  // implicit unique btree index; a duplicate index would double write-time
+  // maintenance cost for no benefit.
   pageIdx: index('form_targets_page_id_idx').on(table.pageId),
   driveIdx: index('form_targets_drive_id_idx').on(table.driveId),
   statusIdx: index('form_targets_status_idx').on(table.status),
+  // At most one ACTIVE form target per Sheet page — enforced in Postgres
+  // (not just app logic) so two concurrent provisions can't both succeed and
+  // silently share/collide on `nextRow`. Paused/archived rows are unaffected,
+  // so archiving one target and provisioning a new one on the same sheet
+  // still works. Mirrors workflow_runs_running_claim_idx's partial-unique
+  // "one active X per Y" pattern.
+  oneActivePerPageIdx: uniqueIndex('form_targets_one_active_per_page_idx')
+    .on(table.pageId)
+    .where(sql`${table.status} = 'active'`),
 }));
 
 export const formTargetsRelations = relations(formTargets, ({ one }) => ({

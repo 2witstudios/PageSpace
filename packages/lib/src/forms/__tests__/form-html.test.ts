@@ -55,4 +55,24 @@ describe('buildFormHtml', () => {
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;');
   });
+
+  it('preserves a submitUrl containing an ampersand and quotes intact in the JS fetch() call, not HTML-escaped', () => {
+    const submitUrl = 'https://app.pagespace.ai/api/public/forms/tok/submit?a=1&b="two"';
+    const html = buildFormHtml({ fields, submitUrl });
+
+    // The script body must fetch() the exact raw URL — an HTML-escaped
+    // "&amp;"/"&quot;" in a JS string context would corrupt the request.
+    expect(html).toContain(JSON.stringify(submitUrl).replace(/</g, '\\u003c'));
+    expect(html).not.toContain('&amp;b=');
+  });
+
+  it('does not let a formId containing "</script>" break out of the inline script block', () => {
+    const html = buildFormHtml({
+      fields,
+      submitUrl: 'https://app.pagespace.ai/api/public/forms/tok/submit',
+      formId: '</script><script>alert(1)</script>',
+    });
+
+    expect(html).not.toContain('</script><script>alert(1)</script>');
+  });
 });

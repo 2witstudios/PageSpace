@@ -1,6 +1,17 @@
 import type { FormFieldDef } from '@pagespace/db/schema/form-targets';
-import { escapeHtml } from '../canvas/render-document';
+import { escapeHtml } from '../utils/html';
 import { HONEYPOT_FIELD_NAME } from './honeypot';
+
+/**
+ * JSON.stringify a value for safe embedding inside an inline <script> JS
+ * string context. JSON.stringify already produces valid JS-string escaping
+ * for quotes/backslashes/control chars — the one gap is `<`, which it does
+ * NOT escape, so a value containing `</script>` could otherwise break out of
+ * the script block. `<` is JSON- and JS-legal and parses to the same value.
+ */
+function jsonScriptSafe(value: string): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
+}
 
 export interface BuildFormHtmlInput {
   fields: FormFieldDef[];
@@ -32,7 +43,6 @@ function buildFieldMarkup(field: FormFieldDef): string {
  */
 export function buildFormHtml({ fields, submitUrl, formId = 'pagespace-form' }: BuildFormHtmlInput): string {
   const safeFormId = escapeHtml(formId);
-  const safeSubmitUrl = escapeHtml(submitUrl);
   const fieldsMarkup = fields.map(buildFieldMarkup).join('\n');
 
   return `<form id="${safeFormId}">
@@ -45,7 +55,7 @@ ${fieldsMarkup}
 </form>
 <script>
 (function () {
-  var form = document.getElementById(${JSON.stringify(safeFormId)});
+  var form = document.getElementById(${jsonScriptSafe(formId)});
   var status = form.querySelector('[data-role="form-status"]');
   form.addEventListener('submit', function (event) {
     event.preventDefault();
@@ -53,7 +63,7 @@ ${fieldsMarkup}
     new FormData(form).forEach(function (value, key) {
       data[key] = value;
     });
-    fetch(${JSON.stringify(safeSubmitUrl)}, {
+    fetch(${jsonScriptSafe(submitUrl)}, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),

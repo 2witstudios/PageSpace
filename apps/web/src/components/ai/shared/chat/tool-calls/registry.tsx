@@ -525,7 +525,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       actionType="create"
       success={parsedOutput.success !== false}
       title="Form target"
-      pageId={parsedOutput.formTargetId as string | undefined}
+      pageId={parsedOutput.pageId as string | undefined}
       message={parsedOutput.message as string | undefined}
       errorMessage={parsedOutput.error as string | undefined}
     />
@@ -536,7 +536,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       actionType="update"
       success={parsedOutput.success !== false}
       title="Form target"
-      pageId={parsedOutput.formTargetId as string | undefined}
+      pageId={parsedOutput.pageId as string | undefined}
       message={parsedOutput.status ? `Status: ${parsedOutput.status as string}` : undefined}
       errorMessage={parsedOutput.error as string | undefined}
     />

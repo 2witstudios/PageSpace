@@ -154,6 +154,20 @@ describe('POST /api/public/forms/[token]/submit', () => {
       expect(response.status).toBe(413);
       expect(mockCheckDistributedRateLimit).not.toHaveBeenCalled();
     });
+
+    it('returns 413 for an oversized body even when Content-Length is absent (e.g. chunked encoding)', async () => {
+      const oversized = 'x'.repeat(8 * 1024 + 1); // exceeds the route's 8KB cap
+      const request = new Request('http://localhost/api/public/forms/pft_realtoken/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: oversized,
+      });
+
+      const response = await POST(request, params());
+
+      expect(response.status).toBe(413);
+      expect(mockCheckDistributedRateLimit).not.toHaveBeenCalled();
+    });
   });
 
   describe('schema validation (400)', () => {

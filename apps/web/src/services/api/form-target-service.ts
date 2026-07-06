@@ -15,6 +15,15 @@ const MAX_APPEND_ATTEMPTS = 3;
 
 export class FormTargetPageNotSheetError extends Error {}
 
+/** Thrown when the target Sheet already has an active form target (enforced
+ * by a partial unique index — see packages/db/src/schema/form-targets.ts).
+ */
+export class FormTargetAlreadyActiveError extends Error {}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: string }).code === '23505';
+}
+
 export interface CreateFormTargetInput {
   sheetPageId: string;
   fields: FormFieldDef[];
@@ -30,9 +39,14 @@ export interface CreateFormTargetResult {
 /**
  * Provisions a form target: writes the header row for `fields` onto the
  * target Sheet (via the existing page-mutation pipeline, so it's revisioned
- * and activity-logged like any other edit), then creates the form_targets
- * grant row. The header write happens BEFORE the grant exists so schema and
- * header can never disagree at t=0.
+ * and activity-logged like any other edit) and creates the form_targets
+ * grant row in the SAME transaction — a failure after the header write (DB
+ * error, connection drop, unique-hash collision) rolls back the header edit
+ * too, instead of leaving an orphaned Sheet mutation with no grant.
+ *
+ * Throws FormTargetAlreadyActiveError if the sheet already has an active
+ * form target (enforced by a partial unique index, not just app logic, so
+ * two concurrent provisions can't both succeed and collide on `nextRow`).
  */
 export async function createFormTarget({
   sheetPageId,
@@ -48,38 +62,48 @@ export async function createFormTarget({
     throw new FormTargetPageNotSheetError(`Page "${sheetPageId}" is not a SHEET page`);
   }
 
-  const sheetData = parseSheetContent(page.content);
-  const updatedSheet = updateSheetCells(sheetData, buildHeaderRowUpdates(fields, HEADER_ROW));
-  const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
-
-  await applyPageMutation({
-    pageId: page.id,
-    operation: 'update',
-    updates: { content: newContent },
-    updatedFields: ['content'],
-    expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-    context: mutationContext,
-  });
-
   const generated = generateToken(FORM_TOKEN_PREFIX);
 
-  const [formTarget] = await db
-    .insert(formTargets)
-    .values({
-      tokenHash: generated.hash,
-      tokenPrefix: generated.tokenPrefix,
-      driveId: page.driveId,
-      pageId: page.id,
-      action: 'sheet:append',
-      fields,
-      headerRow: HEADER_ROW,
-      nextRow: HEADER_ROW + 1,
-      status: 'active',
-      createdBy,
-    })
-    .returning();
+  try {
+    const [formTarget] = await db.transaction(async (tx) => {
+      const sheetData = parseSheetContent(page.content);
+      const updatedSheet = updateSheetCells(sheetData, buildHeaderRowUpdates(fields, HEADER_ROW));
+      const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
 
-  return { token: generated.token, formTarget };
+      await applyPageMutation({
+        pageId: page.id,
+        operation: 'update',
+        updates: { content: newContent },
+        updatedFields: ['content'],
+        expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+        context: mutationContext,
+        tx,
+      });
+
+      return tx
+        .insert(formTargets)
+        .values({
+          tokenHash: generated.hash,
+          tokenPrefix: generated.tokenPrefix,
+          driveId: page.driveId,
+          pageId: page.id,
+          action: 'sheet:append',
+          fields,
+          headerRow: HEADER_ROW,
+          nextRow: HEADER_ROW + 1,
+          status: 'active',
+          createdBy,
+        })
+        .returning();
+    });
+
+    return { token: generated.token, formTarget };
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new FormTargetAlreadyActiveError(`Sheet "${sheetPageId}" already has an active form target`);
+    }
+    throw error;
+  }
 }
 
 /**

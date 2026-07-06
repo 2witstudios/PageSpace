@@ -13,8 +13,8 @@ function buildFieldSchema(field: FormFieldDef): z.ZodTypeAny {
     field.type === 'checkbox'
       ? z.boolean()
       : field.type === 'email'
-        ? z.string().max(FIELD_MAX_LENGTH.email).email()
-        : z.string().max(FIELD_MAX_LENGTH[field.type]);
+        ? z.string().trim().max(FIELD_MAX_LENGTH.email).email()
+        : z.string().trim().max(FIELD_MAX_LENGTH[field.type]);
 
   if (field.type === 'checkbox') {
     return field.required ? base : base.optional();

@@ -20,18 +20,51 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const MAX_PAYLOAD_BYTES = 8 * 1024;
 
+/**
+ * Reads a request body as text, aborting as soon as the byte cap is exceeded
+ * instead of buffering the whole stream first — bounds memory use for a
+ * caller that omits Content-Length (or uses chunked transfer-encoding).
+ * Returns null if the cap is exceeded.
+ */
+async function readBodyWithCap(request: Request, maxBytes: number): Promise<string | null> {
+  const reader = request.body?.getReader();
+  if (!reader) {
+    return '';
+  }
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+
+  return Buffer.concat(chunks).toString('utf-8');
+}
+
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await context.params;
 
-    // 1. Size cap — before touching rate limits or the DB.
+    // 1. Size cap — before touching rate limits or the DB. Enforced while
+    // streaming, not after a full read: a caller that omits Content-Length
+    // (or uses chunked transfer-encoding) would otherwise force full
+    // in-memory buffering of an arbitrarily large body before the declared-
+    // length check below ever runs.
     const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
     if (contentLength > MAX_PAYLOAD_BYTES) {
       return Response.json({ error: 'Payload too large' }, { status: 413 });
     }
 
-    const rawBody = await request.text();
-    if (Buffer.byteLength(rawBody, 'utf-8') > MAX_PAYLOAD_BYTES) {
+    const rawBody = await readBodyWithCap(request, MAX_PAYLOAD_BYTES);
+    if (rawBody === null) {
       return Response.json({ error: 'Payload too large' }, { status: 413 });
     }
 
@@ -46,7 +79,10 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 
     if (!ipLimit.allowed || !tokenLimit.allowed) {
       const retryAfter = Math.max(ipLimit.retryAfter ?? 0, tokenLimit.retryAfter ?? 0) || 60;
-      loggers.api.warn('Form submission rate limit exceeded', { ip });
+      // Hashed, not raw — consistent with the hashed IP persisted on a
+      // successful submission below; app logs commonly have broader
+      // retention/access than the database.
+      loggers.api.warn('Form submission rate limit exceeded', { ipHash: hashToken(ip) });
       return Response.json(
         { error: 'Too many submissions. Please try again later.' },
         { status: 429, headers: { 'Retry-After': String(retryAfter) } }

@@ -1,5 +1,6 @@
 import { sanitizeCSS } from './sanitize-css';
 import { buildBaselineCsp } from './csp';
+import { escapeHtml } from '../utils/html';
 
 /**
  * Isomorphic renderer for canvas pages — assembles a complete, standalone HTML
@@ -129,17 +130,10 @@ export const BASELINE_CSP =
  */
 export const BASELINE_RESET = 'html,body{margin:0;padding:0;}';
 
-/**
- * Escape a string for safe interpolation into HTML text / the <title> element.
- */
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+// Re-exported for existing consumers — the implementation lives in a
+// dependency-free shared module so non-canvas modules (e.g. forms) don't
+// couple to canvas internals to escape a string.
+export { escapeHtml };
 
 /**
  * Split author HTML into its `<style>` blocks (sanitized + joined) and the
@@ -178,7 +172,7 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
   const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin } = input;
-  const csp = formActionOrigin ? buildBaselineCsp(formActionOrigin) : BASELINE_CSP;
+  const csp = buildBaselineCsp(formActionOrigin);
 
   const { css, body } = extractAndSanitizeStyles(html ?? '', allowedAssetHosts);
   const rawTitle = title && title.trim() ? title : 'Untitled';
