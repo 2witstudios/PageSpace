@@ -56,13 +56,19 @@ describe('calculateTerminalChargeCents', () => {
     expect(calculateTerminalChargeCents({ activeSeconds: 3600 })).toBe(12);
   });
 
-  it('enforces the 1.5x floor: charge is never less than 1.5x the real substrate cost', () => {
-    expect(MARKUP_BPS).toBeGreaterThanOrEqual(15000); // 1.5x pinned as the floor bps
+  it('pins the shared MARKUP_BPS default at >=1.5x — NOT an independent per-source floor', () => {
+    // This only asserts the GLOBAL constant every AI surface shares is still >=15000bps.
+    // calculateTerminalChargeCents applies whatever MARKUP_BPS currently is, same as
+    // every other source — it has no terminal-specific floor logic of its own (see
+    // terminal-pricing.ts's module doc). If this default is ever lowered, or split
+    // per-source, this test — and the "amount never less than 1.5x" check below — stop
+    // meaning what their names say; they'd need a real per-source floor to test instead.
+    expect(MARKUP_BPS).toBeGreaterThanOrEqual(15000);
     for (const activeSeconds of [1, 60, 900, 3600, 7200]) {
       const cost = calculateTerminalCostDollars({ activeSeconds });
       const chargeCents = calculateTerminalChargeCents({ activeSeconds });
-      // Allow for cent-rounding: the charge must be within half a cent of the exact
-      // 1.5x-of-cost figure, and never systematically under it.
+      // Formula consistency, not floor enforcement: this holds for ANY positive
+      // MARKUP_BPS >= ~1.0x, so it does not by itself prove a 1.5x floor exists.
       expect(chargeCents).toBeGreaterThanOrEqual(Math.floor(cost * 1.5 * 100));
     }
   });

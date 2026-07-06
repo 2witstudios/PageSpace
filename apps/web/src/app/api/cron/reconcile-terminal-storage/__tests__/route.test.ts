@@ -47,7 +47,7 @@ describe('/api/cron/reconcile-terminal-storage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockReconcile.mockResolvedValue({ processed: 3, charged: 2, skipped: 1, totalCostDollars: 0.001234 });
+    mockReconcile.mockResolvedValue({ processed: 3, charged: 2, skipped: 1, failed: 0, totalCostDollars: 0.001234 });
   });
 
   it('returns the auth error and never reconciles when auth fails', async () => {
@@ -71,10 +71,10 @@ describe('/api/cron/reconcile-terminal-storage', () => {
         eventType: 'data.write',
         resourceType: 'cron_job',
         resourceId: 'reconcile_terminal_storage',
-        details: expect.objectContaining({ processed: 3, charged: 2, skipped: 1 }),
+        details: expect.objectContaining({ processed: 3, charged: 2, skipped: 1, failed: 0 }),
       }),
     );
-    expect(body).toMatchObject({ success: true, processed: 3, charged: 2, skipped: 1 });
+    expect(body).toMatchObject({ success: true, processed: 3, charged: 2, skipped: 1, failed: 0 });
   });
 
   it('returns a 500 with the error message when reconcile throws', async () => {
