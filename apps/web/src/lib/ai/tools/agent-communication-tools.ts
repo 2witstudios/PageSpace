@@ -646,14 +646,14 @@ export const agentCommunicationTools = {
             driveId: targetAgent.driveId,
             currentTools: agentTools,
             requestOrigin: 'agent',
-            // NOT `agentId` (the target being consulted): resolveSandboxActorContext
-            // resolves the real code-exec agentPageId from chatSource.agentPageId ??
-            // parentAgentId — nestedContext below inherits chatSource unchanged and
-            // sets parentAgentId to this same value, so this must match or the
-            // suppression decision here would authorize against a different agent
-            // than the one canRunCode actually checks when the target agent later
-            // tries to invoke a sandbox tool.
-            agentPageId: executionContext?.chatSource?.agentPageId ?? executionContext?.locationContext?.currentPage?.id,
+            // NOT `agentId` (the target being consulted): nestedContext below sets
+            // parentAgentId to callingPage?.id and inherits chatSource unchanged, and
+            // resolveSandboxActorContext resolves the real code-exec agentPageId from
+            // chatSource.agentPageId ?? parentAgentId — i.e. the CALLER's identity,
+            // never the target's, at any nesting depth. Must match or this suppression
+            // decision would authorize against a different agent than the one
+            // canRunCode actually checks when the target later invokes a sandbox tool.
+            agentPageId: executionContext?.chatSource?.agentPageId ?? callingPage?.id,
           });
         } catch (error) {
           loggers.ai.error('ask_agent: failed to resolve integration tools, falling back to built-in tools only', error as Error);
@@ -684,7 +684,7 @@ export const agentCommunicationTools = {
           currentAgentId: agentId,
           locationContext: executionContext?.locationContext, // Explicitly preserve location context
           // Chain tracking for audit trail
-          parentAgentId: executionContext?.locationContext?.currentPage?.id,
+          parentAgentId: callingPage?.id,
           parentConversationId: executionContext?.conversationId,
           agentChain: [
             ...(executionContext?.agentChain || []),

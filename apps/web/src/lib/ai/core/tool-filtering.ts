@@ -11,7 +11,7 @@
 
 import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
 import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
-import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { canRunCode, type CanRunCodeInput } from '@pagespace/lib/services/sandbox/can-run-code';
 
 // Tools that modify content (excluded in read-only mode; also used by elision to protect side-effectful results)
 export const WRITE_TOOLS = new Set([
@@ -153,15 +153,10 @@ export function hasSandboxGitTools(tools: Record<string, unknown>): boolean {
 export async function suppressGithubIntegrationTools<T>(
   integrationTools: Record<string, T>,
   currentTools: Record<string, unknown>,
-  auth: { userId: string; driveId?: string; requestOrigin?: 'user' | 'agent'; agentPageId?: string }
+  auth: Omit<CanRunCodeInput, 'deps'>
 ): Promise<Record<string, T>> {
   if (!hasSandboxGitTools(currentTools)) return integrationTools;
-  const authorized = await canRunCode({
-    userId: auth.userId,
-    driveId: auth.driveId,
-    requestOrigin: auth.requestOrigin,
-    agentPageId: auth.agentPageId,
-  });
+  const authorized = await canRunCode(auth);
   if (!authorized.ok) return integrationTools;
   return Object.fromEntries(
     Object.entries(integrationTools).filter(([name]) => parseIntegrationToolName(name)?.providerSlug !== 'github')
