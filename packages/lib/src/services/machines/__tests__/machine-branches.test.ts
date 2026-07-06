@@ -10,6 +10,7 @@ import {
   type MachineBranchProjectLookup,
 } from '../machine-branches';
 import type { MachineBranchStore, MachineBranchRecord } from '../machine-branches-store';
+import { deriveBranchSessionKey } from '../branch-session';
 import type { MachineHost, MachineHandle } from '../../sandbox/machine-host';
 import type { RunCommandArgs, SandboxRunResult } from '../../sandbox/sandbox-client/types';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
@@ -56,10 +57,15 @@ function makeStore(seed: MachineBranchRecord[] = []) {
       rows.set(k, row);
       return row;
     },
-    updateSandboxId: async ({ id, sandboxId, now }) => {
+    updateSandboxId: async ({ id, previousSandboxId, sandboxId, now }) => {
       for (const [k, row] of rows) {
-        if (row.id === id) rows.set(k, { ...row, sandboxId, updatedAt: now });
+        if (row.id === id) {
+          if (row.sandboxId !== previousSandboxId) return false;
+          rows.set(k, { ...row, sandboxId, updatedAt: now });
+          return true;
+        }
       }
+      return false;
     },
     remove: async (terminalId, projectName, branchName) => {
       rows.delete(key(terminalId, projectName, branchName));
@@ -254,6 +260,117 @@ describe('spawnBranch', () => {
     expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
     expect(killCalls).toHaveLength(1);
     expect(await store.list(TERMINAL_ID, PROJECT_NAME)).toEqual([]);
+  });
+
+  it('given clone fails because a concurrent spawn already committed the SAME shared Sprite, should NOT kill it and should report resumed', async () => {
+    // MachineHost.provision is name-keyed/idempotent — two concurrent
+    // spawnBranch calls for the same new branch can both resolve to the SAME
+    // physical Sprite. Simulate that here: the moment OUR clone runs, a
+    // "concurrent" call has already recorded THIS SAME Sprite (state.machineId)
+    // as the winning row, so our own clone fails as redundant (e.g. the
+    // destination directory already exists).
+    const { store } = makeStore();
+    const { host, killCalls } = makeFakeHost((state, args) => {
+      if (args.cmd === 'git' && args.args?.[0] === 'clone') {
+        void store.create({
+          ownerId: 'other-user',
+          terminalId: TERMINAL_ID,
+          projectName: PROJECT_NAME,
+          branchName: 'main',
+          sessionKey: deriveBranchSessionKey({
+            tenantId: actor.tenantId,
+            terminalId: TERMINAL_ID,
+            projectName: PROJECT_NAME,
+            branchName: 'main',
+            secret: SECRET,
+          }),
+          sandboxId: state.machineId,
+          now: NOW,
+        });
+        return { exitCode: 128, stdout: '', stderr: 'fatal: destination path already exists' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const { deps } = makeDeps({ host, store });
+
+    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.resumed).toBe(true);
+    // The shared Sprite must NOT have been killed — that would destroy the
+    // concurrent winner's already-tracked, live branch-terminal.
+    expect(killCalls).toHaveLength(0);
+    expect((await store.findByName(TERMINAL_ID, PROJECT_NAME, 'main'))?.sandboxId).toBe(result.sandboxId);
+  });
+
+  it('given the unique-violation race with a genuinely DIFFERENT winning Sprite, should kill its own redundant Sprite and return the winner\'s', async () => {
+    const store = makeStore().store;
+    const { host, killCalls, provisionCalls } = makeFakeHost((_state, args) => {
+      if (args.cmd === 'git' && args.args?.[0] === 'checkout' && args.args?.includes('origin/main')) {
+        // Simulate a concurrent spawnBranch call finishing first on its OWN,
+        // genuinely independent Sprite (not the one we hold).
+        void store.create({
+          ownerId: 'other-user',
+          terminalId: TERMINAL_ID,
+          projectName: PROJECT_NAME,
+          branchName: 'main',
+          sessionKey: deriveBranchSessionKey({
+            tenantId: actor.tenantId,
+            terminalId: TERMINAL_ID,
+            projectName: PROJECT_NAME,
+            branchName: 'main',
+            secret: SECRET,
+          }),
+          sandboxId: 'sbx-other-winner',
+          now: NOW,
+        });
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const { deps } = makeDeps({ host, store });
+
+    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-other-winner', resumed: true });
+    // Our own redundant Sprite is killed, but NEVER the winner's.
+    expect(provisionCalls).toHaveLength(1);
+    expect(killCalls).toHaveLength(1);
+    expect(killCalls).not.toContain('sbx-other-winner');
+  });
+
+  it('given a concurrent re-provision-after-vanish race, should not overwrite the winner\'s row and should kill its own redundant Sprite', async () => {
+    let armed = false;
+    let raceRowId = '';
+    let racePreviousSandboxId = '';
+    const { host, killCalls } = makeFakeHost((_state, args) => {
+      if (armed && args.cmd === 'git' && args.args?.[0] === 'clone') {
+        armed = false;
+        // Simulate a truly concurrent racer winning the re-provision update
+        // for the SAME vanished branch just before we do.
+        void store.updateSandboxId({
+          id: raceRowId,
+          previousSandboxId: racePreviousSandboxId,
+          sandboxId: 'sbx-concurrent-winner',
+          now: NOW,
+        });
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const { deps, store } = makeDeps({ host });
+
+    const first = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!first.ok) throw new Error('expected ok');
+    const before = await store.findByName(TERMINAL_ID, PROJECT_NAME, 'main');
+    if (!before) throw new Error('expected row');
+    await host.kill({ machineId: first.sandboxId });
+
+    raceRowId = before.id;
+    racePreviousSandboxId = before.sandboxId;
+    armed = true;
+
+    const second = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(second).toEqual({ ok: true, sandboxId: 'sbx-concurrent-winner', resumed: true });
+    // Our own re-provisioned (now-redundant) Sprite is killed; the winner's never is.
+    expect(killCalls).not.toContain('sbx-concurrent-winner');
   });
 
   it('given the branch does not exist upstream, should fall back to creating a fresh local branch', async () => {

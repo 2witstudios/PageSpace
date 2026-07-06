@@ -184,6 +184,37 @@ async function safeKillSprite(host: MachineHost, machineId: string): Promise<voi
 }
 
 /**
+ * Reconcile after losing a provisioning collision (a concurrent `spawnBranch`
+ * call for the same branch beat us to persisting a row). `MachineHost.provision`
+ * is name-keyed and auto-resumes ("same name, same filesystem" — see
+ * `../sandbox/machine-host.ts`), so two concurrent calls deriving the same
+ * session key can both end up holding a handle to the SAME physical Sprite —
+ * in that case the Sprite must NOT be killed, since it's the one the winner
+ * already recorded and is live. Only a genuinely distinct (or absent) tracked
+ * Sprite is safe to tear down.
+ */
+async function reconcileProvisionCollision({
+  deps,
+  terminalId,
+  projectName,
+  branchName,
+  handle,
+}: {
+  deps: MachineBranchesDeps;
+  terminalId: string;
+  projectName: string;
+  branchName: string;
+  handle: MachineHandle;
+}): Promise<{ ok: true; sandboxId: string; resumed: true } | { row: MachineBranchRecord | null }> {
+  const row = await deps.store.findByName(terminalId, projectName, branchName);
+  if (row && row.sandboxId === handle.machineId) {
+    return { ok: true, sandboxId: row.sandboxId, resumed: true };
+  }
+  await safeKillSprite(deps.host, handle.machineId);
+  return { row };
+}
+
+/**
  * Spawn (or resume) a branch-terminal: an isolated Sprite with `branchName`
  * checked out from the named Project. Idempotent by (terminalId,
  * projectName, branchName) — a second call reattaches to the same Sprite
@@ -236,31 +267,49 @@ export async function spawnBranch({
 
   const cloned = await cloneAndCheckoutBranch({ handle, repoUrl: project.repoUrl, branchName, scopeKey, actor, deps });
   if (!cloned.ok) {
-    await safeKillSprite(deps.host, handle.machineId);
+    // A concurrent spawnBranch call for this SAME branch may have already won
+    // (and may be sharing our exact Sprite — provision is name-keyed/idempotent),
+    // in which case our redundant clone/checkout failing (e.g. "dir already
+    // exists") doesn't mean the branch-terminal is broken.
+    const reconciled = await reconcileProvisionCollision({ deps, terminalId, projectName, branchName, handle });
+    if ('ok' in reconciled) return reconciled;
     return { ok: false, reason: cloned.reason, detail: cloned.detail };
   }
 
-  try {
-    if (existing) {
-      await deps.store.updateSandboxId({ id: existing.id, sandboxId: handle.machineId, now: deps.now() });
-    } else {
-      await deps.store.create({
-        ownerId: actor.userId,
-        terminalId,
-        projectName,
-        branchName,
-        sessionKey,
-        sandboxId: handle.machineId,
-        now: deps.now(),
-      });
+  if (existing) {
+    const updated = await deps.store.updateSandboxId({
+      id: existing.id,
+      previousSandboxId: existing.sandboxId,
+      sandboxId: handle.machineId,
+      now: deps.now(),
+    });
+    if (!updated) {
+      // Lost a race against a concurrent re-provision of the same vanished
+      // branch — do not silently overwrite; the winner already wrote its own.
+      const reconciled = await reconcileProvisionCollision({ deps, terminalId, projectName, branchName, handle });
+      if ('ok' in reconciled) return reconciled;
+      if (reconciled.row) return { ok: true, sandboxId: reconciled.row.sandboxId, resumed: true };
+      return { ok: false, reason: 'error', detail: 'lost a concurrent branch-terminal spawn race' };
     }
+    return { ok: true, sandboxId: handle.machineId, resumed: false };
+  }
+
+  try {
+    await deps.store.create({
+      ownerId: actor.userId,
+      terminalId,
+      projectName,
+      branchName,
+      sessionKey,
+      sandboxId: handle.machineId,
+      now: deps.now(),
+    });
   } catch (error) {
     if (isUniqueViolation(error)) {
-      // Lost a race against a concurrent spawn of the same branch — the
-      // Sprite we just provisioned is redundant, not orphaned state.
-      await safeKillSprite(deps.host, handle.machineId);
-      const winner = await deps.store.findByName(terminalId, projectName, branchName);
-      if (winner) return { ok: true, sandboxId: winner.sandboxId, resumed: true };
+      // Lost a race against a concurrent spawn of the same branch.
+      const reconciled = await reconcileProvisionCollision({ deps, terminalId, projectName, branchName, handle });
+      if ('ok' in reconciled) return reconciled;
+      if (reconciled.row) return { ok: true, sandboxId: reconciled.row.sandboxId, resumed: true };
     }
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }

@@ -38,7 +38,15 @@ export interface MachineBranchStore {
   findByName(terminalId: string, projectName: string, branchName: string): Promise<MachineBranchRecord | null>;
   /** Throws a unique-violation error (see `isUniqueViolation`) if this (terminalId, projectName, branchName) already exists. */
   create(input: NewMachineBranchInput): Promise<MachineBranchRecord>;
-  updateSandboxId(input: { id: string; sandboxId: string; now: Date }): Promise<void>;
+  /**
+   * Conditional update — only writes if the row's CURRENT `sandboxId` still
+   * equals `previousSandboxId`, returning whether it actually updated. This
+   * is a compare-and-swap: two concurrent re-provisions racing to record a
+   * replacement Sprite for the same vanished one must not silently
+   * last-write-wins (the loser's win would orphan its own live Sprite,
+   * untracked) — the loser instead sees `updated: false` and can react.
+   */
+  updateSandboxId(input: { id: string; previousSandboxId: string; sandboxId: string; now: Date }): Promise<boolean>;
   remove(terminalId: string, projectName: string, branchName: string): Promise<void>;
 }
 
@@ -98,11 +106,13 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
       return row;
     },
 
-    async updateSandboxId({ id, sandboxId, now }) {
-      await db
+    async updateSandboxId({ id, previousSandboxId, sandboxId, now }) {
+      const updated = await db
         .update(machineBranches)
         .set({ sandboxId, updatedAt: now })
-        .where(eq(machineBranches.id, id));
+        .where(and(eq(machineBranches.id, id), eq(machineBranches.sandboxId, previousSandboxId)))
+        .returning({ id: machineBranches.id });
+      return updated.length > 0;
     },
 
     async remove(terminalId, projectName, branchName) {
