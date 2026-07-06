@@ -24,3 +24,31 @@ export function manageKeysScopedAuthResult(
     ...overrides,
   };
 }
+
+/**
+ * A drive-scoped OAuth credential (app member for one drive only, ADR 0002
+ * Decision 2) — the negative counterpart to `manageKeysScopedAuthResult`,
+ * used to prove the mcp-tokens scope-guard still rejects this shape while
+ * admitting a manage_keys-only one.
+ */
+export function driveScopedOAuthAuthResult(
+  overrides: Partial<OAuthAuthResult> = {}
+): OAuthAuthResult {
+  return {
+    tokenType: 'oauth',
+    userId: 'test-user-id',
+    role: 'user',
+    tokenVersion: 0,
+    adminRoleVersion: 0,
+    tokenId: 'oauth-token-1',
+    scopes: {
+      account: false,
+      offlineAccess: false,
+      manageKeys: false,
+      drives: new Map([['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'inherit' } }]]),
+    },
+    driveScopes: [{ driveId: 'drive-1', role: null, customRoleId: null }],
+    allowedDriveIds: ['drive-1'],
+    ...overrides,
+  };
+}
