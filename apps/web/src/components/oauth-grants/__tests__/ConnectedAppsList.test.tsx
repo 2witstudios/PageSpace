@@ -116,6 +116,30 @@ describe('ConnectedAppsList', () => {
     expect(mocks.del).not.toHaveBeenCalled();
   });
 
+  it('resets the button instead of getting stuck when the magic-link fallback request itself fails', async () => {
+    vi.mocked(startAuthentication).mockRejectedValue(new Error('no_passkey'));
+    mocks.post.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      if (url === '/api/auth/step-up/magic-link/request') {
+        return Promise.reject(new Error('network error'));
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+
+    render(<ConnectedAppsList />);
+    await userEvent.click(screen.getByRole('button', { name: /^revoke$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /revoke access/i }));
+
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole('button', { name: /check email/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^revoke$/i })).not.toBeDisabled();
+    expect(sessionStorage.getItem('pagespace:pendingOAuthGrantRevokeId')).toBeNull();
+  });
+
   it('completes the revoke automatically when a magic-link step-up token comes back in the URL hash', async () => {
     sessionStorage.setItem('pagespace:pendingOAuthGrantRevokeId', 'grant-1');
     window.location.hash = '#step_up_token=ps_stepup_from_email';

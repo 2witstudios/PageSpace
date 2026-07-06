@@ -89,8 +89,11 @@ export function ConnectedAppsList() {
   async function requestMagicLinkStepUp(grantId: string): Promise<void> {
     const actionBinding = buildRevokeActionBinding(grantId);
     const next = `${window.location.pathname}${window.location.search}`;
-    sessionStorage.setItem(PENDING_REVOKE_STORAGE_KEY, grantId);
     await post('/api/auth/step-up/magic-link/request', { actionBinding, next });
+    // Only remember a pending grant once the email has actually been
+    // dispatched — otherwise a failed request below would leave a pending id
+    // behind with no corresponding link ever on its way.
+    sessionStorage.setItem(PENDING_REVOKE_STORAGE_KEY, grantId);
   }
 
   const handleConfirmRevoke = async () => {
@@ -102,9 +105,16 @@ export function ConnectedAppsList() {
       await revokeGrant(grantId, stepUpToken);
     } catch (error) {
       if (isNoPasskeyError(error)) {
-        await requestMagicLinkStepUp(grantId);
-        setAwaitingEmailForId(grantId);
-        setRevokingId(null);
+        try {
+          await requestMagicLinkStepUp(grantId);
+          setAwaitingEmailForId(grantId);
+        } catch {
+          // Sending the fallback email itself failed — must not leave the
+          // button stuck showing "Revoking…" with no way to retry.
+          toast.error('Something went wrong. Please try again.');
+        } finally {
+          setRevokingId(null);
+        }
         return;
       }
       toast.error('Something went wrong. Please try again.');
