@@ -16,15 +16,14 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          orderBy: vi.fn().mockReturnValue({
-            limit: vi.fn().mockReturnValue({
-              offset: vi.fn().mockResolvedValue([]),
-            }),
-          }),
-        }),
+        where: vi.fn().mockResolvedValue([{ total: 0 }]),
       }),
     }),
+    query: {
+      activityLogs: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    },
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -58,8 +57,10 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, getAllowedDriveIds } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { db } from '@pagespace/db/db';
+import { encryptField } from '@pagespace/lib/encryption/field-crypto';
 
 const mockUserId = 'user_123';
 
@@ -87,5 +88,57 @@ describe('GET /api/activities audit', () => {
       expect.any(Request),
       expect.objectContaining({ eventType: 'data.read', userId: mockUserId, resourceType: 'activities', resourceId: 'self' })
     );
+  });
+});
+
+describe('GET /api/activities PII decryption', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+    vi.mocked(getAllowedDriveIds).mockReturnValue([]);
+  });
+
+  it('decrypts ciphertext user name/email before responding', async () => {
+    const encryptedName = await encryptField('Real Name');
+    const encryptedEmail = await encryptField('real@example.com');
+    vi.mocked(db.query.activityLogs.findMany).mockResolvedValue([
+      {
+        id: 'act-1',
+        user: { id: 'user-1', name: encryptedName, email: encryptedEmail, image: null },
+      },
+    ] as never);
+
+    const res = await GET(new Request('http://localhost/api/activities?context=user'));
+    const body = await res.json();
+
+    expect(body.activities[0].user.name).toBe('Real Name');
+    expect(body.activities[0].user.email).toBe('real@example.com');
+  });
+
+  it('passes through legacy plaintext user name/email unchanged', async () => {
+    vi.mocked(db.query.activityLogs.findMany).mockResolvedValue([
+      {
+        id: 'act-1',
+        user: { id: 'user-1', name: 'Legacy Name', email: 'legacy@example.com', image: null },
+      },
+    ] as never);
+
+    const res = await GET(new Request('http://localhost/api/activities?context=user'));
+    const body = await res.json();
+
+    expect(body.activities[0].user.name).toBe('Legacy Name');
+    expect(body.activities[0].user.email).toBe('legacy@example.com');
+  });
+
+  it('does not crash when the activity has no joined user (deleted user)', async () => {
+    vi.mocked(db.query.activityLogs.findMany).mockResolvedValue([
+      { id: 'act-1', user: null, actorDisplayName: 'Deleted User', actorEmail: 'deleted@example.com' },
+    ] as never);
+
+    const res = await GET(new Request('http://localhost/api/activities?context=user'));
+    const body = await res.json();
+
+    expect(body.activities[0].user).toBeNull();
+    expect(body.activities[0].actorDisplayName).toBe('Deleted User');
   });
 });

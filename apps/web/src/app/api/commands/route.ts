@@ -5,6 +5,7 @@ import { commands } from '@pagespace/db/schema/commands';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPDriveScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -108,7 +109,8 @@ export async function GET(request: Request) {
           columns: { id: true, name: true },
         })
       : [];
-    const authorNameById = new Map(authors.map((author) => [author.id, author.name]));
+    const decryptedAuthors = await decryptUserRows(authors);
+    const authorNameById = new Map(decryptedAuthors.map((author) => [author.id, author.name]));
 
     return NextResponse.json({
       commands: sorted.map((command) => {

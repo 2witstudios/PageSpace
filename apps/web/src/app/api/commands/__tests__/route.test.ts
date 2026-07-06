@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import { encryptField } from '@pagespace/lib/encryption/field-crypto';
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -212,6 +213,22 @@ describe('GET /api/commands', () => {
       entryPageAvailable: false,
       authorName: 'Alice',
     });
+  });
+
+  it('decrypts ciphertext author names before responding', async () => {
+    const encryptedName = await encryptField('Real Author');
+    mockedDb.select.mockReset();
+    mockedDb.select
+      .mockReturnValueOnce(selectChain([]) as never)
+      .mockReturnValueOnce(selectChain([]) as never);
+    mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
+    mockedDb.query.users.findMany.mockResolvedValue([
+      { id: USER_ID, name: encryptedName },
+    ] as never);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(json.commands[0].authorName).toBe('Real Author');
   });
 
   it('marks the entry page unavailable when it no longer exists', async () => {
