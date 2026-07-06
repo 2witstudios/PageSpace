@@ -36,6 +36,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   isScopedOAuthAuth: vi.fn(),
+  isManageKeysOnly: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -74,7 +75,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 
 import { POST, GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth, isManageKeysOnly } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
@@ -126,6 +127,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
         (auth as { tokenType?: string }).tokenType === 'oauth' &&
         !(auth as { scopes?: { account?: boolean } }).scopes?.account
     );
+    vi.mocked(isManageKeysOnly).mockReturnValue(false);
 
     // Default mocks that need re-setup after resetAllMocks
     vi.mocked(getActorInfo).mockResolvedValue({ actorEmail: 'test@example.com' } as never);
