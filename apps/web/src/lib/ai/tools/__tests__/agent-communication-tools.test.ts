@@ -1072,6 +1072,62 @@ describe('agent-communication-tools', () => {
         );
       });
 
+      it('passes the caller chatSource agentPageId (not the consulted target agentId) for the sandbox-authorization check', async () => {
+        vi.mocked(resolvePageAgentIntegrationTools).mockResolvedValue({});
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            chatSource: { type: 'page' as const, agentPageId: 'calling-agent' },
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'List my repos' },
+          context
+        );
+
+        // agentId ('agent-1') is the CONSULTED target, not the acting agent that
+        // canRunCode will actually check at real invocation time — that's always
+        // resolved from chatSource.agentPageId (see resolveSandboxActorContext),
+        // which nested calls never override. Passing the target here instead would
+        // let the suppression decision diverge from the real authorization outcome.
+        expect(resolvePageAgentIntegrationTools).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requestOrigin: 'agent',
+            agentPageId: 'calling-agent',
+          })
+        );
+      });
+
+      it('falls back to locationContext.currentPage.id for agentPageId when chatSource is absent', async () => {
+        vi.mocked(resolvePageAgentIntegrationTools).mockResolvedValue({});
+
+        const context = {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: {
+            userId: 'user-123',
+            locationContext: {
+              currentPage: { id: 'current-page-agent', title: 'X', type: 'AI_CHAT', path: '/x' },
+            },
+          } as ToolExecutionContext,
+        };
+
+        await agentCommunicationTools.ask_agent!.execute!(
+          { agentPath: '/drive/agent', agentId: 'agent-1', question: 'List my repos' },
+          context
+        );
+
+        expect(resolvePageAgentIntegrationTools).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentPageId: 'current-page-agent',
+          })
+        );
+      });
+
       it('falls back to built-in tools only when integration resolver throws', async () => {
         vi.mocked(resolvePageAgentIntegrationTools).mockRejectedValue(
           new Error('DB connection failed')

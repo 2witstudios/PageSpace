@@ -173,6 +173,31 @@ describe('resolvePageAgentIntegrationTools', () => {
     expect(result).toHaveProperty('int__slack__send_message');
   });
 
+  it('forwards requestOrigin and agentPageId to canRunCode unchanged', async () => {
+    const mockGrants = [{ id: 'grant-1' }] as unknown as GrantWithConnectionAndProvider[];
+    mockResolveAgentIntegrations.mockResolvedValue(mockGrants);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    mockConvert.mockReturnValue({
+      'int__github__list_repos': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+    });
+
+    await resolvePageAgentIntegrationTools({
+      agentId: 'agent-1',
+      userId: 'user-1',
+      driveId: 'drive-1',
+      currentTools: { git_clone: {} },
+      requestOrigin: 'agent',
+      agentPageId: 'calling-agent-1',
+    });
+
+    expect(mockCanRunCode).toHaveBeenCalledWith({
+      userId: 'user-1',
+      driveId: 'drive-1',
+      requestOrigin: 'agent',
+      agentPageId: 'calling-agent-1',
+    });
+  });
+
   it('given no sandbox git tools in currentTools, keeps GitHub integration tools', async () => {
     const mockGrants = [{ id: 'grant-1' }] as unknown as GrantWithConnectionAndProvider[];
     mockResolveAgentIntegrations.mockResolvedValue(mockGrants);
@@ -248,6 +273,30 @@ describe('resolveGlobalAssistantIntegrationTools', () => {
 
     expect(result).toHaveProperty('int__github__list_repos');
     expect(result).toHaveProperty('int__slack__send_message');
+  });
+
+  it('normalizes a null driveId to undefined and forwards requestOrigin/agentPageId to canRunCode', async () => {
+    mockResolveGlobalIntegrations.mockResolvedValue([{ id: 'grant-1' }] as never);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    mockConvert.mockReturnValue({
+      'int__github__list_repos': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+    });
+
+    await resolveGlobalAssistantIntegrationTools({
+      userId: 'user-1',
+      driveId: null,
+      userDriveRole: null,
+      currentTools: { gh_pr_view: {} },
+      requestOrigin: 'agent',
+      agentPageId: 'calling-agent-1',
+    });
+
+    expect(mockCanRunCode).toHaveBeenCalledWith({
+      userId: 'user-1',
+      driveId: undefined,
+      requestOrigin: 'agent',
+      agentPageId: 'calling-agent-1',
+    });
   });
 });
 

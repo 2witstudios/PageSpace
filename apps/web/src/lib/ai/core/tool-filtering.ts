@@ -3,6 +3,10 @@
  *
  * Replaces the complex role-based permission system with simple
  * toggles that filter out specific tools based on user settings.
+ *
+ * Exception: suppressGithubIntegrationTools below calls canRunCode (a real,
+ * DB-backed authorization check) — do not "simplify" it back to a pure
+ * presence check, that's the exact regression it exists to prevent.
  */
 
 import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
@@ -135,17 +139,16 @@ export function hasSandboxGitTools(tools: Record<string, unknown>): boolean {
 
 /**
  * Suppress GitHub OAuth integration tools when the sandbox git/gh CLI toolkit is
- * both registered in the current tool set AND actually usable by this caller
- * right now (per `canRunCode`) — the two overlap in capability (browsing repos,
- * reviewing PRs, filing issues), and offering both surfaces for the same GitHub
- * account is redundant and confuses tool selection. Other providers' integration
- * tools (Slack, etc.) are untouched.
+ * both registered in the current tool set AND authorized for this caller right
+ * now (per `canRunCode`) — the two overlap in capability, and offering both for
+ * the same GitHub account is redundant. Other providers (Slack, etc.) untouched.
  *
- * Presence alone is not enough: the sandbox toolkit is registered for every user
- * whenever the global `CODE_EXECUTION_ENABLED` kill-switch is on, regardless of
- * per-user authorization (e.g. the production admin-only gate). Suppressing the
- * GitHub OAuth tools for a caller who cannot actually invoke the sandbox tools
- * would leave them with no working GitHub surface at all.
+ * Presence alone is not enough: `buildPageSpaceTools` registers the sandbox
+ * toolkit for every user whenever the global kill-switch is on, regardless of
+ * per-user authorization — suppressing GitHub for a caller who can't actually
+ * invoke the sandbox tools would leave them with no GitHub surface at all. This
+ * is a listing/UX decision, not a security boundary: it never grants sandbox
+ * access, it only decides which already-permitted-or-not surface to show.
  */
 export async function suppressGithubIntegrationTools<T>(
   integrationTools: Record<string, T>,

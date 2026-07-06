@@ -646,7 +646,14 @@ export const agentCommunicationTools = {
             driveId: targetAgent.driveId,
             currentTools: agentTools,
             requestOrigin: 'agent',
-            agentPageId: agentId,
+            // NOT `agentId` (the target being consulted): resolveSandboxActorContext
+            // resolves the real code-exec agentPageId from chatSource.agentPageId ??
+            // parentAgentId — nestedContext below inherits chatSource unchanged and
+            // sets parentAgentId to this same value, so this must match or the
+            // suppression decision here would authorize against a different agent
+            // than the one canRunCode actually checks when the target agent later
+            // tries to invoke a sandbox tool.
+            agentPageId: executionContext?.chatSource?.agentPageId ?? executionContext?.locationContext?.currentPage?.id,
           });
         } catch (error) {
           loggers.ai.error('ask_agent: failed to resolve integration tools, falling back to built-in tools only', error as Error);
