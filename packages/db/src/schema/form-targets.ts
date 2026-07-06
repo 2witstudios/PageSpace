@@ -1,0 +1,66 @@
+import { pgTable, text, timestamp, integer, jsonb, index } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { createId } from '@paralleldrive/cuid2';
+import { users } from './auth';
+import { drives, pages } from './core';
+
+export type FormTargetAction = 'sheet:append';
+
+export type FormFieldType = 'text' | 'email' | 'textarea' | 'checkbox';
+
+export interface FormFieldDef {
+  name: string;
+  label: string;
+  type: FormFieldType;
+  required: boolean;
+}
+
+export type FormTargetStatus = 'active' | 'paused' | 'archived';
+
+/**
+ * A narrowly-scoped, revocable public write grant: {driveId, pageId, action}
+ * only, never a session or drive membership. `tokenHash` is the sole lookup
+ * key at submit time — status is re-read on every request, so pausing takes
+ * effect on the very next submission with no propagation delay.
+ */
+export const formTargets = pgTable('form_targets', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+
+  tokenHash: text('token_hash').unique().notNull(),
+  tokenPrefix: text('token_prefix').notNull(),
+
+  driveId: text('drive_id').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  pageId: text('page_id').notNull().references(() => pages.id, { onDelete: 'cascade' }),
+  action: text('action', { enum: ['sheet:append'] }).notNull().default('sheet:append'),
+
+  // Ordered — fields[i] always maps to sheet column i, fixed at provisioning
+  // time. Never re-derived from the sheet's live header row (see field-schema
+  // note in canvas-forms.md): drift is detected and logged, not auto-remapped.
+  fields: jsonb('fields').notNull().$type<FormFieldDef[]>(),
+
+  headerRow: integer('header_row').notNull().default(1),
+  nextRow: integer('next_row').notNull(),
+
+  status: text('status', { enum: ['active', 'paused', 'archived'] }).notNull().default('active'),
+  statusReason: text('status_reason'),
+
+  createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
+  lastSubmittedAt: timestamp('last_submitted_at', { mode: 'date' }),
+  submissionCount: integer('submission_count').notNull().default(0),
+}, (table) => ({
+  tokenHashIdx: index('form_targets_token_hash_idx').on(table.tokenHash),
+  pageIdx: index('form_targets_page_id_idx').on(table.pageId),
+  driveIdx: index('form_targets_drive_id_idx').on(table.driveId),
+  statusIdx: index('form_targets_status_idx').on(table.status),
+}));
+
+export const formTargetsRelations = relations(formTargets, ({ one }) => ({
+  page: one(pages, { fields: [formTargets.pageId], references: [pages.id] }),
+  drive: one(drives, { fields: [formTargets.driveId], references: [drives.id] }),
+  creator: one(users, { fields: [formTargets.createdBy], references: [users.id] }),
+}));
+
+export type FormTarget = typeof formTargets.$inferSelect;
+export type NewFormTarget = typeof formTargets.$inferInsert;

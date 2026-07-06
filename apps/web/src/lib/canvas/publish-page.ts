@@ -272,6 +272,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     ogDescription: resolvedMeta.description,
     description: resolvedMeta.description,
     robots: resolvedMeta.robots,
+    formActionOrigin: process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL,
   });
   const key = buildPublishedKey(subdomain, path);
 

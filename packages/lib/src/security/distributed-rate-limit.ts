@@ -543,6 +543,17 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
+  // Public Canvas-form submission (/api/public/forms/[token]/submit): generous
+  // enough for a real visitor retrying a validation error, tight enough to
+  // blunt scripted spam against a specific form token. Callers also key a
+  // secondary limit on the token prefix (see the route) so a single leaked
+  // token can't be hammered from many IPs to bypass the per-IP limit here.
+  FORM_SUBMISSION: {
+    maxAttempts: 10,
+    windowMs: 60 * 1000,
+    blockDurationMs: 60 * 1000,
+    progressiveDelay: false,
+  },
   MARKETING_CONTACT_FORM: {
     maxAttempts: 5,
     windowMs: 60 * 60 * 1000,

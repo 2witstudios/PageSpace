@@ -707,6 +707,31 @@
       "import": "./dist/canvas/render-document.js",
       "require": "./dist/canvas/render-document.js"
     },
+    "./canvas/csp": {
+      "types": "./dist/canvas/csp.d.ts",
+      "import": "./dist/canvas/csp.js",
+      "require": "./dist/canvas/csp.js"
+    },
+    "./forms/submission-schema": {
+      "types": "./dist/forms/submission-schema.d.ts",
+      "import": "./dist/forms/submission-schema.js",
+      "require": "./dist/forms/submission-schema.js"
+    },
+    "./forms/cell-mapping": {
+      "types": "./dist/forms/cell-mapping.d.ts",
+      "import": "./dist/forms/cell-mapping.js",
+      "require": "./dist/forms/cell-mapping.js"
+    },
+    "./forms/honeypot": {
+      "types": "./dist/forms/honeypot.d.ts",
+      "import": "./dist/forms/honeypot.js",
+      "require": "./dist/forms/honeypot.js"
+    },
+    "./forms/form-html": {
+      "types": "./dist/forms/form-html.d.ts",
+      "import": "./dist/forms/form-html.js",
+      "require": "./dist/forms/form-html.js"
+    },
     "./canvas/resolve-published-meta": {
       "types": "./dist/canvas/resolve-published-meta.d.ts",
       "import": "./dist/canvas/resolve-published-meta.js",
@@ -1590,6 +1615,21 @@
       ],
       "canvas/render-document": [
         "./dist/canvas/render-document.d.ts"
+      ],
+      "canvas/csp": [
+        "./dist/canvas/csp.d.ts"
+      ],
+      "forms/submission-schema": [
+        "./dist/forms/submission-schema.d.ts"
+      ],
+      "forms/cell-mapping": [
+        "./dist/forms/cell-mapping.d.ts"
+      ],
+      "forms/honeypot": [
+        "./dist/forms/honeypot.d.ts"
+      ],
+      "forms/form-html": [
+        "./dist/forms/form-html.d.ts"
       ],
       "canvas/resolve-published-meta": [
         "./dist/canvas/resolve-published-meta.d.ts"

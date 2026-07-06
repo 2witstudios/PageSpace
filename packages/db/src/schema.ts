@@ -51,6 +51,7 @@ export * from './schema/custom-domains';
 export * from './schema/incidents';
 export * from './schema/data-subject-requests';
 export * from './schema/oauth';
+export * from './schema/form-targets';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -105,6 +106,7 @@ import * as customDomains from './schema/custom-domains';
 import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
 import * as oauth from './schema/oauth';
+import * as formTargets from './schema/form-targets';
 
 export const schema = {
   ...auth,
@@ -160,4 +162,5 @@ export const schema = {
   ...incidents,
   ...dataSubjectRequests,
   ...oauth,
+  ...formTargets,
 };

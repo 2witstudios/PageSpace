@@ -519,6 +519,29 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     );
   },
 
+  // === FORM TOOLS ===
+  provision_form_target: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="create"
+      success={parsedOutput.success !== false}
+      title="Form target"
+      pageId={parsedOutput.formTargetId as string | undefined}
+      message={parsedOutput.message as string | undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  update_form_target_status: ({ parsedOutput }) => (
+    <ActionResultRenderer
+      actionType="update"
+      success={parsedOutput.success !== false}
+      title="Form target"
+      pageId={parsedOutput.formTargetId as string | undefined}
+      message={parsedOutput.status ? `Status: ${parsedOutput.status as string}` : undefined}
+      errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
   // === CHANNEL TOOLS ===
   send_channel_message: ({ parsedInput, parsedOutput }) => {
     const messagePreview = getSendChannelMessagePreview(parsedInput, parsedOutput);

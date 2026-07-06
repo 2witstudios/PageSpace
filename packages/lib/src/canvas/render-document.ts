@@ -1,4 +1,5 @@
 import { sanitizeCSS } from './sanitize-css';
+import { buildBaselineCsp } from './csp';
 
 /**
  * Isomorphic renderer for canvas pages — assembles a complete, standalone HTML
@@ -83,6 +84,13 @@ export interface RenderCanvasDocumentInput {
    * page out of search indexes.
    */
   robots?: string;
+  /**
+   * When set, scopes `form-action`/`connect-src` in the emitted CSP to this
+   * single origin — e.g. the app's own origin, so a provisioned Canvas <form>
+   * (see `../forms/form-html.ts`) can submit to the public forms API. Omit to
+   * keep the unchanged `BASELINE_CSP` (`form-action 'none'`, no `connect-src`).
+   */
+  formActionOrigin?: string;
 }
 
 /**
@@ -169,7 +177,8 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin } = input;
+  const csp = formActionOrigin ? buildBaselineCsp(formActionOrigin) : BASELINE_CSP;
 
   const { css, body } = extractAndSanitizeStyles(html ?? '', allowedAssetHosts);
   const rawTitle = title && title.trim() ? title : 'Untitled';
@@ -209,7 +218,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     faviconTags +
     seoTags +
     ogTags +
-    `<meta http-equiv="Content-Security-Policy" content="${BASELINE_CSP}">` +
+    `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<style>${BASELINE_RESET}${css}</style>` +
     '</head><body>' +
     body +

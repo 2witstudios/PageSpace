@@ -1,0 +1,58 @@
+import { describe, it, expect } from 'vitest';
+import { buildFormHtml } from '../form-html';
+import { HONEYPOT_FIELD_NAME } from '../honeypot';
+import type { FormFieldDef } from '@pagespace/db/schema/form-targets';
+
+const fields: FormFieldDef[] = [
+  { name: 'name', label: 'Name', type: 'text', required: true },
+  { name: 'email', label: 'Email', type: 'email', required: true },
+  { name: 'notes', label: 'Anything else?', type: 'textarea', required: false },
+];
+
+describe('buildFormHtml', () => {
+  it('emits an input for every field with the correct name, type, and label', () => {
+    const html = buildFormHtml({ fields, submitUrl: 'https://app.pagespace.ai/api/public/forms/tok_abc/submit' });
+
+    expect(html).toContain('name="name"');
+    expect(html).toContain('type="text"');
+    expect(html).toContain('name="email"');
+    expect(html).toContain('type="email"');
+    expect(html).toContain('name="notes"');
+    expect(html).toContain('<textarea');
+    expect(html).toContain('Name');
+    expect(html).toContain('Email');
+    expect(html).toContain('Anything else?');
+  });
+
+  it('marks required fields as required and leaves optional fields unmarked', () => {
+    const html = buildFormHtml({ fields, submitUrl: 'https://app.pagespace.ai/api/public/forms/tok_abc/submit' });
+    const nameInputMatch = html.match(/<input[^>]*name="name"[^>]*>/)?.[0] ?? '';
+    const notesMatch = html.match(/<textarea[^>]*name="notes"[^>]*>/)?.[0] ?? '';
+
+    expect(nameInputMatch).toContain('required');
+    expect(notesMatch).not.toContain('required');
+  });
+
+  it('includes a hidden honeypot input that is visually hidden, not merely present', () => {
+    const html = buildFormHtml({ fields, submitUrl: 'https://app.pagespace.ai/api/public/forms/tok_abc/submit' });
+    const honeypotMatch = html.match(new RegExp(`<input[^>]*name="${HONEYPOT_FIELD_NAME}"[^>]*>`))?.[0] ?? '';
+
+    expect(honeypotMatch).not.toBe('');
+    expect(honeypotMatch).toMatch(/tabindex="-1"|autocomplete="off"/);
+    expect(html).toContain('position:absolute');
+  });
+
+  it('embeds the exact submit URL passed in', () => {
+    const html = buildFormHtml({ fields, submitUrl: 'https://app.pagespace.ai/api/public/forms/tok_xyz/submit' });
+    expect(html).toContain('https://app.pagespace.ai/api/public/forms/tok_xyz/submit');
+  });
+
+  it('HTML-escapes a field label containing markup', () => {
+    const maliciousFields: FormFieldDef[] = [
+      { name: 'name', label: '<script>alert(1)</script>', type: 'text', required: true },
+    ];
+    const html = buildFormHtml({ fields: maliciousFields, submitUrl: 'https://app.pagespace.ai/api/public/forms/tok/submit' });
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;');
+  });
+});

@@ -60,6 +60,18 @@ export async function middleware(req: NextRequest) {
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
       return new NextResponse(null, { status: 404, headers: response.headers });
     }
+    // Public Canvas-form submission endpoint: no session (public by design —
+    // visitors on a published site are never authenticated), and origin
+    // validation is inapplicable — valid callers are arbitrary published-site
+    // hosts/custom domains with no fixed allowlist. Origin/Referer must never
+    // be the authorization decision for this route (the token hash lookup in
+    // the route handler is); returning here means it's never even checked,
+    // let alone allowed to block, regardless of ORIGIN_VALIDATION_MODE.
+    if (pathname.startsWith('/api/public/forms/')) {
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
+      return response;
+    }
+
     const ip =
       req.headers.get('x-forwarded-for')?.split(',')[0] ||
       req.headers.get('x-real-ip') ||
