@@ -57,6 +57,16 @@ describe('defaultSandboxBillingDeps.gate', () => {
     expect(mockCanConsumeAI).toHaveBeenCalledWith('owner-2', 'free', expect.anything());
     expect(result).toEqual({ allowed: false, holdId: undefined, reason: 'insufficient_balance' });
   });
+
+  it('does not set skipDailyCap, so terminal spend feeds the per-user/day exposure cap like every other source', async () => {
+    mockUserRow('pro');
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1' });
+
+    await defaultSandboxBillingDeps.gate({ payerId: 'owner-1' });
+
+    const opts = mockCanConsumeAI.mock.calls[0][2];
+    expect(opts.skipDailyCap).not.toBe(true);
+  });
 });
 
 describe('defaultSandboxBillingDeps.trackUsage', () => {
