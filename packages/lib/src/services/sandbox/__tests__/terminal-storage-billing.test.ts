@@ -70,6 +70,20 @@ describe('defaultReconcileTerminalStorageDeps.chargeStorage', () => {
     expect(call.holdId).toBeUndefined();
     expect(call.metadata).toMatchObject({ type: 'terminal_storage', pageId: 'page-1', gbMonths: 2.5 });
   });
+
+  it('forwards pageId as a TOP-LEVEL field (not just inside metadata), so usage-breakdown can attribute the charge to the right machine', async () => {
+    mockTrackUsage.mockResolvedValue(undefined);
+
+    await defaultReconcileTerminalStorageDeps.chargeStorage({
+      payerId: 'owner-1',
+      pageId: 'page-1',
+      costDollars: 0.05,
+      gbMonths: 2.5,
+    });
+
+    const call = mockTrackUsage.mock.calls[0][0];
+    expect(call.pageId).toBe('page-1');
+  });
 });
 
 describe('defaultReconcileTerminalStorageDeps.advanceWatermark', () => {

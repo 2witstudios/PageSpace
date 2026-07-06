@@ -24,6 +24,8 @@ export type TerminalSession = {
   payerId?: string;
   holdId?: string;
   connectedAt?: number;
+  /** The Terminal page this session is for — the usage-breakdown's per-machine attribution key. */
+  pageId?: string;
 };
 
 export type TerminalSessionMap = {

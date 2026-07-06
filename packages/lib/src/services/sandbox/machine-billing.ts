@@ -54,12 +54,15 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
     return { allowed: result.allowed, holdId: result.holdId, reason: result.allowed ? undefined : result.reason };
   },
 
-  async trackUsage({ payerId, holdId, activeSeconds }) {
+  async trackUsage({ payerId, holdId, activeSeconds, pageId }) {
     await AIMonitoring.trackUsage({
       userId: payerId,
       provider: 'sprites',
       model: 'terminal-machine',
       source: 'terminal',
+      // The machine's identifying page (resolveMachinePageId's output) — the ONE
+      // attribution field the usage-breakdown's per-machine view groups on.
+      pageId,
       providerCostDollars: calculateTerminalCostDollars({ activeSeconds }),
       // Active-window duration (ms), matching the quantity that was billed —
       // not a request-latency figure, since there is no single "request" here.

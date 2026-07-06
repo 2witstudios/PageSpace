@@ -72,7 +72,7 @@ function endTerminalSession(
   if (billing && session.holdId && session.payerId && session.connectedAt !== undefined) {
     const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
     void billing
-      .trackUsage({ payerId: session.payerId, holdId: session.holdId, activeSeconds })
+      .trackUsage({ payerId: session.payerId, holdId: session.holdId, activeSeconds, pageId: session.pageId })
       .catch((error) => {
         loggers.realtime.error('Terminal session billing settle failed', error instanceof Error ? error : new Error(String(error)), {
           sessionKey,
@@ -158,6 +158,7 @@ export function buildTerminalHandlers({ sessionMap, openShell, checkAuth, socket
         payerId: authResult.payerId,
         holdId,
         connectedAt,
+        pageId,
         outputFn: (data) => socket.emit('terminal:output', { data }),
         closedFn: (exitCode) => socket.emit('terminal:closed', { exitCode }),
         scrollback: [],

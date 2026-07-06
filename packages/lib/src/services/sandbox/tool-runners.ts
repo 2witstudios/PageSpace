@@ -92,7 +92,7 @@ export interface SandboxBillingDeps {
   /** Places a flat-estimate hold for this payer before the machine run begins. */
   gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
   /** Settles the hold to the real active-window cost. Only called on a successful run. */
-  trackUsage: (input: { payerId: string; holdId?: string; activeSeconds: number }) => Promise<void>;
+  trackUsage: (input: { payerId: string; holdId?: string; activeSeconds: number; pageId?: string }) => Promise<void>;
   /** Releases a hold without billing. Called on every exit that never reaches `trackUsage`. */
   releaseHold: (holdId: string) => Promise<void>;
 }
@@ -370,7 +370,7 @@ async function withMachineBilling<S>(
     if (result.success) {
       handedOff = true;
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
-      await billing.trackUsage({ payerId, holdId, activeSeconds });
+      await billing.trackUsage({ payerId, holdId, activeSeconds, pageId: machinePageId });
     }
     return result;
   } finally {

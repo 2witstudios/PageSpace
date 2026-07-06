@@ -459,7 +459,7 @@ describe('buildTerminalHandlers', () => {
 
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
       const call = billing.trackUsage.mock.calls[0][0];
-      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1', pageId: 'page1' });
       expect(call.activeSeconds).toBeCloseTo(7, 0);
       expect(billing.releaseHold).not.toHaveBeenCalled();
       expect(sessionMap.getByKey('key1')).toBeUndefined();
@@ -477,6 +477,7 @@ describe('buildTerminalHandlers', () => {
       const call = billing.trackUsage.mock.calls[0][0];
       expect(call.payerId).toBe('owner-1');
       expect(call.holdId).toBe('hold-1');
+      expect(call.pageId).toBe('page1');
       expect(call.activeSeconds).toBeCloseTo(DETACHED_IDLE_MS / 1000, 0);
       expect(billing.releaseHold).not.toHaveBeenCalled();
     });
