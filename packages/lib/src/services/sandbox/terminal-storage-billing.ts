@@ -30,6 +30,9 @@ export const defaultReconcileTerminalStorageDeps: ReconcileTerminalStorageDeps =
       provider: 'sprites',
       model: 'terminal-machine-storage',
       source: 'terminal',
+      // The machine's identifying page — the usage-breakdown's per-machine view
+      // groups on this (see machine-billing.ts's trackUsage for the same field).
+      pageId,
       providerCostDollars: costDollars,
       // Not a wall-clock duration (this is a background storage charge, not a
       // single timed run) — 0 mirrors the shape of every other non-timed

@@ -151,6 +151,14 @@ describe('aggregateUsageBreakdown', () => {
       expect(r.byMachine[0]).toMatchObject({ pageId: 'page-c', label: 'Untitled machine' });
     });
 
+    it('tolerates a null durationMs (e.g. an idle-storage charge, which has no wall-clock window) as 0 runtime without dropping its cost', () => {
+      const r = aggregateUsageBreakdown(
+        [terminalRow({ pageId: 'page-d', pageTitle: 'Storage-billed page', chargeMillicents: 5_000, durationMs: null })],
+        PERIOD,
+      );
+      expect(r.byMachine[0]).toMatchObject({ pageId: 'page-d', activeSeconds: 0, spendCents: 5, calls: 1 });
+    });
+
     it('computes sharePct against TOTAL TERMINAL spend, not overall spend across all features', () => {
       const r = aggregateUsageBreakdown(
         [
