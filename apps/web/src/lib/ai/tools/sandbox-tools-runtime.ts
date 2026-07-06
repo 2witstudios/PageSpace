@@ -33,6 +33,7 @@ import {
 } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
+import { lookupPageOwnerId } from '@pagespace/lib/billing/terminal-payer';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import {
   acquireCodeExecutionSlot,
@@ -321,6 +322,8 @@ export interface MachineDirectoryRuntimeDeps {
   getGlobalConfig: (userId: string) => Promise<{ terminalAccess: boolean; machines: MachineRef[] }>;
   /** Lazily provision (or reuse) the personal Terminal page backing a user's global "own" machine. */
   getOrCreateOwnMachinePageId: (userId: string) => Promise<string>;
+  /** A page's owning drive's `ownerId` — the same lookup `resolveTerminalPayerId` uses for billing attribution. */
+  lookupPageOwnerId: (pageId: string) => Promise<string | null>;
 }
 
 const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
@@ -330,6 +333,7 @@ const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
   getAgentConfig: (agentPageId) => pageAgentRepository.getAgentById(agentPageId),
   getGlobalConfig: (userId) => globalTerminalConfigRepository.getConfig(userId),
   getOrCreateOwnMachinePageId: (userId) => globalTerminalConfigRepository.getOrCreateOwnMachinePageId(userId),
+  lookupPageOwnerId,
 };
 
 /**
@@ -408,6 +412,11 @@ export function createMachineDirectory(
       if (machine.kind === 'own') return ambientDriveId;
       const page = await deps.findPage(machine.terminalId);
       return page?.driveId ?? ambientDriveId;
+    },
+    resolveTenantId: async (_rawContext, machine, ambientTenantId) => {
+      if (machine.kind === 'own') return ambientTenantId;
+      const ownerId = await deps.lookupPageOwnerId(machine.terminalId);
+      return ownerId ?? ambientTenantId;
     },
   };
 }

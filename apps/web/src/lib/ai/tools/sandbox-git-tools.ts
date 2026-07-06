@@ -171,7 +171,18 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         },
       };
     }
-    return { ok: true, userId: ctx.userId, ctx: { ...ctx, activeMachine } };
+    // Mirror sandbox-tools.ts's driveId/tenantId resolution: an 'existing'
+    // machine can reference a Terminal page outside the ambient drive/tenant
+    // (global assistant, or a switched active machine in a shared drive).
+    // Leaving these ambient would derive a different session key here than
+    // bash/writeFile/readFile derive for the SAME active machine.
+    const driveId = machines.resolveDriveId
+      ? await machines.resolveDriveId(rawContext, activeMachine, ctx.driveId)
+      : ctx.driveId;
+    const tenantId = machines.resolveTenantId
+      ? await machines.resolveTenantId(rawContext, activeMachine, ctx.tenantId)
+      : ctx.tenantId;
+    return { ok: true, userId: ctx.userId, ctx: { ...ctx, driveId, tenantId, activeMachine } };
   };
 
   /** Direct-exec helper for local git commands (no token needed). */

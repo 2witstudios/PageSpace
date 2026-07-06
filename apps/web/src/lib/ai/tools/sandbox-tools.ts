@@ -129,6 +129,27 @@ export interface MachineDirectoryDeps {
     machine: MachineRef,
     ambientDriveId: string | undefined,
   ) => Promise<string | undefined>;
+  /**
+   * Resolve the tenant (drive owner) that actually backs a machine, overriding
+   * the ambient `ctx.tenantId` the same way `resolveDriveId` overrides
+   * `ctx.driveId` — and for the same reason: an 'existing' machine can
+   * reference a Terminal page in a drive the acting context doesn't already
+   * reflect (global assistant, or a page agent's active machine switched to a
+   * shared drive's Terminal). Session-key derivation
+   * (`packages/lib/src/services/sandbox/terminal-session-manager.ts`) keys off
+   * `tenantId` + `driveId` + `pageId`; the realtime PTY path
+   * (`apps/realtime/src/index.ts`'s `buildMachineSandbox`) always resolves
+   * tenantId fresh from the machine's own page, so leaving this ambient would
+   * derive a DIFFERENT session key than the realtime path for the same
+   * page — an agent's tool calls would silently attach to a different Sprite
+   * than the one a human's live Terminal view is connected to. Optional —
+   * omitted implementations keep using the ambient tenantId unchanged.
+   */
+  resolveTenantId?: (
+    rawContext: ToolExecutionContext | undefined,
+    machine: MachineRef,
+    ambientTenantId: string,
+  ) => Promise<string>;
 }
 
 /**
@@ -241,7 +262,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
     const driveId = machines.resolveDriveId
       ? await machines.resolveDriveId(rawContext, activeMachine, ctx.driveId)
       : ctx.driveId;
-    return { ok: true, ctx: { ...ctx, driveId, activeMachine } };
+    const tenantId = machines.resolveTenantId
+      ? await machines.resolveTenantId(rawContext, activeMachine, ctx.tenantId)
+      : ctx.tenantId;
+    return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine } };
   };
 
   return {

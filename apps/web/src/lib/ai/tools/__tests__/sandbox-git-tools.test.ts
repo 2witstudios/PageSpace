@@ -1490,6 +1490,27 @@ describe('active machine access', () => {
     expect(result).toMatchObject({ success: false });
     expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
+
+  it('git_status: given machines has no resolveDriveId/resolveTenantId, should use the ambient ctx.driveId/tenantId unchanged', async () => {
+    const deps = makeDeps();
+    const { git_status } = createSandboxGitTools(deps);
+    await git_status.execute!({}, {} as never);
+    expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ driveId: 'd1', tenantId: 't1' }),
+    );
+  });
+
+  it('git_status: given machines provides resolveDriveId/resolveTenantId (existing machine in another drive), should override both — mirroring sandbox-tools.ts so git tools attach to the same session as bash/file tools', async () => {
+    const deps = makeDeps();
+    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', terminalId: 't1' }]);
+    deps.machines.resolveDriveId = vi.fn().mockResolvedValue('home-drive-1');
+    deps.machines.resolveTenantId = vi.fn().mockResolvedValue('real-drive-owner');
+    const { git_status } = createSandboxGitTools(deps);
+    await git_status.execute!({}, {} as never);
+    expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ driveId: 'home-drive-1', tenantId: 'real-drive-owner' }),
+    );
+  });
 });
 
 // ── schema strictness ────────────────────────────────────────────────────

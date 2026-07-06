@@ -161,6 +161,7 @@ function makeMachineDirectoryDeps(
     getAgentConfig: async () => ({ terminalAccess: false, machines: [] }),
     getGlobalConfig: async () => ({ terminalAccess: false, machines: [] }),
     getOrCreateOwnMachinePageId: async () => 'own-machine-page-1',
+    lookupPageOwnerId: async () => 'drive-owner-1',
     ...overrides,
   };
 }
@@ -348,6 +349,33 @@ describe('createMachineDirectory', () => {
       await expect(
         directory.resolveDriveId?.(undefined, { kind: 'existing', terminalId: 'gone' }, 'ambient-drive'),
       ).resolves.toBe('ambient-drive');
+    });
+  });
+
+  describe('resolveTenantId', () => {
+    it('given the own machine, should return the ambient tenantId unchanged (page-agent path)', async () => {
+      const directory = createMachineDirectory(makeMachineDirectoryDeps());
+      await expect(
+        directory.resolveTenantId?.(undefined, { kind: 'own' }, 'ambient-tenant'),
+      ).resolves.toBe('ambient-tenant');
+    });
+
+    it('given an existing machine in a different drive, should return that drive\'s ownerId, overriding the ambient tenantId', async () => {
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({ lookupPageOwnerId: async () => 'real-drive-owner' }),
+      );
+      await expect(
+        directory.resolveTenantId?.(undefined, { kind: 'existing', terminalId: 't1' }, 'ambient-tenant'),
+      ).resolves.toBe('real-drive-owner');
+    });
+
+    it('given an existing machine whose page/drive can\'t be resolved, should fall back to the ambient tenantId', async () => {
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({ lookupPageOwnerId: async () => null }),
+      );
+      await expect(
+        directory.resolveTenantId?.(undefined, { kind: 'existing', terminalId: 'gone' }, 'ambient-tenant'),
+      ).resolves.toBe('ambient-tenant');
     });
   });
 });

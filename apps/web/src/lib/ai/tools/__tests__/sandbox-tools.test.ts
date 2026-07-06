@@ -430,6 +430,39 @@ describe('createSandboxTools', () => {
       await exec(tools.bash, { command: 'echo hi' }, {});
       expect(seenAcquisitions).toEqual([expect.objectContaining({ driveId: 'home-drive-1' })]);
     });
+
+    it('given machines has no resolveTenantId, should use the ambient ctx.tenantId unchanged', async () => {
+      const seenAcquisitions: unknown[] = [];
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async (input) => {
+        seenAcquisitions.push(input);
+        return { ok: true, sandboxId: 'sbx', resumed: false };
+      };
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      await exec(tools.bash, { command: 'echo hi' }, {});
+      expect(seenAcquisitions).toEqual([expect.objectContaining({ tenantId: 't1' })]);
+    });
+
+    it('given machines provides resolveTenantId, should override the ambient ctx.tenantId with its result — keeping it consistent with the machine\'s own resolved driveId', async () => {
+      const seenAcquisitions: unknown[] = [];
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async (input) => {
+        seenAcquisitions.push(input);
+        return { ok: true, sandboxId: 'sbx', resumed: false };
+      };
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [{ kind: 'existing', terminalId: 't1' }],
+        describeMachine: async () => ({ name: 'Shared Terminal' }),
+        isMachineAccessible: async () => true,
+        resolveDriveId: async () => 'home-drive-1',
+        resolveTenantId: async () => 'real-drive-owner',
+      };
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+      await exec(tools.bash, { command: 'echo hi' }, {});
+      expect(seenAcquisitions).toEqual([
+        expect.objectContaining({ driveId: 'home-drive-1', tenantId: 'real-drive-owner' }),
+      ]);
+    });
   });
 
   describe('terminal tools resolve the active machine before delegating', () => {
