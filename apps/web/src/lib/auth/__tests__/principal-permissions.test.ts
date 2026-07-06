@@ -65,6 +65,7 @@ import {
   getScopedAccessiblePagesInDrive,
   hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
+import { manageKeysScopedAuthResult } from './manage-keys-fixture';
 
 const USER_ID = 'user_aaaaaaaaaaaaaaaaaaaaaa';
 const TOKEN_ID = 'tok_bbbbbbbbbbbbbbbbbbbbbb';
@@ -79,12 +80,12 @@ const scopedMcpAuth: AuthResult = { ...base, userId: USER_ID, tokenType: 'mcp', 
 const DRIVE_SCOPES = [{ driveId: DRIVE_ID, role: null, customRoleId: null }];
 const accountOAuthAuth: AuthResult = {
   ...base, userId: USER_ID, tokenType: 'oauth', tokenId: TOKEN_ID,
-  scopes: { account: true, offlineAccess: false, drives: new Map() },
+  scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false },
   driveScopes: [], allowedDriveIds: [],
 };
 const scopedOAuthAuth: AuthResult = {
   ...base, userId: USER_ID, tokenType: 'oauth', tokenId: TOKEN_ID,
-  scopes: { account: false, offlineAccess: false, drives: new Map([[DRIVE_ID, { kind: 'drive' as const, driveId: DRIVE_ID, role: { kind: 'inherit' as const } }]]) },
+  scopes: { account: false, offlineAccess: false, drives: new Map([[DRIVE_ID, { kind: 'drive' as const, driveId: DRIVE_ID, role: { kind: 'inherit' as const } }]]), manageKeys: false },
   driveScopes: DRIVE_SCOPES, allowedDriveIds: [DRIVE_ID],
 };
 
@@ -363,5 +364,107 @@ describe('getPrincipalBatchPagePermissions', () => {
     vi.mocked(getBatchPagePermissions).mockResolvedValue(expected);
     expect(await getPrincipalBatchPagePermissions(accountOAuthAuth, [PAGE_ID])).toBe(expected);
     expect(getBatchPagePermissions).toHaveBeenCalledWith(USER_ID, [PAGE_ID]);
+  });
+});
+
+// =============================================================================
+// MANAGE-KEYS-ONLY CREDENTIAL — deny-first short-circuit
+// =============================================================================
+//
+// isScopedOAuthAuth returns true for a manage-keys-only credential too
+// (scopes.account is false), so absent an explicit guard every function here
+// would dispatch to the scoped/app path — which today happens to deny
+// because driveScopes/allowedDriveIds are empty for a well-formed manage-keys
+// credential. That's caller convention, not a guarantee this module itself
+// provides: a credential violating the manage_keys/account exclusivity
+// invariant (e.g. a future bug producing account:true + manageKeys:true) has
+// `!auth.scopes.account` false, so isScopedOAuthAuth is false too, and it
+// would fall through to the "acts as the user" branch — full unrestricted
+// access. These tests pin down that the explicit isManageKeysOnly check
+// denies first, regardless of the other scope fields.
+describe('manage-keys-only credential — deny-first short-circuit', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const manageKeysAuth = manageKeysScopedAuthResult();
+
+  // Simulates a future invariant violation: manageKeys + account both true,
+  // plus a non-empty allowedDriveIds — proves the guard doesn't rely on
+  // scopes.account being false or allowedDriveIds being empty.
+  const brokenManageKeysAuth = manageKeysScopedAuthResult({
+    scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: true },
+    allowedDriveIds: ['drive-should-never-be-reachable'],
+  });
+
+  const cases: Array<[string, AuthResult]> = [
+    ['well-formed manage-keys credential', manageKeysAuth],
+    ['invariant-violated manage-keys credential (account=true, non-empty allowedDriveIds)', brokenManageKeysAuth],
+  ];
+
+  it.each(cases)('getPrincipalAccessLevel denies (%s)', async (_label, auth) => {
+    expect(await getPrincipalAccessLevel(auth, PAGE_ID)).toBeNull();
+    expect(getUserAccessLevel).not.toHaveBeenCalled();
+    expect(getAppAccessLevel).not.toHaveBeenCalled();
+    expect(getScopedAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('canPrincipalViewPage denies (%s)', async (_label, auth) => {
+    expect(await canPrincipalViewPage(auth, PAGE_ID)).toBe(false);
+    expect(canUserViewPage).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('canPrincipalEditPage denies (%s)', async (_label, auth) => {
+    expect(await canPrincipalEditPage(auth, PAGE_ID)).toBe(false);
+    expect(canUserEditPage).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('canPrincipalDeletePage denies (%s)', async (_label, auth) => {
+    expect(await canPrincipalDeletePage(auth, PAGE_ID)).toBe(false);
+    expect(canUserDeletePage).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('canPrincipalSharePage denies (%s)', async (_label, auth) => {
+    expect(await canPrincipalSharePage(auth, PAGE_ID)).toBe(false);
+    expect(canUserSharePage).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('isPrincipalDriveMember denies (%s)', async (_label, auth) => {
+    expect(await isPrincipalDriveMember(auth, DRIVE_ID)).toBe(false);
+    expect(isUserDriveMember).not.toHaveBeenCalled();
+    expect(hasAppDriveMembership).not.toHaveBeenCalled();
+    expect(hasScopedDriveMembership).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('isPrincipalDriveOwnerOrAdmin denies (%s)', async (_label, auth) => {
+    expect(await isPrincipalDriveOwnerOrAdmin(auth, DRIVE_ID)).toBe(false);
+    expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+    expect(getAppDriveMembership).not.toHaveBeenCalled();
+    expect(getScopedDriveMembership).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('getPrincipalDriveIds returns empty, never the owning user\'s drive list (%s)', async (_label, auth) => {
+    expect(await getPrincipalDriveIds(auth)).toEqual([]);
+    expect(getDriveIdsForUser).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('getPrincipalDriveAccess denies (%s)', async (_label, auth) => {
+    expect(await getPrincipalDriveAccess(auth, DRIVE_ID)).toBe(false);
+    expect(getUserDriveAccess).not.toHaveBeenCalled();
+    expect(hasAppDriveMembership).not.toHaveBeenCalled();
+    expect(hasScopedDriveMembership).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('getPrincipalAccessiblePagesInDrive returns empty, never the owning user\'s pages (%s)', async (_label, auth) => {
+    expect(await getPrincipalAccessiblePagesInDrive(auth, DRIVE_ID)).toEqual([]);
+    expect(getUserAccessiblePagesInDriveWithDetails).not.toHaveBeenCalled();
+    expect(getAppAccessiblePagesInDrive).not.toHaveBeenCalled();
+    expect(getScopedAccessiblePagesInDrive).not.toHaveBeenCalled();
+  });
+
+  it.each(cases)('getPrincipalBatchPagePermissions denies every requested page, never the owning user\'s batch (%s)', async (_label, auth) => {
+    const result = await getPrincipalBatchPagePermissions(auth, [PAGE_ID]);
+    expect(result.get(PAGE_ID)).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+    expect(getBatchPagePermissions).not.toHaveBeenCalled();
+    expect(getAppAccessiblePagesInDrive).not.toHaveBeenCalled();
+    expect(getScopedAccessiblePagesInDrive).not.toHaveBeenCalled();
   });
 });
