@@ -931,6 +931,14 @@ describe('git_merge action', () => {
     const result = await git_merge.execute!({}, {} as never);
     expect(result).toMatchObject({ success: false });
   });
+
+  it('rejects a branch that looks like a flag', async () => {
+    const deps = makeDeps();
+    const { git_merge } = createSandboxGitTools(deps);
+    const result = await git_merge.execute!({ branch: '--strategy=octopus' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
 });
 
 describe('git_rebase action', () => {
@@ -955,6 +963,14 @@ describe('git_rebase action', () => {
     const { git_rebase } = createSandboxGitTools(deps);
     const result = await git_rebase.execute!({}, {} as never);
     expect(result).toMatchObject({ success: false });
+  });
+
+  it('rejects a branch_or_ref that looks like a flag', async () => {
+    const deps = makeDeps();
+    const { git_rebase } = createSandboxGitTools(deps);
+    const result = await git_rebase.execute!({ branch_or_ref: '--exec=whoami' }, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
 });
 

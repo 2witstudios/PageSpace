@@ -508,6 +508,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       .strict()
       .refine((d) => (d.action ?? 'run') !== 'run' || !!d.branch, {
         message: 'branch is required when running a merge',
+      })
+      .refine((d) => d.branch === undefined || !startsLikeFlag(d.branch), {
+        message: 'branch must not start with "-"',
       }),
     execute: async ({ branch, strategy, action, cwd }, options) => {
       const opened = await open(options);
@@ -518,6 +521,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       }
       if (!branch) {
         return { success: false as const, error: 'branch is required when running a merge' };
+      }
+      if (startsLikeFlag(branch)) {
+        return { success: false as const, error: 'branch must not start with "-"' };
       }
       const strategyFlag =
         strategy === 'squash' ? ['--squash'] : strategy === 'ff-only' ? ['--ff-only'] : [];
@@ -544,6 +550,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       .strict()
       .refine((d) => (d.action ?? 'run') !== 'run' || !!d.branch_or_ref, {
         message: 'branch_or_ref is required when running a rebase',
+      })
+      .refine((d) => d.branch_or_ref === undefined || !startsLikeFlag(d.branch_or_ref), {
+        message: 'branch_or_ref must not start with "-"',
       }),
     execute: async ({ branch_or_ref, action, cwd }, options) => {
       const opened = await open(options);
@@ -554,6 +563,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitS
       }
       if (!branch_or_ref) {
         return { success: false as const, error: 'branch_or_ref is required when running a rebase' };
+      }
+      if (startsLikeFlag(branch_or_ref)) {
+        return { success: false as const, error: 'branch_or_ref must not start with "-"' };
       }
       return git('git', ['rebase', branch_or_ref], opened.ctx, cwd);
     },

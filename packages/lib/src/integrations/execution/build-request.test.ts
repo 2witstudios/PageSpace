@@ -90,6 +90,69 @@ describe('interpolatePath', () => {
       interpolatePath({ template, input, rawPathParams: ['path'] })
     ).toThrow(/path/);
   });
+
+  it('given a rawPathParams value with percent-encoded ".." segments, should throw', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = {
+      owner: 'acme',
+      repo: 'webapp',
+      path: '%2e%2e/%2e%2e/other-org/other-repo/contents/secret.txt',
+    };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a rawPathParams value with mixed-case percent-encoded ".." segments, should throw', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: '%2E%2e/other-org/other-repo/contents/x' };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a rawPathParams value mixing a literal dot with a percent-encoded dot (".%2e"), should throw', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: '.%2e/other-org/other-repo/contents/x' };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a rawPathParams value containing a backslash, should throw rather than let it act as a path separator', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: '..\\..\\other-org\\other-repo\\contents\\x' };
+
+    expect(() =>
+      interpolatePath({ template, input, rawPathParams: ['path'] })
+    ).toThrow(/path/);
+  });
+
+  it('given a plain identifier param with a percent-encoded ".." value, should throw', () => {
+    const template = '/repos/{owner}/{repo}';
+    const input = { owner: '%2e%2e', repo: 'webapp' };
+
+    expect(() => interpolatePath({ template, input })).toThrow(/owner/);
+  });
+
+  it('given a plain identifier param containing a backslash, should throw', () => {
+    const template = '/repos/{owner}/{repo}';
+    const input = { owner: 'acme\\evil', repo: 'webapp' };
+
+    expect(() => interpolatePath({ template, input })).toThrow(/owner/);
+  });
+
+  it('given a rawPathParams value with a legitimate dotted segment (".github"), should preserve it', () => {
+    const template = '/repos/{owner}/{repo}/contents/{path}';
+    const input = { owner: 'acme', repo: 'webapp', path: '.github/workflows/ci.yml' };
+
+    const result = interpolatePath({ template, input, rawPathParams: ['path'] });
+
+    expect(result).toBe('/repos/acme/webapp/contents/.github/workflows/ci.yml');
+  });
 });
 
 describe('resolveValue', () => {

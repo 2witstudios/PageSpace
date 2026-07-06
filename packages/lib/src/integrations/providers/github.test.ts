@@ -422,6 +422,17 @@ describe('githubProvider', () => {
       expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
     });
 
+    it('given a path containing percent-encoded "../" segments, should throw rather than escape the declared repo', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const input = {
+        owner: 'acme',
+        repo: 'webapp',
+        path: '%2e%2e/%2e%2e/other-org/other-repo/contents/secret.txt',
+      };
+
+      expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
+    });
+
     it('given the tool config, should declare rawPathParams: ["path"]', () => {
       const config = (tool.execution as { config: HttpExecutionConfig }).config;
       expect(config.rawPathParams).toEqual(['path']);
@@ -984,6 +995,19 @@ describe('githubProvider', () => {
       expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
     });
 
+    it('given a path containing percent-encoded "../" segments, should throw rather than write to a different repo', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const input = {
+        owner: 'acme',
+        repo: 'webapp',
+        path: '%2e%2e/%2e%2e/other-org/other-repo/contents/secret.txt',
+        message: 'evil commit',
+        content: 'aGVsbG8=',
+      };
+
+      expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
+    });
+
     it('given the tool config, should declare rawPathParams: ["path"]', () => {
       const config = (tool.execution as { config: HttpExecutionConfig }).config;
       expect(config.rawPathParams).toEqual(['path']);
@@ -1026,6 +1050,19 @@ describe('githubProvider', () => {
         owner: 'acme',
         repo: 'webapp',
         path: '../../other-org/other-repo/contents/secret.txt',
+        message: 'evil delete',
+        sha: 'blob123',
+      };
+
+      expect(() => buildHttpRequest(config, input, 'https://api.github.com')).toThrow();
+    });
+
+    it('given a path containing percent-encoded "../" segments, should throw rather than delete from a different repo', () => {
+      const config = (tool.execution as { config: HttpExecutionConfig }).config;
+      const input = {
+        owner: 'acme',
+        repo: 'webapp',
+        path: '%2e%2e/%2e%2e/other-org/other-repo/contents/secret.txt',
         message: 'evil delete',
         sha: 'blob123',
       };
