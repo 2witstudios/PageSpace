@@ -36,7 +36,20 @@ const defaultLoadKeyring: LoadKeyring = () => import('@napi-rs/keyring');
  */
 const PROFILE_KEY_SEPARATOR = '\u0000';
 
+/**
+ * `keychainAccountKey`/`parseKeychainAccountKey` are re-exported as public
+ * library API (see `index.ts`), so a caller other than this package's own
+ * CLI argv parsing (which can never carry a NUL byte) could otherwise pass a
+ * `host`/`profile` containing the separator itself and collide two distinct
+ * pairs onto the same account key — e.g. `("A\0B", "C")` and `("A", "B\0C")`
+ * both encode to `"A\0B\0C"`, so one pair's `set()` would silently overwrite
+ * the other's keychain entry. Reject the separator at this boundary so no
+ * caller can construct that collision.
+ */
 export function keychainAccountKey(host: string, profile: string = DEFAULT_PROFILE_NAME): string {
+  if (host.includes(PROFILE_KEY_SEPARATOR) || profile.includes(PROFILE_KEY_SEPARATOR)) {
+    throw new Error('Host and profile names must not contain a NUL byte.');
+  }
   return profile === DEFAULT_PROFILE_NAME ? host : `${host}${PROFILE_KEY_SEPARATOR}${profile}`;
 }
 

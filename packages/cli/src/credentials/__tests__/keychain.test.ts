@@ -95,6 +95,21 @@ describe('keychainAccountKey / parseKeychainAccountKey — per-profile namespaci
   it('a bare host with no encoded profile parses as the "default" profile', () => {
     expect(parseKeychainAccountKey('https://pagespace.ai')).toEqual({ host: 'https://pagespace.ai', profile: 'default' });
   });
+
+  it('rejects a host containing an embedded NUL byte, since it could collide with an unrelated host/profile pair', () => {
+    expect(() => keychainAccountKey('A\u0000B', 'C')).toThrow(/NUL/);
+  });
+
+  it('rejects a profile containing an embedded NUL byte, since it could collide with an unrelated host/profile pair', () => {
+    expect(() => keychainAccountKey('A', 'B\u0000C')).toThrow(/NUL/);
+  });
+
+  it('a previously-colliding pair is now rejected outright instead of one silently overwriting the other', () => {
+    // Before the boundary check, both of these encoded to the identical account key 'A\u0000B\u0000C',
+    // so setting one pair's credential would silently clobber the other's keychain entry.
+    expect(() => keychainAccountKey('A\u0000B', 'C')).toThrow(/NUL/);
+    expect(() => keychainAccountKey('A', 'B\u0000C')).toThrow(/NUL/);
+  });
 });
 
 describe('createNativeKeychainAdapter — missing native binding degrades cleanly', () => {
