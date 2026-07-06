@@ -19,7 +19,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { manageKeysScopedAuthResult } from '@/lib/auth/__tests__/manage-keys-fixture';
+import { manageKeysScopedAuthResult, driveScopedOAuthAuthResult } from '@/lib/auth/__tests__/manage-keys-fixture';
 
 vi.mock('@/lib/repositories/session-repository', () => ({
   sessionRepository: {
@@ -74,23 +74,6 @@ import { POST, GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 
-const DRIVE_SCOPED_OAUTH = {
-  tokenType: 'oauth' as const,
-  userId: 'test-user-id',
-  role: 'user' as const,
-  tokenVersion: 0,
-  adminRoleVersion: 0,
-  tokenId: 'oauth-token-1',
-  scopes: {
-    account: false,
-    offlineAccess: false,
-    manageKeys: false,
-    drives: new Map([['drive-1', { kind: 'drive' as const, driveId: 'drive-1', role: { kind: 'inherit' as const } }]]),
-  },
-  driveScopes: [{ driveId: 'drive-1', role: null, customRoleId: null }],
-  allowedDriveIds: ['drive-1'],
-};
-
 describe('mcp-tokens routes — manage_keys-only vs drive-scoped OAuth (real isScopedOAuthAuth/isManageKeysOnly)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -122,7 +105,7 @@ describe('mcp-tokens routes — manage_keys-only vs drive-scoped OAuth (real isS
     });
 
     it('still rejects a drive-scoped OAuth credential the same way — step-up gate fires before any scope check, never reaching the repository', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(DRIVE_SCOPED_OAUTH as never);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(driveScopedOAuthAuthResult());
 
       const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
         method: 'POST',
@@ -151,7 +134,7 @@ describe('mcp-tokens routes — manage_keys-only vs drive-scoped OAuth (real isS
     });
 
     it('still rejects a drive-scoped OAuth credential, never reaching the repository', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(DRIVE_SCOPED_OAUTH as never);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(driveScopedOAuthAuthResult());
 
       const request = new NextRequest('http://localhost/api/auth/mcp-tokens', { method: 'GET' });
       const response = await GET(request);
