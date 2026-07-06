@@ -34,6 +34,8 @@ import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { useRouter } from 'next/navigation';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { attemptStepUp, readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
+import { buildMintActionBinding, buildUpdateActionBinding, type DriveRoleSelection } from './mcp-token-step-up';
 
 interface DriveScope {
   id: string;
@@ -67,11 +69,6 @@ interface DriveRoleOption {
   id: string;
   name: string;
   color?: string | null;
-}
-
-interface DriveRoleSelection {
-  role: 'ADMIN' | 'MEMBER' | null;
-  customRoleId?: string | null;
 }
 
 const INHERIT_VALUE = 'INHERIT';
@@ -254,12 +251,36 @@ for await (const chunk of stream) {
   );
 }
 
+// Minting and widening an MCP token's drive scopes are step-up gated (Phase 8
+// credential minting security correction). A magic-link fallback redirects
+// back to this same settings page, losing React state — sessionStorage
+// carries the in-flight name/driveIds/roleSelections across that round trip,
+// the URL fragment carries the resulting grant, and the mount effect below
+// reconciles the two, mirroring `ConnectedAppsList`'s revoke-resume pattern.
+const PENDING_MINT_STORAGE_KEY = 'pagespace:pendingMcpTokenMint';
+const PENDING_UPDATE_STORAGE_KEY = 'pagespace:pendingMcpTokenUpdate';
+
+type StepUpStatus = 'idle' | 'in_progress' | 'awaiting_email';
+
+interface PendingMint {
+  name: string;
+  driveIds: string[];
+  roleSelections: Record<string, DriveRoleSelection>;
+}
+
+interface PendingUpdate {
+  tokenId: string;
+  driveIds: string[];
+  roleSelections: Record<string, DriveRoleSelection>;
+}
+
 export default function MCPSettingsView() {
   const router = useRouter();
   const [tokens, setTokens] = useState<MCPToken[]>([]);
   const [drives, setDrives] = useState<Drive[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [createStepUpStatus, setCreateStepUpStatus] = useState<StepUpStatus>('idle');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newTokenName, setNewTokenName] = useState('');
   const [selectedDriveIds, setSelectedDriveIds] = useState<string[]>([]);
@@ -270,6 +291,7 @@ export default function MCPSettingsView() {
   const [editSelectedDriveIds, setEditSelectedDriveIds] = useState<string[]>([]);
   const [editDriveRoles, setEditDriveRoles] = useState<Record<string, DriveRoleSelection>>({});
   const [editingScopes, setEditingScopes] = useState(false);
+  const [editStepUpStatus, setEditStepUpStatus] = useState<StepUpStatus>('idle');
   const [driveRolesByDriveId, setDriveRolesByDriveId] = useState<Record<string, DriveRoleOption[]>>({});
   const loadedRoleDriveIdsRef = useRef<Set<string>>(new Set());
   const [newToken, setNewToken] = useState<NewToken | null>(null);
@@ -282,6 +304,32 @@ export default function MCPSettingsView() {
   useEffect(() => {
     loadTokens();
     loadDrives();
+  }, []);
+
+  // A step-up magic link redirects back to this same settings URL with the
+  // grant attached in the fragment — pick it up on load, scrub it from the
+  // visible URL, and resume whichever mint/update was pending.
+  useEffect(() => {
+    const tokenFromEmail = readStepUpTokenFromHash(window.location.hash);
+    if (!tokenFromEmail) return;
+    const cleanedHash = stripStepUpTokenFromHash(window.location.hash);
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${cleanedHash}`);
+
+    const pendingMintRaw = sessionStorage.getItem(PENDING_MINT_STORAGE_KEY);
+    if (pendingMintRaw) {
+      sessionStorage.removeItem(PENDING_MINT_STORAGE_KEY);
+      const pending = JSON.parse(pendingMintRaw) as PendingMint;
+      finalizeCreateToken(pending.name, pending.driveIds, pending.roleSelections, tokenFromEmail);
+      return;
+    }
+
+    const pendingUpdateRaw = sessionStorage.getItem(PENDING_UPDATE_STORAGE_KEY);
+    if (pendingUpdateRaw) {
+      sessionStorage.removeItem(PENDING_UPDATE_STORAGE_KEY);
+      const pending = JSON.parse(pendingUpdateRaw) as PendingUpdate;
+      finalizeUpdateTokenScopes(pending.tokenId, pending.driveIds, pending.roleSelections, tokenFromEmail);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const ensureDriveRolesLoaded = async (driveId: string) => {
@@ -355,21 +403,22 @@ export default function MCPSettingsView() {
       };
     });
 
-  const createToken = async () => {
-    if (!newTokenName.trim()) {
-      toast.error('Please enter a name for the token');
-      return;
-    }
-
+  const finalizeCreateToken = async (
+    name: string,
+    driveIds: string[],
+    roleSelections: Record<string, DriveRoleSelection>,
+    stepUpToken: string,
+  ) => {
     setCreating(true);
     try {
       const payload: {
         name: string;
+        stepUpToken: string;
         drives?: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[];
-      } = { name: newTokenName.trim() };
-      if (selectedDriveIds.length > 0) {
-        payload.drives = selectedDriveIds.map(id => {
-          const selection = newDriveRoles[id] ?? { role: null, customRoleId: null };
+      } = { name, stepUpToken };
+      if (driveIds.length > 0) {
+        payload.drives = driveIds.map(id => {
+          const selection = roleSelections[id] ?? { role: null, customRoleId: null };
           return { id, role: selection.role, customRoleId: selection.customRoleId ?? undefined };
         });
       }
@@ -379,8 +428,8 @@ export default function MCPSettingsView() {
       // Add drive scopes to the token object for display
       const tokenWithScopes: MCPToken = {
         ...token,
-        isScoped: selectedDriveIds.length > 0,
-        driveScopes: buildDriveScopes(selectedDriveIds, newDriveRoles),
+        isScoped: driveIds.length > 0,
+        driveScopes: buildDriveScopes(driveIds, roleSelections),
       };
 
       setNewToken(token);
@@ -395,11 +444,47 @@ export default function MCPSettingsView() {
       setNewDriveRoles({});
       setCreateDialogOpen(false);
       setShowNewToken(true);
+      setCreateStepUpStatus('idle');
       toast.success('MCP token created successfully');
     } catch (error) {
       console.error('Error creating MCP token:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to create MCP token');
+      setCreateStepUpStatus('idle');
     } finally {
+      setCreating(false);
+    }
+  };
+
+  const createToken = async () => {
+    if (!newTokenName.trim()) {
+      toast.error('Please enter a name for the token');
+      return;
+    }
+
+    const name = newTokenName.trim();
+    const driveIds = selectedDriveIds;
+    const roleSelections = newDriveRoles;
+
+    setCreating(true);
+    setCreateStepUpStatus('in_progress');
+    try {
+      const actionBinding = buildMintActionBinding(name, driveIds, roleSelections);
+      const next = `${window.location.pathname}${window.location.search}`;
+      const result = await attemptStepUp(actionBinding, next);
+      if (result.status === 'awaiting_email') {
+        // Only remember a pending mint once the email has actually been
+        // dispatched — otherwise a failed request would leave pending state
+        // behind with no corresponding link ever on its way.
+        sessionStorage.setItem(PENDING_MINT_STORAGE_KEY, JSON.stringify({ name, driveIds, roleSelections }));
+        setCreateStepUpStatus('awaiting_email');
+        setCreating(false);
+        return;
+      }
+      await finalizeCreateToken(name, driveIds, roleSelections, result.stepUpToken);
+    } catch (error) {
+      console.error('Error starting MCP token step-up:', error);
+      toast.error('Something went wrong. Please try again.');
+      setCreateStepUpStatus('idle');
       setCreating(false);
     }
   };
@@ -438,6 +523,7 @@ export default function MCPSettingsView() {
       ensureDriveRolesLoaded(scope.id);
     });
     setEditDriveRoles(roles);
+    setEditStepUpStatus('idle');
     setEditDialogOpen(true);
   };
 
@@ -451,6 +537,49 @@ export default function MCPSettingsView() {
 
   const setEditDriveRole = (driveId: string, value: string) => {
     setEditDriveRoles(prev => ({ ...prev, [driveId]: roleSelectionFromValue(value) }));
+  };
+
+  const finalizeUpdateTokenScopes = async (
+    tokenId: string,
+    driveIds: string[],
+    roleSelections: Record<string, DriveRoleSelection>,
+    stepUpToken: string,
+  ) => {
+    setEditingScopes(true);
+    try {
+      const driveScopesPayload = driveIds.map(id => {
+        const selection = roleSelections[id] ?? { role: null, customRoleId: null };
+        return { id, role: selection.role, customRoleId: selection.customRoleId ?? undefined };
+      });
+
+      await patch<{ id: string; name: string; driveScopes: { id: string; name: string }[] }>(
+        `/api/auth/mcp-tokens/${tokenId}`,
+        { drives: driveScopesPayload, stepUpToken }
+      );
+
+      // PATCH always sends an explicit drives array, so the token is always scoped
+      // afterward (even [] means "scoped to zero drives", not "unscoped") — unlike
+      // createToken()'s conditional isScoped, which reflects an omitted drives field.
+      const nextDriveScopes = buildDriveScopes(driveIds, roleSelections);
+      setTokens(prev => prev.map(t =>
+        t.id === tokenId
+          ? { ...t, driveScopes: nextDriveScopes, isScoped: true }
+          : t
+      ));
+      setEditDialogOpen(false);
+      setEditingTokenId(null);
+      setEditingTokenWasUnscoped(false);
+      setEditSelectedDriveIds([]);
+      setEditDriveRoles({});
+      setEditStepUpStatus('idle');
+      toast.success('Token scopes updated successfully');
+    } catch (error) {
+      console.error('Error updating MCP token scopes:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update token scopes');
+      setEditStepUpStatus('idle');
+    } finally {
+      setEditingScopes(false);
+    }
   };
 
   const updateTokenScopes = async () => {
@@ -467,37 +596,30 @@ export default function MCPSettingsView() {
       if (!confirmed) return;
     }
 
+    const tokenId = editingTokenId;
+    const driveIds = editSelectedDriveIds;
+    const roleSelections = editDriveRoles;
+
     setEditingScopes(true);
+    setEditStepUpStatus('in_progress');
     try {
-      const driveScopesPayload = editSelectedDriveIds.map(id => {
-        const selection = editDriveRoles[id] ?? { role: null, customRoleId: null };
-        return { id, role: selection.role, customRoleId: selection.customRoleId ?? undefined };
-      });
-
-      await patch<{ id: string; name: string; driveScopes: { id: string; name: string }[] }>(
-        `/api/auth/mcp-tokens/${editingTokenId}`,
-        { drives: driveScopesPayload }
-      );
-
-      // PATCH always sends an explicit drives array, so the token is always scoped
-      // afterward (even [] means "scoped to zero drives", not "unscoped") — unlike
-      // createToken()'s conditional isScoped, which reflects an omitted drives field.
-      const nextDriveScopes = buildDriveScopes(editSelectedDriveIds, editDriveRoles);
-      setTokens(prev => prev.map(t =>
-        t.id === editingTokenId
-          ? { ...t, driveScopes: nextDriveScopes, isScoped: true }
-          : t
-      ));
-      setEditDialogOpen(false);
-      setEditingTokenId(null);
-      setEditingTokenWasUnscoped(false);
-      setEditSelectedDriveIds([]);
-      setEditDriveRoles({});
-      toast.success('Token scopes updated successfully');
+      const actionBinding = buildUpdateActionBinding(tokenId, driveIds, roleSelections);
+      const next = `${window.location.pathname}${window.location.search}`;
+      const result = await attemptStepUp(actionBinding, next);
+      if (result.status === 'awaiting_email') {
+        // Only remember a pending update once the email has actually been
+        // dispatched — otherwise a failed request would leave pending state
+        // behind with no corresponding link ever on its way.
+        sessionStorage.setItem(PENDING_UPDATE_STORAGE_KEY, JSON.stringify({ tokenId, driveIds, roleSelections }));
+        setEditStepUpStatus('awaiting_email');
+        setEditingScopes(false);
+        return;
+      }
+      await finalizeUpdateTokenScopes(tokenId, driveIds, roleSelections, result.stepUpToken);
     } catch (error) {
-      console.error('Error updating MCP token scopes:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update token scopes');
-    } finally {
+      console.error('Error starting MCP token update step-up:', error);
+      toast.error('Something went wrong. Please try again.');
+      setEditStepUpStatus('idle');
       setEditingScopes(false);
     }
   };
@@ -716,6 +838,7 @@ export default function MCPSettingsView() {
                 setNewTokenName('');
                 setSelectedDriveIds([]);
                 setNewDriveRoles({});
+                setCreateStepUpStatus('idle');
               }
             }}>
             <DialogTrigger asChild>
@@ -807,13 +930,25 @@ export default function MCPSettingsView() {
                     </Button>
                   )}
                 </div>
+
+                {createStepUpStatus === 'awaiting_email' && (
+                  <p className="text-sm text-muted-foreground">
+                    Check your email for a confirmation link to finish creating this token.
+                  </p>
+                )}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={createToken} disabled={creating}>
-                  {creating ? "Creating..." : "Create Token"}
+                <Button onClick={createToken} disabled={creating || createStepUpStatus === 'awaiting_email'}>
+                  {createStepUpStatus === 'awaiting_email'
+                    ? 'Check your email…'
+                    : createStepUpStatus === 'in_progress'
+                      ? 'Confirming…'
+                      : creating
+                        ? 'Creating...'
+                        : 'Create Token'}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -906,6 +1041,7 @@ export default function MCPSettingsView() {
             setEditingTokenWasUnscoped(false);
             setEditSelectedDriveIds([]);
             setEditDriveRoles({});
+            setEditStepUpStatus('idle');
           }
         }}>
         <DialogContent className="max-w-md">
@@ -977,13 +1113,25 @@ export default function MCPSettingsView() {
                 </Button>
               )}
             </div>
+
+            {editStepUpStatus === 'awaiting_email' && (
+              <p className="text-sm text-muted-foreground">
+                Check your email for a confirmation link to finish saving these changes.
+              </p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={updateTokenScopes} disabled={editingScopes}>
-              {editingScopes ? "Saving..." : "Save Changes"}
+            <Button onClick={updateTokenScopes} disabled={editingScopes || editStepUpStatus === 'awaiting_email'}>
+              {editStepUpStatus === 'awaiting_email'
+                ? 'Check your email…'
+                : editStepUpStatus === 'in_progress'
+                  ? 'Confirming…'
+                  : editingScopes
+                    ? 'Saving...'
+                    : 'Save Changes'}
             </Button>
           </DialogFooter>
         </DialogContent>

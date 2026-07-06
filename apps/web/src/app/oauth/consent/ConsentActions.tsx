@@ -1,13 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { startAuthentication } from '@simplewebauthn/browser';
 import { post } from '@/lib/auth/auth-fetch';
+import { attemptStepUp } from '@/lib/auth/step-up-ceremony';
 import {
   buildConsentActionBinding,
   readStepUpTokenFromHash,
   stripStepUpTokenFromHash,
-  isNoPasskeyError,
 } from './consent-step-up';
 
 interface ConsentActionsProps {
@@ -55,25 +54,6 @@ export function ConsentActions(props: ConsentActionsProps) {
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${cleanedHash}`);
   }, []);
 
-  async function runWebauthnStepUp(): Promise<string> {
-    const { options } = await post<{ options: { challenge: string }; challengeId: string }>(
-      '/api/auth/step-up/webauthn/options',
-      { actionBinding },
-    );
-    const webauthnResponse = await startAuthentication({ optionsJSON: options as never });
-    const { stepUpToken: token } = await post<{ stepUpToken: string }>('/api/auth/step-up/webauthn/verify', {
-      response: webauthnResponse,
-      expectedChallenge: options.challenge,
-      actionBinding,
-    });
-    return token;
-  }
-
-  async function requestMagicLinkStepUp(): Promise<void> {
-    const next = `${window.location.pathname}${window.location.search}`;
-    await post('/api/auth/step-up/magic-link/request', { actionBinding, next });
-  }
-
   async function decide(action: 'approve' | 'deny') {
     setIsSubmitting(true);
     setError(null);
@@ -83,20 +63,22 @@ export function ConsentActions(props: ConsentActionsProps) {
       if (action === 'approve' && !token) {
         setStepUpStatus('in_progress');
         try {
-          token = await runWebauthnStepUp();
-        } catch (ceremonyError) {
-          if (isNoPasskeyError(ceremonyError)) {
-            await requestMagicLinkStepUp();
+          const next = `${window.location.pathname}${window.location.search}`;
+          const result = await attemptStepUp(actionBinding, next);
+          if (result.status === 'awaiting_email') {
             setStepUpStatus('awaiting_email');
             setIsSubmitting(false);
             return;
           }
-          // Any other ceremony failure (most commonly the user dismissing or
-          // cancelling the browser's WebAuthn prompt) must not leave the
-          // button stuck showing "Confirming…" — explicitly drop back to
-          // idle and clear any token so a retry starts a genuinely fresh
-          // ceremony. The outer catch below still surfaces the user-facing
-          // error and re-enables the buttons.
+          token = result.stepUpToken;
+        } catch (ceremonyError) {
+          // Any ceremony failure (most commonly the user dismissing or
+          // cancelling the browser's WebAuthn prompt, or the magic-link
+          // request itself failing) must not leave the button stuck showing
+          // "Confirming…" — explicitly drop back to idle and clear any token
+          // so a retry starts a genuinely fresh ceremony. The outer catch
+          // below still surfaces the user-facing error and re-enables the
+          // buttons.
           setStepUpStatus('idle');
           setStepUpToken(null);
           throw ceremonyError;

@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { startAuthentication } from '@simplewebauthn/browser';
-import { post, del } from '@/lib/auth/auth-fetch';
+import { del } from '@/lib/auth/auth-fetch';
+import { attemptStepUp } from '@/lib/auth/step-up-ceremony';
 import { useOAuthGrants, type OAuthGrant } from '@/hooks/useOAuthGrants';
-import { readStepUpTokenFromHash, stripStepUpTokenFromHash, isNoPasskeyError } from './step-up-hash';
+import { readStepUpTokenFromHash, stripStepUpTokenFromHash } from './step-up-hash';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -71,52 +71,28 @@ export function ConnectedAppsList() {
     revokeGrant(pendingGrantId, tokenFromEmail);
   }, [revokeGrant]);
 
-  async function runWebauthnStepUp(grantId: string): Promise<string> {
-    const actionBinding = buildRevokeActionBinding(grantId);
-    const { options } = await post<{ options: { challenge: string }; challengeId: string }>(
-      '/api/auth/step-up/webauthn/options',
-      { actionBinding },
-    );
-    const webauthnResponse = await startAuthentication({ optionsJSON: options as never });
-    const { stepUpToken } = await post<{ stepUpToken: string }>('/api/auth/step-up/webauthn/verify', {
-      response: webauthnResponse,
-      expectedChallenge: options.challenge,
-      actionBinding,
-    });
-    return stepUpToken;
-  }
-
-  async function requestMagicLinkStepUp(grantId: string): Promise<void> {
-    const actionBinding = buildRevokeActionBinding(grantId);
-    const next = `${window.location.pathname}${window.location.search}`;
-    await post('/api/auth/step-up/magic-link/request', { actionBinding, next });
-    // Only remember a pending grant once the email has actually been
-    // dispatched — otherwise a failed request below would leave a pending id
-    // behind with no corresponding link ever on its way.
-    sessionStorage.setItem(PENDING_REVOKE_STORAGE_KEY, grantId);
-  }
-
   const handleConfirmRevoke = async () => {
     if (!confirmingGrant) return;
     const grantId = confirmingGrant.id;
     setRevokingId(grantId);
     try {
-      const stepUpToken = await runWebauthnStepUp(grantId);
-      await revokeGrant(grantId, stepUpToken);
-    } catch (error) {
-      if (isNoPasskeyError(error)) {
-        try {
-          await requestMagicLinkStepUp(grantId);
-          setAwaitingEmailForId(grantId);
-        } catch {
-          // Sending the fallback email itself failed — must not leave the
-          // button stuck showing "Revoking…" with no way to retry.
-          toast.error('Something went wrong. Please try again.');
-        } finally {
-          setRevokingId(null);
-        }
+      const actionBinding = buildRevokeActionBinding(grantId);
+      const next = `${window.location.pathname}${window.location.search}`;
+      const result = await attemptStepUp(actionBinding, next);
+      if (result.status === 'awaiting_email') {
+        // Only remember a pending grant once the email has actually been
+        // dispatched — otherwise a failed request would leave a pending id
+        // behind with no corresponding link ever on its way.
+        sessionStorage.setItem(PENDING_REVOKE_STORAGE_KEY, grantId);
+        setAwaitingEmailForId(grantId);
+        setRevokingId(null);
         return;
       }
+      await revokeGrant(grantId, result.stepUpToken);
+    } catch {
+      // Covers both a generic WebAuthn ceremony failure and the magic-link
+      // fallback request itself failing — either way, must not leave the
+      // button stuck showing "Revoking…" with no way to retry.
       toast.error('Something went wrong. Please try again.');
       setRevokingId(null);
     }
