@@ -142,6 +142,37 @@ describe('runDeviceLogin — happy path', () => {
     });
   });
 
+  it('persists the credential under deps.profile when given, defaulting to "default" when omitted', async () => {
+    const setCalls: Array<{ host: string; profile: string | undefined }> = [];
+    const { deps } = baseDeps({
+      profile: 'work',
+      credentialStore: {
+        set: async (host, _credential, profile) => {
+          setCalls.push({ host, profile });
+        },
+      },
+    });
+
+    await runDeviceLogin(deps);
+
+    expect(setCalls).toEqual([{ host: 'https://pagespace.ai', profile: 'work' }]);
+  });
+
+  it('persists the credential under the "default" profile when no profile is given', async () => {
+    const setCalls: Array<{ host: string; profile: string | undefined }> = [];
+    const { deps } = baseDeps({
+      credentialStore: {
+        set: async (host, _credential, profile) => {
+          setCalls.push({ host, profile });
+        },
+      },
+    });
+
+    await runDeviceLogin(deps);
+
+    expect(setCalls).toEqual([{ host: 'https://pagespace.ai', profile: 'default' }]);
+  });
+
   it('keeps polling through authorization_pending and slow_down before succeeding, honoring the accumulated backoff', async () => {
     const waited: number[] = [];
     const responses: DeviceTokenResult[] = [

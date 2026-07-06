@@ -84,6 +84,7 @@ export function ConnectedAppsList() {
         // behind with no corresponding link ever on its way.
         sessionStorage.setItem(PENDING_REVOKE_STORAGE_KEY, grantId);
         setAwaitingEmailForId(grantId);
+        setConfirmingGrant(null);
         setRevokingId(null);
         return;
       }

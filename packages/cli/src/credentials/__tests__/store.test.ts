@@ -160,6 +160,46 @@ describe('CompositeCredentialStore — NUL-byte host/profile rejection', () => {
   });
 });
 
+describe('CompositeCredentialStore — malformed keychain entry', () => {
+  it('get() throws a distinct, accurately-worded error for a malformed entry, without degrading the store', async () => {
+    const keychain = createFakeKeychainAdapter();
+    const fileStore = new FileCredentialStore({ path: credentialsPath });
+    const stderr = fakeSink();
+    const store = new CompositeCredentialStore(keychain, fileStore, stderr);
+
+    await store.set('pagespace.ai', CRED_A);
+    await keychain.setSecret('bad.example', 'not-valid-json');
+
+    await expect(store.get('bad.example')).rejects.toThrow(/malformed/i);
+    await expect(store.get('bad.example')).rejects.not.toThrow(/keychain unavailable/i);
+
+    // The store must still be using the keychain for other hosts, not degraded to the file store.
+    expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+    expect(stderr.lines).toEqual([]);
+    await expect(fs.stat(credentialsPath)).rejects.toThrow();
+  });
+
+  it('list() skips a malformed entry with a stderr warning instead of throwing or degrading the whole store', async () => {
+    const keychain = createFakeKeychainAdapter();
+    const stderr = fakeSink();
+    const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), stderr);
+
+    await store.set('pagespace.ai', CRED_A);
+    await keychain.setSecret('bad.example', 'not-valid-json');
+
+    const summaries = await store.list();
+
+    expect(summaries).toEqual([{ host: 'pagespace.ai', tokenPrefix: CRED_A.refreshToken.slice(0, 12) }]);
+    expect(stderr.lines.join('')).toMatch(/bad\.example/);
+    expect(stderr.lines.join('')).not.toMatch(/keychain unavailable/i);
+    expect(stderr.lines.join('')).not.toContain(CRED_A.refreshToken);
+
+    // Still on the keychain afterward — one bad entry must not flip the whole store to the file-store fallback.
+    expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+    expect(keychain.calls).toContain('getSecret:pagespace.ai');
+  });
+});
+
 describe('CompositeCredentialStore — keychain unavailable', () => {
   it('degrades to the file store and prints exactly one stderr notice', async () => {
     const keychain = createUnavailableKeychainAdapter('no secret service running');

@@ -114,6 +114,8 @@ describe('ConnectedAppsList', () => {
     });
     expect(sessionStorage.getItem('pagespace:pendingOAuthGrantRevokeId')).toBe('grant-1');
     expect(mocks.del).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /revoke access/i })).not.toBeInTheDocument();
   });
 
   it('resets the button instead of getting stuck when the magic-link fallback request itself fails', async () => {

@@ -19,6 +19,7 @@
  * discipline as `LoopbackLoginResult`.
  */
 import type { CredentialStore } from '../credentials/store.js';
+import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
 import type { ConfirmIdentity, DiscoverMetadata, DiscoveredMetadata, ExchangedTokens, Identity, WaitMs } from './loopback-flow.js';
 
 export interface DeviceAuthorization {
@@ -128,6 +129,8 @@ export interface DeviceLoginDeps {
   readonly confirmIdentity: ConfirmIdentity;
   /** Polled between waits/polls; true once the user has hit Ctrl-C. Never an event emitter — keeps this module I/O-free. */
   readonly isInterrupted: () => boolean;
+  /** Which named profile to store the credential under. Defaults to `"default"`, mirroring `loopback-flow.ts`. */
+  readonly profile?: string;
 }
 
 export type DeviceLoginResult =
@@ -198,12 +201,16 @@ export async function runDeviceLogin(deps: DeviceLoginDeps): Promise<DeviceLogin
 
     switch (decision.outcome.kind) {
       case 'success': {
-        await deps.credentialStore.set(deps.host, {
-          refreshToken: decision.outcome.tokens.refreshToken,
-          clientId: deps.clientId,
-          scopes: decision.outcome.tokens.scope.split(' ').filter(Boolean),
-          createdAt: new Date(deps.now()).toISOString(),
-        });
+        await deps.credentialStore.set(
+          deps.host,
+          {
+            refreshToken: decision.outcome.tokens.refreshToken,
+            clientId: deps.clientId,
+            scopes: decision.outcome.tokens.scope.split(' ').filter(Boolean),
+            createdAt: new Date(deps.now()).toISOString(),
+          },
+          deps.profile ?? DEFAULT_PROFILE_NAME,
+        );
 
         let identity: Identity | null;
         try {
