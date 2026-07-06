@@ -8,7 +8,7 @@
  * Zero trust: a rejected flag's value is never echoed back in the error
  * message, only the flag name — the value may be a secret (`--token`).
  *
- * Command-specific flags (e.g. `tokens create --name`) are not part of this
+ * Command-specific flags (e.g. `tokens create --drive`) are not part of this
  * global grammar. Once at least one positional/command token has been seen,
  * an unrecognized `--flag` is passed through into `args` verbatim for the
  * command's own pure arg-mapper to interpret — only a `--flag` with NO
