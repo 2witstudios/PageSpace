@@ -66,7 +66,12 @@ export function deriveAgentTerminalScope(key: {
 export interface MachineAgentTerminalStore {
   list(scope: AgentTerminalScopeKey): Promise<MachineAgentTerminalRecord[]>;
   findByName(scope: AgentTerminalScopeKey, name: string): Promise<MachineAgentTerminalRecord | null>;
-  /** Level-agnostic lookup by the row's OWN id — no scope path required (mirrors PurePoint's `Attach{agent_id}`). */
+  /**
+   * Level-agnostic lookup by the row's OWN id — no scope path required
+   * (mirrors PurePoint's `Attach{agent_id}`). Performs no access check; a
+   * caller learns the row's `terminalId` only from the returned record, so it
+   * must authorize against that before trusting or acting on the result.
+   */
   findById(id: string): Promise<MachineAgentTerminalRecord | null>;
   /** Throws a unique-violation error (see `isUniqueViolation`) if this (scope, name) already exists. */
   create(input: NewMachineAgentTerminalInput): Promise<MachineAgentTerminalRecord>;
