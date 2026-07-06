@@ -19,12 +19,13 @@ export const githubProvider: IntegrationProviderConfig = {
       authorizationUrl: 'https://github.com/login/oauth/authorize',
       tokenUrl: 'https://github.com/login/oauth/access_token',
       revokeUrl: 'https://github.com/settings/connections/applications',
-      scopes: ['repo', 'read:user'],
+      scopes: ['repo', 'workflow', 'read:user'],
       pkceRequired: false,
     },
   },
   oauthScopeDescriptions: {
     repo: 'Read and write code, issues, and pull requests on any repository your GitHub account can access',
+    workflow: 'Update GitHub Actions workflow files when committing code',
     'read:user': 'Read your GitHub profile (username and avatar)',
   },
   connectNotes:
@@ -417,6 +418,350 @@ export const githubProvider: IntegrationProviderConfig = {
           files: 'files',
         },
         maxLength: 5000,
+      },
+    },
+
+    {
+      id: 'list_commits',
+      name: 'List Commits',
+      description:
+        'List commits on a repository branch, optionally filtered to a file path',
+      category: 'read',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          sha: {
+            type: 'string',
+            description: 'Branch name or commit SHA to start listing from (defaults to default branch)',
+          },
+          path: {
+            type: 'string',
+            description: 'Only commits containing this file path',
+          },
+          per_page: {
+            type: 'integer',
+            description: 'Results per page (max 100)',
+          },
+          page: {
+            type: 'integer',
+            description: 'Page number',
+          },
+        },
+        required: ['owner', 'repo'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'GET',
+          pathTemplate: '/repos/{owner}/{repo}/commits',
+          queryParams: {
+            sha: { $param: 'sha' },
+            path: { $param: 'path' },
+            per_page: { $param: 'per_page', transform: 'string' },
+            page: { $param: 'page', transform: 'string' },
+          },
+        },
+      },
+      outputTransform: {
+        mapping: {
+          sha: 'sha',
+          message: 'commit.message',
+          author_name: 'commit.author.name',
+          author_date: 'commit.author.date',
+          html_url: 'html_url',
+        },
+        maxLength: 500,
+      },
+    },
+    {
+      id: 'compare_refs',
+      name: 'Compare Refs',
+      description:
+        'Compare two branches, tags, or commits (like a PR diff preview). Returns ahead/behind counts and total commits between base and head.',
+      category: 'read',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          base: {
+            type: 'string',
+            description: 'Base ref (branch, tag, or commit SHA)',
+          },
+          head: {
+            type: 'string',
+            description: 'Head ref (branch, tag, or commit SHA)',
+          },
+        },
+        required: ['owner', 'repo', 'base', 'head'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'GET',
+          pathTemplate: '/repos/{owner}/{repo}/compare/{base}...{head}',
+        },
+      },
+      outputTransform: {
+        mapping: {
+          status: 'status',
+          ahead_by: 'ahead_by',
+          behind_by: 'behind_by',
+          total_commits: 'total_commits',
+          merge_base_sha: 'merge_base_commit.sha',
+          html_url: 'html_url',
+        },
+        maxLength: 500,
+      },
+    },
+    {
+      id: 'list_check_runs',
+      name: 'List Check Runs',
+      description:
+        'List CI check runs (build, lint, tests) for a commit SHA, branch, or tag. Use the PR head SHA to see whether a pull request is green.',
+      category: 'read',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          ref: {
+            type: 'string',
+            description: 'Commit SHA, branch name, or tag name',
+          },
+          per_page: {
+            type: 'integer',
+            description: 'Results per page (max 100)',
+          },
+          page: {
+            type: 'integer',
+            description: 'Page number',
+          },
+        },
+        required: ['owner', 'repo', 'ref'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'GET',
+          pathTemplate: '/repos/{owner}/{repo}/commits/{ref}/check-runs',
+          queryParams: {
+            per_page: { $param: 'per_page', transform: 'string' },
+            page: { $param: 'page', transform: 'string' },
+          },
+        },
+      },
+      outputTransform: {
+        extract: '$.check_runs',
+        mapping: {
+          name: 'name',
+          status: 'status',
+          conclusion: 'conclusion',
+          html_url: 'html_url',
+          started_at: 'started_at',
+          completed_at: 'completed_at',
+        },
+        maxLength: 500,
+      },
+    },
+    {
+      id: 'list_workflow_runs',
+      name: 'List Workflow Runs',
+      description:
+        'List GitHub Actions workflow runs for a repository, filterable by branch and status. Use to check CI outcomes after a push.',
+      category: 'read',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          branch: {
+            type: 'string',
+            description: 'Filter runs to a branch',
+          },
+          status: {
+            type: 'string',
+            enum: ['queued', 'in_progress', 'completed', 'success', 'failure'],
+            description: 'Filter by run status or conclusion',
+          },
+          event: {
+            type: 'string',
+            description: 'Filter by trigger event (e.g. "push", "pull_request")',
+          },
+          per_page: {
+            type: 'integer',
+            description: 'Results per page (max 100)',
+          },
+          page: {
+            type: 'integer',
+            description: 'Page number',
+          },
+        },
+        required: ['owner', 'repo'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'GET',
+          pathTemplate: '/repos/{owner}/{repo}/actions/runs',
+          queryParams: {
+            branch: { $param: 'branch' },
+            status: { $param: 'status' },
+            event: { $param: 'event' },
+            per_page: { $param: 'per_page', transform: 'string' },
+            page: { $param: 'page', transform: 'string' },
+          },
+        },
+      },
+      outputTransform: {
+        extract: '$.workflow_runs',
+        mapping: {
+          id: 'id',
+          name: 'name',
+          status: 'status',
+          conclusion: 'conclusion',
+          head_branch: 'head_branch',
+          event: 'event',
+          html_url: 'html_url',
+          created_at: 'created_at',
+        },
+        maxLength: 500,
+      },
+    },
+    {
+      id: 'search_issues',
+      name: 'Search Issues and PRs',
+      description:
+        'Search issues and pull requests across GitHub. Uses GitHub search syntax — include "repo:owner/repo" to scope to a repository. Example: "login bug repo:acme/webapp is:issue is:open"',
+      category: 'read',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          q: {
+            type: 'string',
+            description:
+              'Search query using GitHub issue search syntax. Include "repo:owner/repo" to scope to a repository and "is:issue" or "is:pr" to filter type.',
+          },
+          sort: {
+            type: 'string',
+            enum: ['created', 'updated', 'comments'],
+            description: 'Sort field',
+          },
+          order: {
+            type: 'string',
+            enum: ['asc', 'desc'],
+            description: 'Sort order',
+          },
+          per_page: {
+            type: 'integer',
+            description: 'Results per page (max 100)',
+          },
+          page: {
+            type: 'integer',
+            description: 'Page number',
+          },
+        },
+        required: ['q'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'GET',
+          pathTemplate: '/search/issues',
+          queryParams: {
+            q: { $param: 'q' },
+            sort: { $param: 'sort' },
+            order: { $param: 'order' },
+            per_page: { $param: 'per_page', transform: 'string' },
+            page: { $param: 'page', transform: 'string' },
+          },
+        },
+      },
+      outputTransform: {
+        extract: '$.items',
+        mapping: {
+          number: 'number',
+          title: 'title',
+          state: 'state',
+          html_url: 'html_url',
+          created_at: 'created_at',
+          pull_request_url: 'pull_request.html_url',
+        },
+        maxLength: 500,
+      },
+      rateLimit: { requests: 10, windowMs: 60_000 },
+    },
+    {
+      id: 'list_labels',
+      name: 'List Labels',
+      description: 'List the labels available in a repository. Check here before applying labels to issues or PRs.',
+      category: 'read',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          per_page: {
+            type: 'integer',
+            description: 'Results per page (max 100)',
+          },
+          page: {
+            type: 'integer',
+            description: 'Page number',
+          },
+        },
+        required: ['owner', 'repo'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'GET',
+          pathTemplate: '/repos/{owner}/{repo}/labels',
+          queryParams: {
+            per_page: { $param: 'per_page', transform: 'string' },
+            page: { $param: 'page', transform: 'string' },
+          },
+        },
+      },
+      outputTransform: {
+        mapping: {
+          name: 'name',
+          description: 'description',
+          color: 'color',
+        },
+        maxLength: 500,
       },
     },
 
@@ -1247,6 +1592,374 @@ export const githubProvider: IntegrationProviderConfig = {
       },
       rateLimit: { requests: 10, windowMs: 60_000 },
     },
+    {
+      id: 'create_branch',
+      name: 'Create Branch',
+      description:
+        'Create a new branch in a repository from a commit SHA. Get the SHA of the branch to fork from via list_branches (commit_sha field).',
+      category: 'write',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          ref: {
+            type: 'string',
+            description: 'Fully qualified ref for the new branch, e.g. "refs/heads/my-feature"',
+          },
+          sha: {
+            type: 'string',
+            description: 'Commit SHA the new branch points at (e.g. the default branch head from list_branches)',
+          },
+        },
+        required: ['owner', 'repo', 'ref', 'sha'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'POST',
+          pathTemplate: '/repos/{owner}/{repo}/git/refs',
+          bodyTemplate: {
+            ref: { $param: 'ref' },
+            sha: { $param: 'sha' },
+          },
+          bodyEncoding: 'json',
+        },
+      },
+      outputTransform: {
+        mapping: {
+          ref: 'ref',
+          sha: 'object.sha',
+          url: 'url',
+        },
+        maxLength: 500,
+      },
+      rateLimit: { requests: 10, windowMs: 60_000 },
+    },
+    {
+      id: 'create_or_update_file',
+      name: 'Create or Update File',
+      description:
+        'Create or update a single file in a repository with a commit message. Content must be base64-encoded. To update an existing file, pass its current blob sha (from get_repo_content). Note: writing files under .github/workflows requires a GitHub connection made after workflow permissions were added — reconnect in Settings → Integrations if GitHub rejects the write.',
+      category: 'write',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          path: {
+            type: 'string',
+            description: 'Path of the file to create or update (e.g. "src/index.ts")',
+          },
+          message: {
+            type: 'string',
+            description: 'Commit message',
+          },
+          content: {
+            type: 'string',
+            description: 'New file content, base64-encoded',
+          },
+          branch: {
+            type: 'string',
+            description: 'Branch to commit to (defaults to the default branch)',
+          },
+          sha: {
+            type: 'string',
+            description: 'Current blob SHA of the file being replaced (required when updating an existing file)',
+          },
+        },
+        required: ['owner', 'repo', 'path', 'message', 'content'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'PUT',
+          pathTemplate: '/repos/{owner}/{repo}/contents/{path}',
+          bodyTemplate: {
+            message: { $param: 'message' },
+            content: { $param: 'content' },
+            branch: { $param: 'branch' },
+            sha: { $param: 'sha' },
+          },
+          bodyEncoding: 'json',
+        },
+      },
+      outputTransform: {
+        mapping: {
+          path: 'content.path',
+          sha: 'content.sha',
+          html_url: 'content.html_url',
+          commit_sha: 'commit.sha',
+        },
+        maxLength: 500,
+      },
+      rateLimit: { requests: 10, windowMs: 60_000 },
+    },
+    {
+      id: 'delete_file',
+      name: 'Delete File',
+      description:
+        'Delete a file from a repository with a commit message. Requires the current blob sha of the file (from get_repo_content).',
+      category: 'write',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          path: {
+            type: 'string',
+            description: 'Path of the file to delete',
+          },
+          message: {
+            type: 'string',
+            description: 'Commit message',
+          },
+          sha: {
+            type: 'string',
+            description: 'Current blob SHA of the file being deleted',
+          },
+          branch: {
+            type: 'string',
+            description: 'Branch to commit to (defaults to the default branch)',
+          },
+        },
+        required: ['owner', 'repo', 'path', 'message', 'sha'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'DELETE',
+          pathTemplate: '/repos/{owner}/{repo}/contents/{path}',
+          bodyTemplate: {
+            message: { $param: 'message' },
+            sha: { $param: 'sha' },
+            branch: { $param: 'branch' },
+          },
+          bodyEncoding: 'json',
+        },
+      },
+      outputTransform: {
+        mapping: {
+          commit_sha: 'commit.sha',
+          message: 'commit.message',
+        },
+        maxLength: 500,
+      },
+      rateLimit: { requests: 10, windowMs: 60_000 },
+    },
+    {
+      id: 'create_pull_request',
+      name: 'Create Pull Request',
+      description:
+        'Open a pull request from a head branch into a base branch',
+      category: 'write',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          title: {
+            type: 'string',
+            description: 'Pull request title',
+          },
+          head: {
+            type: 'string',
+            description: 'Branch with the changes (use "user:branch" for cross-fork PRs)',
+          },
+          base: {
+            type: 'string',
+            description: 'Branch to merge into (e.g. the default branch)',
+          },
+          body: {
+            type: 'string',
+            description: 'Pull request description (markdown)',
+          },
+          draft: {
+            type: 'boolean',
+            description: 'Open as a draft pull request',
+          },
+        },
+        required: ['owner', 'repo', 'title', 'head', 'base'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'POST',
+          pathTemplate: '/repos/{owner}/{repo}/pulls',
+          bodyTemplate: {
+            title: { $param: 'title' },
+            head: { $param: 'head' },
+            base: { $param: 'base' },
+            body: { $param: 'body' },
+            draft: { $param: 'draft' },
+          },
+          bodyEncoding: 'json',
+        },
+      },
+      outputTransform: {
+        mapping: {
+          number: 'number',
+          title: 'title',
+          state: 'state',
+          html_url: 'html_url',
+          head_ref: 'head.ref',
+          base_ref: 'base.ref',
+          draft: 'draft',
+        },
+        maxLength: 500,
+      },
+      rateLimit: { requests: 10, windowMs: 60_000 },
+    },
+    {
+      id: 'update_pull_request',
+      name: 'Update Pull Request',
+      description:
+        'Update a pull request: change title, body, state (open/closed), or base branch. Keep PR descriptions current as follow-up commits land.',
+      category: 'write',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          pull_number: {
+            type: 'integer',
+            description: 'Pull request number',
+          },
+          title: {
+            type: 'string',
+            description: 'New pull request title',
+          },
+          body: {
+            type: 'string',
+            description: 'New pull request description (markdown)',
+          },
+          state: {
+            type: 'string',
+            enum: ['open', 'closed'],
+            description: 'Pull request state',
+          },
+          base: {
+            type: 'string',
+            description: 'New base branch',
+          },
+        },
+        required: ['owner', 'repo', 'pull_number'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'PATCH',
+          pathTemplate: '/repos/{owner}/{repo}/pulls/{pull_number}',
+          bodyTemplate: {
+            title: { $param: 'title' },
+            body: { $param: 'body' },
+            state: { $param: 'state' },
+            base: { $param: 'base' },
+          },
+          bodyEncoding: 'json',
+        },
+      },
+      outputTransform: {
+        mapping: {
+          number: 'number',
+          title: 'title',
+          state: 'state',
+          html_url: 'html_url',
+        },
+        maxLength: 500,
+      },
+      rateLimit: { requests: 10, windowMs: 60_000 },
+    },
+    {
+      id: 'merge_pull_request',
+      name: 'Merge Pull Request',
+      description:
+        'Merge a pull request using merge, squash, or rebase. Check list_check_runs on the PR head SHA first to confirm CI is green.',
+      category: 'write',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: {
+            type: 'string',
+            description: 'Repository owner',
+          },
+          repo: {
+            type: 'string',
+            description: 'Repository name',
+          },
+          pull_number: {
+            type: 'integer',
+            description: 'Pull request number',
+          },
+          merge_method: {
+            type: 'string',
+            enum: ['merge', 'squash', 'rebase'],
+            description: 'How to merge the pull request',
+          },
+          commit_title: {
+            type: 'string',
+            description: 'Title of the merge commit (defaults to GitHub’s standard title)',
+          },
+          commit_message: {
+            type: 'string',
+            description: 'Body of the merge commit',
+          },
+        },
+        required: ['owner', 'repo', 'pull_number', 'merge_method'],
+      },
+      execution: {
+        type: 'http',
+        config: {
+          method: 'PUT',
+          pathTemplate: '/repos/{owner}/{repo}/pulls/{pull_number}/merge',
+          bodyTemplate: {
+            merge_method: { $param: 'merge_method' },
+            commit_title: { $param: 'commit_title' },
+            commit_message: { $param: 'commit_message' },
+          },
+          bodyEncoding: 'json',
+        },
+      },
+      outputTransform: {
+        mapping: {
+          merged: 'merged',
+          sha: 'sha',
+          message: 'message',
+        },
+        maxLength: 500,
+      },
+      rateLimit: { requests: 10, windowMs: 60_000 },
+    },
   ],
   toolBundles: [
     {
@@ -1262,6 +1975,12 @@ export const githubProvider: IntegrationProviderConfig = {
         'list_branches',
         'search_code',
         'get_commit',
+        'list_commits',
+        'compare_refs',
+        'list_check_runs',
+        'list_workflow_runs',
+        'search_issues',
+        'list_labels',
         'list_issues',
         'list_issue_comments',
         'get_pull_request',
@@ -1274,7 +1993,7 @@ export const githubProvider: IntegrationProviderConfig = {
     {
       id: 'code_review',
       name: 'Code review',
-      description: 'Read pull requests and code, then post reviews, inline comments, and replies.',
+      description: 'Read pull requests, code, and CI results, then post reviews, inline comments, and replies.',
       toolIds: [
         'get_pull_request',
         'list_pull_requests',
@@ -1283,6 +2002,9 @@ export const githubProvider: IntegrationProviderConfig = {
         'list_pr_review_comments',
         'get_repo_content',
         'get_commit',
+        'list_commits',
+        'compare_refs',
+        'list_check_runs',
         'create_pr_review',
         'create_pr_review_comment',
         'create_issue_comment',
@@ -1291,19 +2013,47 @@ export const githubProvider: IntegrationProviderConfig = {
     {
       id: 'issue_triage',
       name: 'Issue triage',
-      description: 'Read, open, update, and comment on issues.',
+      description: 'Read, search, open, update, and comment on issues.',
       toolIds: [
         'list_issues',
         'list_issue_comments',
+        'search_issues',
+        'list_labels',
         'create_issue',
         'update_issue',
         'create_issue_comment',
       ],
     },
     {
+      id: 'contributor',
+      name: 'Contributor',
+      description: 'Create branches, commit files, and open, update, and merge pull requests.',
+      toolIds: [
+        'list_repos',
+        'get_repo',
+        'get_repo_content',
+        'get_repo_tree',
+        'list_branches',
+        'get_commit',
+        'list_commits',
+        'compare_refs',
+        'list_check_runs',
+        'get_pull_request',
+        'list_pull_requests',
+        'list_pr_files',
+        'create_branch',
+        'create_or_update_file',
+        'delete_file',
+        'create_pull_request',
+        'update_pull_request',
+        'merge_pull_request',
+        'create_issue_comment',
+      ],
+    },
+    {
       id: 'full',
       name: 'Full access',
-      description: 'Every GitHub tool — read and write across repos, issues, and pull requests.',
+      description: 'Every GitHub tool — read and write across repos, code, issues, pull requests, and CI.',
       toolIds: [
         'list_repos',
         'get_repo',
@@ -1312,6 +2062,12 @@ export const githubProvider: IntegrationProviderConfig = {
         'list_branches',
         'search_code',
         'get_commit',
+        'list_commits',
+        'compare_refs',
+        'list_check_runs',
+        'list_workflow_runs',
+        'search_issues',
+        'list_labels',
         'list_issues',
         'list_issue_comments',
         'get_pull_request',
@@ -1324,6 +2080,12 @@ export const githubProvider: IntegrationProviderConfig = {
         'create_issue_comment',
         'create_pr_review',
         'create_pr_review_comment',
+        'create_branch',
+        'create_or_update_file',
+        'delete_file',
+        'create_pull_request',
+        'update_pull_request',
+        'merge_pull_request',
       ],
     },
   ],

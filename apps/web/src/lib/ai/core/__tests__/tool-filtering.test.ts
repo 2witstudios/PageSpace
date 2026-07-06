@@ -233,9 +233,22 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
       'git_commit',
       'git_push',
       'git_checkout',
+      'git_revert',
       'gh_pr_create',
       'gh_pr_merge',
+      'gh_pr_comment',
+      'gh_pr_edit',
+      'gh_pr_update_branch',
+      'gh_pr_thread_resolve',
+      'gh_run_rerun',
+      'gh_workflow_run',
       'gh_issue_create',
+      'gh_issue_comment',
+      'gh_issue_edit',
+      'gh_issue_close',
+      'gh_issue_reopen',
+      'gh_repo_fork',
+      'gh_repo_create',
     ]) {
       expect(isWriteTool(name)).toBe(true);
     }
@@ -247,10 +260,18 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
       'git_status',
       'git_diff',
       'git_log',
+      'git_show',
+      'git_blame',
       'gh_pr_list',
       'gh_pr_view',
+      'gh_pr_thread_list',
+      'gh_workflow_list',
       'gh_issue_list',
       'gh_issue_view',
+      'gh_repo_view',
+      'gh_repo_list',
+      'gh_search',
+      'gh_label_list',
     ]) {
       expect(isWriteTool(name)).toBe(false);
     }

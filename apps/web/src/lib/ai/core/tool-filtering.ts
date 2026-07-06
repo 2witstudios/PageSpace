@@ -67,9 +67,10 @@ export const WRITE_TOOLS = new Set([
   // Sandbox / code-execution operations — all mutate the persistent sandbox
   // filesystem or a remote. bash can run arbitrary mutations, so it is excluded
   // in read-only mode too. Read-only sandbox tools (readFile, git_status,
-  // git_diff, git_log, gh_pr_list, gh_pr_view, gh_pr_diff, gh_pr_checks,
-  // gh_run_list, gh_run_view, gh_issue_list, gh_issue_view) are
-  // intentionally NOT listed and remain available.
+  // git_diff, git_log, git_show, git_blame, gh_pr_list, gh_pr_view, gh_pr_diff,
+  // gh_pr_checks, gh_pr_thread_list, gh_run_list, gh_run_view, gh_workflow_list,
+  // gh_issue_list, gh_issue_view, gh_repo_view, gh_repo_list, gh_search,
+  // gh_label_list) are intentionally NOT listed and remain available.
   'bash',
   'writeFile',
   'editFile',
@@ -83,6 +84,7 @@ export const WRITE_TOOLS = new Set([
   'git_commit',
   'git_merge',
   'git_rebase',
+  'git_revert',
   'git_checkout',
   'git_branch',
   'git_fetch',
@@ -93,10 +95,22 @@ export const WRITE_TOOLS = new Set([
   'gh_pr_checkout',
   'gh_pr_review',
   'gh_pr_review_comment',
+  'gh_pr_comment',
+  'gh_pr_edit',
+  'gh_pr_update_branch',
+  'gh_pr_thread_resolve',
   'gh_pr_close',
   'gh_pr_reopen',
   'gh_pr_ready',
+  'gh_run_rerun',
+  'gh_workflow_run',
   'gh_issue_create',
+  'gh_issue_comment',
+  'gh_issue_edit',
+  'gh_issue_close',
+  'gh_issue_reopen',
+  'gh_repo_fork',
+  'gh_repo_create',
 ]);
 
 // Web search tools (excluded when web search is disabled)
