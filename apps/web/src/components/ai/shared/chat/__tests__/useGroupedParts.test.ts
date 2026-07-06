@@ -155,8 +155,9 @@ describe('useGroupedParts', () => {
 
     expect(result.current).toHaveLength(1);
     const group = result.current[0];
-    if (isProcessedToolPart(group)) {
-      expect(group.state).toBe('input-available');
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts[0].state).toBe('input-available');
     }
   });
 
