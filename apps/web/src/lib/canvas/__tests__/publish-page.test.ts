@@ -882,6 +882,24 @@ describe('regeneratePublishedSiteFiles', () => {
       expect(renderInput?.title).toBe('Oops');
     });
 
+    it('prefers the 404 page\'s own og:title over its internal page title, matching normal publish precedence', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1', publishFaviconUrl: null,
+      }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+        title: 'Internal Page Name', content: '<p>custom 404 with og:title</p>',
+      }));
+      vi.mocked(extractAndStripOgMeta).mockReturnValueOnce({
+        meta: { ogTitle: 'Author-Chosen Title', faviconHref: undefined, ogImageUrl: undefined, ogDescription: undefined },
+        html: '<p>custom 404 with og:title</p>',
+      });
+
+      await regeneratePublishedSiteFiles('drive-1');
+
+      const renderInput = vi.mocked(renderPublishedPage).mock.calls.find((c) => c[0].html === '<p>custom 404 with og:title</p>')?.[0];
+      expect(renderInput?.title).toBe('Author-Chosen Title');
+    });
+
     it('falls back to the generic 404 when the referenced page cannot be found', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
         name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'missing-page', ownerId: 'owner-1', publishFaviconUrl: null,

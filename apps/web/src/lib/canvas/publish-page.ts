@@ -588,7 +588,9 @@ async function renderNotFoundPageHtml(params: {
 
     return renderPublishedPage({
       html: bodyHtml,
-      title: page.title || 'Page not found',
+      // Same precedence as a normal publish (resolvePublishedMeta): the
+      // page's own og:title wins over its internal page title.
+      title: meta.ogTitle || page.title || 'Page not found',
       assetBaseUrl: getPublishAssetBaseUrl(),
       faviconHref: favicon.faviconHref,
       faviconBaseUrl: favicon.faviconBaseUrl,
