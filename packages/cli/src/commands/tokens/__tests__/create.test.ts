@@ -444,4 +444,137 @@ describe('createTokensCreateHandler', () => {
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('offline');
   });
+
+  it('maps an access_denied callback to exit 1 without storing a credential', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = new URL(url).searchParams.get('state')!;
+        queueMicrotask(() => fake.deliver({ error: 'access_denied', state }));
+        return true;
+      },
+    });
+
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stdout, stderr, env: {} });
+    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toMatch(/consent was denied/i);
+    expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
+    const allOutput = [...stdout.lines, ...stderr.lines].join('');
+    expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
+    expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
+  });
+
+  it('maps a timeout waiting for the browser redirect to exit 1 without storing a credential', async () => {
+    const store = fakeStore();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      // Default startServer's fakeServer() never delivers a callback; make the
+      // timeout side of the race resolve immediately instead of waiting for
+      // the real (5-minute) DEFAULT_LOGIN_TIMEOUT_MS.
+      waitMs: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+    });
+
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toMatch(/consent timed out/i);
+    expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
+  });
+
+  it('maps a state mismatch on the callback to exit 1 without storing a credential', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: async () => {
+        queueMicrotask(() => fake.deliver({ code: 'auth-code', state: 'deliberately-wrong-state' }));
+        return true;
+      },
+    });
+
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toMatch(/did not match this request/i);
+    expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
+  });
+
+  it('maps a non-access_denied authorize error to exit 1, surfacing the error code', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = new URL(url).searchParams.get('state')!;
+        queueMicrotask(() => fake.deliver({ error: 'server_error', state }));
+        return true;
+      },
+    });
+
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toMatch(/consent failed: server_error/i);
+    expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
+  });
+
+  it('never writes the access or refresh token to stdout/stderr even on a token-exchange failure', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      exchangeCode: async () => {
+        throw new Error('exchange rejected by server');
+      },
+      openBrowser: autoApprove(fake),
+    });
+
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stdout, stderr, env: {} });
+    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toMatch(/exchanging the authorization code/i);
+    expect(stderr.lines.join('')).toContain('exchange rejected by server');
+    const allOutput = [...stdout.lines, ...stderr.lines].join('');
+    expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
+    expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
+    expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
+  });
+
+  it('maps exhausting all loopback port-bind attempts to exit 1 without storing a credential', async () => {
+    const store = fakeStore();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => {
+        throw new Error('EADDRINUSE');
+      },
+      maxPortAttempts: 2,
+    });
+
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toMatch(/could not bind a local loopback port/i);
+    expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
+  });
 });
