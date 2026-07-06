@@ -49,6 +49,7 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext } from './sandbox-tools';
 import { canActorViewPage } from './actor-permissions';
 import { pageAgentRepository, type MachineRef } from '@/lib/repositories/page-agent-repository';
+import { globalTerminalConfigRepository } from '@/lib/repositories/global-terminal-config-repository';
 import type { ToolExecutionContext } from '../core/types';
 import { notifyTerminalAgentActivity } from '@/lib/websocket/socket-utils';
 
@@ -308,36 +309,69 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
  * without a real database connection.
  */
 export interface MachineDirectoryRuntimeDeps {
-  findPage: (pageId: string) => Promise<{ title: string; type: string } | undefined>;
+  findPage: (pageId: string) => Promise<{ title: string; type: string; driveId: string } | undefined>;
   canViewPage: (rawContext: ToolExecutionContext, pageId: string) => Promise<boolean>;
   /** `PageAgentConfig.terminalAccess`/`machines` — the canonical config source. */
   getAgentConfig: (agentPageId: string) => Promise<{ terminalAccess: boolean; machines: MachineRef[] } | null>;
+  /** The global assistant's user-level parallel of `getAgentConfig` (globalAssistantConfig). */
+  getGlobalConfig: (userId: string) => Promise<{ terminalAccess: boolean; machines: MachineRef[] }>;
+  /** Lazily provision (or reuse) the personal Terminal page backing a user's global "own" machine. */
+  getOrCreateOwnMachinePageId: (userId: string) => Promise<string>;
 }
 
 const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
   findPage: async (pageId) =>
-    db.query.pages.findFirst({ where: eq(pages.id, pageId), columns: { title: true, type: true } }),
+    db.query.pages.findFirst({ where: eq(pages.id, pageId), columns: { title: true, type: true, driveId: true } }),
   canViewPage: canActorViewPage,
   getAgentConfig: (agentPageId) => pageAgentRepository.getAgentById(agentPageId),
+  getGlobalConfig: (userId) => globalTerminalConfigRepository.getConfig(userId),
+  getOrCreateOwnMachinePageId: (userId) => globalTerminalConfigRepository.getOrCreateOwnMachinePageId(userId),
 };
 
 /**
- * Resolves an agent's configured machine list for `listMachines`. No
- * `agentPageId` means the global assistant — it has no per-page config
- * surface yet (see tasks/terminal.md's "global-assistant parallel" follow-on),
- * so it defaults to a single own machine. A page agent's list is gated by
- * `terminalAccess` (default off → no machines); `machines[0]` is the default
- * active machine, falling back to 'own' if `terminalAccess` is on but no
- * machine has been configured yet.
+ * Resolves the global assistant's configured machine list: gated by the
+ * user's own `terminalAccess` (default off → no machines), same as a page
+ * agent. Its 'own' machine has no agent page to serve as its identity
+ * (machine-session.ts's resolveMachinePageId doc comment), so it is resolved
+ * transparently here into the user's lazily-provisioned personal Terminal
+ * page — everything downstream (routing, permissions, activity) then treats
+ * it exactly like any other 'existing' machine.
+ */
+async function resolveGlobalConfiguredMachines(
+  userId: string,
+  deps: MachineDirectoryRuntimeDeps,
+): Promise<MachineRef[]> {
+  const config = await deps.getGlobalConfig(userId);
+  if (!config.terminalAccess) return [];
+  const configured = config.machines.length > 0 ? config.machines : [{ kind: 'own' as const }];
+  return Promise.all(
+    configured.map(async (m) =>
+      m.kind === 'own'
+        ? { kind: 'existing' as const, terminalId: await deps.getOrCreateOwnMachinePageId(userId) }
+        : m,
+    ),
+  );
+}
+
+/**
+ * Resolves an agent's configured machine list for `listMachines`. A page
+ * agent's list is gated by `terminalAccess` (default off → no machines);
+ * `machines[0]` is the default active machine, falling back to 'own' if
+ * `terminalAccess` is on but no machine has been configured yet. No
+ * `agentPageId` means the global assistant — see resolveGlobalConfiguredMachines.
  */
 async function resolveConfiguredMachines(
   agentPageId: string | undefined,
+  userId: string | undefined,
   deps: MachineDirectoryRuntimeDeps,
 ): Promise<MachineRef[]> {
-  if (!agentPageId) return [{ kind: 'own' }];
-  const agent = await deps.getAgentConfig(agentPageId);
-  if (!agent?.terminalAccess) return [];
-  return agent.machines.length > 0 ? agent.machines : [{ kind: 'own' }];
+  if (agentPageId) {
+    const agent = await deps.getAgentConfig(agentPageId);
+    if (!agent?.terminalAccess) return [];
+    return agent.machines.length > 0 ? agent.machines : [{ kind: 'own' }];
+  }
+  if (!userId) return [];
+  return resolveGlobalConfiguredMachines(userId, deps);
 }
 
 function activeMachineAgentPageId(rawContext: ToolExecutionContext | undefined): string | undefined {
@@ -352,7 +386,8 @@ export function createMachineDirectory(
   deps: MachineDirectoryRuntimeDeps = defaultMachineDirectoryDeps,
 ): MachineDirectoryDeps {
   return {
-    listMachines: (rawContext) => resolveConfiguredMachines(activeMachineAgentPageId(rawContext), deps),
+    listMachines: (rawContext) =>
+      resolveConfiguredMachines(activeMachineAgentPageId(rawContext), rawContext?.userId, deps),
     describeMachine: async (_rawContext, machine) => {
       if (machine.kind === 'own') return { name: 'My Machine' };
       const page = await deps.findPage(machine.terminalId);
@@ -364,6 +399,11 @@ export function createMachineDirectory(
       const page = await deps.findPage(machine.terminalId);
       if (!page || !isTerminalPage(page.type as PageType)) return false;
       return deps.canViewPage(rawContext, machine.terminalId);
+    },
+    resolveDriveId: async (_rawContext, machine, ambientDriveId) => {
+      if (machine.kind === 'own') return ambientDriveId;
+      const page = await deps.findPage(machine.terminalId);
+      return page?.driveId ?? ambientDriveId;
     },
   };
 }
