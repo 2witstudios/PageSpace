@@ -28,6 +28,25 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // Mock dotenv so the config call is a no-op
 vi.mock('dotenv', () => ({ config: vi.fn() }));
 
+// createDbTerminalSessionStore does a dynamic import('@pagespace/db/db') from
+// INSIDE @pagespace/lib's (externalized, pre-built) dependency graph, which
+// bypasses this file's `@pagespace/db/db` mock (vi.mock only intercepts
+// modules Vitest's own loader transforms, not a workspace package's own
+// transitive requires) — so it's mocked directly here instead. Everything
+// else from this module (deriveTerminalSessionKey, acquireTerminalSandbox,
+// etc.) passes through to the real, pure/DI'd implementation.
+const mockFindBySessionKey = vi.fn();
+vi.mock('@pagespace/lib/services/sandbox/terminal-session-manager', async () => {
+  const actual = await vi.importActual<typeof import('@pagespace/lib/services/sandbox/terminal-session-manager')>(
+    '@pagespace/lib/services/sandbox/terminal-session-manager',
+  );
+  return {
+    ...actual,
+    getSandboxSessionSecret: () => 'a'.repeat(32),
+    createDbTerminalSessionStore: async () => ({ findBySessionKey: mockFindBySessionKey }),
+  };
+});
+
 // Logger mock
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -572,6 +591,92 @@ describe('requestListener - /api/kick', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
     expect(mockHandleKickRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('requestListener - /api/terminal-activity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindBySessionKey.mockResolvedValue(null);
+  });
+
+  function terminalActivityBody(over: Partial<{ tenantId: string; driveId?: string; pageId: string; command: string; output: string; exitCode: number; agentLabel: string }> = {}) {
+    return JSON.stringify({
+      tenantId: 't1',
+      driveId: 'd1',
+      pageId: 'terminal-page-1',
+      command: 'echo hi',
+      output: 'hi',
+      exitCode: 0,
+      agentLabel: 'Agent Bob',
+      ...over,
+    });
+  }
+
+  it('given a valid signed request with no driveId, should return 200 with delivered:false without any sandbox lookup', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(terminalActivityBody({ driveId: undefined })));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockFindBySessionKey).not.toHaveBeenCalled();
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, delivered: false }));
+  });
+
+  it('given no signature, should return 401 without any sandbox lookup', async () => {
+    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(terminalActivityBody()));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+    expect(mockFindBySessionKey).not.toHaveBeenCalled();
+  });
+
+  it('given no persisted sandbox record for the machine, should return 200 with delivered:false', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockFindBySessionKey.mockResolvedValueOnce(null);
+
+    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(terminalActivityBody()));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, delivered: false }));
+  });
+
+  // Regression test: resolveSessionKey does a real async DB lookup
+  // (terminal_sessions), unlike the old synchronous deriveSessionKey it
+  // replaced. Without a .catch() on the handleTerminalActivityRequest(...)
+  // promise chain, a rejection here left the HTTP request hanging forever
+  // and could crash the whole realtime process via an unhandled rejection.
+  it('given the sandbox lookup rejects (e.g. a transient DB error), should respond 500 instead of hanging or throwing unhandled', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockFindBySessionKey.mockRejectedValueOnce(new Error('connection terminated unexpectedly'));
+
+    const req = createMockReq({ method: 'POST', url: '/api/terminal-activity', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(terminalActivityBody()));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(500, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: false, error: 'Internal error' }));
   });
 });
 

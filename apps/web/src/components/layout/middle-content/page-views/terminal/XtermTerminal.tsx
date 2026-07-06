@@ -111,6 +111,7 @@ export default function XtermTerminal({ socket, pageId, onReady, onError }: Xter
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to initialize terminal';
         onError?.(message);
+        teardown?.();
       }
     })();
 

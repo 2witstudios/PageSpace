@@ -89,16 +89,24 @@ const SHELL_AGENT_TERMINAL_NAME = 'shell';
  * human terminal's `makeTerminalCheckAuth` used to perform inline.
  */
 function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
+  // The caller (resolveProjectOrMachineLocation, agent-terminals.ts) collapses
+  // every acquire failure to one generic 'machine_unavailable' reason — log the
+  // SPECIFIC reason here so it's still visible in realtime logs for triage.
+  function deny(reason: string, terminalId: string): AgentTerminalMachineSandboxResult {
+    loggers.realtime.warn('Machine sandbox acquire denied', { reason, terminalId, actorUserId });
+    return { ok: false, reason };
+  }
+
   return {
     acquire: async (terminalId): Promise<AgentTerminalMachineSandboxResult> => {
       const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, terminalId)).limit(1);
-      if (!pageRow) return { ok: false, reason: 'page_not_found' };
+      if (!pageRow) return deny('page_not_found', terminalId);
       const [driveRow] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1);
-      if (!driveRow) return { ok: false, reason: 'drive_not_found' };
+      if (!driveRow) return deny('drive_not_found', terminalId);
 
       const nowMs = Date.now();
       const guardrail = checkMachineRuntimeGuardrail({ machineKey: terminalId, now: nowMs });
-      if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
+      if (!guardrail.allowed) return deny(guardrail.reason, terminalId);
 
       const [store, sdk] = await Promise.all([dbTerminalSessionStorePromise, getRealtimeSpritesSdk()]);
       const rawClient = createSpritesSandboxClient({ sdk });
@@ -125,14 +133,14 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
             }),
         },
       });
-      if (!result.ok) return { ok: false, reason: result.reason };
+      if (!result.ok) return deny(result.reason, terminalId);
 
       if (result.resumed) {
         try {
           const sprite = await sdk.getSprite(result.sandboxId);
           await ensureSpriteAwake(sprite);
         } catch {
-          return { ok: false, reason: 'provision_failed' };
+          return deny('provision_failed', terminalId);
         }
       }
 
@@ -140,6 +148,29 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
       return { ok: true, sandboxId: result.sandboxId };
     },
   };
+}
+
+/**
+ * The in-memory `agentTerminalSessionMap` key for a (scope, name) target.
+ * Machine and project scope share the SAME owning Machine's Sprite
+ * (`sandboxId`) — see `resolveProjectOrMachineLocation` in `agent-terminals.ts`
+ * — so the scope discriminant (not just `sandboxId` + `name`) is required to
+ * keep e.g. a machine-scope "cli" terminal and a project-scope "cli" terminal
+ * on the SAME machine from colliding onto one shared PTY session.
+ */
+function buildAgentTerminalSessionKey({
+  sandboxId,
+  projectName,
+  branchName,
+  name,
+}: {
+  sandboxId: string;
+  projectName?: string;
+  branchName?: string;
+  name: string;
+}): string {
+  const scope = branchName ? `branch:${projectName}:${branchName}` : projectName ? `project:${projectName}` : 'machine';
+  return `${sandboxId}:agent:${scope}:${name}`;
 }
 
 /**
@@ -259,7 +290,7 @@ async function makeAgentTerminalCheckAuth({
     agentTerminalId: resolved.agentTerminalId,
     sandboxId: resolved.sandboxId,
     cwd: resolved.cwd,
-    sessionKey: `${resolved.sandboxId}:agent:${name}`,
+    sessionKey: buildAgentTerminalSessionKey({ sandboxId: resolved.sandboxId, projectName, branchName, name }),
     sprite,
     releaseSlot,
     command: spec.command,
@@ -606,13 +637,17 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                         const store = await dbTerminalSessionStorePromise;
                         const key = deriveTerminalSessionKey({ tenantId, driveId, pageId, secret: getSandboxSessionSecret() });
                         const record = await store.findBySessionKey(key);
-                        return record ? `${record.sandboxId}:agent:${SHELL_AGENT_TERMINAL_NAME}` : null;
+                        return record ? buildAgentTerminalSessionKey({ sandboxId: record.sandboxId, name: SHELL_AGENT_TERMINAL_NAME }) : null;
                     },
                 },
                 body,
             ).then((result) => {
                 res.writeHead(result.status, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Terminal activity request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
             });
         });
     } else if (req.method === 'POST' && req.url === '/api/kick') {
