@@ -41,6 +41,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Security
 
+- **Settings > Account now lists and revokes connected apps** — every OAuth-authorized client
+  currently holding a grant on your account (including the `pagespace` CLI), with its scope in
+  plain language and when it was connected, is now visible from a "Connected Apps" section.
+  Previously the only way to revoke a `pagespace login` credential was `pagespace logout` from the
+  same machine that held it — if a laptop was lost or stolen, there was no way to shut off its
+  access from the web. Revoking a grant here immediately invalidates its refresh token and
+  requires a fresh step-up confirmation (passkey tap, or a confirmation email if you have no
+  passkey), the same as minting one.
 - **`pagespace tokens create` now requires browser consent** — minting a scoped credential from
   the CLI opens the same OAuth consent screen `pagespace login` uses, scoped to the requested
   drive(s), instead of POSTing directly to the token-minting API with whatever ambient credential

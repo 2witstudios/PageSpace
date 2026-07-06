@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
-import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle, Download, Clock, Smartphone } from "lucide-react";
+import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle, Download, Clock, Smartphone, Link2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
@@ -19,6 +19,7 @@ import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog"
 import { ImageCropperDialog } from "@/components/dialogs/ImageCropperDialog";
 import { DeviceList } from "@/components/devices/DeviceList";
 import { RevokeAllDevicesDialog } from "@/components/devices/RevokeAllDevicesDialog";
+import { ConnectedAppsList } from "@/components/oauth-grants/ConnectedAppsList";
 import { useDevices } from "@/hooks/useDevices";
 import { PasskeyManager } from "@/components/settings/PasskeyManager";
 
@@ -631,6 +632,23 @@ export default function AccountPage() {
         </CardHeader>
         <CardContent>
           <DeviceList />
+        </CardContent>
+      </Card>
+
+      {/* Connected Apps Section */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Link2 className="h-5 w-5" />
+            Connected Apps
+          </CardTitle>
+          <CardDescription>
+            Apps and CLIs authorized to access your account. Revoking access here takes effect
+            immediately, even if the device that authorized it is lost or offline.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ConnectedAppsList />
         </CardContent>
       </Card>
 
