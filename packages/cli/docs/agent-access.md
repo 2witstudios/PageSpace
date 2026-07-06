@@ -49,11 +49,15 @@ more. That combination — not the scope of the token alone — is the actual is
 
 | Path | Who it's for | What it grants |
 | --- | --- | --- |
-| `pagespace login` | You, personally, at an interactive prompt. | Your full personal account access, for as long as the stored credential lives. |
-| `pagespace tokens create --drive <id> --role ... --save-as-profile agent` | An agent or automated process on this machine. | Only the drive(s)/role(s) named, stored under a profile separate from your personal login. |
-| A token minted from **Settings → MCP** in the app | An agent, CI job, or service account on a *different* machine (there's no way to copy a `pagespace tokens create` credential off the machine it was minted on). | Whatever scope you pick when minting it. |
+| `pagespace login` | You, personally, at an interactive prompt. | A `manage_keys`-scoped credential, for as long as it lives — lets you create/list/edit/revoke your own keys (including via `pagespace keys`), but zero content access on its own. |
+| `pagespace keys` (or `pagespace tokens create --drive <id> --role ... --save-as-profile agent`) | An agent or automated process on this machine. | Only the drive(s)/role(s) named, stored under a profile separate from your personal login. |
+| A token minted from **Settings → MCP** in the app | An agent, CI job, or service account on a *different* machine (there's no way to copy a `pagespace keys`/`tokens create` credential off the machine it was minted on). | Whatever scope you pick when minting it. |
 
-`pagespace mcp` (and `pagespace-mcp`) never fall back to your personal login — they require one of
-`--token`, `PAGESPACE_TOKEN`, `--profile`, or `PAGESPACE_PROFILE` to be given explicitly. That
-means an MCP client config that forgets to set one of those fails loudly instead of silently
-running as you.
+Every non-exempt command never falls back to your personal login — it requires one of `--token`,
+`PAGESPACE_TOKEN`, `--profile`, or `PAGESPACE_PROFILE` to be given explicitly. `login`, `logout`,
+`whoami`, `help`, `tokens create`, and the whole `keys` surface (`keys`, `keys create`, `keys
+list`, `keys revoke`) are exempt — each of those either mints its own credential or only ever
+acts on your own account/keys, so there's nothing to fall back to. Every other command, including
+`pagespace mcp` and `tokens list`/`tokens revoke`, fails loudly instead of silently running as you
+if invoked with no explicit credential. This gate started as `pagespace mcp`-only (Phase 8); it
+now applies CLI-wide (Phase 9).

@@ -30,22 +30,30 @@ Old config (`claude_desktop_config.json`):
 ```
 
 New config — install `@pagespace/cli` once (`npm install -g @pagespace/cli` or use `npx -y -p
-@pagespace/cli pagespace`), run `pagespace login` in a terminal to store a real OAuth credential,
-then:
+@pagespace/cli pagespace`), then mint a drive-scoped key for the agent (`pagespace keys`, guided,
+or `pagespace tokens create --drive <id> --role member --save-as-profile agent`, flag-driven —
+either way it opens a browser for a one-time consent screen and saves the result under a profile
+name), and point the MCP config at that profile:
 
 ```json
 {
   "mcpServers": {
     "pagespace": {
       "command": "pagespace",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "PAGESPACE_PROFILE": "agent"
+      }
     }
   }
 }
 ```
 
-No `env` block needed — `pagespace mcp` reads your stored login the same way every other
-`pagespace` command does.
+An `env` block naming a profile (or `PAGESPACE_TOKEN`) is required — `pagespace mcp` never falls
+back to your personal `pagespace login` credential, and that credential grants no content access
+anyway (it's scoped to key management only). See [Auth](../README.md#auth) and
+[`agent-access.md`](agent-access.md) for why `pagespace login` isn't the right credential for an
+MCP client regardless.
 
 ## Claude Code
 
@@ -128,9 +136,10 @@ behaves exactly like `pagespace mcp` and honors your existing `PAGESPACE_API_URL
 ```
 
 This `pagespace-mcp` bin is itself a first-class, supported entry point — not a deprecated shim —
-so there's no pressure to move off it. Whenever it's convenient, `pagespace login` (for a person)
-or a Settings → MCP token (for CI) plus the plain `["mcp"]` args form is the same server with one
-fewer moving part, but staying on `pagespace-mcp` via `npx` is a perfectly fine destination too.
+so there's no pressure to move off it. Whenever it's convenient, a `pagespace keys`/`tokens
+create` profile (for a person's own machine) or a Settings → MCP token (for CI) plus the plain
+`["mcp"]` args form is the same server with one fewer moving part, but staying on `pagespace-mcp`
+via `npx` is a perfectly fine destination too.
 
 ## What changed, mechanically
 

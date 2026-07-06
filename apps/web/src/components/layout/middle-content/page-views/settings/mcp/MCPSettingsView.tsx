@@ -768,13 +768,14 @@ export default function MCPSettingsView() {
         <p className="mb-8 text-muted-foreground">
           Connect Claude Code, Claude Desktop, and other MCP clients to PageSpace.{' '}
           <code className="rounded bg-muted px-1">pagespace login</code> is for you, personally —
-          it grants your full personal account access, so it isn&apos;t the right choice for an
-          agent or MCP client. For an agent, CI job, or service account, mint a token scoped to
-          specific drives instead — either below, or from the terminal with{' '}
+          it grants only a key-management credential with no content access of its own, so it
+          isn&apos;t the right choice for an agent or MCP client either way. For an agent, CI job,
+          or service account, mint a token scoped to specific drives instead — either below, or
+          from the terminal with{' '}
           <code className="rounded bg-muted px-1">
             pagespace tokens create --drive &lt;id&gt; --save-as-profile agent
-          </code>
-          .
+          </code>{' '}
+          or the guided <code className="rounded bg-muted px-1">pagespace keys</code> wizard.
         </p>
       </div>
 
@@ -1179,8 +1180,8 @@ export default function MCPSettingsView() {
                 <p className="text-xs text-muted-foreground">
                   This installs <code className="rounded bg-muted px-1">pagespace mcp</code>, which the
                   config below points at. Don&apos;t authenticate it with{' '}
-                  <code className="rounded bg-muted px-1">pagespace login</code> — that&apos;s your
-                  personal account access. Instead run{' '}
+                  <code className="rounded bg-muted px-1">pagespace login</code> — that only grants a
+                  personal, key-management credential with no content access anyway. Instead run{' '}
                   <code className="rounded bg-muted px-1">
                     pagespace tokens create --drive &lt;id&gt; --save-as-profile agent
                   </code>{' '}

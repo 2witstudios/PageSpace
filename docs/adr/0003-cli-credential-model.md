@@ -103,6 +103,24 @@ that narrows scope on a `refresh_token` grant (RFC 6749 §6) to drop
 the presented token is still consumed (rotation semantics), but there is
 nothing left to rotate into on a subsequent call.
 
+**F1a (Phase 9 amendment, 2026-07-06) — `DEFAULT_LOGIN_SCOPE` is now
+`manage_keys offline_access`, not `account offline_access`.** `pagespace
+login` no longer requests the `account` scope by default; it requests
+`manage_keys` (ADR 0002's key-management-only scope, added by Phase 9) —
+still combined with `offline_access`, so the refresh-issuance gate above is
+unaffected and login still always receives a refresh token. The consequence
+this ADR's F1 didn't anticipate: a fresh `pagespace login` now grants zero
+content access on its own. Getting an `account` or `drive:*` grant requires a
+separate, explicit step — `pagespace keys` (guided) or `pagespace tokens
+create` (flag-driven) — each going through its own browser consent screen.
+This is additive, not a correction of D2's contract: `manage_keys` is simply
+the scope `pagespace login` now requests by default, and everything else in
+§3 (lifetimes, rotation, reuse detection) applies identically regardless of
+which access scope a token carries. Existing stored credentials from before
+this change (`account offline_access`) are unaffected and keep working as
+issued — this only changes what a *new* `pagespace login` requests going
+forward.
+
 ### 3.1 Format and storage at rest (server)
 
 - Access token: **`ps_at_*`**; refresh token: **`ps_rt_*`**. Both opaque, 32 bytes base64url entropy via `generateOpaqueToken` — `TokenType` union and the `isValidTokenFormat` regex are extended with `at|rt` (`packages/lib/src/auth/opaque-tokens.ts:10,32`). No JWTs, no embedded claims — all context (user, client, scopes, family, expiry) lives in DB rows keyed by SHA3-256 hash (`token-utils.ts:42-44`), plaintext never stored, raw value returned exactly once at issuance. `tokenPrefix` (first 12 chars) stored for debugging only (`token-utils.ts:47-59`).
