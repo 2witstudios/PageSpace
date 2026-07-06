@@ -147,6 +147,22 @@ export type MachineRuntimeGuardrailDecision =
   | { allowed: false; reason: MachineRuntimeGuardrailReason };
 
 /**
+ * Drop entries whose gap has already exceeded the grace window: once that's
+ * true, `checkMachineRuntimeGuardrail` treats the key as if it had no state
+ * anyway, so the entry is pure dead weight. Without this, every distinct
+ * machine ever acquired would occupy an entry for the life of the process —
+ * unlike the per-user semaphore above, this map has no symmetric
+ * acquire/release to hook a delete into, so eviction has to be opportunistic.
+ */
+function evictStaleMachineActivity(now: number): void {
+  for (const [key, state] of machineActivityByKey) {
+    if (now - state.lastActiveAt > MACHINE_ACTIVITY_GRACE_MS) {
+      machineActivityByKey.delete(key);
+    }
+  }
+}
+
+/**
  * Advisory check: has this machine been continuously active (no gap longer
  * than `MACHINE_ACTIVITY_GRACE_MS`) for at least `maxActiveSeconds`? Pure
  * read — does not itself record activity; callers must also call
@@ -178,6 +194,10 @@ export function checkMachineRuntimeGuardrail({
  * fresh window instead of extending the old one.
  */
 export function recordMachineActivity({ machineKey, now }: { machineKey: string; now: number }): void {
+  // Opportunistic sweep: every acquisition is a natural checkpoint to reclaim
+  // any OTHER machine's entry that has gone idle, keeping the map bounded by
+  // currently (or recently) active machines rather than every machine ever seen.
+  evictStaleMachineActivity(now);
   const state = machineActivityByKey.get(machineKey);
   if (!state || now - state.lastActiveAt > MACHINE_ACTIVITY_GRACE_MS) {
     machineActivityByKey.set(machineKey, { firstActiveAt: now, lastActiveAt: now });
@@ -189,4 +209,9 @@ export function recordMachineActivity({ machineKey, now }: { machineKey: string;
 /** Clear all machine-runtime guardrail state. Test-only seam. */
 export function resetMachineRuntimeGuardrail(): void {
   machineActivityByKey.clear();
+}
+
+/** Current guardrail map size — test-only seam for verifying eviction bounds memory. */
+export function machineActivityMapSize(): number {
+  return machineActivityByKey.size;
 }

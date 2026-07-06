@@ -27,6 +27,23 @@ import { truncateToBytes } from '@pagespace/lib/services/sandbox/output-limit';
 /** Cap on the output preview injected into the feed — a live PTY pane, not a log viewer. */
 const MAX_FEED_OUTPUT_BYTES = 4 * 1024;
 
+/**
+ * C0 control characters EXCEPT tab/LF/CR, and DEL. `command`, `agentLabel`,
+ * and `output` are agent-controlled (the model chose the command; its output
+ * can carry indirect prompt-injection payloads) and are about to be
+ * interpolated into a string that is written VERBATIM into a live,
+ * escape-sequence-interpreting xterm.js feed — the header/footer's OWN
+ * `\x1b[...m` color codes are added by this module, not by the payload, so
+ * anything the payload contributes must be stripped of control bytes first.
+ * Otherwise an embedded ESC (0x1B) sequence could spoof output (fake a
+ * different exit code, overwrite/hide prior lines) for the human watching.
+ */
+const CONTROL_CHARS_EXCEPT_WHITESPACE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
+
+function stripControlChars(text: string): string {
+  return text.replace(CONTROL_CHARS_EXCEPT_WHITESPACE, '');
+}
+
 export interface TerminalActivityPayload {
   tenantId: string;
   driveId?: string;
@@ -84,8 +101,11 @@ export function validateTerminalActivityPayload(payload: TerminalActivityPayload
  */
 export function formatTerminalActivityLine(payload: Pick<TerminalActivityPayload, 'command' | 'output' | 'exitCode' | 'agentLabel'>): string {
   const { text: truncatedOutput } = truncateToBytes({ text: payload.output, maxBytes: MAX_FEED_OUTPUT_BYTES });
-  const header = `\r\n\x1b[36m▸ ${payload.agentLabel} ran:\x1b[0m ${payload.command}\r\n`;
-  const body = truncatedOutput.length > 0 ? `${truncatedOutput.replace(/\r?\n/g, '\r\n')}\r\n` : '';
+  const safeAgentLabel = stripControlChars(payload.agentLabel);
+  const safeCommand = stripControlChars(payload.command);
+  const safeOutput = stripControlChars(truncatedOutput);
+  const header = `\r\n\x1b[36m▸ ${safeAgentLabel} ran:\x1b[0m ${safeCommand}\r\n`;
+  const body = safeOutput.length > 0 ? `${safeOutput.replace(/\r?\n/g, '\r\n')}\r\n` : '';
   const footer = `\x1b[90m(exit ${payload.exitCode})\x1b[0m\r\n`;
   return header + body + footer;
 }

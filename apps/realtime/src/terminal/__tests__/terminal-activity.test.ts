@@ -121,6 +121,40 @@ describe('formatTerminalActivityLine', () => {
     const text = formatTerminalActivityLine(makePayload({ output: big }));
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(Buffer.byteLength(big, 'utf8'));
   });
+
+  it('given an ESC byte embedded in the command, should strip it instead of forwarding a raw escape sequence', () => {
+    // A model-chosen command could carry an ANSI/OSC escape sequence (e.g. via
+    // indirect prompt injection) intended to spoof output in the viewer's xterm.js
+    // feed. The header/footer's OWN color codes must survive; only the payload's
+    // control bytes should be stripped.
+    const malicious = 'echo hi\x1b[31mFAKE ERROR\x1b[0m';
+    const text = formatTerminalActivityLine(makePayload({ command: malicious }));
+    expect(text).toContain('echo hi[31mFAKE ERROR[0m');
+    expect(text).not.toContain('\x1b[31m');
+  });
+
+  it('given an ESC byte embedded in the output, should strip it (only the header/footer\'s own codes remain)', () => {
+    const text = formatTerminalActivityLine(makePayload({ output: 'safe\x1b]0;evil-title\x07text' }));
+    expect(text).toContain('safe]0;evil-titletext');
+    expect(text).not.toContain('\x1b]0;evil-title\x07');
+  });
+
+  it('given an ESC byte embedded in agentLabel, should strip it (only the header/footer\'s own codes remain)', () => {
+    const text = formatTerminalActivityLine(makePayload({ agentLabel: 'Bob\x1b[2J' }));
+    expect(text).toContain('Bob[2J ran:');
+    expect(text).not.toContain('\x1b[2J');
+  });
+
+  it('given the header/footer\'s own ANSI color codes, should still preserve them (only the payload is sanitized)', () => {
+    const text = formatTerminalActivityLine(makePayload());
+    expect(text).toContain('\x1b[36m');
+    expect(text).toContain('\x1b[90m');
+  });
+
+  it('given real newlines/tabs in output, should preserve them (only control/escape bytes are stripped)', () => {
+    const text = formatTerminalActivityLine(makePayload({ output: 'line1\nline2\ttabbed' }));
+    expect(text).toContain('line1\r\nline2\ttabbed');
+  });
 });
 
 describe('handleTerminalActivityRequest', () => {

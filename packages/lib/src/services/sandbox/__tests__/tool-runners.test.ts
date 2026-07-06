@@ -250,6 +250,55 @@ describe('runBashInSandbox', () => {
     expect(result).toEqual({ success: true, stdout: 'ok', stderr: '', exitCode: 0, truncated: false });
   });
 
+  it('given a slow-to-resolve terminal activity feed, should NOT block the tool result on it (fire-and-forget)', async () => {
+    let releaseFeed: (() => void) | undefined;
+    const feedGate = new Promise<void>((resolve) => {
+      releaseFeed = resolve;
+    });
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      notifyTerminalActivity: async () => {
+        await feedGate; // Never resolves during this test unless we release it.
+      },
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: true });
+    releaseFeed?.(); // Avoid leaving a dangling unresolved promise after the test.
+  });
+
+  it('given both stdout and stderr, should combine them for the terminal activity feed instead of dropping stderr', async () => {
+    const notified: Array<{ output: string }> = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      reconnect: async () =>
+        makeSandbox({ runCommand: async () => ({ exitCode: 0, stdout: 'out-line', stderr: 'err-line' }) }),
+      notifyTerminalActivity: async (input) => {
+        notified.push(input);
+      },
+    });
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(notified[0]?.output).toBe('out-line\nerr-line');
+  });
+
+  it('given no actorDisplayName, should fall back to a generic label instead of the actor\'s raw email (PII)', async () => {
+    const notified: Array<{ agentLabel: string }> = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      notifyTerminalActivity: async (input) => {
+        notified.push(input);
+      },
+    });
+    await runBashInSandbox({
+      command: 'echo hi',
+      ctx: makeCtx({ actorEmail: 'someone@example.com', actorDisplayName: undefined }),
+      deps,
+    });
+    expect(notified[0]?.agentLabel).toBe('AI agent');
+    expect(notified[0]?.agentLabel).not.toContain('@');
+  });
+
   it('given output over the cap, should truncate and flag it', async () => {
     const big = 'x'.repeat(300 * 1024);
     const { deps } = makeDeps({

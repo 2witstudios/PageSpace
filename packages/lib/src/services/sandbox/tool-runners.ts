@@ -456,14 +456,24 @@ export async function runBashInSandbox({
       anomaly: anomalyForExit(run.exitCode),
     });
     if (session.pageId) {
-      await safeNotifyTerminalActivity(deps, {
+      // Fire-and-forget: this is a visibility nicety over a network hop to
+      // another service, not a safety gate. Awaiting it would tie every
+      // successful bash call's latency to the terminal-activity feed's
+      // availability (up to its own request timeout) for no benefit — the
+      // tool result below does not depend on it. safeNotifyTerminalActivity
+      // already swallows its own errors, so this can never surface as an
+      // unhandled rejection.
+      void safeNotifyTerminalActivity(deps, {
         pageId: session.pageId,
         driveId: ctx.driveId,
         tenantId: ctx.tenantId,
         command,
-        output: stdout.text || stderr.text,
+        output: [stdout.text, stderr.text].filter((text) => text.length > 0).join('\n'),
         exitCode: run.exitCode,
-        agentLabel: ctx.actorDisplayName ?? ctx.actorEmail,
+        // No display name is set for a plain email fallback — a raw email
+        // address is PII and this feed is visible to every viewer with edit
+        // access to the Terminal page, not just the acting user.
+        agentLabel: ctx.actorDisplayName ?? 'AI agent',
       });
     }
     return {

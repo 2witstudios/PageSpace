@@ -10,6 +10,7 @@ import {
   recordMachineActivity,
   resetMachineRuntimeGuardrail,
   getMachineMaxActiveSeconds,
+  machineActivityMapSize,
   MACHINE_ACTIVITY_GRACE_MS,
   type CodeExecutionQuotaDeps,
 } from '../quota';
@@ -162,5 +163,30 @@ describe('machine runtime guardrail', () => {
   it('given an invalid env override, should fall back to the default', () => {
     process.env.TERMINAL_MACHINE_MAX_ACTIVE_SECONDS = 'not-a-number';
     expect(getMachineMaxActiveSeconds()).toBe(4 * 60 * 60);
+  });
+
+  it('given a machine that has gone idle past the grace window, should evict its entry (bounded memory)', () => {
+    recordMachineActivity({ machineKey: 'stale-machine', now: 0 });
+    expect(machineActivityMapSize()).toBe(1);
+
+    // A later acquisition on a DIFFERENT machine, well past the first
+    // machine's grace window, should sweep the stale entry rather than
+    // accumulating it forever.
+    const now = MACHINE_ACTIVITY_GRACE_MS + 1;
+    recordMachineActivity({ machineKey: 'other-machine', now });
+
+    expect(machineActivityMapSize()).toBe(1);
+  });
+
+  it('given many machines that all go idle, should not grow unbounded across acquisitions', () => {
+    for (let i = 0; i < 50; i++) {
+      recordMachineActivity({ machineKey: `machine-${i}`, now: 0 });
+    }
+    expect(machineActivityMapSize()).toBe(50);
+
+    // One more acquisition, long after all 50 went idle, should sweep them all.
+    recordMachineActivity({ machineKey: 'fresh-machine', now: MACHINE_ACTIVITY_GRACE_MS + 1 });
+
+    expect(machineActivityMapSize()).toBe(1);
   });
 });
