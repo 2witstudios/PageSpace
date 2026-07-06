@@ -47,6 +47,7 @@ import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
+import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { nextConfig } from '../../../../../../next.config';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
@@ -497,5 +498,50 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
 
     expect(res.status).toBe(200);
     expect(consumeStepUpGrant).not.toHaveBeenCalled();
+  });
+
+  it('rejects a scope-cap failure before burning the step-up grant, so a corrected retry with the same token still succeeds', async () => {
+    // Default drive-service mock grants OWNER on every drive; override it
+    // once so this particular request has no access to the requested drive,
+    // driving checkGrantAuthority's 'no_access' branch (a real scope-cap
+    // rejection, not a request-syntax one — the scope itself is well-formed).
+    vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: false, isMember: false, role: null });
+
+    const overPrivilegedBody = { ...approvalBody, scope: 'drive:testdrive1' };
+    const res = await POST(postRequest(overPrivilegedBody) as never);
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    const location = new URL(json.redirectUri);
+    expect(location.searchParams.get('error')).toBe('invalid_scope');
+    expect(location.searchParams.get('state')).toBe('xyz123');
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+
+    // Core assertion: the scope-cap rejection must short-circuit before the
+    // step-up grant is ever consumed/burned — the user shouldn't have to
+    // redo biometrics/email just because of an unrelated authorization
+    // failure.
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
+
+    // Bonus: prove the grant is genuinely still alive (not just "not yet
+    // called" by coincidence) by retrying with a corrected, in-authority
+    // scope and the exact same stepUpToken value — it must still work.
+    const retryRes = await POST(postRequest(approvalBody) as never);
+    expect(retryRes.status).toBe(200);
+    const retryJson = await retryRes.json();
+    const retryLocation = new URL(retryJson.redirectUri);
+    expect(retryLocation.searchParams.get('code')).toBeTruthy();
+    expect(consumeStepUpGrant).toHaveBeenCalledTimes(1);
+    expect(consumeStepUpGrant).toHaveBeenCalledWith({
+      userId: 'user-1',
+      token: 'ps_stepup_test',
+      actionBinding: {
+        clientId: 'pagespace-cli',
+        redirectUri: REDIRECT_URI,
+        scope: 'account',
+        state: 'xyz123',
+      },
+    });
+    expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
   });
 });

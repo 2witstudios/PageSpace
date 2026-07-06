@@ -234,6 +234,25 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
   }
+
+  // Consent = minting: enforce the same authority caps as mcp-tokens (ADR 0002
+  // Decision 2). Any violation rejects the entire request — no partial grant,
+  // uniform `invalid_scope` (no oracle distinguishing "no access" from "role
+  // not grantable" on an endpoint reachable pre-consent by arbitrary clients).
+  //
+  // Deliberately runs BEFORE consumeStepUpGrant: this is an orthogonal
+  // authorization check, not part of the step-up ceremony, and consuming the
+  // grant single-use-burns it regardless of outcome. A user who legitimately
+  // completed WebAuthn/magic-link step-up shouldn't have to redo it just
+  // because the request also happens to fail the scope cap — burn only once
+  // every other check has already passed.
+  const authority = checkGrantAuthority(result.scopes, await resolveGrantAuthority(result.scopes, auth.userId));
+  if (!authority.ok) {
+    return NextResponse.json({
+      redirectUri: buildRedirectWithParams(result.redirectUri, { error: 'invalid_scope', state: result.state }),
+    });
+  }
+
   const stepUpResult = await consumeStepUpGrant({
     userId: auth.userId,
     token: body.stepUpToken,
@@ -246,17 +265,6 @@ export async function POST(req: NextRequest) {
       details: { clientId: result.client.clientId, oauthEvent: 'consent_step_up_invalid' },
     });
     return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
-  }
-
-  // Consent = minting: enforce the same authority caps as mcp-tokens (ADR 0002
-  // Decision 2). Any violation rejects the entire request — no partial grant,
-  // uniform `invalid_scope` (no oracle distinguishing "no access" from "role
-  // not grantable" on an endpoint reachable pre-consent by arbitrary clients).
-  const authority = checkGrantAuthority(result.scopes, await resolveGrantAuthority(result.scopes, auth.userId));
-  if (!authority.ok) {
-    return NextResponse.json({
-      redirectUri: buildRedirectWithParams(result.redirectUri, { error: 'invalid_scope', state: result.state }),
-    });
   }
 
   const clientDbId = await ensureOAuthClientRow(result.client);
