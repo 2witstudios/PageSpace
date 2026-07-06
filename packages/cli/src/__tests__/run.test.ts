@@ -134,6 +134,70 @@ describe('run', () => {
     });
   });
 
+  it('"drives list" is not auth-exempt either: fails closed with an actionable message and zero credentials', async () => {
+    const deps = makeDeps(['drives', 'list']);
+    const code = await run(deps);
+    expect(code).not.toBe(EXIT_SUCCESS);
+    expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
+  });
+
+  it('"pages list" is not auth-exempt either: fails closed with an actionable message and zero credentials', async () => {
+    const deps = makeDeps(['pages', 'list']);
+    const code = await run(deps);
+    expect(code).not.toBe(EXIT_SUCCESS);
+    expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
+  });
+
+  describe('"drives list" with a stored default profile but no explicit credential (Phase 9 task 4 — generalized from Phase 8 task 4)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('never touches the personal credential at all: no discovery/refresh network call, no rotation', async () => {
+      let networkCalls = 0;
+      vi.stubGlobal(
+        'fetch',
+        (async () => {
+          networkCalls += 1;
+          throw new Error('run() must never make a network call for drives list with no explicit credential');
+        }) as unknown as typeof fetch,
+      );
+
+      const store = createFakeCredentialStore();
+      const personalCredential: HostCredential = {
+        refreshToken: 'ps_rt_personal_secret',
+        clientId: 'cli',
+        scopes: ['manage_keys', 'offline_access'],
+        createdAt: new Date(0).toISOString(),
+      };
+      await store.set('https://pagespace.ai', personalCredential, 'default');
+
+      const deps = { ...makeDeps(['drives', 'list']), credentialStore: store };
+      const code = await run(deps);
+
+      expect(code).not.toBe(EXIT_SUCCESS);
+      expect(deps.stderr.lines.join('')).toContain('tokens create');
+      expect(networkCalls).toBe(0);
+
+      const stillStored = await store.get('https://pagespace.ai', 'default');
+      expect(stillStored?.refreshToken).toBe('ps_rt_personal_secret');
+    });
+  });
+
+  describe('exempt commands remain unaffected by the generalized ambient-credential gate (Phase 9 task 4)', () => {
+    it('"whoami" never receives the ambient-credential-gate error, even with no explicit token/profile', async () => {
+      const deps = makeDeps(['whoami']);
+      await run(deps);
+      expect(deps.stderr.lines.join('')).not.toContain('No explicit credential found');
+    });
+
+    it('"logout" never receives the ambient-credential-gate error, even with no explicit token/profile', async () => {
+      const deps = makeDeps(['logout']);
+      await run(deps);
+      expect(deps.stderr.lines.join('')).not.toContain('No explicit credential found');
+    });
+  });
+
   describe('"tokens create" is auth-exempt: it mints via its own browser-consent flow, never the ambient credential (Phase 8)', () => {
     // The real handler's consent flow is covered by its own unit tests
     // (commands/tokens/__tests__/create.test.ts); driving it through run()

@@ -94,13 +94,15 @@ export function missingCredentialsMessage(host: string): string {
 }
 
 /**
- * `pagespace mcp`'s fail-closed gate (Phase 8 task 4): does this invocation
- * name a credential itself? Deliberately NOT `resolveAuth`/`resolveProfileName`
- * — both of those intentionally fall through to the stored "default" profile
+ * The CLI-wide fail-closed gate (Phase 8 task 4, generalized to every
+ * non-exempt command in Phase 9 task 4): does this invocation name a
+ * credential itself? Deliberately NOT `resolveAuth`/`resolveProfileName` —
+ * both of those intentionally fall through to the stored "default" profile
  * when nothing is given, which is exactly the ambient-personal-login fallback
- * `mcp` must never take. Lives here rather than in `commands/mcp.ts` so that
- * module never has to reference `PAGESPACE_TOKEN`/`PAGESPACE_PROFILE` itself
- * (see `commands/__tests__/single-auth-path.test.ts`). Routes the token check
+ * this gate exists to block for every command that touches `ctx.sdk`. Lives
+ * here rather than in a command module so no command file has to reference
+ * `PAGESPACE_TOKEN`/`PAGESPACE_PROFILE` itself (see
+ * `commands/__tests__/single-auth-path.test.ts`). Routes the token check
  * through `resolveEnvToken` (not a raw `env.PAGESPACE_TOKEN` read) so the
  * legacy `PAGESPACE_AUTH_TOKEN` env var — an explicit token under an old
  * name, not the ambient fallback this gate exists to block — still counts,
@@ -121,8 +123,8 @@ export function hasExplicitCredential(
 /** Companion message for `hasExplicitCredential` returning `false` — secret-free, points at the fix. */
 export function noExplicitCredentialMessage(): string {
   return (
-    'No explicit token found — pagespace mcp never falls back to your personal login. Run ' +
-    '"pagespace tokens create --drive <driveId> --role member --save-as-profile agent" and pass ' +
-    'the result via the PAGESPACE_TOKEN environment variable or --profile agent.'
+    'No explicit credential found — pagespace never falls back to your personal login for this ' +
+    'command. Run "pagespace tokens create --drive <driveId> --role member --save-as-profile agent" ' +
+    'and pass the result via the PAGESPACE_TOKEN environment variable or --profile agent.'
   );
 }

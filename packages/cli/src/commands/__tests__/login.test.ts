@@ -119,7 +119,9 @@ describe('createLoginHandler', () => {
     const allOutput = [...stdout.lines, ...stderr.lines].join('');
     expect(allOutput).toContain('ada@example.com');
     expect(allOutput).toContain(FIXED_TOKENS.scope);
-    expect(allOutput).toMatch(/personal account access/i);
+    expect(allOutput).toMatch(/key-management access only/i);
+    expect(allOutput).toMatch(/zero content access/i);
+    expect(allOutput).not.toMatch(/personal account access/i);
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
   });
