@@ -4,7 +4,6 @@ import { deriveSessionKey } from '../session-key';
 const base = {
   tenantId: 'tenant-1',
   driveId: 'drive-1',
-  conversationId: 'conv-1',
   secret: 'a'.repeat(32),
 };
 
@@ -13,19 +12,13 @@ describe('deriveSessionKey', () => {
     expect(deriveSessionKey(base)).toBe(deriveSessionKey(base));
   });
 
-  it('given a different conversation, should derive a different key', () => {
-    expect(deriveSessionKey({ ...base, conversationId: 'conv-2' })).not.toBe(
-      deriveSessionKey(base),
-    );
-  });
-
-  it('given a different drive, should derive a different key (drive namespacing)', () => {
+  it('given a different drive (same tenant), should derive a different key (drive namespacing)', () => {
     expect(deriveSessionKey({ ...base, driveId: 'drive-2' })).not.toBe(
       deriveSessionKey(base),
     );
   });
 
-  it('given a different tenant, should derive a different key (tenant namespacing)', () => {
+  it('given a different tenant (same drive), should derive a different key (tenant namespacing)', () => {
     expect(deriveSessionKey({ ...base, tenantId: 'tenant-2' })).not.toBe(
       deriveSessionKey(base),
     );
@@ -37,9 +30,8 @@ describe('deriveSessionKey', () => {
     );
   });
 
-  it('given any inputs, should not embed the raw conversation id (opaque)', () => {
+  it('given any inputs, should not embed the raw drive or tenant id (opaque)', () => {
     const key = deriveSessionKey(base);
-    expect(key).not.toContain(base.conversationId);
     expect(key).not.toContain(base.driveId);
     expect(key).not.toContain(base.tenantId);
   });
@@ -51,23 +43,29 @@ describe('deriveSessionKey', () => {
     expect(key).toMatch(/^pgs-sbx-[0-9a-f]{64}$/);
   });
 
+  it('given the same drive, should derive the same key regardless of caller (agent chat vs terminal)', () => {
+    // The whole point of the per-drive namespace: two independent call sites
+    // addressing the same (tenantId, driveId) land on the same Sprite.
+    const fromAgentChat = deriveSessionKey({ tenantId: base.tenantId, driveId: base.driveId, secret: base.secret });
+    const fromTerminal = deriveSessionKey({ tenantId: base.tenantId, driveId: base.driveId, secret: base.secret });
+    expect(fromAgentChat).toBe(fromTerminal);
+  });
+
   it('given an empty secret, should throw (fail closed — never derive a guessable key)', () => {
     expect(() => deriveSessionKey({ ...base, secret: '' })).toThrow(/non-empty secret/);
   });
 
-  it('given no driveId, should derive a key using empty string for the drive segment', () => {
-    const { driveId: _, ...withoutDrive } = base;
-    const key = deriveSessionKey(withoutDrive);
-    expect(key).toMatch(/^pgs-sbx-[0-9a-f]{64}$/);
+  it('given a missing driveId, should throw (fail closed — no drive means no sandbox identity)', () => {
+    const { driveId: _driveId, ...withoutDrive } = base;
+    expect(() => deriveSessionKey(withoutDrive as typeof base)).toThrow(/non-empty driveId/);
   });
 
-  it('given no driveId, should produce identical keys for identical inputs (deterministic)', () => {
-    const { driveId: _, ...withoutDrive } = base;
-    expect(deriveSessionKey(withoutDrive)).toBe(deriveSessionKey(withoutDrive));
+  it('given an empty-string driveId, should throw (fail closed)', () => {
+    expect(() => deriveSessionKey({ ...base, driveId: '' })).toThrow(/non-empty driveId/);
   });
 
-  it('given undefined driveId vs a real driveId, should produce distinct keys', () => {
-    const { driveId: _, ...withoutDrive } = base;
-    expect(deriveSessionKey(withoutDrive)).not.toBe(deriveSessionKey(base));
+  it('given a missing tenantId, should throw (fail closed)', () => {
+    const { tenantId: _tenantId, ...withoutTenant } = base;
+    expect(() => deriveSessionKey(withoutTenant as typeof base)).toThrow(/non-empty tenantId/);
   });
 });

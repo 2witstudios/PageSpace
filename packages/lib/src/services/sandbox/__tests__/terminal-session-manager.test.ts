@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
-  deriveTerminalSessionKey,
   planTerminalLifecycle,
   acquireTerminalSandbox,
   type TerminalSessionStore,
   type TerminalSessionRecord,
 } from '../terminal-session-manager';
 import type { SandboxClient } from '../session-manager';
+import { deriveSessionKey } from '../session-key';
 import { resolveSandboxNetworkOptions } from '../network-options';
 
 const SECRET = 'x'.repeat(32);
@@ -20,7 +20,7 @@ const namespacing = { tenantId: 't1', driveId: 'd1', pageId: 'p1' };
 const actor = { userId: 'u1', ...namespacing };
 
 function keyFor() {
-  return deriveTerminalSessionKey({ ...namespacing, secret: SECRET });
+  return deriveSessionKey({ tenantId: namespacing.tenantId, driveId: namespacing.driveId, secret: SECRET });
 }
 
 function makeStore(seed?: TerminalSessionRecord) {
@@ -85,26 +85,6 @@ function seedRecord(over: Partial<TerminalSessionRecord> = {}): TerminalSessionR
     ...over,
   };
 }
-
-describe('deriveTerminalSessionKey', () => {
-  it('given the same inputs, returns the same key every time', () => {
-    const a = deriveTerminalSessionKey({ ...namespacing, secret: SECRET });
-    const b = deriveTerminalSessionKey({ ...namespacing, secret: SECRET });
-    expect(a).toBe(b);
-  });
-
-  it('given different pageIds (same tenantId+driveId), returns different keys', () => {
-    const a = deriveTerminalSessionKey({ ...namespacing, pageId: 'p1', secret: SECRET });
-    const b = deriveTerminalSessionKey({ ...namespacing, pageId: 'p2', secret: SECRET });
-    expect(a).not.toBe(b);
-  });
-
-  it('given an empty string secret, throws', () => {
-    expect(() => deriveTerminalSessionKey({ ...namespacing, secret: '' })).toThrow(
-      'deriveTerminalSessionKey requires a non-empty secret',
-    );
-  });
-});
 
 describe('planTerminalLifecycle', () => {
   it('given canRun=false and no session, returns { action: deny }', () => {
@@ -232,6 +212,20 @@ describe('acquireTerminalSandbox', () => {
       deps: { store, client, now: () => NOW, secret: '', checkFullEgressEnablement: passGate },
     });
     expect(result).toEqual({ ok: false, reason: 'error' });
+  });
+
+  it('given a different pageId in the same drive, derives the SAME session key (drive is the machine, not the page)', async () => {
+    const { store } = makeStore();
+    const { client, calls } = makeClient();
+    const result = await acquireTerminalSandbox({
+      ...actor,
+      pageId: 'some-other-page',
+      canRun: true,
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
+    });
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-new' });
+    if (result.ok) expect(result.sessionKey).toBe(keyFor());
+    expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
   });
 
   it('given no existing session, calls client.getOrCreate and store.save; returns { ok: true, resumed: false }', async () => {

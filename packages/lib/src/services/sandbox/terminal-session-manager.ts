@@ -1,33 +1,10 @@
-import { createHmac } from 'crypto';
 import type { SandboxCreateOptions } from './sandbox-options';
 import { resolveSandboxNetworkOptions } from './network-options';
 import { getConfiguredEgressIpTag } from './egress-ip';
 import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
 import type { SandboxClient } from './session-manager';
+import { deriveSessionKey } from './session-key';
 import { loggers } from '../../logging/logger-config';
-
-export interface TerminalSessionKeyInput {
-  tenantId: string;
-  driveId: string;
-  pageId: string;
-  secret: string;
-}
-
-const NAMESPACE_VERSION = 'terminal-session:v1';
-
-export function deriveTerminalSessionKey({
-  tenantId,
-  driveId,
-  pageId,
-  secret,
-}: TerminalSessionKeyInput): string {
-  if (secret.length === 0) {
-    throw new Error('deriveTerminalSessionKey requires a non-empty secret');
-  }
-  const payload = [NAMESPACE_VERSION, tenantId, driveId, pageId].join('\0');
-  const digest = createHmac('sha3-256', secret).update(payload).digest('hex');
-  return `pgs-sbx-${digest}`;
-}
 
 export type TerminalTeardownReason = 'idle' | 'session_end';
 export type TerminalLifecycleIntent = 'run' | 'end';
@@ -223,7 +200,10 @@ export async function acquireTerminalSandbox(
     return { ok: false, reason: 'error' };
   }
 
-  const key = deriveTerminalSessionKey({ tenantId, driveId, pageId, secret: deps.secret });
+  // The terminal shares the SAME drive-scoped key as agent chat: a terminal page
+  // is a window onto the drive's one machine, not a machine of its own —
+  // `pageId` no longer participates in sandbox addressing (kept for audit only).
+  const key = deriveSessionKey({ tenantId, driveId, secret: deps.secret });
 
   try {
     const existing = await deps.store.findBySessionKey(key);

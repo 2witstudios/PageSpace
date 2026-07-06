@@ -66,8 +66,10 @@ export interface AcquireSandboxDeps {
 
 export interface AcquireSandboxInput {
   tenantId: string;
-  /** Absent for global (non-drive) contexts. Session key uses '' for the drive
-   *  segment when driveId is not provided. */
+  /** Required for session-key derivation (drive-scoped sandboxes only); a
+   *  missing driveId fails the acquire closed — see the guard below. Optional
+   *  in this type only because the no-drive global caller has not yet been
+   *  migrated to resolve a Home-drive id (tracked separately). */
   driveId?: string;
   conversationId: string;
   userId: string;
@@ -214,13 +216,14 @@ export async function acquireConversationSandbox(
   const { deps, tenantId, driveId, conversationId, userId, requestOrigin, agentPageId, hardExpiryMs } = input;
 
   // Fail closed if any required namespacing component or the secret is missing.
-  // driveId is intentionally optional (absent for global context) — its absence is
-  // handled by deriveSessionKey which substitutes '' for the drive segment.
-  if (!deps.secret || !tenantId || !conversationId || !userId) {
+  // driveId is now REQUIRED for key derivation — the no-drive global path is
+  // retired (see the epic's Home-drive task); a caller with no driveId is denied
+  // here rather than falling back to a shared drive-less sandbox.
+  if (!deps.secret || !tenantId || !driveId || !conversationId || !userId) {
     return { ok: false, reason: 'error' };
   }
 
-  const key = deriveSessionKey({ tenantId, driveId, conversationId, secret: deps.secret });
+  const key = deriveSessionKey({ tenantId, driveId, secret: deps.secret });
 
   // Fail closed on any unexpected IO error (store lookup/remove, client.get): a
   // failure here means we cannot establish session state safely, so we deny
@@ -312,7 +315,7 @@ export async function teardownConversationSandbox({
     return { torn: false };
   }
 
-  const key = deriveSessionKey({ tenantId, driveId, conversationId, secret: deps.secret });
+  const key = deriveSessionKey({ tenantId, driveId, secret: deps.secret });
 
   // The lookup is the only throwing IO before we know there is anything to tear
   // down. If the store is unavailable we cannot proceed, but cleanup must never

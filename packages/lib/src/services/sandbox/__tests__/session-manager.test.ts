@@ -18,7 +18,7 @@ const namespacing = { tenantId: 't1', driveId: 'd1', conversationId: 'c1' };
 const actor = { userId: 'u1', ...namespacing };
 
 function keyFor() {
-  return deriveSessionKey({ ...namespacing, secret: SECRET });
+  return deriveSessionKey({ tenantId: namespacing.tenantId, driveId: namespacing.driveId, secret: SECRET });
 }
 
 // In-memory store with call tracking, so tests assert what the orchestrator did
@@ -236,7 +236,7 @@ describe('acquireConversationSandbox', () => {
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-existing', resumed: true });
   });
 
-  it('given no driveId and all other required fields present, should pass the guard and proceed to provisioning', async () => {
+  it('given no driveId, should deny without provisioning (fail closed — no drive-less sandbox identity)', async () => {
     const { store } = makeStore();
     const { client, calls } = makeClient();
     const result = await acquireConversationSandbox({
@@ -245,8 +245,8 @@ describe('acquireConversationSandbox', () => {
       userId: 'u1',
       deps: { store, client, authorize: async () => ({ ok: true }), now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
     });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-new', resumed: false });
-    expect(calls.getOrCreate.length).toBe(1);
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(calls.getOrCreate).toEqual([]);
   });
 
   it('agent path: provisions with OPEN egress via the shared resolver (full-egress unification)', async () => {
