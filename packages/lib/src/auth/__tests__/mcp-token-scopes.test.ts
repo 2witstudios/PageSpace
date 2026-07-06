@@ -111,4 +111,22 @@ describe('computeMcpTokenActionBinding', () => {
     });
     expect(a).toEqual(b);
   });
+
+  it('does not collide two different drive-scope sets when a customRoleId smuggles a delimiter sequence', () => {
+    // Regression: with an unescaped `${id}:${role}:${customRoleId}` join,
+    // both of these serialized to "x::y,z:MEMBER:" — letting a step-up grant
+    // minted for one drive-scope set be spent minting a different one.
+    const a = computeMcpTokenActionBinding({
+      name: 'Token',
+      driveScopes: normalizeDriveScopes([{ id: 'x', role: null, customRoleId: 'y,z:MEMBER:' }]),
+    });
+    const b = computeMcpTokenActionBinding({
+      name: 'Token',
+      driveScopes: normalizeDriveScopes([
+        { id: 'x', role: null, customRoleId: 'y' },
+        { id: 'z', role: 'MEMBER' },
+      ]),
+    });
+    expect(a).not.toEqual(b);
+  });
 });

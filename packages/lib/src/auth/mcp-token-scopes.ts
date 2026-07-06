@@ -66,6 +66,13 @@ export function normalizeDriveScopes(
  * request (Phase 8 step-up gate). Fed into `computeActionBindingHash`
  * (`step-up-decisions.ts`) so a step-up grant obtained for one set of
  * name/drive-scope parameters can never be spent minting a different one.
+ *
+ * The drive-scope list is JSON-encoded (sorted `[id, role, customRoleId]`
+ * tuples), never an ad-hoc delimiter join: `id` and `customRoleId` are plain
+ * `z.string()` at the HTTP layer with no format validation for non-CLI
+ * callers, and an unescaped join would let a smuggled `:`/`,` collapse two
+ * different drive-scope sets to the same binding — see
+ * `computeActionBindingHash`'s docstring for the same reasoning.
  */
 export function computeMcpTokenActionBinding({
   name,
@@ -74,9 +81,10 @@ export function computeMcpTokenActionBinding({
   name: string;
   driveScopes: NormalizedDriveScope[];
 }): Record<string, string> {
-  const canonicalDrives = [...driveScopes]
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map((scope) => `${scope.id}:${scope.role ?? ''}:${scope.customRoleId ?? ''}`)
-    .join(',');
+  const canonicalDrives = JSON.stringify(
+    [...driveScopes]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((scope) => [scope.id, scope.role ?? '', scope.customRoleId ?? '']),
+  );
   return { name, driveScopes: canonicalDrives };
 }
