@@ -365,6 +365,13 @@ export async function resolveAgentTerminal({
  * mirrors PurePoint's `Attach{agent_id}` (`Manifest::find_agent` searches
  * root + every worktree by id; no scope path needed). The row's own
  * `projectName`/`machineBranchId` columns tell us where its Sprite lives.
+ *
+ * PERFORMS NO ACCESS CHECK — unlike the by-name path (whose callers already
+ * hold a `terminalId` from the request and check page access to it BEFORE
+ * calling in), a by-id caller only learns which page a row belongs to AFTER
+ * this resolves. No route wires this today; whoever adds one MUST check the
+ * caller's access to the *resolved* `row.terminalId` (e.g. via
+ * `packages/lib/src/permissions/`) before trusting or acting on the result.
  */
 export async function resolveAgentTerminalById({
   agentTerminalId,
@@ -448,6 +455,11 @@ export async function killAgentTerminal({
 /**
  * Level-agnostic kill, keyed PURELY on the agent terminal's own id — same
  * PurePoint `Attach{agent_id}` parity as `resolveAgentTerminalById`.
+ *
+ * PERFORMS NO ACCESS CHECK — see the identical warning on
+ * `resolveAgentTerminalById`. A future caller MUST authorize against the
+ * resolved row's `terminalId` itself; this function will happily kill any
+ * agent terminal on the machine's Sprite given only its id.
  */
 export async function killAgentTerminalById({
   agentTerminalId,
