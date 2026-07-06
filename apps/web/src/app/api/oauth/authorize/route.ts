@@ -31,6 +31,7 @@ import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
 import { ensureOAuthClientRow, createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 
 function rateLimitedResponse(retryAfter: number): NextResponse {
   return NextResponse.json({ error: 'rate_limited', retryAfter }, { status: 429 });
@@ -151,6 +152,11 @@ const approvalSchema = z.object({
   scope: z.string(),
   state: z.string().optional(),
   action: z.enum(['approve', 'deny']),
+  // Required only for action=approve (checked explicitly below via the
+  // falsy check, not `.min(1)` here — an empty string must fail that same
+  // check identically to an absent field, not surface as a distinct
+  // zod-shaped 400 that tells an attacker the field was present but empty).
+  stepUpToken: z.string().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -213,15 +219,52 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // Step-up gate (Phase 8 credential minting security correction): approving
+  // consent mints an authorization code — the same escalation shape as
+  // minting an mcp_* token — so it requires a live step-up grant bound to
+  // exactly this client_id + redirect_uri + scope + state, not just a valid
+  // session. Bound on the RAW wire params (not `result.*`) because that's
+  // exactly what the consent page's step-up ceremony independently computes
+  // client-side before the user ever clicks Allow.
+  if (!body.stepUpToken) {
+    auditRequest(req, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      details: { clientId: result.client.clientId, oauthEvent: 'consent_missing_step_up' },
+    });
+    return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+  }
+
   // Consent = minting: enforce the same authority caps as mcp-tokens (ADR 0002
   // Decision 2). Any violation rejects the entire request — no partial grant,
   // uniform `invalid_scope` (no oracle distinguishing "no access" from "role
   // not grantable" on an endpoint reachable pre-consent by arbitrary clients).
+  //
+  // Deliberately runs BEFORE consumeStepUpGrant: this is an orthogonal
+  // authorization check, not part of the step-up ceremony, and consuming the
+  // grant single-use-burns it regardless of outcome. A user who legitimately
+  // completed WebAuthn/magic-link step-up shouldn't have to redo it just
+  // because the request also happens to fail the scope cap — burn only once
+  // every other check has already passed.
   const authority = checkGrantAuthority(result.scopes, await resolveGrantAuthority(result.scopes, auth.userId));
   if (!authority.ok) {
     return NextResponse.json({
       redirectUri: buildRedirectWithParams(result.redirectUri, { error: 'invalid_scope', state: result.state }),
     });
+  }
+
+  const stepUpResult = await consumeStepUpGrant({
+    userId: auth.userId,
+    token: body.stepUpToken,
+    actionBinding: { clientId: body.clientId, redirectUri: body.redirectUri, scope: body.scope, state: body.state ?? '' },
+  });
+  if (!stepUpResult.ok) {
+    auditRequest(req, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      details: { clientId: result.client.clientId, oauthEvent: 'consent_step_up_invalid' },
+    });
+    return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
   }
 
   const clientDbId = await ensureOAuthClientRow(result.client);

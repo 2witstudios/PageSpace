@@ -262,6 +262,14 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     body: bodyHtml,
   });
   const favicon = resolveFaviconTags(meta.faviconHref, drive.publishFaviconUrl, FAVICON_BASE_URL);
+  const formActionOrigin = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
+  if (!formActionOrigin) {
+    loggers.api.warn(
+      'Neither WEB_APP_URL nor NEXT_PUBLIC_APP_URL is set — published Canvas forms will be blocked (form-action \'none\')',
+      { pageId: page.id, driveId: drive.id }
+    );
+  }
+
   const html = renderPublishedPage({
     html: bodyHtml,
     title: resolvedMeta.title,
@@ -273,6 +281,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     ogDescription: resolvedMeta.description,
     description: resolvedMeta.description,
     robots: resolvedMeta.robots,
+    formActionOrigin,
   });
   const key = buildPublishedKey(subdomain, path);
 
@@ -575,6 +584,7 @@ async function renderNotFoundPageHtml(params: {
     });
     const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
     const favicon = resolveFaviconTags(meta.faviconHref, publishFaviconUrl, FAVICON_BASE_URL);
+    const formActionOrigin = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
 
     return renderPublishedPage({
       html: bodyHtml,
@@ -585,6 +595,7 @@ async function renderNotFoundPageHtml(params: {
       ogImageUrl: meta.ogImageUrl ?? publishDefaultOgImageUrl ?? undefined,
       description: meta.ogDescription,
       robots: 'noindex',
+      formActionOrigin,
     });
   } catch (err) {
     loggers.api.warn('Failed to render custom 404 page; falling back to generic 404', {

@@ -183,6 +183,50 @@ describe('createWhoamiHandler', () => {
     expect(parsed.scopes).toEqual(CREDENTIAL.scopes);
   });
 
+  it('resolves the profile from --profile and reads/writes that profile, not "default"', async () => {
+    const hosts = new Map<string, Map<string, HostCredential>>();
+    hosts.set('https://pagespace.ai', new Map([['work', CREDENTIAL]]));
+    const store: CredentialStore = {
+      get: async (host, profile = 'default') => hosts.get(host)?.get(profile) ?? null,
+      set: async (host, credential, profile = 'default') => {
+        const profiles = hosts.get(host) ?? new Map<string, HostCredential>();
+        profiles.set(profile, credential);
+        hosts.set(host, profiles);
+      },
+      delete: async () => {},
+      list: async () => [],
+    };
+    const handler = createWhoamiHandler(baseDeps(store));
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+    const code = await handler(ctx, commandIntent(['whoami', '--profile', 'work', '--json']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const parsed = JSON.parse(stdout.lines.join(''));
+    expect(parsed.email).toBe(IDENTITY.email);
+    expect((await store.get('https://pagespace.ai', 'work'))?.refreshToken).toBe(REFRESHED.refreshToken);
+  });
+
+  it('exits 1 "not logged in" when only a different profile is stored for the host', async () => {
+    const hosts = new Map<string, Map<string, HostCredential>>();
+    hosts.set('https://pagespace.ai', new Map([['default', CREDENTIAL]]));
+    const store: CredentialStore = {
+      get: async (host, profile = 'default') => hosts.get(host)?.get(profile) ?? null,
+      set: async () => {},
+      delete: async () => {},
+      list: async () => [],
+    };
+    const handler = createWhoamiHandler(baseDeps(store));
+
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+    const code = await handler(ctx, commandIntent(['whoami', '--profile', 'work']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toMatch(/not logged in/i);
+  });
+
   it('never writes the access or refresh token to stdout/stderr on success', async () => {
     const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
     const handler = createWhoamiHandler(baseDeps(store));

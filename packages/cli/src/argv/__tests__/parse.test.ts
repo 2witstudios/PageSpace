@@ -15,6 +15,7 @@ describe('parseArgv', () => {
       json: false,
       host: undefined,
       token: undefined,
+      profile: undefined,
       yes: false,
       all: false,
       force: false,
@@ -91,6 +92,12 @@ describe('parseArgv', () => {
     expect(result.flags.token).toBe('ps_sess_abc123');
   });
 
+  it('parses --profile with its value', () => {
+    const result = parseArgv(['--profile', 'work']);
+    expectCommand(result);
+    expect(result.flags.profile).toBe('work');
+  });
+
   it('parses flags interleaved before and after the command', () => {
     const result = parseArgv(['--json', 'tokens', 'create', '--yes']);
     expectCommand(result);
@@ -112,6 +119,17 @@ describe('parseArgv', () => {
   it('rejects --token with a missing value as a usage error', () => {
     const result = parseArgv(['--token']);
     expect(result.kind).toBe('usage-error');
+  });
+
+  it('rejects --profile with a missing value as a usage error', () => {
+    const result = parseArgv(['--profile']);
+    expect(result.kind).toBe('usage-error');
+  });
+
+  it('parses --profile=value (equals-joined) the same as space-separated', () => {
+    const result = parseArgv(['--profile=work']);
+    expectCommand(result);
+    expect(result.flags.profile).toBe('work');
   });
 
   it('rejects --host followed immediately by another flag as a missing value', () => {

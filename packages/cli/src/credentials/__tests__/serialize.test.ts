@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CredentialsFileFormatError,
+  DEFAULT_PROFILE_NAME,
   emptyCredentialsFile,
   getHost,
   isSecureMode,
@@ -14,7 +15,7 @@ import {
   tokenPrefix,
   upsertHost,
 } from '@pagespace/cli';
-import type { CredentialsFile, HostCredential } from '@pagespace/cli';
+import type { CredentialsFile, HostCredential, HostProfiles } from '@pagespace/cli';
 
 const CRED_A: HostCredential = {
   refreshToken: 'ps_rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -31,8 +32,8 @@ const CRED_B: HostCredential = {
 };
 
 describe('emptyCredentialsFile', () => {
-  it('starts with version 1 and no hosts', () => {
-    expect(emptyCredentialsFile()).toEqual({ version: 1, hosts: {} });
+  it('starts with version 2 and no hosts', () => {
+    expect(emptyCredentialsFile()).toEqual({ version: 2, hosts: {} });
   });
 });
 
@@ -40,7 +41,7 @@ describe('upsertHost / getHost / removeHost', () => {
   it('is pure: does not mutate the input file', () => {
     const file = emptyCredentialsFile();
     const next = upsertHost(file, 'pagespace.ai', CRED_A);
-    expect(file).toEqual({ version: 1, hosts: {} });
+    expect(file).toEqual({ version: 2, hosts: {} });
     expect(getHost(next, 'pagespace.ai')).toEqual(CRED_A);
   });
 
@@ -111,6 +112,228 @@ describe('serializeCredentialsFile / parseCredentialsFile round-trip', () => {
       },
     });
     expect(() => parseCredentialsFile(raw)).toThrow(CredentialsFileFormatError);
+  });
+});
+
+describe('v1 -> v2 migration (automatic, one-time, on read)', () => {
+  const v1Raw = JSON.stringify({
+    version: 1,
+    hosts: {
+      'pagespace.ai': CRED_A,
+      'self-hosted.example': CRED_B,
+    },
+  });
+
+  it('reads a v1 file back as version 2, folding each host into its "default" profile', () => {
+    const file = parseCredentialsFile(v1Raw);
+    expect(file.version).toBe(2);
+    expect(file).toEqual({
+      version: 2,
+      hosts: {
+        'pagespace.ai': { profiles: { default: CRED_A } },
+        'self-hosted.example': { profiles: { default: CRED_B } },
+      },
+    });
+  });
+
+  it('a migrated v1 credential reads back identically through the profile-aware API, with zero behavior change', () => {
+    const file = parseCredentialsFile(v1Raw);
+    expect(getHost(file, 'pagespace.ai')).toEqual(CRED_A);
+    expect(getHost(file, 'pagespace.ai', DEFAULT_PROFILE_NAME)).toEqual(CRED_A);
+    expect(getHost(file, 'self-hosted.example')).toEqual(CRED_B);
+    expect(listSummaries(file)).toEqual([
+      { host: 'pagespace.ai', tokenPrefix: tokenPrefix(CRED_A.refreshToken) },
+      { host: 'self-hosted.example', tokenPrefix: tokenPrefix(CRED_B.refreshToken) },
+    ]);
+  });
+
+  it('still rejects a malformed v1 host entry during migration', () => {
+    const raw = JSON.stringify({
+      version: 1,
+      hosts: { 'pagespace.ai': { clientId: 'x', scopes: [], createdAt: '2026-01-01T00:00:00.000Z' } },
+    });
+    expect(() => parseCredentialsFile(raw)).toThrow(CredentialsFileFormatError);
+  });
+});
+
+describe('named profiles (v2)', () => {
+  it('upsertHost defaults to the "default" profile, leaving other profiles for the same host untouched', () => {
+    let file = emptyCredentialsFile();
+    file = upsertHost(file, 'pagespace.ai', CRED_A);
+    file = upsertHost(file, 'pagespace.ai', CRED_B, 'work');
+
+    expect(getHost(file, 'pagespace.ai')).toEqual(CRED_A);
+    expect(getHost(file, 'pagespace.ai', 'default')).toEqual(CRED_A);
+    expect(getHost(file, 'pagespace.ai', 'work')).toEqual(CRED_B);
+  });
+
+  it('getHost returns null for a profile that was never stored', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    expect(getHost(file, 'pagespace.ai', 'work')).toBeNull();
+  });
+
+  it('removeHost drops only the named profile, leaving sibling profiles for the same host intact', () => {
+    let file = emptyCredentialsFile();
+    file = upsertHost(file, 'pagespace.ai', CRED_A, 'default');
+    file = upsertHost(file, 'pagespace.ai', CRED_B, 'work');
+
+    const next = removeHost(file, 'pagespace.ai', 'work');
+
+    expect(getHost(next, 'pagespace.ai', 'work')).toBeNull();
+    expect(getHost(next, 'pagespace.ai', 'default')).toEqual(CRED_A);
+  });
+
+  it('removeHost drops the host entirely once its last profile is removed', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    const next = removeHost(file, 'pagespace.ai', 'default');
+    expect(next.hosts['pagespace.ai']).toBeUndefined();
+  });
+
+  it('removeHost of an unknown profile on a known host is a no-op', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    expect(removeHost(file, 'pagespace.ai', 'unknown-profile')).toEqual(file);
+  });
+
+  it('listSummaries(file, profile) only reports hosts that have that profile stored', () => {
+    let file = emptyCredentialsFile();
+    file = upsertHost(file, 'pagespace.ai', CRED_A, 'default');
+    file = upsertHost(file, 'pagespace.ai', CRED_B, 'work');
+    file = upsertHost(file, 'self-hosted.example', CRED_B, 'default');
+
+    expect(listSummaries(file, 'default')).toEqual([
+      { host: 'pagespace.ai', tokenPrefix: tokenPrefix(CRED_A.refreshToken) },
+      { host: 'self-hosted.example', tokenPrefix: tokenPrefix(CRED_B.refreshToken) },
+    ]);
+    expect(listSummaries(file, 'work')).toEqual([{ host: 'pagespace.ai', tokenPrefix: tokenPrefix(CRED_B.refreshToken) }]);
+  });
+
+  it('round-trips a multi-profile file through serialize/parse', () => {
+    let file = emptyCredentialsFile();
+    file = upsertHost(file, 'pagespace.ai', CRED_A, 'default');
+    file = upsertHost(file, 'pagespace.ai', CRED_B, 'work');
+
+    expect(parseCredentialsFile(serializeCredentialsFile(file))).toEqual(file);
+  });
+
+  it('rejects a v2 host entry missing a "profiles" object', () => {
+    const raw = JSON.stringify({ version: 2, hosts: { 'pagespace.ai': { notProfiles: {} } } });
+    expect(() => parseCredentialsFile(raw)).toThrow(CredentialsFileFormatError);
+  });
+
+  it('rejects a v2 profile entry that is a malformed credential', () => {
+    const raw = JSON.stringify({
+      version: 2,
+      hosts: { 'pagespace.ai': { profiles: { default: { clientId: 'x' } } } },
+    });
+    expect(() => parseCredentialsFile(raw)).toThrow(CredentialsFileFormatError);
+  });
+});
+
+describe('prototype-named profiles are ordinary data, never Object.prototype lookups', () => {
+  const PROTOTYPE_NAMES = ['__proto__', 'constructor', 'toString'] as const;
+
+  it('getHost returns null (not a prototype member) for a prototype-named profile that was never stored', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    for (const name of PROTOTYPE_NAMES) {
+      expect(getHost(file, 'pagespace.ai', name)).toBeNull();
+    }
+  });
+
+  it('getHost returns null for a prototype-named host that was never stored', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      expect(getHost(emptyCredentialsFile(), name)).toBeNull();
+    }
+  });
+
+  it('stores and reads back a prototype-named profile like any other name', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A, name);
+      expect(getHost(file, 'pagespace.ai', name)).toEqual(CRED_A);
+    }
+  });
+
+  it('removeHost of a never-stored prototype-named profile is a no-op that keeps the host', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    for (const name of PROTOTYPE_NAMES) {
+      expect(removeHost(file, 'pagespace.ai', name)).toEqual(file);
+    }
+  });
+
+  it('removeHost drops a stored prototype-named profile, leaving siblings intact', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      let file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+      file = upsertHost(file, 'pagespace.ai', CRED_B, name);
+      const next = removeHost(file, 'pagespace.ai', name);
+      expect(getHost(next, 'pagespace.ai', name)).toBeNull();
+      expect(getHost(next, 'pagespace.ai')).toEqual(CRED_A);
+    }
+  });
+
+  it('listSummaries neither crashes nor reports hosts for a never-stored prototype-named profile', () => {
+    const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A);
+    for (const name of PROTOTYPE_NAMES) {
+      expect(listSummaries(file, name)).toEqual([]);
+    }
+  });
+
+  it('listSummaries reports a stored prototype-named profile normally', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_B, name);
+      expect(listSummaries(file, name)).toEqual([{ host: 'pagespace.ai', tokenPrefix: tokenPrefix(CRED_B.refreshToken) }]);
+    }
+  });
+
+  it('removeHost with a prototype-named host still removes only the named profile, leaving the host and siblings intact', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      let file = upsertHost(emptyCredentialsFile(), name, CRED_A, 'default');
+      file = upsertHost(file, name, CRED_B, 'work');
+
+      const next = removeHost(file, name, 'work');
+
+      expect(getHost(next, name, 'work')).toBeNull();
+      expect(getHost(next, name, 'default')).toEqual(CRED_A);
+      expect(Object.hasOwn(next.hosts, name)).toBe(true);
+      expect(Object.getPrototypeOf(next.hosts)).toBe(Object.prototype);
+    }
+  });
+
+  it('removeHost never lets a bracket assignment on the outer hosts object reach the __proto__ setter', () => {
+    // Every real constructor in this file (parse/migrate/upsertHost) always makes a
+    // "__proto__" own property enumerable, so `{ ...file.hosts }` always copies it
+    // forward and a later `hosts[host] = value` assignment just updates that existing
+    // own property rather than falling through to Object.prototype's accessor. To
+    // exercise the assignment itself (the thing the computed-key-literal fix guards),
+    // this builds a host entry the one way a plain object can carry an own "__proto__"
+    // key that `{ ...x }` will NOT carry forward: a non-enumerable own property, made
+    // with `Object.defineProperty` (which — unlike bracket assignment — never triggers
+    // the exotic setter).
+    const rawHosts: Record<string, HostProfiles> = {};
+    Object.defineProperty(rawHosts, '__proto__', {
+      value: { profiles: { default: CRED_A, work: CRED_B } },
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    const file: CredentialsFile = { version: 2, hosts: rawHosts };
+    expect(Object.hasOwn(file.hosts, '__proto__')).toBe(true);
+
+    const next = removeHost(file, '__proto__', 'work');
+
+    expect(Object.getPrototypeOf(next.hosts)).toBe(Object.prototype);
+    expect(Object.hasOwn(next.hosts, '__proto__')).toBe(true);
+    expect(getHost(next, '__proto__', 'default')).toEqual(CRED_A);
+    expect(getHost(next, '__proto__', 'work')).toBeNull();
+  });
+
+  it('round-trips a prototype-named profile through serialize/parse without corrupting the object', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_A, name);
+      const reparsed = parseCredentialsFile(serializeCredentialsFile(file));
+      expect(getHost(reparsed, 'pagespace.ai', name)).toEqual(CRED_A);
+      // Own data property, not a polluted prototype slot that a bracket read
+      // only appears to find.
+      expect(Object.hasOwn(reparsed.hosts['pagespace.ai']!.profiles, name)).toBe(true);
+    }
   });
 });
 

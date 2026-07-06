@@ -18,6 +18,7 @@ import { workflowTools } from '../tools/workflow-tools';
 import { triggerTools } from '../tools/trigger-tools';
 import { modelTools } from '../tools/model-tools';
 import { commandTools } from '../tools/command-tools';
+import { formTools } from '../tools/form-tools';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
 import { buildGitSandboxTools } from '../tools/sandbox-git-tools-runtime';
 import { CORE_TOOL_NAMES } from './stub-tools';
@@ -41,6 +42,7 @@ const baseTools = {
   ...triggerTools,
   ...modelTools,
   ...commandTools,
+  ...formTools,
 };
 
 /**

@@ -6,7 +6,7 @@
  * `--json`/`--yes`/`--host`/`--token`/etc. and passes everything else
  * through into `args` verbatim once a command path has started. Each
  * resource command owning a `--drive` flag interprets it itself, the same
- * way `tokens create` interprets its own `--name`/`--role`.
+ * way `tokens create` interprets its own `--drive`/`--role` pairs.
  */
 export type ExtractDriveFlagResult =
   | { readonly ok: true; readonly driveId: string | undefined; readonly rest: readonly string[] }

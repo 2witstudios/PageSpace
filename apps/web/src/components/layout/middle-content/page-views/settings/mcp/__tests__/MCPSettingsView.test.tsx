@@ -6,6 +6,10 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
+vi.mock('@simplewebauthn/browser', () => ({
+  startAuthentication: vi.fn(),
+}));
+
 const fetchWithAuthMock = vi.fn();
 const postMock = vi.fn();
 const patchMock = vi.fn();
@@ -20,6 +24,25 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 
 import MCPSettingsView from '../MCPSettingsView';
 import { toast } from 'sonner';
+import { startAuthentication } from '@simplewebauthn/browser';
+
+const STEP_UP_TOKEN = 'ps_stepup_test';
+
+// Default step-up mock: a successful WebAuthn ceremony. `postMock` also
+// serves the real /api/auth/mcp-tokens(...) calls further down, so this
+// dispatches on URL and lets tests override per-endpoint as needed.
+const mockSuccessfulWebauthnStepUp = () => {
+  vi.mocked(startAuthentication).mockResolvedValue({} as never);
+  postMock.mockImplementation((url: string) => {
+    if (url === '/api/auth/step-up/webauthn/options') {
+      return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+    }
+    if (url === '/api/auth/step-up/webauthn/verify') {
+      return Promise.resolve({ stepUpToken: STEP_UP_TOKEN });
+    }
+    throw new Error(`unexpected post to ${url}`);
+  });
+};
 
 // jsdom doesn't implement these; Radix Select's pointer-interaction internals need them.
 beforeAll(() => {
@@ -101,6 +124,7 @@ const selectRoleOption = async (driveLabel: string, optionName: RegExp) => {
 describe('MCPSettingsView — edit token drive scopes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSuccessfulWebauthnStepUp();
   });
 
   it('renders an edit-scopes button per token row alongside delete', async () => {
@@ -148,6 +172,7 @@ describe('MCPSettingsView — edit token drive scopes', () => {
           { id: DRIVE_ONE.id, role: null, customRoleId: undefined },
           { id: DRIVE_TWO.id, role: null, customRoleId: undefined },
         ],
+        stepUpToken: STEP_UP_TOKEN,
       })
     );
 
@@ -159,7 +184,7 @@ describe('MCPSettingsView — edit token drive scopes', () => {
     await userEvent.click(within(dialog2).getByRole('button', { name: /save changes/i }));
 
     await waitFor(() =>
-      expect(patchMock).toHaveBeenCalledWith('/api/auth/mcp-tokens/token-1', { drives: [] })
+      expect(patchMock).toHaveBeenCalledWith('/api/auth/mcp-tokens/token-1', { drives: [], stepUpToken: STEP_UP_TOKEN })
     );
   });
 
@@ -176,6 +201,7 @@ describe('MCPSettingsView — edit token drive scopes', () => {
     await waitFor(() =>
       expect(patchMock).toHaveBeenCalledWith('/api/auth/mcp-tokens/token-1', {
         drives: [{ id: DRIVE_ONE.id, role: 'ADMIN', customRoleId: undefined }],
+        stepUpToken: STEP_UP_TOKEN,
       })
     );
   });
@@ -221,6 +247,7 @@ describe('MCPSettingsView — edit token drive scopes', () => {
     await waitFor(() =>
       expect(patchMock).toHaveBeenCalledWith('/api/auth/mcp-tokens/token-1', {
         drives: [{ id: DRIVE_ONE.id, role: 'MEMBER', customRoleId: CUSTOM_ROLE.id }],
+        stepUpToken: STEP_UP_TOKEN,
       })
     );
   });
@@ -305,7 +332,10 @@ describe('MCPSettingsView — edit token drive scopes', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
 
     await waitFor(() =>
-      expect(patchMock).toHaveBeenCalledWith('/api/auth/mcp-tokens/token-unscoped', { drives: [] })
+      expect(patchMock).toHaveBeenCalledWith('/api/auth/mcp-tokens/token-unscoped', {
+        drives: [],
+        stepUpToken: STEP_UP_TOKEN,
+      })
     );
     confirmSpy.mockRestore();
   });
@@ -341,6 +371,285 @@ describe('MCPSettingsView — edit token drive scopes', () => {
   });
 });
 
+describe('MCPSettingsView — create token step-up', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    window.location.hash = '';
+    mockSuccessfulWebauthnStepUp();
+  });
+
+  const openCreateDialog = async () => {
+    await userEvent.click(screen.getByRole('button', { name: /^create token$/i }));
+    return screen.findByRole('dialog', { name: /create new mcp token/i });
+  };
+
+  it('runs a WebAuthn step-up ceremony and sends the resulting stepUpToken with an unscoped mint', async () => {
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      if (url === '/api/auth/step-up/webauthn/verify') {
+        return Promise.resolve({ stepUpToken: STEP_UP_TOKEN });
+      }
+      if (url === '/api/auth/mcp-tokens') {
+        return Promise.resolve({ id: 'token-new', name: 'My New Token', token: 'mcp_raw', createdAt: '2026-01-01T00:00:00Z', lastUsed: null, driveScopes: [] });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    await renderView([]);
+
+    const dialog = await openCreateDialog();
+    await userEvent.type(within(dialog).getByLabelText('Token Name'), 'My New Token');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^create token$/i }));
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith('/api/auth/mcp-tokens', { name: 'My New Token', stepUpToken: STEP_UP_TOKEN }),
+    );
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/token created/i));
+  });
+
+  it('includes the selected drives array (with the stepUpToken) for a scoped mint', async () => {
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      if (url === '/api/auth/step-up/webauthn/verify') {
+        return Promise.resolve({ stepUpToken: STEP_UP_TOKEN });
+      }
+      if (url === '/api/auth/mcp-tokens') {
+        return Promise.resolve({ id: 'token-new', name: 'Scoped Token', token: 'mcp_raw', createdAt: '2026-01-01T00:00:00Z', lastUsed: null, driveScopes: [] });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    await renderView([]);
+
+    const dialog = await openCreateDialog();
+    await userEvent.type(within(dialog).getByLabelText('Token Name'), 'Scoped Token');
+    await userEvent.click(within(dialog).getByLabelText('Drive One'));
+    await userEvent.click(within(dialog).getByRole('button', { name: /^create token$/i }));
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith('/api/auth/mcp-tokens', {
+        name: 'Scoped Token',
+        stepUpToken: STEP_UP_TOKEN,
+        drives: [{ id: DRIVE_ONE.id, role: null, customRoleId: undefined }],
+      }),
+    );
+  });
+
+  it('falls back to a magic link when the user has no passkey, remembers the pending mint, and does not call the mint endpoint', async () => {
+    vi.mocked(startAuthentication).mockRejectedValue(new Error('no_passkey'));
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      if (url === '/api/auth/step-up/magic-link/request') {
+        return Promise.resolve({ ok: true });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    await renderView([]);
+
+    const dialog = await openCreateDialog();
+    await userEvent.type(within(dialog).getByLabelText('Token Name'), 'Pending Token');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^create token$/i }));
+
+    await waitFor(() => expect(within(dialog).getAllByText(/check your email/i).length).toBeGreaterThan(0));
+    expect(postMock).not.toHaveBeenCalledWith('/api/auth/mcp-tokens', expect.anything());
+    expect(JSON.parse(sessionStorage.getItem('pagespace:pendingMcpTokenMint') as string)).toMatchObject({
+      name: 'Pending Token',
+      driveIds: [],
+    });
+  });
+
+  it('completes a pending mint automatically when a magic-link step-up token comes back in the URL hash', async () => {
+    sessionStorage.setItem(
+      'pagespace:pendingMcpTokenMint',
+      JSON.stringify({ name: 'Resumed Token', driveIds: [], roleSelections: {} }),
+    );
+    window.location.hash = '#step_up_token=ps_stepup_from_email';
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/mcp-tokens') {
+        return Promise.resolve({ id: 'token-resumed', name: 'Resumed Token', token: 'mcp_raw', createdAt: '2026-01-01T00:00:00Z', lastUsed: null, driveScopes: [] });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+
+    await renderView([]);
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith('/api/auth/mcp-tokens', {
+        name: 'Resumed Token',
+        stepUpToken: 'ps_stepup_from_email',
+      }),
+    );
+    expect(sessionStorage.getItem('pagespace:pendingMcpTokenMint')).toBeNull();
+  });
+
+  it('does not start a second step-up ceremony when Enter is pressed again while one is already in flight', async () => {
+    let resolveOptions!: (value: { options: { challenge: string }; challengeId: string }) => void;
+    const optionsPromise = new Promise<{ options: { challenge: string }; challengeId: string }>((resolve) => {
+      resolveOptions = resolve;
+    });
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') return optionsPromise;
+      throw new Error(`unexpected post to ${url}`);
+    });
+    await renderView([]);
+
+    const dialog = await openCreateDialog();
+    const nameInput = within(dialog).getByLabelText('Token Name');
+    await userEvent.type(nameInput, 'My New Token');
+
+    // First Enter starts the ceremony; it hangs on the unresolved options call.
+    await userEvent.type(nameInput, '{Enter}');
+    // A second Enter while that ceremony is still in flight must be a no-op,
+    // not start a second concurrent WebAuthn ceremony/mint request.
+    await userEvent.type(nameInput, '{Enter}');
+
+    expect(postMock).toHaveBeenCalledTimes(1);
+
+    resolveOptions({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+    await waitFor(() => expect(startAuthentication).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not leave the dialog stuck on "Confirming…" after a generic WebAuthn ceremony cancellation, and retries a fresh ceremony on the next click', async () => {
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    vi.mocked(startAuthentication).mockRejectedValue(new Error('NotAllowedError: user cancelled'));
+    await renderView([]);
+
+    const dialog = await openCreateDialog();
+    await userEvent.type(within(dialog).getByLabelText('Token Name'), 'My New Token');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^create token$/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /confirming/i })).not.toBeInTheDocument();
+    const createButton = within(dialog).getByRole('button', { name: /^create token$/i });
+    expect(createButton).not.toBeDisabled();
+    expect(startAuthentication).toHaveBeenCalledTimes(1);
+
+    // Clicking again must start a genuinely fresh ceremony, not skip it
+    // because stale creating/step-up state was left behind.
+    await userEvent.click(createButton);
+    await waitFor(() => expect(startAuthentication).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe('MCPSettingsView — edit token step-up fallback and resume', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    window.location.hash = '';
+  });
+
+  it('falls back to a magic link when the user has no passkey, remembers the pending update, and does not call PATCH', async () => {
+    vi.mocked(startAuthentication).mockRejectedValue(new Error('no_passkey'));
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      if (url === '/api/auth/step-up/magic-link/request') {
+        return Promise.resolve({ ok: true });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    await renderView();
+
+    await userEvent.click(within(getCardFor('Token A')).getByRole('button', { name: /edit token scopes/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit token drive scopes/i });
+    await userEvent.click(within(dialog).getByLabelText('Drive Two'));
+    await userEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(within(dialog).getAllByText(/check your email/i).length).toBeGreaterThan(0));
+    expect(patchMock).not.toHaveBeenCalled();
+    expect(JSON.parse(sessionStorage.getItem('pagespace:pendingMcpTokenUpdate') as string)).toMatchObject({
+      tokenId: 'token-1',
+      driveIds: [DRIVE_ONE.id, DRIVE_TWO.id],
+    });
+  });
+
+  it('completes a pending update automatically when a magic-link step-up token comes back in the URL hash', async () => {
+    sessionStorage.setItem(
+      'pagespace:pendingMcpTokenUpdate',
+      JSON.stringify({ tokenId: 'token-1', driveIds: [DRIVE_TWO.id], roleSelections: {} }),
+    );
+    window.location.hash = '#step_up_token=ps_stepup_from_email';
+    patchMock.mockResolvedValueOnce({ id: 'token-1', name: 'Token A', driveScopes: [] });
+
+    await renderView();
+
+    await waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith('/api/auth/mcp-tokens/token-1', {
+        drives: [{ id: DRIVE_TWO.id, role: null, customRoleId: undefined }],
+        stepUpToken: 'ps_stepup_from_email',
+      }),
+    );
+    expect(sessionStorage.getItem('pagespace:pendingMcpTokenUpdate')).toBeNull();
+  });
+
+  it('does not leave the edit dialog stuck on "Confirming…" after a generic WebAuthn ceremony cancellation, and retries a fresh ceremony on the next click', async () => {
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') {
+        return Promise.resolve({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+      }
+      throw new Error(`unexpected post to ${url}`);
+    });
+    vi.mocked(startAuthentication).mockRejectedValue(new Error('NotAllowedError: user cancelled'));
+    await renderView();
+
+    await userEvent.click(within(getCardFor('Token A')).getByRole('button', { name: /edit token scopes/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit token drive scopes/i });
+    await userEvent.click(within(dialog).getByLabelText('Drive Two'));
+    await userEvent.click(within(dialog).getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /confirming/i })).not.toBeInTheDocument();
+    const saveButton = within(dialog).getByRole('button', { name: /save changes/i });
+    expect(saveButton).not.toBeDisabled();
+    expect(patchMock).not.toHaveBeenCalled();
+    expect(startAuthentication).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(saveButton);
+    await waitFor(() => expect(startAuthentication).toHaveBeenCalledTimes(2));
+  });
+
+  it('does not start a second step-up ceremony when Save Changes is clicked again while one is already in flight', async () => {
+    let resolveOptions!: (value: { options: { challenge: string }; challengeId: string }) => void;
+    const optionsPromise = new Promise<{ options: { challenge: string }; challengeId: string }>((resolve) => {
+      resolveOptions = resolve;
+    });
+    postMock.mockImplementation((url: string) => {
+      if (url === '/api/auth/step-up/webauthn/options') return optionsPromise;
+      throw new Error(`unexpected post to ${url}`);
+    });
+    await renderView();
+
+    await userEvent.click(within(getCardFor('Token A')).getByRole('button', { name: /edit token scopes/i }));
+    const dialog = await screen.findByRole('dialog', { name: /edit token drive scopes/i });
+    await userEvent.click(within(dialog).getByLabelText('Drive Two'));
+
+    const saveButton = within(dialog).getByRole('button', { name: /save changes/i });
+    // First click starts the ceremony; it hangs on the unresolved options call.
+    await userEvent.click(saveButton);
+    // The button is now disabled and reads "Confirming…" while the ceremony
+    // is in flight — a second click here must be a no-op, mirroring the
+    // createToken double-Enter test's assertion that only one request fires.
+    await userEvent.click(within(dialog).getByRole('button', { name: /confirming/i }));
+
+    expect(postMock).toHaveBeenCalledTimes(1);
+
+    resolveOptions({ options: { challenge: 'srv-challenge' }, challengeId: 'chal-1' });
+    await waitFor(() => expect(startAuthentication).toHaveBeenCalledTimes(1));
+    expect(patchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('MCPSettingsView — Quick MCP Setup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -367,13 +676,15 @@ describe('MCPSettingsView — Quick MCP Setup', () => {
     });
   });
 
-  it('mentions `pagespace login` and that PAGESPACE_TOKEN can be omitted afterward, on the Global install tab', async () => {
+  it('steers agent MCP setup toward `tokens create --save-as-profile agent`, not `pagespace login`, on the Global install tab', async () => {
     await renderView();
 
     const setupCard = screen.getByText('Quick MCP Setup').closest('[data-slot="card"]') as HTMLElement;
     expect(within(setupCard).getByText(/pagespace login/)).toBeInTheDocument();
+    expect(within(setupCard).getByText(/tokens create --drive/)).toBeInTheDocument();
     expect(within(setupCard).getByText('PAGESPACE_TOKEN', { selector: 'code' })).toBeInTheDocument();
-    expect(within(setupCard).getByText(/reuse your stored credential/i)).toBeInTheDocument();
+    expect(within(setupCard).getByText(/PAGESPACE_PROFILE/)).toBeInTheDocument();
+    expect(within(setupCard).getByText(/reuse that scoped credential/i)).toBeInTheDocument();
   });
 
   it('switching to the No install (npx) tab hides the install step and emits an npx config', async () => {

@@ -12,6 +12,7 @@
  */
 import { PAGESPACE_CLI_CLIENT_ID } from '../auth/client.js';
 import { resolveConfig } from '../config/resolve.js';
+import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
 import { createCredentialStore } from '../credentials/store.js';
 import type { CredentialStore } from '../credentials/store.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../exit-codes.js';
@@ -20,6 +21,7 @@ import { confirmIdentity } from '../auth/confirm-identity.js';
 import { createDiscoverMetadata } from '../auth/discover.js';
 import { createPollDeviceToken } from '../auth/poll-device-token.js';
 import { createRequestDeviceAuthorization } from '../auth/request-device-authorization.js';
+import { resolveProfileName } from '../auth/resolve.js';
 import { runDeviceLogin } from '../auth/device-flow.js';
 import type { DeviceAuthorization, PollDeviceToken, RequestDeviceAuthorization } from '../auth/device-flow.js';
 import type { ConfirmIdentity, DiscoverMetadata, WaitMs } from '../auth/loopback-flow.js';
@@ -44,12 +46,17 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
       env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
       profile: null,
     });
+    const profileName = resolveProfileName(
+      { profile: intent.flags.profile },
+      { PAGESPACE_PROFILE: ctx.env.PAGESPACE_PROFILE },
+    );
 
     const store = deps.createCredentialStore();
-    const existing = await store.get(host);
+    const existing = await store.get(host, profileName);
     if (existing && !intent.flags.yes) {
+      const profileNote = profileName === DEFAULT_PROFILE_NAME ? '' : ` (profile "${profileName}")`;
       ctx.stderr.write(
-        `A stored credential for ${host} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host}" first.\n`,
+        `A stored credential for ${host}${profileNote} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host}" first.\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }
@@ -67,6 +74,7 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
       timeoutMs: deps.timeoutMs,
       credentialStore: store,
       confirmIdentity: deps.confirmIdentity,
+      profile: profileName,
       onDeviceCode: (authorization: DeviceAuthorization) => {
         ctx.stdout.write(`To finish signing in, visit:\n  ${authorization.verificationUri}\n`);
         ctx.stdout.write(`And enter this code: ${authorization.userCode}\n`);
@@ -80,6 +88,9 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
           result.identity
             ? `Logged in as ${result.identity.name ?? result.identity.email} <${result.identity.email}> on ${host}.\n`
             : `Logged in to ${host}.\n`,
+        );
+        ctx.stdout.write(
+          `Scope: ${result.scope} — key-management access only, with zero content access; run "pagespace tokens create" to mint a scoped key for actual content access.\n`,
         );
         return EXIT_SUCCESS;
       case 'access_denied':

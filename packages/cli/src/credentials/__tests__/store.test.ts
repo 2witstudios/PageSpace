@@ -77,6 +77,127 @@ describe('CompositeCredentialStore — keychain available', () => {
 
     expect(await store.get('pagespace.ai')).toBeNull();
   });
+
+  describe('named profiles', () => {
+    it('stores a named profile under a distinct keychain account key, coexisting with "default"', async () => {
+      const keychain = createFakeKeychainAdapter();
+      const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), fakeSink());
+
+      await store.set('pagespace.ai', CRED_A);
+      await store.set('pagespace.ai', CRED_B, 'work');
+
+      expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+      expect(await store.get('pagespace.ai', 'work')).toEqual(CRED_B);
+      expect(keychain.calls).toContain('setSecret:pagespace.ai');
+      expect(keychain.calls.some((call) => call.startsWith('setSecret:') && call !== 'setSecret:pagespace.ai')).toBe(true);
+    });
+
+    it('list(profile) only reports hosts with that profile stored', async () => {
+      const keychain = createFakeKeychainAdapter();
+      const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), fakeSink());
+
+      await store.set('pagespace.ai', CRED_A);
+      await store.set('pagespace.ai', CRED_B, 'work');
+      await store.set('self-hosted.example', CRED_B);
+
+      expect((await store.list()).map((entry) => entry.host).sort()).toEqual(['pagespace.ai', 'self-hosted.example']);
+      expect(await store.list('work')).toEqual([{ host: 'pagespace.ai', tokenPrefix: CRED_B.refreshToken.slice(0, 12) }]);
+    });
+
+    it('delete(host, profile) removes only the named profile, leaving "default" intact', async () => {
+      const keychain = createFakeKeychainAdapter();
+      const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), fakeSink());
+
+      await store.set('pagespace.ai', CRED_A);
+      await store.set('pagespace.ai', CRED_B, 'work');
+
+      await store.delete('pagespace.ai', 'work');
+
+      expect(await store.get('pagespace.ai', 'work')).toBeNull();
+      expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+    });
+  });
+});
+
+describe('CompositeCredentialStore — NUL-byte host/profile rejection', () => {
+  it('rejects a NUL byte in host at the boundary rather than silently degrading to the file store', async () => {
+    const keychain = createFakeKeychainAdapter();
+    const fileStore = new FileCredentialStore({ path: credentialsPath });
+    const store = new CompositeCredentialStore(keychain, fileStore, fakeSink());
+
+    await expect(store.set('A\u0000B', CRED_A, 'C')).rejects.toThrow(/NUL/);
+    await expect(fileStore.get('A\u0000B', 'C')).resolves.toBeNull();
+  });
+
+  it('rejects a NUL byte in profile at the boundary rather than silently degrading to the file store', async () => {
+    const keychain = createFakeKeychainAdapter();
+    const fileStore = new FileCredentialStore({ path: credentialsPath });
+    const store = new CompositeCredentialStore(keychain, fileStore, fakeSink());
+
+    await expect(store.set('A', CRED_A, 'B\u0000C')).rejects.toThrow(/NUL/);
+    await expect(fileStore.get('A', 'B\u0000C')).resolves.toBeNull();
+  });
+
+  it('rejects a NUL byte in host even when the keychain is already degraded and every call goes straight to the file store', async () => {
+    const keychain = createUnavailableKeychainAdapter();
+    const fileStore = new FileCredentialStore({ path: credentialsPath });
+    const store = new CompositeCredentialStore(keychain, fileStore, fakeSink());
+
+    // Degrade the store first via an unrelated, valid host.
+    await store.set('pagespace.ai', CRED_A);
+
+    await expect(store.set('A\u0000B', CRED_A, 'C')).rejects.toThrow(/NUL/);
+    await expect(fileStore.get('A\u0000B', 'C')).resolves.toBeNull();
+  });
+
+  it('rejects a NUL byte on get() and delete(), not just set()', async () => {
+    const keychain = createFakeKeychainAdapter();
+    const fileStore = new FileCredentialStore({ path: credentialsPath });
+    const store = new CompositeCredentialStore(keychain, fileStore, fakeSink());
+
+    await expect(store.get('A\u0000B', 'C')).rejects.toThrow(/NUL/);
+    await expect(store.delete('A\u0000B', 'C')).rejects.toThrow(/NUL/);
+  });
+});
+
+describe('CompositeCredentialStore — malformed keychain entry', () => {
+  it('get() throws a distinct, accurately-worded error for a malformed entry, without degrading the store', async () => {
+    const keychain = createFakeKeychainAdapter();
+    const fileStore = new FileCredentialStore({ path: credentialsPath });
+    const stderr = fakeSink();
+    const store = new CompositeCredentialStore(keychain, fileStore, stderr);
+
+    await store.set('pagespace.ai', CRED_A);
+    await keychain.setSecret('bad.example', 'not-valid-json');
+
+    await expect(store.get('bad.example')).rejects.toThrow(/malformed/i);
+    await expect(store.get('bad.example')).rejects.not.toThrow(/keychain unavailable/i);
+
+    // The store must still be using the keychain for other hosts, not degraded to the file store.
+    expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+    expect(stderr.lines).toEqual([]);
+    await expect(fs.stat(credentialsPath)).rejects.toThrow();
+  });
+
+  it('list() skips a malformed entry with a stderr warning instead of throwing or degrading the whole store', async () => {
+    const keychain = createFakeKeychainAdapter();
+    const stderr = fakeSink();
+    const store = new CompositeCredentialStore(keychain, new FileCredentialStore({ path: credentialsPath }), stderr);
+
+    await store.set('pagespace.ai', CRED_A);
+    await keychain.setSecret('bad.example', 'not-valid-json');
+
+    const summaries = await store.list();
+
+    expect(summaries).toEqual([{ host: 'pagespace.ai', tokenPrefix: CRED_A.refreshToken.slice(0, 12) }]);
+    expect(stderr.lines.join('')).toMatch(/bad\.example/);
+    expect(stderr.lines.join('')).not.toMatch(/keychain unavailable/i);
+    expect(stderr.lines.join('')).not.toContain(CRED_A.refreshToken);
+
+    // Still on the keychain afterward — one bad entry must not flip the whole store to the file-store fallback.
+    expect(await store.get('pagespace.ai')).toEqual(CRED_A);
+    expect(keychain.calls).toContain('getSecret:pagespace.ai');
+  });
 });
 
 describe('CompositeCredentialStore — keychain unavailable', () => {

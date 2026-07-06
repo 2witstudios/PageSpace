@@ -1,6 +1,6 @@
 {
-  "id": "c3ee8220-009b-4e3c-a53e-ebc87f795b14",
-  "prevId": "8b0ee447-5602-45d5-8d45-f4d40a831ac4",
+  "id": "ab7ec046-15c3-479b-aa82-222d450c5c4a",
+  "prevId": "1e435704-6279-47bd-a664-dfa50bdf1117",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1645,18 +1645,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "not_found_page_id": {
-          "name": "not_found_page_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "publish_favicon_url": {
-          "name": "publish_favicon_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
@@ -1733,19 +1721,6 @@
           "tableTo": "pages",
           "columnsFrom": [
             "homePageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "drives_not_found_page_id_pages_id_fk": {
-          "name": "drives_not_found_page_id_pages_id_fk",
-          "tableFrom": "drives",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "not_found_page_id"
           ],
           "columnsTo": [
             "id"
@@ -18476,6 +18451,262 @@
           "nullsNotDistinct": false,
           "columns": [
             "tokenHash"
+          ]
+        }
+      }
+    },
+    "public.form_targets": {
+      "name": "form_targets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "token_prefix": {
+          "name": "token_prefix",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "drive_id": {
+          "name": "drive_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "page_id": {
+          "name": "page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'sheet:append'"
+        },
+        "canvas_page_id": {
+          "name": "canvas_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fields": {
+          "name": "fields",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "header_row": {
+          "name": "header_row",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "next_row": {
+          "name": "next_row",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "status_reason": {
+          "name": "status_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_submitted_at": {
+          "name": "last_submitted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "submission_count": {
+          "name": "submission_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "form_targets_page_id_idx": {
+          "name": "form_targets_page_id_idx",
+          "columns": [
+            {
+              "expression": "page_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "form_targets_drive_id_idx": {
+          "name": "form_targets_drive_id_idx",
+          "columns": [
+            {
+              "expression": "drive_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "form_targets_status_idx": {
+          "name": "form_targets_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "form_targets_canvas_page_id_idx": {
+          "name": "form_targets_canvas_page_id_idx",
+          "columns": [
+            {
+              "expression": "canvas_page_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "form_targets_one_active_per_page_idx": {
+          "name": "form_targets_one_active_per_page_idx",
+          "columns": [
+            {
+              "expression": "page_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"form_targets\".\"status\" = 'active'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "form_targets_drive_id_drives_id_fk": {
+          "name": "form_targets_drive_id_drives_id_fk",
+          "tableFrom": "form_targets",
+          "tableTo": "drives",
+          "columnsFrom": [
+            "drive_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "form_targets_page_id_pages_id_fk": {
+          "name": "form_targets_page_id_pages_id_fk",
+          "tableFrom": "form_targets",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "form_targets_canvas_page_id_pages_id_fk": {
+          "name": "form_targets_canvas_page_id_pages_id_fk",
+          "tableFrom": "form_targets",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "canvas_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "form_targets_created_by_users_id_fk": {
+          "name": "form_targets_created_by_users_id_fk",
+          "tableFrom": "form_targets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "form_targets_token_hash_unique": {
+          "name": "form_targets_token_hash_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "token_hash"
           ]
         }
       }
