@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateTerminalConnectPayload, clampTerminalDimensions } from '../validation';
+import { validateTerminalConnectPayload, validateAgentTerminalConnectPayload, clampTerminalDimensions } from '../validation';
 
 describe('validateTerminalConnectPayload', () => {
   it('given a valid payload, should return ok:true with typed value', () => {
@@ -100,6 +100,52 @@ describe('validateTerminalConnectPayload', () => {
   it('given extra unknown fields, should ignore them and return ok:true', () => {
     const result = validateTerminalConnectPayload({ pageId: 'abc', cols: 80, rows: 24, extra: 'ignored' });
     expect(result).toEqual({ ok: true, value: { pageId: 'abc', cols: 80, rows: 24 } });
+  });
+});
+
+describe('validateAgentTerminalConnectPayload', () => {
+  const valid = { terminalId: 't1', projectName: 'repo', branchName: 'feature-x', name: 'cli', cols: 80, rows: 24 };
+
+  it('given a valid payload, should return ok:true with typed value', () => {
+    expect(validateAgentTerminalConnectPayload(valid)).toEqual({ ok: true, value: valid });
+  });
+
+  it('given null payload, should return ok:false', () => {
+    const result = validateAgentTerminalConnectPayload(null);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid payload');
+  });
+
+  for (const field of ['terminalId', 'projectName', 'branchName', 'name']) {
+    it(`given ${field} is missing, should return ok:false`, () => {
+      const { [field]: _omit, ...rest } = valid;
+      const result = validateAgentTerminalConnectPayload(rest);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toBe(`invalid ${field}`);
+    });
+
+    it(`given ${field} is an empty string, should return ok:false`, () => {
+      const result = validateAgentTerminalConnectPayload({ ...valid, [field]: '' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toBe(`invalid ${field}`);
+    });
+  }
+
+  it('given cols is invalid, should return ok:false', () => {
+    const result = validateAgentTerminalConnectPayload({ ...valid, cols: -1 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid cols');
+  });
+
+  it('given rows is invalid, should return ok:false', () => {
+    const result = validateAgentTerminalConnectPayload({ ...valid, rows: NaN });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe('invalid rows');
+  });
+
+  it('given extra unknown fields, should ignore them and return ok:true', () => {
+    const result = validateAgentTerminalConnectPayload({ ...valid, extra: 'ignored' });
+    expect(result).toEqual({ ok: true, value: valid });
   });
 });
 

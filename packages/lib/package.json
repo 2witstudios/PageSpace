@@ -492,6 +492,21 @@
       "import": "./dist/services/machines/machine-branches.js",
       "require": "./dist/services/machines/machine-branches.js"
     },
+    "./services/machines/agent-terminal-types": {
+      "types": "./dist/services/machines/agent-terminal-types.d.ts",
+      "import": "./dist/services/machines/agent-terminal-types.js",
+      "require": "./dist/services/machines/agent-terminal-types.js"
+    },
+    "./services/machines/agent-terminals-store": {
+      "types": "./dist/services/machines/agent-terminals-store.d.ts",
+      "import": "./dist/services/machines/agent-terminals-store.js",
+      "require": "./dist/services/machines/agent-terminals-store.js"
+    },
+    "./services/machines/agent-terminals": {
+      "types": "./dist/services/machines/agent-terminals.d.ts",
+      "import": "./dist/services/machines/agent-terminals.js",
+      "require": "./dist/services/machines/agent-terminals.js"
+    },
     "./services/sandbox/tool-gate": {
       "types": "./dist/services/sandbox/tool-gate.d.ts",
       "import": "./dist/services/sandbox/tool-gate.js",
@@ -1505,6 +1520,15 @@
       ],
       "services/machines/machine-branches": [
         "./dist/services/machines/machine-branches.d.ts"
+      ],
+      "services/machines/agent-terminal-types": [
+        "./dist/services/machines/agent-terminal-types.d.ts"
+      ],
+      "services/machines/agent-terminals-store": [
+        "./dist/services/machines/agent-terminals-store.d.ts"
+      ],
+      "services/machines/agent-terminals": [
+        "./dist/services/machines/agent-terminals.d.ts"
       ],
       "services/sandbox/sandbox-client/types": [
         "./dist/services/sandbox/sandbox-client/types.d.ts"

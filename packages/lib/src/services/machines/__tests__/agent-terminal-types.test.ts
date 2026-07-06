@@ -1,0 +1,75 @@
+import { describe, it, expect } from 'vitest';
+import {
+  AGENT_LAUNCH_SPECS,
+  isAgentRuntimeType,
+  resolveAgentLaunchSpec,
+  isValidAgentTerminalName,
+} from '../agent-terminal-types';
+
+describe('isAgentRuntimeType', () => {
+  it('given each first-party agent type, should recognize it', () => {
+    expect(isAgentRuntimeType('pagespace-cli')).toBe(true);
+    expect(isAgentRuntimeType('claude')).toBe(true);
+    expect(isAgentRuntimeType('codex')).toBe(true);
+  });
+
+  it('given an unknown type, should reject it', () => {
+    expect(isAgentRuntimeType('gemini')).toBe(false);
+    expect(isAgentRuntimeType('')).toBe(false);
+    expect(isAgentRuntimeType('constructor')).toBe(false);
+  });
+});
+
+describe('resolveAgentLaunchSpec', () => {
+  it('given pagespace-cli, should resolve its command with no args', () => {
+    expect(resolveAgentLaunchSpec('pagespace-cli')).toEqual({ command: 'pagespace-cli', args: [] });
+  });
+
+  it('given claude, should resolve the claude binary', () => {
+    expect(resolveAgentLaunchSpec('claude')).toEqual({ command: 'claude', args: [] });
+  });
+
+  it('given codex, should resolve the codex binary', () => {
+    expect(resolveAgentLaunchSpec('codex')).toEqual({ command: 'codex', args: [] });
+  });
+
+  it('given two resolutions, should return independent arrays (no shared mutable state)', () => {
+    const a = resolveAgentLaunchSpec('claude');
+    a.args.push('--danger');
+    const b = resolveAgentLaunchSpec('claude');
+    expect(b.args).toEqual([]);
+  });
+
+  it('should expose a registry entry for every AgentRuntimeType', () => {
+    expect(Object.keys(AGENT_LAUNCH_SPECS)).toEqual(['pagespace-cli', 'claude', 'codex']);
+  });
+});
+
+describe('isValidAgentTerminalName', () => {
+  it('given a simple alphanumeric name, should accept it', () => {
+    expect(isValidAgentTerminalName('reviewer')).toBe(true);
+    expect(isValidAgentTerminalName('agent-1')).toBe(true);
+    expect(isValidAgentTerminalName('agent_2')).toBe(true);
+  });
+
+  it('given an empty name, should reject it', () => {
+    expect(isValidAgentTerminalName('')).toBe(false);
+  });
+
+  it('given a name starting with a symbol, should reject it', () => {
+    expect(isValidAgentTerminalName('-agent')).toBe(false);
+    expect(isValidAgentTerminalName('_agent')).toBe(false);
+  });
+
+  it('given a name with path-like or shell-meaningful characters, should reject it', () => {
+    expect(isValidAgentTerminalName('../etc')).toBe(false);
+    expect(isValidAgentTerminalName('a/b')).toBe(false);
+    expect(isValidAgentTerminalName('a b')).toBe(false);
+    expect(isValidAgentTerminalName('a;b')).toBe(false);
+  });
+
+  it('given a name longer than 100 chars, should reject it', () => {
+    expect(isValidAgentTerminalName('a'.repeat(101))).toBe(false);
+    expect(isValidAgentTerminalName('a'.repeat(100))).toBe(true);
+  });
+});
