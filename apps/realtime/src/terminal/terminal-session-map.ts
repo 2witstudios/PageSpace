@@ -28,6 +28,16 @@ export type TerminalSession = {
   pageId?: string;
 };
 
+export function appendScrollback(session: Pick<TerminalSession, 'scrollback' | 'scrollbackBytes'>, data: string): void {
+  const bytes = Buffer.byteLength(data, 'utf8');
+  session.scrollback.push(data);
+  session.scrollbackBytes += bytes;
+  while (session.scrollbackBytes > MAX_SCROLLBACK_BYTES && session.scrollback.length > 0) {
+    const removed = session.scrollback.shift()!;
+    session.scrollbackBytes -= Buffer.byteLength(removed, 'utf8');
+  }
+}
+
 export type TerminalSessionMap = {
   getBySocket(socketId: string): TerminalSession | undefined;
   getByKey(sessionKey: string): TerminalSession | undefined;

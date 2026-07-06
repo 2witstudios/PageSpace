@@ -1,18 +1,20 @@
 /**
  * Agent activity → live Terminal feed (Terminal Epic 1 T1.5, activity visibility).
  *
- * An agent's `bash` tool runs on the SAME persistent machine a human Terminal
- * page uses (packages/lib/src/services/sandbox/machine-session.ts), but
- * through a separate one-off exec call — never through the interactive PTY a
- * connected human is watching. Without this, a human viewing a Terminal has
- * no visibility into what an agent just did on their machine.
+ * An agent's `bash` tool runs on the SAME persistent machine Sprite a human's
+ * machine-scope 'shell' agent terminal reconnects to (services/sandbox/
+ * machine-session.ts), but through a separate one-off exec call — never
+ * through the interactive PTY a connected human is watching. Without this, a
+ * human watching that shell has no visibility into what an agent just did on
+ * their machine.
  *
  * `apps/web` posts here (HMAC-signed, mirroring /api/broadcast and /api/kick)
- * after a successful bash run. This handler derives the SAME session key the
- * PTY path uses, looks up any LIVE session in this process's in-memory
- * `terminalSessionMap`, and — if one exists — injects an annotated line into
- * its output feed (both the live socket and its scrollback), so it reads like
- * PTY output to anyone watching or reconnecting.
+ * after a successful bash run. This handler resolves the SAME in-memory
+ * session key `agent-terminal-handler.ts` uses for the machine's conventional
+ * 'shell' terminal, looks up any LIVE session in `agentTerminalSessionMap`,
+ * and — if one exists — injects an annotated line into its output feed (both
+ * the live socket and its scrollback), so it reads like PTY output to anyone
+ * watching or reconnecting.
  *
  * A 200 with `delivered: false` (no live session, or no driveId) is the
  * expected common case — most agent runs happen while nobody is watching the
@@ -21,7 +23,7 @@
  */
 
 import type { TerminalSessionMap } from './terminal-session-map';
-import { appendScrollback } from './terminal-handler';
+import { appendScrollback } from './terminal-session-map';
 import { truncateToBytes } from '@pagespace/lib/services/sandbox/output-limit';
 
 /** Cap on the output preview injected into the feed — a live PTY pane, not a log viewer. */
@@ -112,8 +114,12 @@ export function formatTerminalActivityLine(payload: Pick<TerminalActivityPayload
 
 export interface TerminalActivityDeps {
   sessionMap: Pick<TerminalSessionMap, 'getByKey'>;
-  /** Derives the SAME session key the PTY acquisition path uses for this (tenant, drive, page). */
-  deriveSessionKey: (input: { tenantId: string; driveId: string; pageId: string }) => string;
+  /**
+   * Resolves the machine's conventional 'shell' agent-terminal session key
+   * for (tenant, drive, page), or null if no Sprite has ever been
+   * provisioned for it (nothing to look up — same as no live session).
+   */
+  resolveSessionKey: (input: { tenantId: string; driveId: string; pageId: string }) => Promise<string | null>;
 }
 
 export interface TerminalActivityResult {
@@ -126,10 +132,10 @@ export interface TerminalActivityResult {
  * Handle the terminal-activity API request. Pure composition over injected
  * deps — no HTTP/socket types here, so this is unit-tested directly.
  */
-export function handleTerminalActivityRequest(
+export async function handleTerminalActivityRequest(
   deps: TerminalActivityDeps,
   body: string,
-): { status: number; body: TerminalActivityResult } {
+): Promise<{ status: number; body: TerminalActivityResult }> {
   const parsed = parseTerminalActivityRequest(body);
   if (!parsed.success || !parsed.payload) {
     return { status: 400, body: { success: false, error: parsed.error ?? /* c8 ignore next */ 'Parse error' } };
@@ -148,8 +154,8 @@ export function handleTerminalActivityRequest(
     return { status: 200, body: { success: true, delivered: false } };
   }
 
-  const sessionKey = deps.deriveSessionKey({ tenantId, driveId, pageId });
-  const session = deps.sessionMap.getByKey(sessionKey);
+  const sessionKey = await deps.resolveSessionKey({ tenantId, driveId, pageId });
+  const session = sessionKey ? deps.sessionMap.getByKey(sessionKey) : undefined;
   if (!session) {
     return { status: 200, body: { success: true, delivered: false } };
   }

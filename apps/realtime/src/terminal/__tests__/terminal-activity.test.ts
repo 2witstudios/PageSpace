@@ -161,43 +161,49 @@ describe('handleTerminalActivityRequest', () => {
   function makeDeps(over: Partial<TerminalActivityDeps> = {}): TerminalActivityDeps {
     return {
       sessionMap: { getByKey: () => undefined },
-      deriveSessionKey: ({ tenantId, driveId, pageId }) => `${tenantId}:${driveId}:${pageId}`,
+      resolveSessionKey: async ({ tenantId, driveId, pageId }) => `${tenantId}:${driveId}:${pageId}`,
       ...over,
     };
   }
 
-  it('given invalid JSON, should return 400', () => {
-    const result = handleTerminalActivityRequest(makeDeps(), 'not json');
+  it('given invalid JSON, should return 400', async () => {
+    const result = await handleTerminalActivityRequest(makeDeps(), 'not json');
     expect(result.status).toBe(400);
     expect(result.body.success).toBe(false);
   });
 
-  it('given an invalid payload, should return 400', () => {
-    const result = handleTerminalActivityRequest(makeDeps(), JSON.stringify({ tenantId: 't1' }));
+  it('given an invalid payload, should return 400', async () => {
+    const result = await handleTerminalActivityRequest(makeDeps(), JSON.stringify({ tenantId: 't1' }));
     expect(result.status).toBe(400);
     expect(result.body.success).toBe(false);
   });
 
-  it('given no driveId, should return 200 with delivered: false without deriving a session key', () => {
+  it('given no driveId, should return 200 with delivered: false without resolving a session key', async () => {
     let called = false;
-    const deps = makeDeps({ deriveSessionKey: () => { called = true; return 'x'; } });
-    const result = handleTerminalActivityRequest(deps, JSON.stringify(makePayload({ driveId: undefined })));
+    const deps = makeDeps({ resolveSessionKey: async () => { called = true; return 'x'; } });
+    const result = await handleTerminalActivityRequest(deps, JSON.stringify(makePayload({ driveId: undefined })));
     expect(result).toEqual({ status: 200, body: { success: true, delivered: false } });
     expect(called).toBe(false);
   });
 
-  it('given no live session for the derived key, should return 200 with delivered: false', () => {
-    const result = handleTerminalActivityRequest(makeDeps(), JSON.stringify(makePayload()));
+  it('given no sandbox has ever been provisioned for the machine, should return 200 with delivered: false', async () => {
+    const deps = makeDeps({ resolveSessionKey: async () => null });
+    const result = await handleTerminalActivityRequest(deps, JSON.stringify(makePayload()));
     expect(result).toEqual({ status: 200, body: { success: true, delivered: false } });
   });
 
-  it('given a live session, should inject the formatted line into its scrollback and output feed', () => {
+  it('given no live session for the resolved key, should return 200 with delivered: false', async () => {
+    const result = await handleTerminalActivityRequest(makeDeps(), JSON.stringify(makePayload()));
+    expect(result).toEqual({ status: 200, body: { success: true, delivered: false } });
+  });
+
+  it('given a live session, should inject the formatted line into its scrollback and output feed', async () => {
     const { session, emitted } = makeSession();
     const deps = makeDeps({
       sessionMap: { getByKey: (key) => (key === 't1:d1:terminal-page-1' ? session : undefined) },
     });
 
-    const result = handleTerminalActivityRequest(deps, JSON.stringify(makePayload()));
+    const result = await handleTerminalActivityRequest(deps, JSON.stringify(makePayload()));
 
     expect(result).toEqual({ status: 200, body: { success: true, delivered: true } });
     expect(emitted).toHaveLength(1);
@@ -205,13 +211,13 @@ describe('handleTerminalActivityRequest', () => {
     expect(session.scrollback).toEqual(emitted);
   });
 
-  it('given a live session on a DIFFERENT key, should not deliver', () => {
+  it('given a live session on a DIFFERENT key, should not deliver', async () => {
     const { session, emitted } = makeSession();
     const deps = makeDeps({
       sessionMap: { getByKey: (key) => (key === 'some-other-key' ? session : undefined) },
     });
 
-    const result = handleTerminalActivityRequest(deps, JSON.stringify(makePayload()));
+    const result = await handleTerminalActivityRequest(deps, JSON.stringify(makePayload()));
 
     expect(result.body).toEqual({ success: true, delivered: false });
     expect(emitted).toHaveLength(0);

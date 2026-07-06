@@ -24,6 +24,11 @@ import type { MachineHost } from '@pagespace/lib/services/sandbox/machine-host';
 
 let cachedSdk: SpritesSdk | null = null;
 
+/** The raw Sprites SDK — for callers that need to reach a Sprite directly (e.g. to wake a resumed one) rather than through an `ExecSandboxClient`/`MachineHost` adapter. */
+export async function getProductionSpritesSdk(): Promise<SpritesSdk> {
+  return getSpritesSDK();
+}
+
 async function getSpritesSDK(): Promise<SpritesSdk> {
   if (cachedSdk) return cachedSdk;
   const client = new SpritesClient(resolveSpritesToken());
