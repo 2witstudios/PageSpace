@@ -7,6 +7,7 @@
 
 import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
 import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
+import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 
 // Tools that modify content (excluded in read-only mode; also used by elision to protect side-effectful results)
 export const WRITE_TOOLS = new Set([
@@ -134,16 +135,31 @@ export function hasSandboxGitTools(tools: Record<string, unknown>): boolean {
 
 /**
  * Suppress GitHub OAuth integration tools when the sandbox git/gh CLI toolkit is
- * already registered in the current tool set — the two overlap in capability
- * (browsing repos, reviewing PRs, filing issues), and offering both surfaces for
- * the same GitHub account is redundant and confuses tool selection. Other
- * providers' integration tools (Slack, etc.) are untouched.
+ * both registered in the current tool set AND actually usable by this caller
+ * right now (per `canRunCode`) — the two overlap in capability (browsing repos,
+ * reviewing PRs, filing issues), and offering both surfaces for the same GitHub
+ * account is redundant and confuses tool selection. Other providers' integration
+ * tools (Slack, etc.) are untouched.
+ *
+ * Presence alone is not enough: the sandbox toolkit is registered for every user
+ * whenever the global `CODE_EXECUTION_ENABLED` kill-switch is on, regardless of
+ * per-user authorization (e.g. the production admin-only gate). Suppressing the
+ * GitHub OAuth tools for a caller who cannot actually invoke the sandbox tools
+ * would leave them with no working GitHub surface at all.
  */
-export function suppressGithubIntegrationTools<T>(
+export async function suppressGithubIntegrationTools<T>(
   integrationTools: Record<string, T>,
-  currentTools: Record<string, unknown>
-): Record<string, T> {
+  currentTools: Record<string, unknown>,
+  auth: { userId: string; driveId?: string; requestOrigin?: 'user' | 'agent'; agentPageId?: string }
+): Promise<Record<string, T>> {
   if (!hasSandboxGitTools(currentTools)) return integrationTools;
+  const authorized = await canRunCode({
+    userId: auth.userId,
+    driveId: auth.driveId,
+    requestOrigin: auth.requestOrigin,
+    agentPageId: auth.agentPageId,
+  });
+  if (!authorized.ok) return integrationTools;
   return Object.fromEntries(
     Object.entries(integrationTools).filter(([name]) => parseIntegrationToolName(name)?.providerSlug !== 'github')
   );

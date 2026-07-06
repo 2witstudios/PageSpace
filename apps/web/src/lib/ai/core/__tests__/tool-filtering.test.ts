@@ -1,4 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('@pagespace/lib/services/sandbox/can-run-code', () => ({
+  canRunCode: vi.fn(),
+}));
+
+import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   buildPageAITools,
   filterToolsForReadOnly,
@@ -10,6 +16,8 @@ import {
   hasSandboxGitTools,
   suppressGithubIntegrationTools,
 } from '../tool-filtering';
+
+const mockCanRunCode = vi.mocked(canRunCode);
 
 const baseline = {
   // read tools
@@ -325,20 +333,47 @@ describe('suppressGithubIntegrationTools', () => {
     int__slack__send_message: 'x',
   };
 
-  it('strips int__github__* tools when sandbox git tools are registered', () => {
-    const result = suppressGithubIntegrationTools(integrationTools, { git_clone: 'x' });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCanRunCode.mockResolvedValue({ ok: true });
+  });
+
+  it('strips int__github__* tools when sandbox git tools are registered and authorized', async () => {
+    const result = await suppressGithubIntegrationTools(integrationTools, { git_clone: 'x' }, { userId: 'user-1' });
     expect(result).not.toHaveProperty('int__github__list_repos');
     expect(result).not.toHaveProperty('int__github__create_pr_review_comment');
     expect(result).toHaveProperty('int__slack__send_message');
   });
 
-  it('leaves integration tools untouched when no sandbox git tools are registered', () => {
-    const result = suppressGithubIntegrationTools(integrationTools, { read_page: 'x' });
+  it('leaves integration tools untouched when no sandbox git tools are registered', async () => {
+    const result = await suppressGithubIntegrationTools(integrationTools, { read_page: 'x' }, { userId: 'user-1' });
+    expect(result).toEqual(integrationTools);
+    expect(mockCanRunCode).not.toHaveBeenCalled();
+  });
+
+  it('leaves integration tools untouched against an empty current tool set', async () => {
+    const result = await suppressGithubIntegrationTools(integrationTools, {}, { userId: 'user-1' });
     expect(result).toEqual(integrationTools);
   });
 
-  it('leaves integration tools untouched against an empty current tool set', () => {
-    const result = suppressGithubIntegrationTools(integrationTools, {});
+  it('does NOT suppress GitHub tools when sandbox git tools are present but not authorized for this caller', async () => {
+    mockCanRunCode.mockResolvedValue({ ok: false, reason: 'app_admin_required' });
+    const result = await suppressGithubIntegrationTools(integrationTools, { git_clone: 'x' }, { userId: 'user-1' });
     expect(result).toEqual(integrationTools);
+    expect(result).toHaveProperty('int__github__list_repos');
+  });
+
+  it('forwards userId, driveId, requestOrigin, and agentPageId to canRunCode', async () => {
+    await suppressGithubIntegrationTools(
+      integrationTools,
+      { git_clone: 'x' },
+      { userId: 'user-1', driveId: 'drive-1', requestOrigin: 'agent', agentPageId: 'agent-1' }
+    );
+    expect(mockCanRunCode).toHaveBeenCalledWith({
+      userId: 'user-1',
+      driveId: 'drive-1',
+      requestOrigin: 'agent',
+      agentPageId: 'agent-1',
+    });
   });
 });

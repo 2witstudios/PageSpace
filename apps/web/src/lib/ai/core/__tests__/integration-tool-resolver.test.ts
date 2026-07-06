@@ -40,6 +40,9 @@ vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
 vi.mock('@pagespace/lib/integrations/repositories/config-repository', () => ({
   getConfig: vi.fn(),
 }));
+vi.mock('@pagespace/lib/services/sandbox/can-run-code', () => ({
+  canRunCode: vi.fn(),
+}));
 
 import {
   resolveAgentIntegrations,
@@ -50,16 +53,19 @@ import {
   type GrantWithConnectionAndProvider,
 } from '@pagespace/lib/integrations/converter/ai-sdk';
 import { createToolExecutor } from '@pagespace/lib/integrations/saga/execute-tool';
+import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import { resolvePageAgentIntegrationTools, resolveGlobalAssistantIntegrationTools } from '../integration-tool-resolver';
 
 const mockResolveAgentIntegrations = vi.mocked(resolveAgentIntegrations);
 const mockResolveGlobalIntegrations = vi.mocked(resolveGlobalAssistantIntegrations);
 const mockConvert = vi.mocked(convertIntegrationToolsToAISDK);
 const mockCreateExecutor = vi.mocked(createToolExecutor);
+const mockCanRunCode = vi.mocked(canRunCode);
 
 describe('resolvePageAgentIntegrationTools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCanRunCode.mockResolvedValue({ ok: true });
   });
 
   it('given no grants, should return empty tool set', async () => {
@@ -146,6 +152,27 @@ describe('resolvePageAgentIntegrationTools', () => {
     expect(result).toHaveProperty('int__slack__send_message');
   });
 
+  it('given sandbox git tools present but not authorized for this caller, keeps GitHub integration tools', async () => {
+    mockCanRunCode.mockResolvedValue({ ok: false, reason: 'app_admin_required' });
+    const mockGrants = [{ id: 'grant-1' }] as unknown as GrantWithConnectionAndProvider[];
+    mockResolveAgentIntegrations.mockResolvedValue(mockGrants);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    mockConvert.mockReturnValue({
+      'int__github__list_repos': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+      'int__slack__send_message': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+    });
+
+    const result = await resolvePageAgentIntegrationTools({
+      agentId: 'agent-1',
+      userId: 'user-1',
+      driveId: 'drive-1',
+      currentTools: { git_clone: {} },
+    });
+
+    expect(result).toHaveProperty('int__github__list_repos');
+    expect(result).toHaveProperty('int__slack__send_message');
+  });
+
   it('given no sandbox git tools in currentTools, keeps GitHub integration tools', async () => {
     const mockGrants = [{ id: 'grant-1' }] as unknown as GrantWithConnectionAndProvider[];
     mockResolveAgentIntegrations.mockResolvedValue(mockGrants);
@@ -168,6 +195,7 @@ describe('resolvePageAgentIntegrationTools', () => {
 describe('resolveGlobalAssistantIntegrationTools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCanRunCode.mockResolvedValue({ ok: true });
   });
 
   it('given no grants, should return empty tool set', async () => {
@@ -199,6 +227,26 @@ describe('resolveGlobalAssistantIntegrationTools', () => {
     });
 
     expect(result).not.toHaveProperty('int__github__list_repos');
+    expect(result).toHaveProperty('int__slack__send_message');
+  });
+
+  it('given sandbox git tools present but not authorized for this caller, keeps GitHub integration tools', async () => {
+    mockCanRunCode.mockResolvedValue({ ok: false, reason: 'app_admin_required' });
+    mockResolveGlobalIntegrations.mockResolvedValue([{ id: 'grant-1' }] as never);
+    mockCreateExecutor.mockReturnValue(vi.fn());
+    mockConvert.mockReturnValue({
+      'int__github__list_repos': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+      'int__slack__send_message': { description: 'x', inputSchema: {} as never, execute: vi.fn() },
+    });
+
+    const result = await resolveGlobalAssistantIntegrationTools({
+      userId: 'user-1',
+      driveId: null,
+      userDriveRole: null,
+      currentTools: { gh_pr_view: {} },
+    });
+
+    expect(result).toHaveProperty('int__github__list_repos');
     expect(result).toHaveProperty('int__slack__send_message');
   });
 });

@@ -86,9 +86,16 @@ function createConfiguredExecutor(userId: string, agentId: string | null, driveI
  * @param params.driveId - The drive containing the agent
  * @param params.currentTools - The agent's already-resolved tool set (before
  *   these integration tools are merged in), used to suppress GitHub OAuth
- *   integration tools when the sandbox git/gh CLI toolkit is already present.
+ *   integration tools when the sandbox git/gh CLI toolkit is both present AND
+ *   actually usable by this caller right now (per `canRunCode`).
  *   Callers must pass the pre-tool-exposure-mode set — search mode defers
  *   non-core tools behind execute_tool, hiding their names from a key scan.
+ * @param params.requestOrigin - Whether this request originates from the human
+ *   user or from another agent consulting this one; forwarded to `canRunCode`.
+ *   Defaults to 'user' when omitted.
+ * @param params.agentPageId - The acting agent's page ID (the agent whose
+ *   drive access is checked), required for `canRunCode`'s agent-origin
+ *   authorization check.
  * @returns AI SDK tool objects ready for merging into the tool set
  */
 export async function resolvePageAgentIntegrationTools(params: {
@@ -96,8 +103,10 @@ export async function resolvePageAgentIntegrationTools(params: {
   userId: string;
   driveId: string;
   currentTools: Record<string, unknown>;
+  requestOrigin?: 'user' | 'agent';
+  agentPageId?: string;
 }): Promise<Record<string, CoreTool>> {
-  const { agentId, userId, driveId, currentTools } = params;
+  const { agentId, userId, driveId, currentTools, requestOrigin, agentPageId } = params;
   const deps = createResolutionDeps();
 
   const grants = await resolveAgentIntegrations(deps, agentId);
@@ -106,9 +115,10 @@ export async function resolvePageAgentIntegrationTools(params: {
 
   const executor = createConfiguredExecutor(userId, agentId, driveId);
 
-  const tools = suppressGithubIntegrationTools(
+  const tools = await suppressGithubIntegrationTools(
     convertIntegrationToolsToAISDK(grants, { userId, agentId, driveId }, executor),
-    currentTools
+    currentTools,
+    { userId, driveId, requestOrigin, agentPageId }
   );
   // Sort keys so tool array order is deterministic across requests (only real config
   // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).
@@ -127,10 +137,16 @@ export async function resolvePageAgentIntegrationTools(params: {
  * @param params.userDriveRole - The user's role in the current drive
  * @param params.currentTools - The assistant's already-resolved tool set
  *   (before these integration tools are merged in), used to suppress GitHub
- *   OAuth integration tools when the sandbox git/gh CLI toolkit is already
- *   present. Pass the full pre-core/non-core-split filtered tool set — the
- *   Global Assistant's final tool set never carries raw tool names as
- *   top-level keys (core tools + tool_search/execute_tool only).
+ *   OAuth integration tools when the sandbox git/gh CLI toolkit is both present
+ *   AND actually usable by this caller right now (per `canRunCode`). Pass the
+ *   full pre-core/non-core-split filtered tool set — the Global Assistant's
+ *   final tool set never carries raw tool names as top-level keys (core tools
+ *   + tool_search/execute_tool only).
+ * @param params.requestOrigin - Whether this request originates from the human
+ *   user or from another agent consulting the global assistant; forwarded to
+ *   `canRunCode`. Defaults to 'user' when omitted.
+ * @param params.agentPageId - The acting agent's page ID, required for
+ *   `canRunCode`'s agent-origin authorization check.
  * @returns AI SDK tool objects ready for merging into the tool set
  */
 export async function resolveGlobalAssistantIntegrationTools(params: {
@@ -138,8 +154,10 @@ export async function resolveGlobalAssistantIntegrationTools(params: {
   driveId: string | null;
   userDriveRole: DriveRole | null;
   currentTools: Record<string, unknown>;
+  requestOrigin?: 'user' | 'agent';
+  agentPageId?: string;
 }): Promise<Record<string, CoreTool>> {
-  const { userId, driveId, userDriveRole, currentTools } = params;
+  const { userId, driveId, userDriveRole, currentTools, requestOrigin, agentPageId } = params;
   const deps = createResolutionDeps();
 
   const grants = await resolveGlobalAssistantIntegrations(
@@ -153,9 +171,10 @@ export async function resolveGlobalAssistantIntegrationTools(params: {
 
   const executor = createConfiguredExecutor(userId, null, driveId);
 
-  const tools = suppressGithubIntegrationTools(
+  const tools = await suppressGithubIntegrationTools(
     convertIntegrationToolsToAISDK(grants, { userId, agentId: null, driveId }, executor),
-    currentTools
+    currentTools,
+    { userId, driveId: driveId ?? undefined, requestOrigin, agentPageId }
   );
   // Sort keys so tool array order is deterministic across requests (only real config
   // changes — webSearch/readOnly/MCP/exposure-mode — may change the tool array).

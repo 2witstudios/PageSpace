@@ -645,6 +645,8 @@ export const agentCommunicationTools = {
             userId,
             driveId: targetAgent.driveId,
             currentTools: agentTools,
+            requestOrigin: 'agent',
+            agentPageId: agentId,
           });
         } catch (error) {
           loggers.ai.error('ask_agent: failed to resolve integration tools, falling back to built-in tools only', error as Error);
