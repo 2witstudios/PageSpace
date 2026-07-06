@@ -32,10 +32,14 @@ import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { applyEdit } from './edit-file';
 import { buildSandboxEnv } from './sandbox-env';
 import { getValidatedEnv } from '../../config/env-validation';
-import type { AcquireMachineSandboxInput, AcquireMachineSandboxResult, MachineRefLike } from './machine-session';
+import {
+  resolveMachinePageId,
+  type AcquireMachineSandboxInput,
+  type AcquireMachineSandboxResult,
+  type MachineRefLike,
+} from './machine-session';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
-import { resolveTerminalPayerId } from '../../billing/terminal-payer';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
@@ -78,6 +82,13 @@ export interface SandboxQuotaDeps {
  * never strands a hold against the payer's spendable balance.
  */
 export interface SandboxBillingDeps {
+  /**
+   * Resolves who pays for THIS run (Terminal Epic 3 owner-pays) — the
+   * referenced machine's actual page owner when resolvable, else the acting
+   * tenantId. The one seam payer resolution goes through; see
+   * `terminal-payer.ts`'s `resolveTerminalPayerId`.
+   */
+  resolvePayerId: (input: { tenantId: string; machinePageId?: string }) => Promise<string>;
   /** Places a flat-estimate hold for this payer before the machine run begins. */
   gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
   /** Settles the hold to the real active-window cost. Only called on a successful run. */
@@ -346,7 +357,8 @@ async function withMachineBilling<S>(
   const billing = deps.billing;
   if (!billing) return run();
 
-  const payerId = resolveTerminalPayerId({ tenantId: ctx.tenantId });
+  const machinePageId = resolveMachinePageId({ agentPageId: ctx.agentPageId, activeMachine: ctx.activeMachine });
+  const payerId = await billing.resolvePayerId({ tenantId: ctx.tenantId, machinePageId });
   const gate = await billing.gate({ payerId });
   if (!gate.allowed) return fail('credit_exhausted');
 

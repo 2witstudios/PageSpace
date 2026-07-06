@@ -13,6 +13,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '../../billing/credit-gate';
 import { releaseHold as releaseCreditHold } from '../../billing/credit-consume';
 import { TERMINAL_HOLD_ESTIMATE_CENTS, TERMINAL_MAX_INFLIGHT } from '../../billing/credit-pricing';
+import { resolveTerminalPayerId, lookupPageOwnerId } from '../../billing/terminal-payer';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { calculateTerminalCostDollars } from '../../monitoring/terminal-pricing';
 import type { SubscriptionTier } from '../subscription-utils';
@@ -40,6 +41,10 @@ async function resolvePayerTier(payerId: string): Promise<SubscriptionTier> {
 }
 
 export const defaultSandboxBillingDeps: SandboxBillingDeps = {
+  async resolvePayerId({ tenantId, machinePageId }) {
+    return resolveTerminalPayerId({ tenantId, machinePageId, lookupPageOwnerId });
+  },
+
   async gate({ payerId }) {
     const tier = await resolvePayerTier(payerId);
     const result = await canConsumeAI(payerId, tier, {

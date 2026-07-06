@@ -41,6 +41,17 @@ export const terminalSessions = pgTable('terminal_sessions', {
   sandboxId: text('sandboxId').notNull(),
 
   lastActiveAt: timestamp('lastActiveAt', { mode: 'date' }).defaultNow().notNull(),
+
+  // Watermark for the idle-storage reconcile cron (Terminal Epic 3): the
+  // persistent filesystem accrues cost whether the Machine is active or
+  // hibernating, so this is billed separately from active-runtime — see
+  // packages/lib/src/services/sandbox/terminal-storage-reconcile.ts. Each run
+  // bills only the elapsed window since this watermark, then advances it, so
+  // repeated/overlapping runs never double-bill (idempotent by construction).
+  // Defaults to now() so pre-existing rows start accruing from migration time
+  // rather than requiring a backfill.
+  storageLastBilledAt: timestamp('storageLastBilledAt', { mode: 'date' }).defaultNow().notNull(),
+
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({

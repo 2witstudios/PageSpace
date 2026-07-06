@@ -734,14 +734,20 @@ function makeMutableClock(startMs: number) {
 
 function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
   billing: NonNullable<SandboxRunDeps['billing']>;
+  resolvePayerIdCalls: Array<{ tenantId: string; machinePageId?: string }>;
   gateCalls: Array<{ payerId: string }>;
   trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number }>;
   releaseHoldCalls: string[];
 } {
+  const resolvePayerIdCalls: Array<{ tenantId: string; machinePageId?: string }> = [];
   const gateCalls: Array<{ payerId: string }> = [];
   const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number }> = [];
   const releaseHoldCalls: string[] = [];
   const billing: NonNullable<SandboxRunDeps['billing']> = {
+    resolvePayerId: async (input) => {
+      resolvePayerIdCalls.push(input);
+      return input.tenantId;
+    },
     gate: async (input) => {
       gateCalls.push(input);
       return { allowed: true, holdId: 'hold-1' };
@@ -754,7 +760,7 @@ function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
     },
     ...over,
   };
-  return { billing, gateCalls, trackUsageCalls, releaseHoldCalls };
+  return { billing, resolvePayerIdCalls, gateCalls, trackUsageCalls, releaseHoldCalls };
 }
 
 describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
@@ -834,5 +840,64 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(result).toMatchObject({ success: false, reason: 'concurrency_limit' });
     expect(trackUsageCalls).toEqual([]);
     expect(releaseHoldCalls).toEqual(['hold-1']);
+  });
+
+  it("for an 'own' machine, resolves machinePageId from agentPageId and forwards both to billing.resolvePayerId", async () => {
+    const { billing, resolvePayerIdCalls } = makeBilling();
+    const { deps } = makeDeps({ billing });
+
+    await runBashInSandbox({
+      command: 'echo hi',
+      ctx: makeCtx({ tenantId: 'owner-1', agentPageId: 'own-agent-page' }),
+      deps,
+    });
+
+    expect(resolvePayerIdCalls).toEqual([{ tenantId: 'owner-1', machinePageId: 'own-agent-page' }]);
+  });
+
+  it("for an 'existing' machine, resolves machinePageId from the ACTIVE machine's terminalId (not the agent's own page)", async () => {
+    const { billing, resolvePayerIdCalls } = makeBilling();
+    const { deps } = makeDeps({ billing });
+
+    await runBashInSandbox({
+      command: 'echo hi',
+      ctx: makeCtx({
+        tenantId: 'acting-user',
+        agentPageId: 'own-agent-page',
+        activeMachine: { kind: 'existing', terminalId: 'other-terminal-page' },
+      }),
+      deps,
+    });
+
+    expect(resolvePayerIdCalls).toEqual([
+      { tenantId: 'acting-user', machinePageId: 'other-terminal-page' },
+    ]);
+  });
+
+  it("gates and settles usage against the PAYER resolvePayerId returns, not the raw tenantId, when they differ (owner-pays for a machine owned by someone else)", async () => {
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(2000);
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    const { billing, gateCalls, trackUsageCalls } = makeBilling({
+      resolvePayerId: async () => 'real-owner-99',
+    });
+    const { deps } = makeDeps({ billing, reconnect: async () => sandbox, now: clock.now });
+
+    const result = await runBashInSandbox({
+      command: 'echo hi',
+      ctx: makeCtx({
+        tenantId: 'acting-user',
+        activeMachine: { kind: 'existing', terminalId: 'other-terminal-page' },
+      }),
+      deps,
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(gateCalls).toEqual([{ payerId: 'real-owner-99' }]);
+    expect(trackUsageCalls).toEqual([{ payerId: 'real-owner-99', holdId: 'hold-1', activeSeconds: 2 }]);
   });
 });
