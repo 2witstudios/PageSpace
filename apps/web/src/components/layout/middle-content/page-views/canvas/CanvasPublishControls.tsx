@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Settings2 } from 'lucide-react';
@@ -17,6 +18,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import { PagePickerPopover } from '@/components/common/PagePickerPopover';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 interface CanvasPublishControlsProps {
   pageId: string;
@@ -47,6 +50,12 @@ interface PublishState {
 
 const EMPTY_SETTINGS: PublishSettings = { title: '', description: '', ogImageUrl: '', noindex: false };
 
+/** PublishSettings plus a transient "picked an uploaded file" alternative to
+ *  pasting a URL — resolved server-side, never persisted as its own field. */
+interface PublishOverrides extends PublishSettings {
+  ogImageFileId?: string;
+}
+
 interface PublishStatusResponse {
   published: boolean;
   url?: string;
@@ -75,6 +84,8 @@ const readError = async (res: Response): Promise<string> => {
 };
 
 const CanvasPublishControls = ({ pageId, contentDirty }: CanvasPublishControlsProps) => {
+  const params = useParams<{ driveId?: string }>();
+  const driveId = params?.driveId;
   const [state, setState] = useState<PublishState>({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
   const [isLoading, setIsLoading] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
@@ -123,7 +134,7 @@ const CanvasPublishControls = ({ pageId, contentDirty }: CanvasPublishControlsPr
 
   // Publish (or re-publish) the page. `overrides`, when provided, carries the
   // author's SEO settings; omitting it preserves whatever is persisted.
-  const handlePublish = useCallback(async (isUpdate = false, overrides?: PublishSettings) => {
+  const handlePublish = useCallback(async (isUpdate = false, overrides?: PublishOverrides) => {
     setIsBusy(true);
     try {
       const body = overrides
@@ -131,6 +142,7 @@ const CanvasPublishControls = ({ pageId, contentDirty }: CanvasPublishControlsPr
             title: overrides.title,
             description: overrides.description,
             ogImageUrl: overrides.ogImageUrl,
+            ogImageFileId: overrides.ogImageFileId,
             noindex: overrides.noindex,
           })
         : undefined;
@@ -260,6 +272,7 @@ const CanvasPublishControls = ({ pageId, contentDirty }: CanvasPublishControlsPr
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         initial={state.settings}
+        driveId={driveId}
         isBusy={isBusy}
         onSave={async (next) => {
           const ok = await handlePublish(true, next);
@@ -274,31 +287,40 @@ interface PublishSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initial: PublishSettings;
+  driveId?: string;
   isBusy: boolean;
-  onSave: (settings: PublishSettings) => void;
+  onSave: (settings: PublishOverrides) => void;
 }
 
-function PublishSettingsDialog({ open, onOpenChange, initial, isBusy, onSave }: PublishSettingsDialogProps) {
+function PublishSettingsDialog({ open, onOpenChange, initial, driveId, isBusy, onSave }: PublishSettingsDialogProps) {
   const [form, setForm] = useState<PublishSettings>(initial);
+  const [pickedImageId, setPickedImageId] = useState<string | null>(null);
 
   // Re-seed the form from the latest persisted values whenever the dialog opens.
   useEffect(() => {
-    if (open) setForm(initial);
+    if (open) {
+      setForm(initial);
+      setPickedImageId(null);
+    }
   }, [open, initial]);
 
   // Validate the share-image URL client-side so the user gets a specific message
   // instead of the server's generic rejection (the route also enforces this).
+  // Skipped when an uploaded file was picked — that reference is resolved and
+  // validated server-side, not a client-supplied URL.
   const handleSubmit = () => {
-    const ogImageUrl = form.ogImageUrl.trim();
-    if (ogImageUrl) {
-      try {
-        new URL(ogImageUrl);
-      } catch {
-        toast.error('Enter a valid share image URL, including https://');
-        return;
+    if (!pickedImageId) {
+      const ogImageUrl = form.ogImageUrl.trim();
+      if (ogImageUrl) {
+        try {
+          new URL(ogImageUrl);
+        } catch {
+          toast.error('Enter a valid share image URL, including https://');
+          return;
+        }
       }
     }
-    onSave(form);
+    onSave({ ...form, ogImageFileId: pickedImageId ?? undefined });
   };
 
   return (
@@ -338,8 +360,31 @@ function PublishSettingsDialog({ open, onOpenChange, initial, isBusy, onSave }: 
               value={form.ogImageUrl}
               onChange={(e) => setForm((f) => ({ ...f, ogImageUrl: e.target.value }))}
               placeholder="https://… (1200×630 recommended)"
+              disabled={!!pickedImageId}
             />
           </div>
+          {driveId && (
+            pickedImageId ? (
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Using an uploaded image for this page&apos;s share image</span>
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setPickedImageId(null)}>
+                  Remove
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <Label>Or pick an uploaded image</Label>
+                <PagePickerPopover
+                  driveId={driveId}
+                  value={null}
+                  onChange={setPickedImageId}
+                  pageType={PageType.FILE}
+                  imageOnly
+                  placeholder="Browse uploaded images…"
+                />
+              </div>
+            )
+          )}
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
               <Label htmlFor="publish-noindex">Hide from search engines</Label>

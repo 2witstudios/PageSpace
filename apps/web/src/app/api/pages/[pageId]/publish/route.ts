@@ -12,6 +12,7 @@ import { eq } from '@pagespace/db/operators';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { drives, pages } from '@pagespace/db/schema/core';
+import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -23,6 +24,10 @@ const publishSchema = z.object({
   title: z.string().max(300).optional(),
   description: z.string().max(1000).optional(),
   ogImageUrl: z.union([z.literal(''), z.url()]).optional(),
+  // Alternative to pasting a URL: reference an uploaded FILE page, resolved
+  // server-side (below) to a durable public CDN URL before it ever reaches
+  // publishCanvasPage — never trusted as a URL directly.
+  ogImageFileId: z.string().min(1).optional(),
   noindex: z.boolean().optional(),
 }).nullable();
 
@@ -184,6 +189,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
     const parsedBody = publishSchema.parse(body);
 
+    let ogImageUrl = parsedBody?.ogImageUrl;
+    if (parsedBody?.ogImageFileId) {
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: parsedBody.ogImageFileId, userId, db });
+      if (!resolved) {
+        return NextResponse.json({ error: 'Selected image is unavailable or not accessible' }, { status: 400 });
+      }
+      ogImageUrl = resolved;
+    }
+
     const result = await publishCanvasPage({
       pageId,
       driveId: pageCheck.driveId,
@@ -192,7 +206,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       subdomain: parsedBody?.subdomain,
       title: parsedBody?.title,
       description: parsedBody?.description,
-      ogImageUrl: parsedBody?.ogImageUrl,
+      ogImageUrl,
       noindex: parsedBody?.noindex,
     });
 

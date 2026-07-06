@@ -47,6 +47,14 @@ vi.mock('@pagespace/lib/canvas/site-files', () => ({
   buildRobotsTxt: vi.fn(({ sitemapUrl }: { sitemapUrl: string }) => `robots:${sitemapUrl}`),
   buildSitemapXml: vi.fn((routes: { loc: string }[]) => `sitemap:${routes.map((r) => r.loc).join(',')}`),
   buildNotFoundHtml: vi.fn(({ siteName }: { siteName?: string }) => `404:${siteName ?? ''}`),
+  // Mirrors the real precedence (tested directly in site-files.test.ts) so
+  // wiring assertions here (which favicon tags reach renderPublishedPage) stay faithful.
+  resolveFaviconTags: vi.fn((pageFaviconHref?: string, driveFaviconUrl?: string | null, defaultBase?: string) =>
+    pageFaviconHref
+      ? { faviconHref: pageFaviconHref }
+      : driveFaviconUrl
+        ? { faviconHref: driveFaviconUrl }
+        : { faviconBaseUrl: defaultBase }),
 }));
 
 vi.mock('../render-published', () => ({
@@ -801,6 +809,92 @@ describe('regeneratePublishedSiteFiles', () => {
     vi.mocked(putPublishedSiteFile).mockRejectedValue(new Error('S3 down'));
 
     await expect(regeneratePublishedSiteFiles('drive-1')).resolves.toBeUndefined();
+  });
+
+  describe('custom 404 page', () => {
+    beforeEach(() => {
+      // Reassert the identity passthrough explicitly: an earlier describe block
+      // (SEO overrides) sets a persistent mockReturnValue on this same mock,
+      // and vi.clearAllMocks() clears call history but not that implementation.
+      vi.mocked(extractAndStripOgMeta).mockImplementation((html: string) => ({
+        meta: { faviconHref: undefined, ogImageUrl: undefined, ogDescription: undefined },
+        html,
+      }));
+    });
+
+    it('does not query for a custom 404 page when notFoundPageId is unset', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: null,
+      }));
+
+      await regeneratePublishedSiteFiles('drive-1');
+
+      expect(db.query.pages.findFirst).not.toHaveBeenCalled();
+      const notFoundCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === '404.html');
+      expect(notFoundCall?.[0].body).toBe('404:Acme');
+    });
+
+    it('renders the drive-chosen Canvas page as 404.html instead of the generic fallback', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1', publishFaviconUrl: null,
+      }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+        title: 'Oops', content: '<p>custom 404 content</p>',
+      }));
+
+      await regeneratePublishedSiteFiles('drive-1');
+
+      const notFoundCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === '404.html');
+      expect(notFoundCall?.[0].body).toBe('<html><p>custom 404 content</p></html>');
+      expect(notFoundCall?.[0].body).not.toBe('404:Acme');
+      const renderInput = vi.mocked(renderPublishedPage).mock.calls.find((c) => c[0].html === '<p>custom 404 content</p>')?.[0];
+      expect(renderInput?.robots).toBe('noindex');
+      expect(renderInput?.title).toBe('Oops');
+    });
+
+    it('falls back to the generic 404 when the referenced page cannot be found', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'missing-page', ownerId: 'owner-1', publishFaviconUrl: null,
+      }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined);
+
+      await regeneratePublishedSiteFiles('drive-1');
+
+      const notFoundCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === '404.html');
+      expect(notFoundCall?.[0].body).toBe('404:Acme');
+    });
+
+    it('falls back to the generic 404 when rendering the custom page throws', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1', publishFaviconUrl: null,
+      }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+        title: 'Oops', content: '<p>boom</p>',
+      }));
+      vi.mocked(renderPublishedPage).mockImplementationOnce(() => {
+        throw new Error('render failed');
+      });
+
+      await regeneratePublishedSiteFiles('drive-1');
+
+      const notFoundCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === '404.html');
+      expect(notFoundCall?.[0].body).toBe('404:Acme');
+    });
+
+    it('resolves the drive favicon setting for the custom 404 page when the page has no icon of its own', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1',
+        publishFaviconUrl: 'https://cdn.example.com/assets/drive-favicon.png',
+      }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+        title: 'Oops', content: '<p>custom 404</p>',
+      }));
+
+      await regeneratePublishedSiteFiles('drive-1');
+
+      const renderInput = vi.mocked(renderPublishedPage).mock.calls.find((c) => c[0].html === '<p>custom 404</p>')?.[0];
+      expect(renderInput?.faviconHref).toBe('https://cdn.example.com/assets/drive-favicon.png');
+    });
   });
 });
 

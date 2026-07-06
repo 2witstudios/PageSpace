@@ -49,6 +49,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
@@ -63,6 +67,7 @@ import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
 
 // ============================================================================
@@ -307,6 +312,73 @@ describe('GET /api/mentions/search', () => {
       expect(response.status).toBe(403);
       // getUserAccessLevel should NOT be called since drive access was denied
       expect(getUserAccessLevel).not.toHaveBeenCalled();
+    });
+  });
+
+  // ==========================================================================
+  // pageType / imageOnly filters — added for the 404-page and OG-image/favicon
+  // "pick a page" pickers. Optional and additive: omitting them must behave
+  // exactly as before (covered by every test above, none of which pass them).
+  // ==========================================================================
+  describe('pageType / imageOnly filters', () => {
+    beforeEach(() => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getUserAccessLevel).mockResolvedValue('VIEW' as never);
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockUserId]);
+    });
+
+    it('includes mimeType in the returned page suggestion data', async () => {
+      const selectChain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([
+          { id: 'file-1', title: 'logo.png', type: 'FILE', driveId: mockDriveId, mimeType: 'image/png' },
+        ]),
+      };
+      vi.mocked(db.select).mockReturnValue(selectChain as unknown as ReturnType<typeof db.select>);
+
+      const request = new Request(
+        `https://example.com/api/mentions/search?q=logo&driveId=${mockDriveId}&types=page&pageType=FILE&imageOnly=true`
+      );
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body[0]).toMatchObject({ id: 'file-1', data: { pageType: 'FILE', mimeType: 'image/png' } });
+    });
+
+    it('does not error and behaves like an unfiltered search when pageType is not a real page type', async () => {
+      const selectChain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([
+          { id: 'page-1', title: 'Some Doc', type: 'DOCUMENT', driveId: mockDriveId, mimeType: null },
+        ]),
+      };
+      vi.mocked(db.select).mockReturnValue(selectChain as unknown as ReturnType<typeof db.select>);
+
+      const request = new Request(
+        `https://example.com/api/mentions/search?q=doc&driveId=${mockDriveId}&types=page&pageType=NOT_A_REAL_TYPE`
+      );
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+    });
+
+    it('accepts imageOnly without a pageType filter without erroring', async () => {
+      const selectChain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([]),
+      };
+      vi.mocked(db.select).mockReturnValue(selectChain as unknown as ReturnType<typeof db.select>);
+
+      const request = new Request(
+        `https://example.com/api/mentions/search?q=logo&driveId=${mockDriveId}&types=page&imageOnly=true`
+      );
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
     });
   });
 });

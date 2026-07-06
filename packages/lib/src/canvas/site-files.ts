@@ -86,6 +86,31 @@ export function buildSitemapXml(routes: SitemapRoute[]): string {
   ].join('\n');
 }
 
+/** Resolved favicon reference for a rendered document. */
+export interface FaviconTags {
+  faviconHref?: string;
+  faviconBaseUrl?: string;
+}
+
+/**
+ * Resolve the effective favicon for a published page or site file.
+ *
+ * Precedence: the author's own `<link rel="icon">` tag inside the canvas
+ * content wins (unchanged pre-existing behavior) → else the drive's
+ * `publishFaviconUrl` setting → else the default PageSpace favicon tags built
+ * from `defaultFaviconBaseUrl`. Used by both a normal page publish and the
+ * custom-404-page render so the whole site shares one favicon.
+ */
+export function resolveFaviconTags(
+  pageFaviconHref: string | undefined,
+  driveFaviconUrl: string | null | undefined,
+  defaultFaviconBaseUrl: string,
+): FaviconTags {
+  if (pageFaviconHref) return { faviconHref: pageFaviconHref };
+  if (driveFaviconUrl) return { faviconHref: driveFaviconUrl };
+  return { faviconBaseUrl: defaultFaviconBaseUrl };
+}
+
 /** 404 document input. */
 export interface BuildNotFoundHtmlInput {
   /** Human-readable site name shown on the page. Falls back to a generic label. */

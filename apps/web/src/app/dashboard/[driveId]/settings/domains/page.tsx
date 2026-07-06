@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon } from 'lucide-react';
+import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon, FileWarning } from 'lucide-react';
 import Link from 'next/link';
 import { useDriveStore } from '@/hooks/useDrive';
 import { toast } from 'sonner';
@@ -16,6 +16,8 @@ import { fetchWithAuth, del, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
 import { normalizeHostname, validateCustomDomain, buildDnsInstructions } from '@pagespace/lib/validators/custom-domain';
 import { selectPrimaryActiveDomain } from '@pagespace/lib/canvas/primary-host';
+import { PagePickerPopover } from '@/components/common/PagePickerPopover';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 interface CustomDomain {
   id: string;
@@ -52,6 +54,11 @@ export default function DomainsSettingsPage() {
   const [ogImage, setOgImage] = useState('');
   const [isSavingOgImage, setIsSavingOgImage] = useState(false);
   const [previewError, setPreviewError] = useState(false);
+  const [faviconUrl, setFaviconUrl] = useState('');
+  const [isSavingFavicon, setIsSavingFavicon] = useState(false);
+  const [faviconPreviewError, setFaviconPreviewError] = useState(false);
+  const [notFoundPageId, setNotFoundPageId] = useState<string | null>(null);
+  const [isSavingNotFoundPage, setIsSavingNotFoundPage] = useState(false);
   const [newDomain, setNewDomain] = useState('');
   const [isAddingDomain, setIsAddingDomain] = useState(false);
   const [removingDomainId, setRemovingDomainId] = useState<string | null>(null);
@@ -73,11 +80,23 @@ export default function DomainsSettingsPage() {
     if (drive) setOgImage(drive.publishDefaultOgImageUrl ?? '');
   }, [drive]);
 
+  useEffect(() => {
+    if (drive) setFaviconUrl(drive.publishFaviconUrl ?? '');
+  }, [drive]);
+
+  useEffect(() => {
+    if (drive) setNotFoundPageId(drive.notFoundPageId ?? null);
+  }, [drive]);
+
   // A corrected URL must be able to recover the preview, so clear the error flag
   // whenever the value changes (the keyed <img> below also remounts on change).
   useEffect(() => {
     setPreviewError(false);
   }, [ogImage]);
+
+  useEffect(() => {
+    setFaviconPreviewError(false);
+  }, [faviconUrl]);
 
   const handleSaveOgImage = async (clear = false) => {
     if (isSavingOgImage) return;
@@ -92,6 +111,74 @@ export default function DomainsSettingsPage() {
       toast.error('Failed to save default share image');
     } finally {
       setIsSavingOgImage(false);
+    }
+  };
+
+  // Picking an uploaded file resolves it server-side to a durable public CDN
+  // URL (see resolveUploadedImageAssetUrl) — a pasted link to one of the user's
+  // own files would otherwise be an authenticated URL that fails for anonymous
+  // site visitors. Saves immediately; the URL input above still supports a
+  // pasted external link via the Save button.
+  const handlePickOgImageFile = async (fileId: string | null) => {
+    if (!fileId || isSavingOgImage) return;
+    setIsSavingOgImage(true);
+    try {
+      const updated = await patch<{ publishDefaultOgImageUrl?: string | null }>(`/api/drives/${driveId}`, { ogImageFileId: fileId });
+      setOgImage(updated.publishDefaultOgImageUrl ?? '');
+      updateDriveInStore(driveId, { publishDefaultOgImageUrl: updated.publishDefaultOgImageUrl ?? null });
+      toast.success('Default share image saved');
+    } catch {
+      toast.error('Failed to save default share image');
+    } finally {
+      setIsSavingOgImage(false);
+    }
+  };
+
+  const handleSaveFavicon = async (clear = false) => {
+    if (isSavingFavicon) return;
+    const next = clear ? '' : faviconUrl.trim();
+    setIsSavingFavicon(true);
+    try {
+      await patch(`/api/drives/${driveId}`, { publishFaviconUrl: next });
+      updateDriveInStore(driveId, { publishFaviconUrl: next || null });
+      if (clear) setFaviconUrl('');
+      toast.success(clear ? 'Favicon cleared' : 'Favicon saved');
+    } catch {
+      toast.error('Failed to save favicon');
+    } finally {
+      setIsSavingFavicon(false);
+    }
+  };
+
+  const handlePickFaviconFile = async (fileId: string | null) => {
+    if (!fileId || isSavingFavicon) return;
+    setIsSavingFavicon(true);
+    try {
+      const updated = await patch<{ publishFaviconUrl?: string | null }>(`/api/drives/${driveId}`, { faviconFileId: fileId });
+      setFaviconUrl(updated.publishFaviconUrl ?? '');
+      updateDriveInStore(driveId, { publishFaviconUrl: updated.publishFaviconUrl ?? null });
+      toast.success('Favicon saved');
+    } catch {
+      toast.error('Failed to save favicon');
+    } finally {
+      setIsSavingFavicon(false);
+    }
+  };
+
+  const handleSetNotFoundPage = async (pageId: string | null) => {
+    if (isSavingNotFoundPage) return;
+    const previous = notFoundPageId;
+    setNotFoundPageId(pageId);
+    setIsSavingNotFoundPage(true);
+    try {
+      await patch(`/api/drives/${driveId}`, { notFoundPageId: pageId });
+      updateDriveInStore(driveId, { notFoundPageId: pageId });
+      toast.success(pageId ? '404 page updated' : '404 page cleared');
+    } catch {
+      setNotFoundPageId(previous);
+      toast.error('Failed to update 404 page');
+    } finally {
+      setIsSavingNotFoundPage(false);
     }
   };
 
@@ -385,6 +472,105 @@ export default function DomainsSettingsPage() {
               Clear
             </Button>
           </div>
+          <div className="space-y-1.5 pt-2 border-t">
+            <Label>Or pick an uploaded image</Label>
+            <PagePickerPopover
+              driveId={driveId}
+              value={null}
+              onChange={handlePickOgImageFile}
+              pageType={PageType.FILE}
+              imageOnly
+              placeholder="Browse uploaded images…"
+              disabled={isSavingOgImage}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ImageIcon className="h-4 w-4" />
+            Favicon
+          </CardTitle>
+          <CardDescription>
+            The icon shown in browser tabs for this site. Falls back to a page&apos;s own
+            &lt;link rel=&quot;icon&quot;&gt; tag, then the PageSpace default.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="favicon-url">Favicon URL</Label>
+            <Input
+              id="favicon-url"
+              type="url"
+              value={faviconUrl}
+              onChange={(e) => setFaviconUrl(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSaveFavicon()}
+              placeholder="https://…"
+            />
+          </div>
+          {faviconUrl.trim() && !faviconPreviewError && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={faviconUrl.trim()}
+              src={faviconUrl.trim()}
+              alt="Favicon preview"
+              className="h-10 w-10 rounded border object-contain bg-muted"
+              onError={() => setFaviconPreviewError(true)}
+            />
+          )}
+          <div className="flex gap-2">
+            <Button
+              onClick={() => handleSaveFavicon()}
+              disabled={isSavingFavicon || faviconUrl.trim() === (drive.publishFaviconUrl ?? '')}
+            >
+              {isSavingFavicon && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => handleSaveFavicon(true)}
+              disabled={isSavingFavicon || !(drive.publishFaviconUrl ?? '')}
+            >
+              Clear
+            </Button>
+          </div>
+          <div className="space-y-1.5 pt-2 border-t">
+            <Label>Or pick an uploaded image</Label>
+            <PagePickerPopover
+              driveId={driveId}
+              value={null}
+              onChange={handlePickFaviconFile}
+              pageType={PageType.FILE}
+              imageOnly
+              placeholder="Browse uploaded images…"
+              disabled={isSavingFavicon}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileWarning className="h-4 w-4" />
+            Custom 404 Page
+          </CardTitle>
+          <CardDescription>
+            The Canvas page shown when a visitor requests a URL that doesn&apos;t exist on this
+            site. Falls back to a generic not-found page when unset.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <PagePickerPopover
+            driveId={driveId}
+            value={notFoundPageId}
+            onChange={handleSetNotFoundPage}
+            pageType={PageType.CANVAS}
+            placeholder="Select a Canvas page…"
+            disabled={isSavingNotFoundPage}
+          />
         </CardContent>
       </Card>
     </div>

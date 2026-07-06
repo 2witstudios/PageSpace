@@ -4,6 +4,7 @@ import {
   extractAndStripOgMeta,
   rewriteCanvasAssets,
   rewriteInterPageLinksForDrive,
+  resolveUploadedImageAssetUrl,
 } from '../asset-pipeline';
 
 vi.mock('server-only', () => ({}));
@@ -105,6 +106,7 @@ const mockDb = {
   query: {
     pages: {
       findMany: vi.fn(),
+      findFirst: vi.fn(),
     },
   },
 };
@@ -540,5 +542,80 @@ describe('extractAndStripOgMeta', () => {
     const { meta, html } = extractAndStripOgMeta('');
     expect(meta).toEqual({});
     expect(html).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveUploadedImageAssetUrl — used by OG image / favicon "pick a file" flows
+// ---------------------------------------------------------------------------
+
+describe('resolveUploadedImageAssetUrl', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    canUserViewPage.mockResolvedValue(true);
+  });
+
+  it('given a viewable image page with a contentHash, resolves and copies it to a durable CDN URL', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1',
+      driveId: 'drive-1',
+      contentHash: HASH_A,
+      mimeType: 'image/png',
+      extractionMetadata: null,
+    });
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBe(`https://cdn.example.com/assets/${HASH_A}`);
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    expect(copyObjectToPublishBucket).toHaveBeenCalledWith({
+      id: 'file-1',
+      kind: 'view',
+      sourceKey: `files/${HASH_A}/original`,
+      assetKey: `assets/${HASH_A}`,
+      contentType: 'image/png',
+    });
+  });
+
+  it('returns null when the page does not exist', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue(undefined);
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'missing', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+  });
+
+  it('returns null when the caller cannot view the referenced page', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'drive-1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
+    });
+    canUserViewPage.mockResolvedValue(false);
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+  });
+
+  it('returns null when the page has no resolvable contentHash', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'drive-1', contentHash: null, mimeType: 'image/png', extractionMetadata: null,
+    });
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
+  });
+
+  it('returns null when the permission check itself throws', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'drive-1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
+    });
+    canUserViewPage.mockRejectedValue(new Error('permission service down'));
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', userId: 'user-1', db: mockDb as never });
+
+    expect(url).toBeNull();
   });
 });
