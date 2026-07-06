@@ -29,6 +29,16 @@ export type AgentTerminalConnectPayload = {
   name: string;
   cols: number;
   rows: number;
+  /**
+   * Client-generated id distinguishing ONE pane's PTY stream from another
+   * when several are multiplexed over the SAME socket (the Terminal
+   * workspace's splittable panes — one socket per browser tab, not per
+   * pane). Optional and falls back to the socket's own id in
+   * `agent-terminal-handler.ts` — a caller that never sends more than one
+   * concurrent agent-terminal connection per socket (every caller before
+   * the splittable-panes UI) needs no change.
+   */
+  connectionId?: string;
 };
 
 type AgentOk = { ok: true; value: AgentTerminalConnectPayload };
@@ -64,6 +74,8 @@ export function validateAgentTerminalConnectPayload(payload: unknown): AgentResu
   if (!branchName.ok) return branchName;
   const name = requireNonEmptyString(p.name, 'name');
   if (!name.ok) return name;
+  const connectionId = optionalNonEmptyString(p.connectionId, 'connectionId');
+  if (!connectionId.ok) return connectionId;
 
   if (typeof p.cols !== 'number' || !Number.isFinite(p.cols) || p.cols <= 0) {
     return { ok: false, error: 'invalid cols' };
@@ -81,6 +93,7 @@ export function validateAgentTerminalConnectPayload(payload: unknown): AgentResu
       name: name.value,
       cols: p.cols,
       rows: p.rows,
+      connectionId: connectionId.value,
     },
   };
 }

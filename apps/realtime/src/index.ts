@@ -1227,7 +1227,15 @@ io.on('connection', (socket: AuthSocket) => {
 
   socket.on('agent-terminal:connect', (payload) => {
     agentTerminalHandlers.onConnect(payload).then(() => {
-      const session = agentTerminalSessionMap.getBySocket(socket.id);
+      // Same `connectionId ?? socket.id` fallback `onConnect` itself uses —
+      // several split panes can share this one socket, each under its own
+      // connectionId, so a bare `socket.id` lookup would only ever find
+      // whichever pane never sent one.
+      const payloadConnectionId =
+        payload !== null && typeof payload === 'object' && typeof (payload as { connectionId?: unknown }).connectionId === 'string'
+          ? (payload as { connectionId: string }).connectionId
+          : undefined;
+      const session = agentTerminalSessionMap.getBySocket(payloadConnectionId ?? socket.id);
       if (session) {
         loggers.realtime.info('Agent terminal session opened', { userId: user?.id, sessionKey: session.sessionKey, sandboxId: session.sandboxId });
       }
@@ -1238,7 +1246,7 @@ io.on('connection', (socket: AuthSocket) => {
   });
   socket.on('agent-terminal:input', (payload) => agentTerminalHandlers.onInput(payload));
   socket.on('agent-terminal:resize', (payload) => agentTerminalHandlers.onResize(payload));
-  socket.on('agent-terminal:disconnect', () => agentTerminalHandlers.onDisconnect());
+  socket.on('agent-terminal:disconnect', (payload) => agentTerminalHandlers.onDisconnect(payload));
 
   socket.on('disconnect', (reason) => {
     agentTerminalHandlers.onDisconnect();

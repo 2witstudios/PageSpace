@@ -89,8 +89,16 @@ export type AgentTerminalHandlers = {
   onConnect(payload: unknown): Promise<void>;
   onInput(payload: unknown): void;
   onResize(payload: unknown): void;
-  onDisconnect(): void;
+  /** No payload (or no `connectionId` on it) — the real socket disconnected — tears down every connection this socket had open. A payload WITH `connectionId` closes just that one pane, leaving the socket's other connections (other split panes) live. */
+  onDisconnect(payload?: unknown): void;
 };
+
+/** Extracts the caller-supplied per-pane connection id from an input/resize/disconnect payload, if any — falls back to the socket's own id (this connection's ONLY agent-terminal session) for every caller that predates the splittable-panes UI. */
+function readConnectionId(payload: unknown): string | undefined {
+  if (payload === null || typeof payload !== 'object') return undefined;
+  const value = (payload as { connectionId?: unknown }).connectionId;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
 
 export const MAX_INPUT_BYTES = 4096;
 
@@ -163,6 +171,33 @@ export function buildAgentTerminalHandlers({
   persistStreamSessionId,
   billing,
 }: AgentTerminalHandlerDeps): AgentTerminalHandlers {
+  /**
+   * Every connectionId this SOCKET currently has a live agent-terminal
+   * session under. `buildAgentTerminalHandlers` is instantiated once per
+   * socket connection (see `apps/realtime/src/index.ts`), so this closure is
+   * exactly as socket-scoped as `socket` itself — a real socket disconnect
+   * (browser tab closed/reloaded) needs to tear down ALL of them, not just
+   * one pane's.
+   */
+  const activeConnectionIds = new Set<string>();
+
+  function disconnectConnection(connectionId: string) {
+    const session = sessionMap.getBySocket(connectionId);
+    activeConnectionIds.delete(connectionId);
+    if (!session) return;
+    const { sessionKey } = session;
+    session.outputFn = () => {};
+    session.closedFn = () => {};
+    sessionMap.detach(connectionId);
+    session.idleTimer = setTimeout(() => {
+      if (session.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
+      session.releaseSlot();
+      session.command.kill();
+      endAgentTerminalSession(billing, sessionMap, session, sessionKey);
+      loggers.realtime.info('Agent terminal session reaped (idle)', { sessionKey, sandboxId: session.sandboxId });
+    }, DETACHED_IDLE_MS);
+  }
+
   return {
     async onConnect(payload: unknown) {
       const validation = validateAgentTerminalConnectPayload(payload);
@@ -171,12 +206,13 @@ export function buildAgentTerminalHandlers({
         return;
       }
       const { terminalId, projectName, branchName, name, cols, rows } = validation.value;
+      const connectionId = validation.value.connectionId ?? socket.id;
       const { cols: clampedCols, rows: clampedRows } = clampTerminalDimensions({ cols, rows });
 
       const userId = socket.data.user?.id ?? '';
       const authResult = await checkAuth({ userId, terminalId, projectName, branchName, name });
       if (!authResult.ok) {
-        socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${authResult.reason}` });
+        socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${authResult.reason}`, connectionId });
         return;
       }
 
@@ -188,11 +224,12 @@ export function buildAgentTerminalHandlers({
           clearTimeout(existingSession.idleTimer);
           existingSession.idleTimer = undefined;
         }
-        existingSession.outputFn = (data) => socket.emit('agent-terminal:output', { data });
-        existingSession.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode });
-        sessionMap.reattach(sessionKey, socket.id);
+        existingSession.outputFn = (data) => socket.emit('agent-terminal:output', { data, connectionId });
+        existingSession.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
+        sessionMap.reattach(sessionKey, connectionId);
+        activeConnectionIds.add(connectionId);
         authResult.releaseSlot();
-        socket.emit('agent-terminal:ready', { scrollback: existingSession.scrollback.join('') });
+        socket.emit('agent-terminal:ready', { scrollback: existingSession.scrollback.join(''), connectionId });
         return;
       }
 
@@ -207,7 +244,7 @@ export function buildAgentTerminalHandlers({
         const gateResult = await billing.gate({ payerId: authResult.payerId });
         if (!gateResult.allowed) {
           authResult.releaseSlot();
-          socket.emit('agent-terminal:error', { message: 'Insufficient credits to open an agent terminal session.' });
+          socket.emit('agent-terminal:error', { message: 'Insufficient credits to open an agent terminal session.', connectionId });
           return;
         }
         holdId = gateResult.holdId;
@@ -235,8 +272,8 @@ export function buildAgentTerminalHandlers({
         holdId,
         connectedAt,
         pageId: terminalId,
-        outputFn: (data) => socket.emit('agent-terminal:output', { data }),
-        closedFn: (exitCode) => socket.emit('agent-terminal:closed', { exitCode }),
+        outputFn: (data) => socket.emit('agent-terminal:output', { data, connectionId }),
+        closedFn: (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
         scrollback: [],
         scrollbackBytes: 0,
         reAuthInterval: undefined,
@@ -275,12 +312,13 @@ export function buildAgentTerminalHandlers({
       } catch {
         authResult.releaseSlot();
         if (holdId) void billing?.releaseHold(holdId).catch(() => {});
-        socket.emit('agent-terminal:error', { message: 'Failed to open agent terminal session' });
+        socket.emit('agent-terminal:error', { message: 'Failed to open agent terminal session', connectionId });
         return;
       }
 
       session.command = shell;
-      sessionMap.setNew(sessionKey, socket.id, session);
+      sessionMap.setNew(sessionKey, connectionId, session);
+      activeConnectionIds.add(connectionId);
 
       if (authResult.streamSessionId === null) {
         void discoverNewSessionId(sprite, sessionsBeforeLaunch).then((sessionId) => {
@@ -314,11 +352,13 @@ export function buildAgentTerminalHandlers({
 
       session.reAuthInterval = reAuthInterval;
 
-      socket.emit('agent-terminal:ready', {});
+      socket.emit('agent-terminal:ready', { connectionId });
     },
 
     onInput(payload: unknown) {
-      const session = sessionMap.getBySocket(socket.id);
+      const connectionId = readConnectionId(payload) ?? socket.id;
+      if (!activeConnectionIds.has(connectionId)) return;
+      const session = sessionMap.getBySocket(connectionId);
       if (!session) return;
       const p = payload as { data?: string };
       if (typeof p?.data === 'string' && p.data.length <= MAX_INPUT_BYTES) {
@@ -327,7 +367,9 @@ export function buildAgentTerminalHandlers({
     },
 
     onResize(payload: unknown) {
-      const session = sessionMap.getBySocket(socket.id);
+      const connectionId = readConnectionId(payload) ?? socket.id;
+      if (!activeConnectionIds.has(connectionId)) return;
+      const session = sessionMap.getBySocket(connectionId);
       if (!session) return;
       const p = payload as { cols?: number; rows?: number };
       if (typeof p?.cols === 'number' && typeof p?.rows === 'number' && Number.isFinite(p.cols) && Number.isFinite(p.rows)) {
@@ -336,20 +378,27 @@ export function buildAgentTerminalHandlers({
       }
     },
 
-    onDisconnect() {
-      const session = sessionMap.getBySocket(socket.id);
-      if (!session) return;
-      const { sessionKey } = session;
-      session.outputFn = () => {};
-      session.closedFn = () => {};
-      sessionMap.detach(socket.id);
-      session.idleTimer = setTimeout(() => {
-        if (session.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
-        session.releaseSlot();
-        session.command.kill();
-        endAgentTerminalSession(billing, sessionMap, session, sessionKey);
-        loggers.realtime.info('Agent terminal session reaped (idle)', { sessionKey, sandboxId: session.sandboxId });
-      }, DETACHED_IDLE_MS);
+    onDisconnect(payload?: unknown) {
+      const explicitConnectionId = readConnectionId(payload);
+      if (explicitConnectionId !== undefined) {
+        // One pane explicitly closed (e.g. the Terminal workspace's "Split"
+        // panes closing one of several) — leave this socket's OTHER
+        // connections (other live panes) untouched. Only a connectionId THIS
+        // socket itself registered via a successful, authorized `onConnect`
+        // is honored — `agentTerminalSessionMap` is one shared, server-wide
+        // instance (every socket's sessions live in it), so a connectionId a
+        // client merely CLAIMS (rather than one this socket actually
+        // established) must never be trusted to reach another socket's PTY.
+        if (activeConnectionIds.has(explicitConnectionId)) {
+          disconnectConnection(explicitConnectionId);
+        }
+        return;
+      }
+      // The socket itself disconnected (tab closed/reloaded, network drop) —
+      // every connection this socket had open loses its viewer at once.
+      for (const connectionId of [...activeConnectionIds]) {
+        disconnectConnection(connectionId);
+      }
     },
   };
 }
