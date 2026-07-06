@@ -394,10 +394,14 @@ describe('GET /api/users/search', () => {
       // fall through to the userId-path which auto-accepts. See Review 1
       // finding C1 / Review 2 §1.
       expect(isNotNull).toHaveBeenCalledWith('users.emailVerified');
+      // The email arg now flows through the encryption-aware dual-lookup edge
+      // (`userEmailMatch`), so it is an opaque Drizzle SQL condition rather than a
+      // mock-inspectable `eq`. Anchor on the verified-gate marker instead: the
+      // email lookup's and(...) MUST still compose isNotNull(emailVerified).
       const emailWhereCall = vi.mocked(and).mock.calls.find((args) =>
-        args.some((a) => (a as { _eq?: true; col?: unknown }).col === 'users.email')
+        args.some((a) => (a as { _isNotNull?: true; col?: unknown }).col === 'users.emailVerified')
       );
-      expect(emailWhereCall, 'email lookup should use and(eq(email,...), isNotNull(emailVerified))').toBeDefined();
+      expect(emailWhereCall, 'email lookup should compose isNotNull(emailVerified)').toBeDefined();
       expect(emailWhereCall).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ _isNotNull: true, col: 'users.emailVerified' }),

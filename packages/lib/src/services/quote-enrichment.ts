@@ -17,6 +17,7 @@ import { inArray } from '@pagespace/db/operators';
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { directMessages } from '@pagespace/db/schema/social';
 import { buildThreadPreview } from './preview';
+import { decryptField } from '../encryption/field-crypto';
 
 export type QuoteScope = 'channel' | 'dm';
 
@@ -100,6 +101,12 @@ export async function attachQuotedMessages<T extends { quotedMessageId: string |
 
   const map = new Map<string, QuotedMessageSnapshot>();
   for (const rec of records) {
+    // Decrypt the human author's name PII at the edge (GDPR #965) before
+    // snapshotting it into the denormalized quote (legacy plaintext passes through).
+    const human = rec.user ?? rec.sender ?? null;
+    if (human && human.name != null) {
+      human.name = await decryptField(human.name);
+    }
     map.set(rec.id, snapshotFromRow(rec));
   }
 

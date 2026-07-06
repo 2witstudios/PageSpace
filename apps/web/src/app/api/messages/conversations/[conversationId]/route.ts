@@ -4,6 +4,7 @@ import { sql } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import type { ConversationDetailRow } from '@/types/messaging';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -69,8 +70,9 @@ export async function GET(
       createdAt: row.createdAt,
       otherUser: {
         id: row.user_id,
-        name: row.user_name,
-        email: row.user_email,
+        // Decrypt PII at the edge so the conversation header shows plaintext name/email.
+        name: await decryptField(row.user_name),
+        email: await decryptField(row.user_email),
         image: row.user_image,
         username: row.user_username,
         displayName: row.user_display_name,

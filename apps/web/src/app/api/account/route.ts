@@ -1,6 +1,8 @@
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
+import { userEmailMatch, prepareUserWrite, decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
@@ -48,11 +50,14 @@ export async function GET(req: Request) {
     return Response.json({ error: 'Invalid token version' }, { status: 401 });
   }
 
+  // Decrypt PII at the edge so the account view shows plaintext email/name.
+  const decrypted = await decryptUserRow(user);
+
   return Response.json({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    image: user.image,
+    id: decrypted.id,
+    name: decrypted.name,
+    email: decrypted.email,
+    image: decrypted.image,
   });
 }
 
@@ -89,11 +94,14 @@ export async function PATCH(req: Request) {
         where: eq(users.id, userId),
         columns: { email: true },
       });
-      emailChanged = (current?.email ?? '').toLowerCase() !== normalizedEmail;
+      // Decrypt the stored email before the case-insensitive comparison so a
+      // ciphertext value is compared as plaintext (legacy plaintext passes through).
+      const currentEmailPlain = current ? await decryptField(current.email) : '';
+      emailChanged = (currentEmailPlain ?? '').toLowerCase() !== normalizedEmail;
 
       if (emailChanged) {
         const existingUser = await db.query.users.findFirst({
-          where: eq(users.email, normalizedEmail),
+          where: userEmailMatch(normalizedEmail),
         });
         if (existingUser && existingUser.id !== userId) {
           return Response.json({ error: 'Email is already in use' }, { status: 400 });
@@ -108,9 +116,10 @@ export async function PATCH(req: Request) {
     // of a different inbox. Verification is re-issued via the email below.
     if (emailChanged) updates.emailVerified = null;
 
-    const [updatedUser] = await db
+    const [updatedRow] = await db
       .update(users)
-      .set(updates)
+      // Encrypt email/name + recompute emailBidx (when email present) per the flag.
+      .set(await prepareUserWrite(updates))
       .where(eq(users.id, userId))
       .returning({
         id: users.id,
@@ -119,9 +128,13 @@ export async function PATCH(req: Request) {
         image: users.image,
       });
 
-    if (!updatedUser) {
+    if (!updatedRow) {
       return Response.json({ error: 'Failed to update user' }, { status: 500 });
     }
+
+    // Decrypt PII at the edge so the response, verification email, and activity
+    // log all see plaintext email/name.
+    const updatedUser = await decryptUserRow(updatedRow);
 
     // Send a verification email to the NEW address. Best-effort: a delivery
     // failure must not fail the profile update — the user can resend from the

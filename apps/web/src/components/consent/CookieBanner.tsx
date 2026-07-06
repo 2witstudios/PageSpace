@@ -10,8 +10,6 @@ import { useConsentStore } from '@/stores/useConsentStore';
 /**
  * GDPR/ePrivacy cookie consent banner. All decision logic lives in the pure
  * @pagespace/lib/consent functions (via useConsentStore); this is a thin UI shell.
- *
- * The legal cookie-policy copy is owned separately — see the FILL slot below.
  */
 export function CookieBanner() {
   const acceptAll = useConsentStore((s) => s.acceptAll);
@@ -31,7 +29,6 @@ export function CookieBanner() {
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-3">
         <div className="text-sm text-muted-foreground">
-          {/* FILL: cookie policy copy */}
           <p>
             We use strictly necessary cookies to run PageSpace, plus optional cookies for analytics
             and preferences. Necessary cookies are always on. You can accept all, reject the
@@ -40,9 +37,7 @@ export function CookieBanner() {
               Privacy Policy
             </Link>{' '}
             and{' '}
-            {/* Cookie Policy lives within the Privacy Policy until a dedicated /cookies page
-                ships as part of the user-owned legal-copy task; avoids a 404 in the meantime. */}
-            <Link href="/privacy" className="underline hover:text-foreground">
+            <Link href="/cookies" className="underline hover:text-foreground">
               Cookie Policy
             </Link>{' '}
             for details.

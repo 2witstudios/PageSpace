@@ -6,6 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { usersShareDrive } from '@pagespace/lib/permissions/permissions';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
@@ -95,7 +96,7 @@ export async function GET(request: Request) {
       ORDER BY cd."lastMessageAt" DESC NULLS LAST
     `);
 
-    const conversations = conversationDetails.rows.map((row) => {
+    const conversations = await Promise.all(conversationDetails.rows.map(async (row) => {
       return {
         id: row.id,
         participant1Id: row.participant1Id,
@@ -108,8 +109,9 @@ export async function GET(request: Request) {
         lastRead: toISOTimestamp(row.last_read),
         otherUser: {
           id: row.other_user_id,
-          name: row.other_user_name,
-          email: row.other_user_email,
+          // Decrypt PII at the edge so the DM list shows plaintext name/email.
+          name: await decryptField(row.other_user_name),
+          email: await decryptField(row.other_user_email),
           image: row.other_user_image,
           username: row.other_user_username,
           displayName: row.other_user_display_name,
@@ -117,7 +119,7 @@ export async function GET(request: Request) {
         },
         unreadCount: parseInt(row.unread_count) || 0,
       };
-    });
+    }));
 
     // Determine if there are more conversations (for pagination)
     const hasMore = conversations.length === limit;

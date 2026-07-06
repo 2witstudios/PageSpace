@@ -22,6 +22,7 @@ import {
   type AuthenticatorTransportFuture,
 } from '@simplewebauthn/server';
 import { hashToken, generateToken } from './token-utils';
+import { userEmailMatch, prepareUserWrite } from './user-repository';
 import { PASSKEY_CHALLENGE_EXPIRY_MINUTES } from './passkey-client-constants';
 
 // Configuration
@@ -375,7 +376,7 @@ export async function generateAuthenticationOptions(
 
   if (email) {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email.toLowerCase().trim()),
+      where: userEmailMatch(email.toLowerCase().trim()),
       columns: { id: true },
     });
 
@@ -751,7 +752,7 @@ export async function generateRegistrationOptionsForSignup(
 
   // Check if user already exists
   const existingUser = await db.query.users.findFirst({
-    where: eq(users.email, normalizedEmail),
+    where: userEmailMatch(normalizedEmail),
     columns: { id: true },
   });
 
@@ -855,7 +856,7 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
 
   // Double-check email doesn't exist (race condition protection)
   const existingUser = await db.query.users.findFirst({
-    where: eq(users.email, normalizedEmail),
+    where: userEmailMatch(normalizedEmail),
     columns: { id: true },
   });
 
@@ -907,13 +908,15 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
   const publicKeyBase64 = Buffer.from(credential.publicKey).toString('base64url');
 
   try {
+    // Encrypt PII + compute emailBidx OUTSIDE the tx (pure crypto, no I/O) so the
+    // transaction stays tight and transactional.
+    const userPii = await prepareUserWrite({ name, email: normalizedEmail });
     await db.transaction(async (tx) => {
       // Create user (no password - passwordless signup)
       // Provider is 'email' since passkey auth is email-based (similar to magic link)
       await tx.insert(users).values({
         id: userId,
-        name,
-        email: normalizedEmail,
+        ...userPii,
         provider: 'email',
         role: 'user',
         tokenVersion: 1,

@@ -10,10 +10,29 @@ import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '
 import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { getTierFromPrice } from '@/lib/stripe/price-config';
 import type { SubscriptionTier } from '@/lib/subscription/plans';
+
+/**
+ * Decrypt the displayed `userName`/`userEmail` columns on admin-panel rows (GDPR
+ * #965). The SQL groupBy/orderBy on the ciphertext columns is fine (ciphertext is
+ * opaque but stable per user); only the DISPLAYED value must be decrypted. Legacy
+ * plaintext passes through unchanged.
+ */
+async function decryptUserDisplayFields<
+  T extends { userName?: string | null; userEmail?: string | null },
+>(rows: T[]): Promise<T[]> {
+  return Promise.all(
+    rows.map(async (r) => ({
+      ...r,
+      ...(r.userName !== undefined ? { userName: await decryptField(r.userName) } : {}),
+      ...(r.userEmail !== undefined ? { userEmail: await decryptField(r.userEmail) } : {}),
+    })),
+  );
+}
 
 /**
  * Get system health overview
@@ -198,7 +217,7 @@ export async function getUserActivity(startDate?: Date, endDate?: Date) {
 
   return {
     heatmapData,
-    mostActiveUsers,
+    mostActiveUsers: await decryptUserDisplayFields(mostActiveUsers),
     featureUsage,
   };
 }
@@ -291,7 +310,7 @@ export async function getAiUsageMetrics(startDate?: Date, endDate?: Date) {
     tokenUsageOverTime,
     modelPopularity,
     successRate,
-    topSpenders,
+    topSpenders: await decryptUserDisplayFields(topSpenders),
   };
 }
 
@@ -709,11 +728,13 @@ export async function getTopSpendersByMargin(
     .orderBy(desc(chargedSum))
     .limit(limit);
 
-  return rows.map((r) => ({
-    ...r,
-    marginCents: r.chargedCents - r.realCostCents,
-    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
-  }));
+  return decryptUserDisplayFields(
+    rows.map((r) => ({
+      ...r,
+      marginCents: r.chargedCents - r.realCostCents,
+      marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+    })),
+  );
 }
 
 /**
@@ -735,12 +756,14 @@ export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRo
     .orderBy(desc(creditBalances.debtCents))
     .limit(limit);
 
-  return rows.map((r) => ({
-    userId: r.userId,
-    userName: r.userName,
-    userEmail: r.userEmail,
-    debtCents: r.debtCents,
-  }));
+  return decryptUserDisplayFields(
+    rows.map((r) => ({
+      userId: r.userId,
+      userName: r.userName,
+      userEmail: r.userEmail,
+      debtCents: r.debtCents,
+    })),
+  );
 }
 
 export interface BalanceDriftRow {
@@ -788,7 +811,7 @@ export async function getBalanceDriftAlerts(
       creditBalances.debtCents,
     );
 
-  return rows
+  const flagged = rows
     .map((r): BalanceDriftRow | null => {
       const drift = computeBalanceDrift(
         {
@@ -814,6 +837,8 @@ export async function getBalanceDriftAlerts(
     .filter((r): r is BalanceDriftRow => r !== null)
     .sort((a, b) => Math.abs(b.driftCents) - Math.abs(a.driftCents))
     .slice(0, limit);
+
+  return decryptUserDisplayFields(flagged);
 }
 
 export interface NegativeMarginRow {
@@ -862,13 +887,15 @@ export async function getNegativeMarginAccounts(
 
   // Re-assert the predicate with the shared pure helper so the panel and the SQL filter
   // can never silently disagree.
-  return rows
-    .filter((r) => isNegativeMargin(r.realCostCents, r.chargedCents, floorBps))
-    .map((r) => ({
-      ...r,
-      marginCents: r.chargedCents - r.realCostCents,
-      marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
-    }));
+  return decryptUserDisplayFields(
+    rows
+      .filter((r) => isNegativeMargin(r.realCostCents, r.chargedCents, floorBps))
+      .map((r) => ({
+        ...r,
+        marginCents: r.chargedCents - r.realCostCents,
+        marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+      })),
+  );
 }
 
 /**
@@ -1068,7 +1095,7 @@ export async function getTokenUsageByUser(
   endDate?: Date,
   limit = 10,
 ): Promise<TokenUsageByUserRow[]> {
-  return db
+  const rows = await db
     .select({
       userId: aiUsageLogs.userId,
       userName: users.name,
@@ -1084,6 +1111,8 @@ export async function getTokenUsageByUser(
     .groupBy(aiUsageLogs.userId, users.name, users.email)
     .orderBy(desc(totalTokenSum))
     .limit(limit);
+
+  return decryptUserDisplayFields(rows);
 }
 
 /**

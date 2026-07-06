@@ -6,6 +6,7 @@ import { BACKGROUND_LIGHT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, lt, gte, ne, desc, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
+import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { sessions } from '@pagespace/db/schema/sessions'
 import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
@@ -203,7 +204,10 @@ async function buildAndPersistPulse(
   markHandedOff: () => void,
 ): Promise<void> {
   const userId = user.id;
-  const userName = user.name || user.email?.split('@')[0] || 'there';
+  // Decrypt PII at the edge so the pulse prompt addresses the user in plaintext.
+  const userNamePlain = await decryptField(user.name);
+  const userEmailPlain = await decryptField(user.email);
+  const userName = userNamePlain || userEmailPlain?.split('@')[0] || 'there';
   // Use stored timezone or default to UTC
   const userTimezone = normalizeTimezone(user.timezone);
 
@@ -250,7 +254,7 @@ async function buildAndPersistPulse(
     )) : [];
 
   // Get team members for each drive
-  const teamMembers = driveIds.length > 0 ? await db
+  const teamMembersRaw = driveIds.length > 0 ? await db
     .select({
       driveId: driveMembers.driveId,
       userName: users.name,
@@ -263,6 +267,12 @@ async function buildAndPersistPulse(
       ne(driveMembers.userId, userId),
       isNotNull(driveMembers.acceptedAt)
     )) : [];
+  // Decrypt PII at the edge so the team roster in the prompt is plaintext.
+  const teamMembers = await Promise.all(teamMembersRaw.map(async (m) => ({
+    ...m,
+    userName: await decryptField(m.userName),
+    userEmail: await decryptField(m.userEmail),
+  })));
 
   const teamByDrive = teamMembers.reduce((acc, m) => {
     if (!acc[m.driveId]) acc[m.driveId] = [];
@@ -527,17 +537,18 @@ async function buildAndPersistPulse(
       .orderBy(desc(directMessages.createdAt))
       .limit(10);
 
-    unreadDMs = unreadMessagesList.map(m => ({
-      from: m.senderName || m.senderEmail?.split('@')[0] || 'Someone',
+    // Decrypt PII at the edge so DM sender names in the prompt are plaintext.
+    unreadDMs = await Promise.all(unreadMessagesList.map(async m => ({
+      from: (await decryptField(m.senderName)) || (await decryptField(m.senderEmail))?.split('@')[0] || 'Someone',
       content: m.content || '',
       sentAt: m.createdAt,
-    }));
+    })));
   }
 
   // ========================================
   // 6. PAGE CHAT MESSAGES
   // ========================================
-  const recentPageChats = driveIds.length > 0 ? await db
+  const recentPageChatsRaw = driveIds.length > 0 ? await db
     .select({
       pageId: chatMessages.pageId,
       pageTitle: pages.title,
@@ -561,6 +572,12 @@ async function buildAndPersistPulse(
     )
     .orderBy(desc(chatMessages.createdAt))
     .limit(15) : [];
+  // Decrypt PII at the edge so page-chat sender names in the prompt are plaintext.
+  const recentPageChats = await Promise.all(recentPageChatsRaw.map(async (c) => ({
+    ...c,
+    senderName: await decryptField(c.senderName),
+    senderEmail: await decryptField(c.senderEmail),
+  })));
 
   const chatsByPage = recentPageChats
     .filter(chat => chat.pageId && accessiblePages.has(chat.pageId))
@@ -583,7 +600,7 @@ async function buildAndPersistPulse(
   // ========================================
   // 7. MENTIONS & SHARES
   // ========================================
-  const recentMentions = await db
+  const recentMentionsRaw = await db
     .select({
       mentionedByName: users.name,
       pageTitle: pages.title,
@@ -600,8 +617,13 @@ async function buildAndPersistPulse(
     )
     .orderBy(desc(userMentions.createdAt))
     .limit(5);
+  // Decrypt PII at the edge so mention author names in the prompt are plaintext.
+  const recentMentions = await Promise.all(recentMentionsRaw.map(async (m) => ({
+    ...m,
+    mentionedByName: await decryptField(m.mentionedByName),
+  })));
 
-  const recentShares = await db
+  const recentSharesRaw = await db
     .select({
       pageTitle: pages.title,
       pageContent: pages.content,
@@ -619,6 +641,11 @@ async function buildAndPersistPulse(
     )
     .orderBy(desc(pagePermissions.grantedAt))
     .limit(5);
+  // Decrypt PII at the edge so share author names in the prompt are plaintext.
+  const recentShares = await Promise.all(recentSharesRaw.map(async (s) => ({
+    ...s,
+    sharedByName: await decryptField(s.sharedByName),
+  })));
 
   // ========================================
   // 8. PREVIOUS PULSES (for deduplication)

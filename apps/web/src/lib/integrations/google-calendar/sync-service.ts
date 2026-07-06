@@ -10,6 +10,7 @@ import { eq, and, isNull, inArray, sql, desc } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { googleCalendarConnections, calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { userEmailInListMatch, decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
 import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type GoogleEventAttendee } from './api-client';
@@ -784,13 +785,16 @@ const mapAttendeesToUsers = async (
   const emails = [...new Set(googleAttendees.map((a) => a.email.toLowerCase()))];
   if (emails.length === 0) return;
 
-  // Look up PageSpace users by email (case-insensitive batch query)
-  const matchedUsers = await db
+  // Look up PageSpace users by email (dual blind-index/lowercased-raw batch query)
+  const matchedRows = await db
     .select({ id: users.id, email: users.email })
     .from(users)
-    .where(inArray(sql`lower(${users.email})`, emails));
+    .where(userEmailInListMatch(emails));
 
-  if (matchedUsers.length === 0) return;
+  if (matchedRows.length === 0) return;
+
+  // Decrypt PII at the edge so the email→userId map keys on plaintext emails.
+  const matchedUsers = await decryptUserRows(matchedRows);
 
   // Build a map of email → userId for fast lookup
   const emailToUserId = new Map(matchedUsers.map((u) => [u.email.toLowerCase(), u.id]));

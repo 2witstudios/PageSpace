@@ -1,18 +1,20 @@
-import { db } from './db';
-import { users } from './schema/auth';
-import { eq } from './operators';
+#!/usr/bin/env bun
+import { db } from '@pagespace/db/db';
+import { users } from '@pagespace/db/schema/auth';
+import { eq } from '@pagespace/db/operators';
+import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 
 const email = process.argv[2];
 
 if (!email) {
-  console.error('Usage: bun run --filter \'@pagespace/db\' promote-admin <email>');
+  console.error('Usage: bun run promote-admin <email>');
   process.exit(1);
 }
 
 async function promoteToAdmin() {
   try {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email),
+      where: userEmailMatch(email),
     });
 
     if (!user) {
@@ -27,7 +29,7 @@ async function promoteToAdmin() {
 
     await db.update(users)
       .set({ role: 'admin' })
-      .where(eq(users.email, email));
+      .where(eq(users.id, user.id));
 
     console.log(`Successfully promoted ${email} to admin`);
   } catch (error) {

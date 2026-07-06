@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
+import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { eq, and, or, gte, lte, inArray, isNull, isNotNull, desc, sql } from '@pagespace/db/operators'
 import { calendarEvents, calendarEventDrives, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
@@ -62,7 +63,7 @@ async function canAccessEvent(
 /**
  * Format event for AI response
  */
-function formatEventForResponse(event: {
+async function formatEventForResponse(event: {
   id: string;
   title: string;
   description: string | null;
@@ -89,6 +90,18 @@ function formatEventForResponse(event: {
   drive?: { id: string; name: string; slug: string } | null;
 }, timezone?: string, triggerInfo?: { status: string; triggerId: string } | null) {
   const displayTz = timezone ?? event.timezone;
+  // Decrypt PII at the edge (GDPR #965) so creator/attendee names are plaintext
+  // (legacy plaintext passes through unchanged).
+  const createdByName = event.createdBy ? await decryptField(event.createdBy.name) : null;
+  const decryptedAttendees = event.attendees
+    ? await Promise.all(event.attendees.map(async (a) => ({
+        userId: a.user?.id,
+        name: await decryptField(a.user?.name),
+        status: a.status,
+        isOrganizer: a.isOrganizer,
+        isOptional: a.isOptional,
+      })))
+    : undefined;
   return {
     id: event.id,
     title: event.title,
@@ -108,17 +121,11 @@ function formatEventForResponse(event: {
     ...(event.createdBy && {
       createdBy: {
         id: event.createdBy.id,
-        name: event.createdBy.name,
+        name: createdByName,
       },
     }),
-    ...(event.attendees && {
-      attendees: event.attendees.map((a) => ({
-        userId: a.user?.id,
-        name: a.user?.name,
-        status: a.status,
-        isOrganizer: a.isOrganizer,
-        isOptional: a.isOptional,
-      })),
+    ...(decryptedAttendees && {
+      attendees: decryptedAttendees,
     }),
     ...(event.page && {
       linkedPage: {
@@ -350,7 +357,7 @@ export const calendarReadTools = {
           const userTz = (ctx as ToolExecutionContext)?.timezone;
           const expandedEvents = expandRecurringEvents(events, parsedStartDate, parsedEndDate);
           const triggerMap = await fetchTriggerInfoForEvents(expandedEvents);
-          const formattedEvents = expandedEvents.map((e) => formatEventForResponse(e, userTz, triggerMap.get(e.id)));
+          const formattedEvents = await Promise.all(expandedEvents.map((e) => formatEventForResponse(e, userTz, triggerMap.get(e.id))));
 
           return {
             success: true,
@@ -483,7 +490,7 @@ export const calendarReadTools = {
 
         const userTzForList = (ctx as ToolExecutionContext)?.timezone;
         const triggerMapAll = await fetchTriggerInfoForEvents(expandedScopedEvents);
-        const formattedEvents = expandedScopedEvents.map((e) => formatEventForResponse(e, userTzForList, triggerMapAll.get(e.id)));
+        const formattedEvents = await Promise.all(expandedScopedEvents.map((e) => formatEventForResponse(e, userTzForList, triggerMapAll.get(e.id))));
 
         return {
           success: true,
@@ -580,7 +587,7 @@ export const calendarReadTools = {
         }
 
         const triggerMapSingle = await fetchTriggerInfoForEvents([event]);
-        const formatted = formatEventForResponse(event as Parameters<typeof formatEventForResponse>[0], (ctx as ToolExecutionContext)?.timezone, triggerMapSingle.get(event.id));
+        const formatted = await formatEventForResponse(event as Parameters<typeof formatEventForResponse>[0], (ctx as ToolExecutionContext)?.timezone, triggerMapSingle.get(event.id));
 
         // Calculate RSVP summary if attendees included
         let rsvpSummary: Record<string, number> | undefined;

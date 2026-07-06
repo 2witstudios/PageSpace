@@ -11,6 +11,8 @@
 
 import { db } from '@pagespace/db/db'
 import { eq, and, gt, lte, isNull, or } from '@pagespace/db/operators'
+import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository'
+import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { users } from '@pagespace/db/schema/auth'
 import { connections } from '@pagespace/db/schema/social';
 import { pendingConnectionInvites } from '@pagespace/db/schema/pending-connection-invites';
@@ -45,7 +47,12 @@ export const connectionInviteRepository = {
       .innerJoin(users, eq(users.id, pendingConnectionInvites.invitedBy))
       .where(eq(pendingConnectionInvites.tokenHash, tokenHash))
       .limit(1);
-    return results.at(0) ?? null;
+    const row = results.at(0);
+    if (!row) return null;
+    // Decrypt the inviter's joined name PII at the edge (GDPR #965) — this flows
+    // to the invite/signup screens (legacy plaintext passes through unchanged).
+    row.inviterName = await decryptField(row.inviterName);
+    return row;
   },
 
   async createPendingInvite(input: {
@@ -214,7 +221,7 @@ export const connectionInviteRepository = {
     email: string,
   ): Promise<{ id: string; emailVerified: Date | null; suspendedAt: Date | null } | null> {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email),
+      where: userEmailMatch(email),
       columns: { id: true, emailVerified: true, suspendedAt: true },
     });
     return user
@@ -246,7 +253,7 @@ export const connectionInviteRepository = {
       where: eq(users.id, userId),
       columns: { name: true, email: true },
     });
-    return user ? { name: user.name, email: user.email } : null;
+    return user ? decryptUserRow({ name: user.name, email: user.email }) : null;
   },
 };
 

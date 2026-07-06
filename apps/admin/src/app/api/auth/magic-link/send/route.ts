@@ -1,7 +1,7 @@
 import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { users, verificationTokens } from '@pagespace/db/schema/auth';
+import { verificationTokens } from '@pagespace/db/schema/auth';
+import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { MagicLinkEmail } from '@pagespace/lib/email-templates/MagicLinkEmail';
@@ -64,7 +64,7 @@ export async function POST(req: Request) {
 
     // Look up user — must exist and be an admin
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email),
+      where: userEmailMatch(email),
       columns: { id: true, role: true, suspendedAt: true },
     });
 

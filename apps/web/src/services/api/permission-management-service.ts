@@ -3,6 +3,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
+import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { listDriveRoles, getRoleById, updateDriveRole } from '@pagespace/lib/services/drive-role-service';
 import { createId } from '@paralleldrive/cuid2';
@@ -172,8 +173,9 @@ export const permissionManagementService = {
 
     return {
       success: true,
-      owner: pageWithDrive.drive.owner as PermissionUser,
-      permissions: permissions.map(p => ({
+      // Decrypt PII at the edge so owner + grantee identities show plaintext.
+      owner: (await decryptUserRow(pageWithDrive.drive.owner)) as PermissionUser,
+      permissions: await Promise.all(permissions.map(async p => ({
         id: p.id,
         userId: p.userId,
         canView: p.canView,
@@ -182,8 +184,8 @@ export const permissionManagementService = {
         canDelete: p.canDelete,
         grantedBy: p.grantedBy,
         grantedAt: p.grantedAt,
-        user: p.user as PermissionUser | null,
-      })),
+        user: (await decryptUserRow(p.user)) as PermissionUser | null,
+      }))),
     };
   },
 
