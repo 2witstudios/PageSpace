@@ -17,8 +17,11 @@ export interface AnonymizeResult {
 export const activityLogRepository = {
   /**
    * Anonymize activity logs for a user (GDPR compliance).
-   * Replaces actor email with anonymized identifier and sets display name to 'Deleted User'.
-   * This preserves the audit trail while removing PII.
+   * Replaces actor email with anonymized identifier, sets display name to 'Deleted User',
+   * and clears resourceTitle (#541 — resourceTitle can carry the user's own email, e.g. on
+   * account_delete rows). resourceTitle is excluded from the tamper-evident hash chain
+   * (see serializeLogDataForHash in monitoring/activity-logger.ts), so nulling it here does
+   * not invalidate any stored hash.
    */
   anonymizeForUser: async (
     userId: string,
@@ -30,6 +33,7 @@ export const activityLogRepository = {
         .set({
           actorEmail: anonymizedEmail,
           actorDisplayName: 'Deleted User',
+          resourceTitle: null,
         })
         .where(eq(activityLogs.userId, userId));
 

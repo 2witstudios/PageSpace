@@ -8,11 +8,12 @@ import {
 } from '../pseudonymize';
 
 describe('activity-log pseudonymization patch', () => {
-  it('should overwrite only the denormalized actor columns', () => {
+  it('should overwrite only the denormalized PII columns (actor + resourceTitle)', () => {
     const patch = buildActivityLogPseudonymizationPatch();
     expect(patch).toEqual({
       actorEmail: 'erased@pseudonymized',
       actorDisplayName: null,
+      resourceTitle: null,
     });
   });
 
