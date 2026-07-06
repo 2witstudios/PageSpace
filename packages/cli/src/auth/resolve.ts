@@ -17,6 +17,7 @@
  */
 import type { HostCredential } from '../credentials/serialize.js';
 import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
+import { resolveEnvToken } from './legacy-token-env.js';
 
 export interface ResolveAuthFlags {
   readonly token?: string;
@@ -87,5 +88,39 @@ export function missingCredentialsMessage(host: string): string {
   return (
     `No PageSpace credentials found for ${host}. Provide one of: ` +
     `--token <token>, the PAGESPACE_TOKEN environment variable, or run "pagespace login".`
+  );
+}
+
+/**
+ * `pagespace mcp`'s fail-closed gate (Phase 8 task 4): does this invocation
+ * name a credential itself? Deliberately NOT `resolveAuth`/`resolveProfileName`
+ * — both of those intentionally fall through to the stored "default" profile
+ * when nothing is given, which is exactly the ambient-personal-login fallback
+ * `mcp` must never take. Lives here rather than in `commands/mcp.ts` so that
+ * module never has to reference `PAGESPACE_TOKEN`/`PAGESPACE_PROFILE` itself
+ * (see `commands/__tests__/single-auth-path.test.ts`). Routes the token check
+ * through `resolveEnvToken` (not a raw `env.PAGESPACE_TOKEN` read) so the
+ * legacy `PAGESPACE_AUTH_TOKEN` env var — an explicit token under an old
+ * name, not the ambient fallback this gate exists to block — still counts,
+ * keeping `npx pagespace-mcp` configs working exactly as before.
+ */
+export function hasExplicitCredential(
+  flags: ResolveAuthFlags & ResolveProfileNameFlags,
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  return (
+    presentToken(flags.token) !== null ||
+    resolveEnvToken(env).token !== undefined ||
+    presentToken(flags.profile) !== null ||
+    presentToken(env.PAGESPACE_PROFILE) !== null
+  );
+}
+
+/** Companion message for `hasExplicitCredential` returning `false` — secret-free, points at the fix. */
+export function noExplicitCredentialMessage(): string {
+  return (
+    'No explicit token found — pagespace mcp never falls back to your personal login. Run ' +
+    '"pagespace tokens create --drive <driveId> --role member --save-as-profile agent" and pass ' +
+    'the result via the PAGESPACE_TOKEN environment variable or --profile agent.'
   );
 }

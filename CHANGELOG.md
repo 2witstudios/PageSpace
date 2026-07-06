@@ -48,6 +48,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   token unattended; it's gone. The resulting credential is stored locally under a named profile
   (`--save-as-profile`, defaulting to the drive id) rather than printed, so it isn't a source for a
   portable secret — mint one of those from **Settings → MCP** instead.
+- **BREAKING: `pagespace mcp` no longer falls back to your personal login.** Previously, running
+  `pagespace mcp` with no `--token`/`PAGESPACE_TOKEN`/`--profile` silently authenticated as
+  whichever profile `pagespace login` had stored — so an MCP client config missing its intended
+  scoped token would unknowingly hand an automated agent your full personal account access instead
+  of failing loudly. `mcp` now refuses to start the stdio server at all unless the invocation
+  names a credential itself (`--token`, `PAGESPACE_TOKEN`, `--profile`, or `PAGESPACE_PROFILE`),
+  and exits with a message pointing at `pagespace tokens create ... --save-as-profile <name>`. The
+  legacy `PAGESPACE_AUTH_TOKEN` env var (`npx pagespace-mcp`) still counts as explicit and is
+  unaffected. Every other command's ambient-fallback convenience is unchanged — this is specific
+  to `mcp`, whose whole purpose is being invoked unattended.
 
 ### Fixed
 

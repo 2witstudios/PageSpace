@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { missingCredentialsMessage, resolveAuth, resolveProfileName } from '../resolve.js';
+import { hasExplicitCredential, missingCredentialsMessage, noExplicitCredentialMessage, resolveAuth, resolveProfileName } from '../resolve.js';
 import type { HostCredential } from '../../credentials/serialize.js';
 
 const HOST = 'https://pagespace.ai';
@@ -181,5 +181,66 @@ describe('missingCredentialsMessage', () => {
     expect(message).toContain('PAGESPACE_TOKEN');
     expect(message).toContain('pagespace login');
     expect(message).toContain(HOST);
+  });
+});
+
+describe('hasExplicitCredential — pagespace mcp fail-closed gate (Phase 8 task 4)', () => {
+  it('nothing present -> false (the case mcp must refuse)', () => {
+    expect(hasExplicitCredential({}, {})).toBe(false);
+  });
+
+  it('--token flag alone -> true', () => {
+    expect(hasExplicitCredential({ token: 'mcp_flag' }, {})).toBe(true);
+  });
+
+  it('PAGESPACE_TOKEN env alone -> true', () => {
+    expect(hasExplicitCredential({}, { PAGESPACE_TOKEN: 'mcp_env' })).toBe(true);
+  });
+
+  it('--profile flag alone -> true, even with no matching stored credential', () => {
+    expect(hasExplicitCredential({ profile: 'agent' }, {})).toBe(true);
+  });
+
+  it('PAGESPACE_PROFILE env alone -> true', () => {
+    expect(hasExplicitCredential({}, { PAGESPACE_PROFILE: 'agent' })).toBe(true);
+  });
+
+  it('an explicit --profile "default" still counts as explicit — the user named it, not the resolver', () => {
+    expect(hasExplicitCredential({ profile: 'default' }, {})).toBe(true);
+  });
+
+  it('a whitespace-only --token flag is absent, same as resolveAuth', () => {
+    expect(hasExplicitCredential({ token: '   ' }, {})).toBe(false);
+  });
+
+  it('a whitespace-only --profile flag is absent, same as resolveProfileName', () => {
+    expect(hasExplicitCredential({ profile: '\n\t' }, {})).toBe(false);
+  });
+
+  it('a whitespace-only PAGESPACE_TOKEN env is absent', () => {
+    expect(hasExplicitCredential({}, { PAGESPACE_TOKEN: '   ' })).toBe(false);
+  });
+
+  it('a whitespace-only PAGESPACE_PROFILE env is absent', () => {
+    expect(hasExplicitCredential({}, { PAGESPACE_PROFILE: '   ' })).toBe(false);
+  });
+
+  it('the legacy PAGESPACE_AUTH_TOKEN env var alone -> true — an explicit token under an old name is still explicit, not the ambient-default-profile fallback this gate exists to block', () => {
+    expect(hasExplicitCredential({}, { PAGESPACE_AUTH_TOKEN: 'legacy_value' })).toBe(true);
+  });
+
+  it('PAGESPACE_TOKEN still wins over a simultaneously-set legacy PAGESPACE_AUTH_TOKEN, matching resolveEnvToken precedence', () => {
+    expect(hasExplicitCredential({}, { PAGESPACE_TOKEN: 'current', PAGESPACE_AUTH_TOKEN: 'legacy' })).toBe(true);
+  });
+});
+
+describe('noExplicitCredentialMessage', () => {
+  it('points at tokens create, --save-as-profile, and how to pass the result, with no secret material', () => {
+    const message = noExplicitCredentialMessage();
+    expect(message).toContain('pagespace mcp');
+    expect(message).toContain('tokens create');
+    expect(message).toContain('--save-as-profile');
+    expect(message).toContain('PAGESPACE_TOKEN');
+    expect(message).toContain('--profile');
   });
 });
