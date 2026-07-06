@@ -18,6 +18,8 @@ export interface CertReconcileDomain {
   driveId: string;
   hostname: string;
   status: string;
+  /** Platform-owned domains (e.g. pagespace.ai) never need Fly cert reconcile. */
+  platformOwned?: boolean;
 }
 
 export interface CertReconcileResult {
@@ -69,6 +71,15 @@ export async function reconcileCustomDomainCert(
   opts: CertReconcileOptions = {},
 ): Promise<CertReconcileResult> {
   const { allowFailureTransition = true } = opts;
+
+  // Platform-owned domains (e.g. pagespace.ai) already have valid DNS/TLS via
+  // the main app — they're inserted straight to `active` and never go through
+  // Fly cert provisioning. `isCertEligible` includes `active`, so without this
+  // guard a manual "Check SSL" click would call Fly's addCertificate for a
+  // domain Fly doesn't need to (and shouldn't) manage.
+  if (domain.platformOwned) {
+    return { status: domain.status, action: null };
+  }
 
   if (!process.env.FLY_API_TOKEN) {
     return { status: domain.status, action: null };

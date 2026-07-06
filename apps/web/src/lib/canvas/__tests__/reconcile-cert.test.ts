@@ -85,6 +85,14 @@ describe('reconcileCustomDomainCert — no-op guards', () => {
     expect(result).toEqual({ status: 'dns_failed', action: null });
     expect(addCertificate).not.toHaveBeenCalled();
   });
+
+  it('is a no-op for a platformOwned domain, even though `active` is cert-eligible', async () => {
+    const result = await reconcileCustomDomainCert({ ...domain('active'), platformOwned: true });
+
+    expect(result).toEqual({ status: 'active', action: null });
+    expect(addCertificate).not.toHaveBeenCalled();
+    expect(dbUpdate).not.toHaveBeenCalled();
+  });
 });
 
 describe('reconcileCustomDomainCert — cert advance', () => {
