@@ -17,6 +17,7 @@ vi.mock('@/services/api/form-target-service', () => ({
   getFormTargetById: mockGetFormTargetById,
   FormTargetPageNotSheetError: class FormTargetPageNotSheetError extends Error {},
   FormTargetAlreadyActiveError: class FormTargetAlreadyActiveError extends Error {},
+  FormTargetArchivedError: class FormTargetArchivedError extends Error {},
 }));
 
 vi.mock('@pagespace/lib/forms/form-html', () => ({
@@ -182,5 +183,23 @@ describe('update_form_target_status', () => {
       statusReason: 'spam spike',
     });
     expect(result).toMatchObject({ success: true, status: 'paused', pageId: 'sheet-1' });
+  });
+
+  it('returns a structured error instead of reviving an archived target', async () => {
+    mockGetFormTargetById.mockResolvedValue({ id: 'ft-1', pageId: 'sheet-1', status: 'archived' });
+    mockCanActorEditPage.mockResolvedValue(true);
+    const { FormTargetArchivedError } = await import('@/services/api/form-target-service');
+    mockUpdateFormTargetStatus.mockRejectedValue(
+      new FormTargetArchivedError('Form target "ft-1" is archived — archiving is permanent and cannot be reversed')
+    );
+
+    const result = await formTools.update_form_target_status.execute!(
+      { formTargetId: 'ft-1', status: 'active' },
+      context('user-1')
+    );
+
+    expect(result).toMatchObject({ success: false });
+    if (!('error' in result)) throw new Error('Expected an error in the result');
+    expect(result.error).toMatch(/archived/i);
   });
 });

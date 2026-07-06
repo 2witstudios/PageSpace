@@ -66,7 +66,9 @@ vi.mock('@pagespace/db/db', () => ({
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+  ne: vi.fn((field: unknown, value: unknown) => ({ field, value, ne: true })),
   and: vi.fn((...conditions: unknown[]) => ({ and: conditions })),
+  or: vi.fn((...conditions: unknown[]) => ({ or: conditions })),
 }));
 
 import {
@@ -78,6 +80,7 @@ import {
   getFormTargetByCanvasPageId,
   appendFormSubmission,
   FormTargetAlreadyActiveError,
+  FormTargetArchivedError,
   FormTargetFieldLimitError,
   FormTargetDuplicateFieldNameError,
   FormTargetFieldIndexError,
@@ -265,10 +268,29 @@ describe('updateFormTargetStatus', () => {
 
   it('throws when the form target does not exist', async () => {
     mockUpdateReturning.mockResolvedValue([]);
+    mockSelectLimit.mockResolvedValue([]);
 
     await expect(
       updateFormTargetStatus({ formTargetId: 'missing', status: 'paused' })
     ).rejects.toThrow(/not found/i);
+  });
+
+  it('throws FormTargetArchivedError instead of reviving an archived target', async () => {
+    // The conditional WHERE excludes archived rows from a non-archived status,
+    // so the UPDATE affects zero rows — same as if the row didn't exist.
+    mockUpdateReturning.mockResolvedValue([]);
+    mockSelectLimit.mockResolvedValue([{ id: 'ft-1', status: 'archived' }]);
+
+    await expect(
+      updateFormTargetStatus({ formTargetId: 'ft-1', status: 'active' })
+    ).rejects.toThrow(FormTargetArchivedError);
+  });
+
+  it('allows archiving an already-archived target (idempotent)', async () => {
+    mockUpdateReturning.mockResolvedValue([{ id: 'ft-1', status: 'archived' }]);
+
+    const result = await updateFormTargetStatus({ formTargetId: 'ft-1', status: 'archived' });
+    expect(result.status).toBe('archived');
   });
 });
 

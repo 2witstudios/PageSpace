@@ -27,6 +27,7 @@ import {
   updateFormTargetStatus,
   FormTargetPageNotSheetError,
   FormTargetAlreadyActiveError,
+  FormTargetArchivedError,
   FormTargetFieldLimitError,
   FormTargetDuplicateFieldNameError,
   FormTargetFieldIndexError,
@@ -212,7 +213,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     if (
       error instanceof FormTargetFieldLimitError ||
       error instanceof FormTargetDuplicateFieldNameError ||
-      error instanceof FormTargetFieldIndexError
+      error instanceof FormTargetFieldIndexError ||
+      error instanceof FormTargetArchivedError
     ) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }

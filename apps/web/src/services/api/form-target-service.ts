@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { eq, and } from '@pagespace/db/operators';
+import { eq, and, ne, or } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { formTargets, type FormTarget, type FormFieldDef, type FormTargetStatus } from '@pagespace/db/schema/form-targets';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
@@ -169,10 +169,20 @@ export interface UpdateFormTargetStatusInput {
   statusReason?: string;
 }
 
+/** Archiving is documented as permanent (see canvas-forms.md) — thrown when a
+ *  caller tries to move an archived target back to active/paused. */
+export class FormTargetArchivedError extends Error {}
+
 /**
  * Updates a form target's status. Takes effect immediately: the public
  * submit route re-reads status on every request via lookupActiveFormTarget,
  * so there is no propagation delay or cache to invalidate.
+ *
+ * Archived is a terminal state — the WHERE clause excludes already-archived
+ * rows from any non-archived target status, so a reactivation attempt
+ * affects zero rows atomically (no separate read-then-check race) and is
+ * reported as FormTargetArchivedError instead of silently reviving a form
+ * the operator/AI agent explicitly retired.
  */
 export async function updateFormTargetStatus({
   formTargetId,
@@ -182,14 +192,25 @@ export async function updateFormTargetStatus({
   const [updated] = await db
     .update(formTargets)
     .set({ status, statusReason })
-    .where(eq(formTargets.id, formTargetId))
+    .where(
+      and(
+        eq(formTargets.id, formTargetId),
+        or(eq(formTargets.status, status), ne(formTargets.status, 'archived'))
+      )
+    )
     .returning();
 
-  if (!updated) {
-    throw new Error(`Form target "${formTargetId}" not found`);
+  if (updated) {
+    return updated;
   }
 
-  return updated;
+  const existing = await getFormTargetById(formTargetId);
+  if (!existing) {
+    throw new Error(`Form target "${formTargetId}" not found`);
+  }
+  throw new FormTargetArchivedError(
+    `Form target "${formTargetId}" is archived — archiving is permanent and cannot be reversed`
+  );
 }
 
 const MAX_FIELDS = 20;

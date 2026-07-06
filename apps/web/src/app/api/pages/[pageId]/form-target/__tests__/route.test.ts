@@ -225,6 +225,18 @@ describe('/api/pages/[pageId]/form-target', () => {
       const response = await PATCH(createRequest('PATCH', { op: 'not-a-real-op' }), params());
       expect(response.status).toBe(400);
     });
+
+    it('returns 400 when reactivating an archived target', async () => {
+      const { FormTargetArchivedError } = await import('@/services/api/form-target-service');
+      mockGetFormTargetByCanvasPageId.mockResolvedValue({ ...storedFormTarget, status: 'archived' });
+      mockUpdateFormTargetStatus.mockRejectedValue(new FormTargetArchivedError('archived — cannot be reversed'));
+
+      const response = await PATCH(
+        createRequest('PATCH', { op: 'set-status', status: 'active' }),
+        params()
+      );
+      expect(response.status).toBe(400);
+    });
   });
 
   describe('DELETE', () => {

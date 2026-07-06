@@ -406,7 +406,11 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
         <CardContent className="space-y-4">
           <div className="flex items-center gap-2">
             <Label className="text-sm">Status</Label>
-            <Select value={formTarget.status} onValueChange={(v: FormTarget['status']) => handleSetStatus(v)}>
+            <Select
+              value={formTarget.status}
+              onValueChange={(v: FormTarget['status']) => handleSetStatus(v)}
+              disabled={isBusy || formTarget.status === 'archived'}
+            >
               <SelectTrigger className="w-32">
                 <SelectValue />
               </SelectTrigger>
@@ -416,6 +420,9 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
                 <SelectItem value="archived">Archived</SelectItem>
               </SelectContent>
             </Select>
+            {formTarget.status === 'archived' && (
+              <span className="text-xs text-muted-foreground">Archiving is permanent</span>
+            )}
           </div>
 
           <div className="space-y-2">

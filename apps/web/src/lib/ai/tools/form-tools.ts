@@ -8,6 +8,7 @@ import {
   getFormTargetById,
   FormTargetPageNotSheetError,
   FormTargetAlreadyActiveError,
+  FormTargetArchivedError,
 } from '@/services/api/form-target-service';
 import { buildFormHtml } from '@pagespace/lib/forms/form-html';
 // Shared with the Forms settings API route (apps/web/src/app/api/pages/[pageId]/form-target)
@@ -108,8 +109,15 @@ export const formTools = {
         throw new Error('Insufficient permissions to update this form target');
       }
 
-      const updated = await updateFormTargetStatus({ formTargetId, status, statusReason: reason });
-      return { success: true, formTargetId: updated.id, pageId: existing.pageId, status: updated.status };
+      try {
+        const updated = await updateFormTargetStatus({ formTargetId, status, statusReason: reason });
+        return { success: true, formTargetId: updated.id, pageId: existing.pageId, status: updated.status };
+      } catch (error) {
+        if (error instanceof FormTargetArchivedError) {
+          return { success: false, error: error.message };
+        }
+        throw error;
+      }
     },
   }),
 };
