@@ -14,7 +14,6 @@ import { hasExplicitCredential, noExplicitCredentialMessage, resolveAuth, resolv
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
-import { mcpHandler } from './commands/mcp.js';
 import { tokensCreateHandler } from './commands/tokens/create.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
@@ -38,25 +37,33 @@ export interface RunDependencies {
 }
 
 /**
- * Commands that manage credentials themselves and never touch `ctx.sdk`:
- * `help` doesn't need auth; `login`/`login --device` establish it; `logout`/
- * `whoami` construct their own `CredentialStore` and do their own
- * discovery/refresh (matching `login.ts`'s sanctioned pattern) because
- * "not logged in" is a normal, graceful outcome for them, not a hard
- * failure — routing them through `enforceAuth` first would print this
- * resolver's generic message (and attempt a redundant refresh) ahead of
- * their own, more specific handling. `tokens create` belongs here for the
- * same reason `login` does: it mints its credential through its own
- * browser-consent OAuth flow (Phase 8 task 2) and never touches `ctx.sdk`,
- * so enforcing ambient auth first would both break it for a fresh CLI with
- * nothing stored and needlessly refresh/rotate the personal credential as a
- * side effect of minting an unrelated scoped token. `mcp` is NOT in this
- * set: when given an explicit credential it authenticates through `ctx.sdk`
- * exactly like every other command below. But it can't be blanket-exempted
- * either, so it gets its own pre-`enforceAuth` gate just below — without
- * it, `enforceAuth` would materialize (and, on a stored default profile,
- * silently refresh and rotate) the ambient personal credential before
- * `mcp`'s own fail-closed check ever ran (Phase 8 task 4).
+ * Commands that manage credentials themselves and never touch `ctx.sdk`'s
+ * ambient-resolved auth source at all: `help` doesn't need auth; `login`/
+ * `login --device` establish a credential from scratch; `logout`/`whoami`
+ * construct their own `CredentialStore` and do their own discovery/refresh
+ * (matching `login.ts`'s sanctioned pattern) because "not logged in" is a
+ * normal, graceful outcome for them, not a hard failure. `tokens create`
+ * belongs here for the same reason `login` does: it mints its credential
+ * through its own browser-consent OAuth flow (Phase 8 task 2) and never
+ * touches `ctx.sdk` either.
+ *
+ * This set gates BOTH checks below — the ambient-credential-fallback gate
+ * (first) and `enforceAuth` (second) — for the handlers above, since neither
+ * check's subject (the `source`/`auth` built from `resolveAuth`'s flag > env
+ * > stored-profile precedence) is ever consulted by them. Every OTHER
+ * handler, including `mcp`, DOES eventually authenticate through `ctx.sdk`
+ * when given a credential, so both checks matter there: the ambient gate
+ * refuses to even attempt that authentication on nothing but a stored
+ * default/personal profile (originally Phase 8 task 4's `mcp`-only gate,
+ * generalized here in Phase 9 task 4 to every command — a coding agent with
+ * shell access must never be able to ride a human's `pagespace login`
+ * credential into content access), and `enforceAuth` is what actually
+ * materializes and validates whichever explicit source WAS given.
+ *
+ * Phase 9 task 5's future `pagespace keys` TUI handler belongs in this set
+ * too, once it exists — it will manage its own credentials the same way
+ * `login`/`tokens create` do. Do not add a placeholder for it now; there is
+ * no `keysHandler` on this branch yet.
  */
 const AUTH_EXEMPT_HANDLERS = new Set([
   helpHandler,
@@ -127,23 +134,23 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     return EXIT_USAGE_ERROR;
   }
 
-  if (
-    resolution.route.handler === mcpHandler &&
-    !hasExplicitCredential({ token: parsed.flags.token, profile: parsed.flags.profile }, deps.env)
-  ) {
+  const isAuthExempt = AUTH_EXEMPT_HANDLERS.has(resolution.route.handler);
+
+  if (!isAuthExempt && !hasExplicitCredential({ token: parsed.flags.token, profile: parsed.flags.profile }, deps.env)) {
     // Must run before `enforceAuth` below: that call materializes `source` by
     // calling `auth.getAccessToken()`, which for a `kind: 'profile'` source
-    // (the ambient "default" profile falling through here with nothing
-    // explicit given) performs a real discovery + refresh-token network
-    // exchange and rotates the stored personal credential — exactly the
-    // fallback this gate exists to block. Checking first means that
-    // network/store effect never happens at all, not just that the server
-    // never starts afterward.
+    // (the ambient "default"/personal profile falling through here with
+    // nothing explicit given) performs a real discovery + refresh-token
+    // network exchange and rotates the stored personal credential — exactly
+    // the fallback this gate exists to block, for every command that isn't
+    // exempt above (Phase 8 task 4, generalized in Phase 9 task 4). Checking
+    // first means that network/store effect never happens at all, not just
+    // that the command never runs afterward.
     deps.stderr.write(`${noExplicitCredentialMessage()}\n`);
     return EXIT_RUNTIME_ERROR;
   }
 
-  if (!AUTH_EXEMPT_HANDLERS.has(resolution.route.handler)) {
+  if (!isAuthExempt) {
     const failure = await enforceAuth({ auth, source, credentialStore: deps.credentialStore, stderr: deps.stderr });
     if (failure !== null) {
       return failure;

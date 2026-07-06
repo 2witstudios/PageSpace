@@ -89,7 +89,9 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
             ? `Logged in as ${result.identity.name ?? result.identity.email} <${result.identity.email}> on ${host}.\n`
             : `Logged in to ${host}.\n`,
         );
-        ctx.stdout.write(`Scope: ${result.scope} — this is your full personal account access.\n`);
+        ctx.stdout.write(
+          `Scope: ${result.scope} — key-management access only, with zero content access; run "pagespace tokens create" to mint a scoped key for actual content access.\n`,
+        );
         return EXIT_SUCCESS;
       case 'access_denied':
         ctx.stderr.write('Login was denied.\n');
