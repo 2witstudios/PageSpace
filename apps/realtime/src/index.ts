@@ -33,6 +33,7 @@ import {
   emitValidationError,
 } from './validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
@@ -82,7 +83,9 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
   }
   const tenantId = driveRow.ownerId;
   const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
-  const actorEmail = userRow?.email ?? '';
+  // Decrypt PII at the edge (GDPR #965): actorEmail is denormalized into a
+  // plaintext activity-log/audit snapshot downstream, not an encrypted column.
+  const actorEmail = userRow?.email ? await decryptField(userRow.email) : '';
 
   // Acquire a concurrency slot; deny if the user is at their per-tier limit.
   const slotAcquired = acquireCodeExecutionSlot({ userId, tier });
@@ -527,7 +530,11 @@ async function populateUserMetadata(socket: AuthSocket): Promise<void> {
       db.select({ displayName: userProfiles.displayName, avatarUrl: userProfiles.avatarUrl }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1),
     ]);
 
-    const name = profileResult[0]?.displayName || userResult[0]?.name || 'Unknown';
+    // Decrypt PII at the edge (GDPR #965): users.name may be ciphertext;
+    // userProfiles.displayName is never encrypted and takes precedence anyway.
+    const rawName = userResult[0]?.name;
+    const decryptedName = rawName ? await decryptField(rawName) : undefined;
+    const name = profileResult[0]?.displayName || decryptedName || 'Unknown';
     const avatarUrl = profileResult[0]?.avatarUrl || userResult[0]?.image || null;
 
     socket.data.user = { id: userId, name, avatarUrl };

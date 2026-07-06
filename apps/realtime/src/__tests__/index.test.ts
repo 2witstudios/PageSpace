@@ -47,6 +47,13 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   verifyBroadcastSignature: vi.fn(),
 }));
 
+// field-crypto mock — defaults to passthrough (matches real decryptField's
+// behavior on non-ciphertext-shaped strings); tests override to simulate
+// actual ciphertext decryption.
+vi.mock('@pagespace/lib/encryption/field-crypto', () => ({
+  decryptField: vi.fn(async (value: string | null | undefined) => value),
+}));
+
 // permissions mock
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
@@ -236,6 +243,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { emitValidationError } from '../validation';
 
 // ---------------------------------------------------------------------------
@@ -1691,6 +1699,36 @@ describe('populateUserMetadata', () => {
 
     expect(next).toHaveBeenCalledTimes(1);
     expect((socket.data.user as { name: string }).name).toBe('User Name');
+  });
+
+  it('given no profile and a ciphertext user name (GDPR #965 post-cutover), should decrypt before using as fallback', async () => {
+    mockDbLimit
+      .mockResolvedValueOnce([{ name: 'ciphertext-blob', image: null }]) // users query
+      .mockResolvedValueOnce([]); // no profile
+
+    vi.mocked(decryptField).mockImplementation(async (value) =>
+      value === 'ciphertext-blob' ? 'Decrypted Name' : value
+    );
+
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: 'user-meta-cipher',
+    } as Awaited<ReturnType<typeof sessionService.validateSession>>);
+
+    const socket = createMockSocket({
+      data: { user: { id: 'user-meta-cipher', name: 'Unknown', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_metacipher' },
+        headers: { origin: undefined },
+        address: '127.0.0.1',
+      },
+    });
+    const next = vi.fn();
+
+    await capturedIoUseCallback!(socket, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(decryptField).toHaveBeenCalledWith('ciphertext-blob');
+    expect((socket.data.user as { name: string }).name).toBe('Decrypted Name');
   });
 
   it('given no user data at all, should use Unknown fallback', async () => {
