@@ -34,6 +34,7 @@ const referenceKey = ({ id, kind, driveId }: FileReference): string =>
   driveId ? `dashboard:${driveId}:${id}:${kind}` : `api:${id}:${kind}`;
 
 export interface OgMeta {
+  ogTitle?: string;
   ogImageUrl?: string;
   ogDescription?: string;
   faviconHref?: string;
@@ -44,6 +45,7 @@ export interface OgMeta {
  * tags from the body so they can be hoisted into <head> by renderCanvasDocument.
  *
  * Reads standard HTML semantics the author placed directly in the canvas:
+ *   <meta property="og:title"       content="…">  → ogTitle
  *   <meta property="og:image"       content="…">  → ogImageUrl
  *   <meta property="og:description" content="…">  → ogDescription
  *   <link rel="icon" href="…">                    → faviconHref
@@ -63,6 +65,14 @@ export function extractAndStripOgMeta(html: string): { meta: OgMeta; html: strin
     })
     .replace(/<meta\b[^>]+content="([^"]*)"[^>]+property="og:image"[^>]*\/?>/gi, (_, content: string) => {
       meta.ogImageUrl ??= content || undefined;
+      return '';
+    })
+    .replace(/<meta\b[^>]+property="og:title"[^>]+content="([^"]*)"[^>]*\/?>/gi, (_, content: string) => {
+      meta.ogTitle ??= content || undefined;
+      return '';
+    })
+    .replace(/<meta\b[^>]+content="([^"]*)"[^>]+property="og:title"[^>]*\/?>/gi, (_, content: string) => {
+      meta.ogTitle ??= content || undefined;
       return '';
     })
     .replace(/<meta\b[^>]+property="og:description"[^>]+content="([^"]*)"[^>]*\/?>/gi, (_, content: string) => {
