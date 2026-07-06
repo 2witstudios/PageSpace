@@ -99,7 +99,8 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
   // handing the raw Sprite client straight to acquireTerminalSandbox — the
   // adapter re-expresses it as the same ExecSandboxClient shape used below,
   // so nothing past this point (or the raw `sdk` used for the PTY bridge) changes.
-  const host = createSpriteMachineHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
+  const rawClient = createSpritesSandboxClient({ sdk });
+  const host = createSpriteMachineHost({ sdk, client: rawClient });
   const client = createExecClientFromMachineHost(host, { kind: 'sprite' });
 
   const sandboxResult = await acquireTerminalSandbox({
