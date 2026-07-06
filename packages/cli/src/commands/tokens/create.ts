@@ -106,30 +106,30 @@ export type ResolveTokenProfileNameResult = { readonly ok: true; readonly name: 
 
 /**
  * `--save-as-profile` if given, else the sole drive's id — ambiguous for
- * multiple drives. The `"default"` name is refused outright: that slot holds
- * the personal credential `pagespace login` stores, and letting a scoped
- * token land there would let either credential silently clobber the other.
+ * multiple drives. Whichever branch resolves the name, `"default"` is
+ * refused outright: that slot holds the personal credential `pagespace
+ * login` stores, and letting a scoped token land there (whether named
+ * explicitly or auto-derived from a drive literally named "default") would
+ * let either credential silently clobber the other.
  */
 export function resolveTokenProfileName({
   saveAsProfile,
   drives,
 }: Pick<CreateTokenArgs, 'saveAsProfile' | 'drives'>): ResolveTokenProfileNameResult {
-  if (saveAsProfile === DEFAULT_PROFILE_NAME) {
+  if (saveAsProfile === undefined && drives.length !== 1) {
+    return {
+      ok: false,
+      message: '--save-as-profile <name> is required when scoping a token to more than one drive.',
+    };
+  }
+  const resolvedName = saveAsProfile ?? drives[0].id;
+  if (resolvedName === DEFAULT_PROFILE_NAME) {
     return {
       ok: false,
       message: `--save-as-profile "${DEFAULT_PROFILE_NAME}" is reserved for the personal credential stored by "pagespace login". Choose another profile name.`,
     };
   }
-  if (saveAsProfile !== undefined) {
-    return { ok: true, name: saveAsProfile };
-  }
-  if (drives.length === 1) {
-    return { ok: true, name: drives[0].id };
-  }
-  return {
-    ok: false,
-    message: '--save-as-profile <name> is required when scoping a token to more than one drive.',
-  };
+  return { ok: true, name: resolvedName };
 }
 
 export interface TokensCreateHandlerDeps {

@@ -151,6 +151,13 @@ describe('resolveTokenProfileName', () => {
     expect(result.ok === false && result.message).toContain('pagespace login');
   });
 
+  it('rejects the single-drive auto-derived name when it equals "default" (e.g. --drive default, no --save-as-profile)', () => {
+    const result = resolveTokenProfileName({ saveAsProfile: undefined, drives: [{ id: 'default', role: null }] });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain('"default"');
+    expect(result.ok === false && result.message).toContain('pagespace login');
+  });
+
   it('is a pure function: identical input produces a deep-equal result', () => {
     const input = { saveAsProfile: undefined, drives: [{ id: 'drv1', role: null }] as DriveScopeArg[] };
     expect(resolveTokenProfileName(input)).toEqual(resolveTokenProfileName(input));
@@ -286,6 +293,26 @@ describe('createTokensCreateHandler', () => {
       ctx,
       commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'default']),
     );
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(stderr.lines.join('')).toContain('"default"');
+    expect(browserOpened).toBe(false);
+  });
+
+  it('rejects a single --drive default with no --save-as-profile as a usage error without opening a browser', async () => {
+    const store = fakeStore();
+    let browserOpened = false;
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      openBrowser: async () => {
+        browserOpened = true;
+        return true;
+      },
+    });
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+
+    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'default', '--role', 'member']));
 
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(stderr.lines.join('')).toContain('"default"');
