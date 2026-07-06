@@ -71,10 +71,12 @@ describe('normalizeDriveScopes', () => {
 describe('computeMcpTokenActionBinding', () => {
   it('is independent of drive array order', () => {
     const a = computeMcpTokenActionBinding({
+      op: 'mint',
       name: 'My Token',
       driveScopes: normalizeDriveScopes([{ id: 'drive-1', role: 'ADMIN' }, { id: 'drive-2', role: 'MEMBER' }]),
     });
     const b = computeMcpTokenActionBinding({
+      op: 'mint',
       name: 'My Token',
       driveScopes: normalizeDriveScopes([{ id: 'drive-2', role: 'MEMBER' }, { id: 'drive-1', role: 'ADMIN' }]),
     });
@@ -83,17 +85,19 @@ describe('computeMcpTokenActionBinding', () => {
 
   it('changes when the token name changes', () => {
     const driveScopes = normalizeDriveScopes([{ id: 'drive-1', role: 'ADMIN' }]);
-    const a = computeMcpTokenActionBinding({ name: 'Token A', driveScopes });
-    const b = computeMcpTokenActionBinding({ name: 'Token B', driveScopes });
+    const a = computeMcpTokenActionBinding({ op: 'mint', name: 'Token A', driveScopes });
+    const b = computeMcpTokenActionBinding({ op: 'mint', name: 'Token B', driveScopes });
     expect(a).not.toEqual(b);
   });
 
   it('changes when a drive role changes', () => {
     const a = computeMcpTokenActionBinding({
+      op: 'mint',
       name: 'My Token',
       driveScopes: normalizeDriveScopes([{ id: 'drive-1', role: 'ADMIN' }]),
     });
     const b = computeMcpTokenActionBinding({
+      op: 'mint',
       name: 'My Token',
       driveScopes: normalizeDriveScopes([{ id: 'drive-1', role: 'MEMBER' }]),
     });
@@ -102,14 +106,29 @@ describe('computeMcpTokenActionBinding', () => {
 
   it('produces the same binding for equivalent legacy driveIds and drives input', () => {
     const a = computeMcpTokenActionBinding({
+      op: 'mint',
       name: 'My Token',
       driveScopes: normalizeDriveScopes(undefined, ['drive-1']),
     });
     const b = computeMcpTokenActionBinding({
+      op: 'mint',
       name: 'My Token',
       driveScopes: normalizeDriveScopes([{ id: 'drive-1', role: null }]),
     });
     expect(a).toEqual(b);
+  });
+
+  it('changes when the operation differs for an otherwise identical name + drive-scope set', () => {
+    // Regression: without an operation discriminator, a step-up grant
+    // requested for minting a NEW token named "tok-1" with no drive scopes
+    // would produce the exact same binding as a grant requested for
+    // widening an EXISTING token whose tokenId happens to be "tok-1" (PATCH
+    // uses `name: tokenId`) — letting a mint-grant be replayed to widen a
+    // real token, or vice versa.
+    const driveScopes = normalizeDriveScopes([{ id: 'drive-1', role: 'ADMIN' }]);
+    const mint = computeMcpTokenActionBinding({ op: 'mint', name: 'tok-1', driveScopes });
+    const update = computeMcpTokenActionBinding({ op: 'update', name: 'tok-1', driveScopes });
+    expect(mint).not.toEqual(update);
   });
 
   it('does not collide two different drive-scope sets when a customRoleId smuggles a delimiter sequence', () => {
@@ -117,10 +136,12 @@ describe('computeMcpTokenActionBinding', () => {
     // both of these serialized to "x::y,z:MEMBER:" — letting a step-up grant
     // minted for one drive-scope set be spent minting a different one.
     const a = computeMcpTokenActionBinding({
+      op: 'mint',
       name: 'Token',
       driveScopes: normalizeDriveScopes([{ id: 'x', role: null, customRoleId: 'y,z:MEMBER:' }]),
     });
     const b = computeMcpTokenActionBinding({
+      op: 'mint',
       name: 'Token',
       driveScopes: normalizeDriveScopes([
         { id: 'x', role: null, customRoleId: 'y' },

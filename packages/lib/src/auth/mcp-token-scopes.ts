@@ -65,7 +65,15 @@ export function normalizeDriveScopes(
  * Canonical, order-independent action-binding parts for an mcp-token mint/update
  * request (Phase 8 step-up gate). Fed into `computeActionBindingHash`
  * (`step-up-decisions.ts`) so a step-up grant obtained for one set of
- * name/drive-scope parameters can never be spent minting a different one.
+ * op/name/drive-scope parameters can never be spent minting — or widening —
+ * a different one.
+ *
+ * `op` discriminates the two call sites (`route.ts` POST binds `op: 'mint'`,
+ * `[tokenId]/route.ts` PATCH binds `op: 'update'`, reusing the mint helper's
+ * `name` slot for the tokenId being widened). Without it, a mint request
+ * named identically to some existing token's id, with matching drive scopes,
+ * would produce the same hash as the grant for widening that real token —
+ * letting a grant obtained for one operation be redeemed against the other.
  *
  * The drive-scope list is JSON-encoded (sorted `[id, role, customRoleId]`
  * tuples), never an ad-hoc delimiter join: `id` and `customRoleId` are plain
@@ -75,9 +83,11 @@ export function normalizeDriveScopes(
  * `computeActionBindingHash`'s docstring for the same reasoning.
  */
 export function computeMcpTokenActionBinding({
+  op,
   name,
   driveScopes,
 }: {
+  op: 'mint' | 'update';
   name: string;
   driveScopes: NormalizedDriveScope[];
 }): Record<string, string> {
@@ -86,5 +96,5 @@ export function computeMcpTokenActionBinding({
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((scope) => [scope.id, scope.role ?? '', scope.customRoleId ?? '']),
   );
-  return { name, driveScopes: canonicalDrives };
+  return { op, name, driveScopes: canonicalDrives };
 }
