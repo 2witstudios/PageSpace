@@ -391,7 +391,7 @@ describe('handleKickRequest', () => {
     mockedRegistry.getSocketsForUser.mockReturnValue([]);
     const io = createMockIo(new Map());
 
-    const validReasons = ['member_removed', 'role_changed', 'permission_revoked', 'session_revoked'] as const;
+    const validReasons = ['member_removed', 'role_changed', 'permission_revoked', 'session_revoked', 'page_private'] as const;
 
     for (const reason of validReasons) {
       const body = JSON.stringify({

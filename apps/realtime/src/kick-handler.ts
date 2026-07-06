@@ -15,7 +15,7 @@ import { socketRegistry } from './socket-registry';
 export interface KickPayload {
   userId: string;
   roomPattern: string; // e.g., 'drive:abc123' or 'drive:*' for all drives
-  reason: 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked';
+  reason: 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked' | 'page_private';
   metadata?: {
     driveId?: string;
     pageId?: string;
@@ -30,7 +30,7 @@ export interface KickResult {
   error?: string;
 }
 
-const VALID_REASONS = ['member_removed', 'role_changed', 'permission_revoked', 'session_revoked'] as const;
+const VALID_REASONS = ['member_removed', 'role_changed', 'permission_revoked', 'session_revoked', 'page_private'] as const;
 
 interface ParseResult {
   success: boolean;

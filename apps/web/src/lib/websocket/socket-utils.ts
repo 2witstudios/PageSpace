@@ -1279,6 +1279,22 @@ export async function kickUserFromRooms(payload: KickPayload): Promise<KickResul
       signal: AbortSignal.timeout(30000),
     });
 
+    if (!response.ok) {
+      const errorBody = await response.text();
+      realtimeLogger.error(
+        'Kick request rejected by realtime server',
+        undefined,
+        {
+          userId: maskIdentifier(payload.userId),
+          roomPattern: payload.roomPattern,
+          reason: payload.reason,
+          status: response.status,
+          errorBody,
+        }
+      );
+      return { success: false, kickedCount: 0, rooms: [], error: `Kick request failed with status ${response.status}` };
+    }
+
     const result = await response.json() as KickResult;
 
     if (result.success) {

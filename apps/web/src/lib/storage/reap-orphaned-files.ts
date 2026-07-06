@@ -112,6 +112,20 @@ export async function reapOrphanedFiles(database: Database, options?: ReapOption
     : [];
   const deletedIdSet = new Set(deletedIds);
 
+  // A reaped orphan (physical blob already deleted above) whose row survived
+  // deleteFileRecords's recheck means either (a) another concurrent reap
+  // deleted the row first — benign, race-safe by design — or (b) the row
+  // became newly referenced between the scan and the recheck, so its blob
+  // is now gone out from under a live reference. deleteFileRecords doesn't
+  // report which case occurred, but either way this is worth surfacing:
+  // case (b) is the residual gap the #1867 lock-then-recheck fix narrows
+  // but can't fully close (the physical delete already happened by this point).
+  for (const orphan of reapedOrphans) {
+    if (!deletedIdSet.has(orphan.id)) {
+      console.warn(`[ReapOrphans] Physical blob for ${orphan.id} was deleted but its files row survived the recheck (raced with another reap or a new reference) — the row may now point at a missing blob.`);
+    }
+  }
+
   // Credit storage quota back for every reaped orphan whose row this call
   // actually deleted. computeStorageCreditOnUnlink (M8) centralizes the rules:
   // attribute to the original uploader (createdBy), skip rows nulled by a user
