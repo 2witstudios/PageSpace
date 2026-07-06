@@ -30,3 +30,17 @@ Canonical requirements + file paths for the three Terminal epics. The PageSpace 
 ## Build mandate
 
 Greenfield within the app — code-exec is admin-only + flag-off (`CODE_EXECUTION_ENABLED` default OFF), no released consumers. No backwards-compat shims; delete the throwaway per-conversation path when unifying. Pure functions + DI, thin shells; test-first TDD; bun only; no `any`; Next 15 params awaited; migrations via `bun run db:generate`; permissions only via `packages/lib/src/permissions/`; tests colocated in `__tests__/`. User-facing noun is "Terminal" / "Machine"; never name Fly/Sprites/Modal in UI copy.
+
+## Sprites API — ground on the REAL docs, do not assume
+
+Sprite = Machine. Work against the actual API surface, never inferred SDK shapes.
+- **Docs**: https://sprites.dev/api · **Base URL**: `https://api.sprites.dev/v1` · **Auth**: `Authorization: Bearer $SPRITES_TOKEN`.
+- **Provision / lifecycle** — `POST /v1/sprites` (create), `DELETE /v1/sprites/{sprite}` (destroy); Services API start/stop/restart. Docs: https://sprites.dev/api/sprites
+- **Exec / PTY** — `WSS /v1/sprites/{sprite}/exec` (run commands + terminal), `GET .../exec` (list sessions), `WSS .../exec/{session}` (attach). Docs: https://sprites.dev/api/sprites/exec
+- **Filesystem (persistent)** — read/write/delete; the fs persists (this is why installed tools stick). Docs: https://sprites.dev/api/sprites/filesystem
+- **Checkpoints / restore** — `POST /v1/sprites/{sprite}/checkpoints`, `.../{id}/restore`. Optional — the persistent fs already covers tool persistence.
+- **Network policy (egress)** — `GET/POST /v1/sprites/policies` (DNS-based outbound filtering); matches PageSpace's egress model / containment.
+- **Proxy** — `WSS /v1/sprites/proxy` (TCP tunnel to internal ports); relevant to terminal streaming and future origin-serving.
+- **SDKs** — Node `@fly/sprites` (used today in `packages/lib/src/services/sandbox/sandbox-client/sprites.ts`), Python `sprites-py`, Go `github.com/superfly/sprites-go`, Elixir `superfly/sprites-ex`.
+
+Any task that provisions, execs into, persists files in, checkpoints, or networks a Sprite MUST cite the specific doc page above rather than guessing SDK behavior.
