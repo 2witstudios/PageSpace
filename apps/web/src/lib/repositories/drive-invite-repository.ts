@@ -10,6 +10,8 @@ import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { pendingInvites } from '@pagespace/db/schema/pending-invites';
+import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 
 export const driveInviteRepository = {
   async findDriveById(driveId: string) {
@@ -142,14 +144,14 @@ export const driveInviteRepository = {
       where: eq(users.id, userId),
       columns: { email: true },
     });
-    return user?.email;
+    return user ? await decryptField(user.email) : undefined;
   },
 
   async findUserIdByEmail(
     email: string
   ): Promise<{ id: string; emailVerified: Date | null; suspendedAt: Date | null } | null> {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email),
+      where: userEmailMatch(email),
       columns: { id: true, emailVerified: true, suspendedAt: true },
     });
     return user
@@ -165,7 +167,7 @@ export const driveInviteRepository = {
       columns: { email: true, emailVerified: true, suspendedAt: true },
     });
     return user
-      ? { email: user.email, emailVerified: user.emailVerified, suspendedAt: user.suspendedAt }
+      ? { email: await decryptField(user.email), emailVerified: user.emailVerified, suspendedAt: user.suspendedAt }
       : null;
   },
 
@@ -177,7 +179,7 @@ export const driveInviteRepository = {
       .where(
         and(
           eq(driveMembers.driveId, driveId),
-          eq(users.email, email),
+          userEmailMatch(email),
           isNull(driveMembers.acceptedAt)
         )
       )
@@ -190,7 +192,7 @@ export const driveInviteRepository = {
       where: eq(users.id, userId),
       columns: { name: true, email: true },
     });
-    return user ? { name: user.name, email: user.email } : null;
+    return user ? decryptUserRow({ name: user.name, email: user.email }) : null;
   },
 
   async deleteDriveMemberById(memberId: string): Promise<void> {
@@ -301,7 +303,12 @@ export const driveInviteRepository = {
       .innerJoin(users, eq(users.id, pendingInvites.invitedBy))
       .where(eq(pendingInvites.tokenHash, tokenHash))
       .limit(1);
-    return results.at(0) ?? null;
+    const row = results.at(0);
+    if (!row) return null;
+    // Decrypt the inviter's joined name PII at the edge (GDPR #965) — this flows
+    // to the invite/signup screens (legacy plaintext passes through unchanged).
+    row.inviterName = await decryptField(row.inviterName);
+    return row;
   },
 
   async findActivePendingInviteByDriveAndEmail(
@@ -346,7 +353,7 @@ export const driveInviteRepository = {
     email: string,
   ): Promise<{ id: string; suspendedAt: Date | null } | null> {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email.trim().toLowerCase()),
+      where: userEmailMatch(email.trim().toLowerCase()),
       columns: { id: true, suspendedAt: true },
     });
     return user ? { id: user.id, suspendedAt: user.suspendedAt } : null;
@@ -407,7 +414,7 @@ export const driveInviteRepository = {
     createdAt: Date;
     expiresAt: Date | null;
   }>> {
-    return db
+    const rows = await db
       .select({
         id: pendingInvites.id,
         email: pendingInvites.email,
@@ -429,6 +436,14 @@ export const driveInviteRepository = {
           isNull(pendingInvites.consumedAt),
         ),
       );
+    // Decrypt the inviter's joined name PII at the edge (GDPR #965) — this list
+    // is returned to the member-management UI (legacy plaintext passes through).
+    await Promise.all(
+      rows.map(async (r) => {
+        r.invitedByName = await decryptField(r.invitedByName);
+      }),
+    );
+    return rows;
   },
 
   // Loader for the revoke route (PR 2). Returns expired-unconsumed rows too

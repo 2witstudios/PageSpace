@@ -2,7 +2,8 @@
  * @scaffold - promote-admin.ts Tests
  *
  * promote-admin.ts is a CLI script that reads process.argv[2] for the email
- * and then queries/updates the database. No repository seam exists.
+ * and then queries/updates the database. No repository seam exists beyond the
+ * shared `userEmailMatch` dual-lookup helper.
  *
  * @REVIEW ORM chain mock (db.update().set().where()) encodes internal query
  * composition. This is accepted as temporary characterization until a service
@@ -24,11 +25,12 @@ const mockFindFirst = vi.fn();
 const mockWhere = vi.fn().mockResolvedValue(undefined);
 const mockSet = vi.fn();
 const mockUpdate = vi.fn();
+const mockUserEmailMatch = vi.fn((email: string) => ({ emailMatch: email }));
 
 mockSet.mockReturnValue({ where: mockWhere });
 mockUpdate.mockReturnValue({ set: mockSet });
 
-vi.mock('../db', () => ({
+vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       users: {
@@ -39,12 +41,16 @@ vi.mock('../db', () => ({
   },
 }));
 
-vi.mock('../schema/auth', () => ({
-  users: { email: 'email_column' },
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id_column', email: 'email_column' },
 }));
 
-vi.mock('../operators', () => ({
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ col, val })),
+}));
+
+vi.mock('@pagespace/lib/auth/user-repository', () => ({
+  userEmailMatch: mockUserEmailMatch,
 }));
 
 /** @scaffold */
@@ -64,6 +70,7 @@ describe('promote-admin.ts', () => {
     mockUpdate.mockReset();
     mockSet.mockReset();
     mockWhere.mockReset();
+    mockUserEmailMatch.mockClear();
     // Re-establish the chain
     mockWhere.mockResolvedValue(undefined);
     mockSet.mockReturnValue({ where: mockWhere });
@@ -86,6 +93,16 @@ describe('promote-admin.ts', () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('Usage')
     );
+  });
+
+  it('looks up the user via the dual-lookup helper, not a raw eq', async () => {
+    process.argv = ['node', 'promote-admin.ts', 'notfound@example.com'];
+    mockFindFirst.mockResolvedValueOnce(undefined);
+
+    await import('../promote-admin');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mockUserEmailMatch).toHaveBeenCalledWith('notfound@example.com');
   });
 
   it('exits with 1 when user is not found', async () => {
@@ -119,7 +136,7 @@ describe('promote-admin.ts', () => {
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
 
-  it('promotes user to admin and exits with 0', async () => {
+  it('promotes user to admin by id (not email) and exits with 0', async () => {
     process.argv = ['node', 'promote-admin.ts', 'user@example.com'];
     mockFindFirst.mockResolvedValueOnce({
       id: 'user-1',
@@ -131,6 +148,9 @@ describe('promote-admin.ts', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(mockUpdate).toHaveBeenCalledTimes(1);
+    // The update's where-condition must key off the resolved user's id, not
+    // the raw email — the email column may hold ciphertext post-cutover.
+    expect(mockWhere).toHaveBeenCalledWith({ col: 'id_column', val: 'user-1' });
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining('Successfully promoted')
     );

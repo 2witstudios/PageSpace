@@ -5,6 +5,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
@@ -125,7 +126,9 @@ export async function GET(request: Request) {
           avatarUrl: null,
           lastMessageAt: toISOTimestamp(row.last_message_at),
           lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
-          lastMessageSender: row.sender_name,
+          // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
+          // (plaintext) with users.name (ciphertext); decryptField handles both.
+          lastMessageSender: await decryptField(row.sender_name),
           unreadCount: parseInt(row.unread_count) || 0,
           driveId: row.drive_id,
           driveName: row.drive_name,
@@ -209,7 +212,9 @@ export async function GET(request: Request) {
           items.push({
             id: row.id,
             type: 'dm',
-            name: row.other_user_display_name || row.other_user_name,
+            // Decrypt PII at the edge (GDPR #965): profile displayName stays
+            // plaintext; users.name fallback is ciphertext (decryptField handles both).
+            name: row.other_user_display_name || (await decryptField(row.other_user_name)),
             avatarUrl: row.other_user_image || row.other_user_avatar_url,
             lastMessageAt: toISOTimestamp(row.last_message_at),
             lastMessagePreview: row.last_message,
@@ -295,7 +300,9 @@ export async function GET(request: Request) {
             avatarUrl: null,
             lastMessageAt: toISOTimestamp(row.last_message_at),
             lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
-            lastMessageSender: row.sender_name,
+            // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
+            // (plaintext) with users.name (ciphertext); decryptField handles both.
+            lastMessageSender: await decryptField(row.sender_name),
             unreadCount: parseInt(row.unread_count) || 0,
             driveId: row.drive_id,
             driveName: row.drive_name,

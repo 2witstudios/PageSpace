@@ -7,6 +7,8 @@ import { connections } from '@pagespace/db/schema/social';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -53,10 +55,12 @@ export async function GET(request: Request) {
       .where(eq(users.id, user.id))
       .limit(1);
 
-    const isSelf = !!currentUser && email === currentUser.email;
+    // Decrypt the stored email before the self-connection comparison.
+    const currentUserEmail = currentUser ? await decryptField(currentUser.email) : null;
+    const isSelf = !!currentUserEmail && email === currentUserEmail;
 
-    // Find user by exact email match
-    const [targetUser] = await db
+    // Find user by exact email match (dual blind-index/raw-email lookup)
+    const [targetRow] = await db
       .select({
         id: users.id,
         name: users.name,
@@ -67,8 +71,11 @@ export async function GET(request: Request) {
       })
       .from(users)
       .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
-      .where(eq(users.email, email))
+      .where(userEmailMatch(email))
       .limit(1);
+
+    // Decrypt PII at the edge so the search result shows plaintext name/email.
+    const targetUser = targetRow ? await decryptUserRow(targetRow) : undefined;
 
     let existingStatus: ConnectionStatus | null = null;
     let target: ConnectionSearchProfile | null = null;

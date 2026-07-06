@@ -5,6 +5,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
 import { drives } from '@pagespace/db/schema/core';
 import { connections } from '@pagespace/db/schema/social';
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -137,7 +138,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ users: [] });
     }
 
-    const userRows = await db
+    const userRows = await decryptUserRows(await db
       .select({
         id: users.id,
         name: users.name,
@@ -150,7 +151,7 @@ export async function GET(request: Request) {
       })
       .from(users)
       .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
-      .where(inArray(users.id, allUserIds));
+      .where(inArray(users.id, allUserIds)));
 
     const messageable: MessageableUser[] = userRows.map((u) => ({
       id: u.id,

@@ -3,6 +3,7 @@ import { eq, and, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -66,7 +67,7 @@ export async function GET(req: Request) {
         });
       } else {
         // Multi-member drive - get admins for transfer option
-        const admins = await db
+        const adminRows = await db
           .select({
             id: users.id,
             name: users.name,
@@ -81,6 +82,8 @@ export async function GET(req: Request) {
               eq(driveMembers.role, 'ADMIN')
             )
           );
+        // Decrypt PII at the edge so the transfer-target list shows plaintext.
+        const admins = await decryptUserRows(adminRows);
 
         multiMemberDrives.push({
           id: drive.id,

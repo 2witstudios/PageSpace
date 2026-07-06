@@ -10,6 +10,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
+import { decryptUserRow } from '../auth/user-repository';
 
 export interface UserAccount {
   id: string;
@@ -43,7 +44,8 @@ export const accountRepository = {
       },
     });
 
-    return user ?? null;
+    // Decrypt PII at the edge so the email confirmation + erasure payload use plaintext.
+    return user ? decryptUserRow(user) : null;
   },
 
   /**

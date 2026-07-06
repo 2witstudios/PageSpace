@@ -154,7 +154,7 @@ export const siteMetadata: Metadata = {
   category: "technology",
 };
 
-export const LEGAL_LAST_UPDATED = "February 17, 2026";
+export const LEGAL_LAST_UPDATED = "July 5, 2026";
 
 /**
  * Pre-defined metadata for common pages
@@ -229,6 +229,22 @@ export const pageMetadata = {
       "Terms of Service for PageSpace, the AI-powered unified workspace platform.",
     path: "/terms",
     keywords: ["terms of service", "terms", "legal", "agreement"],
+  }),
+
+  subprocessors: createMetadata({
+    title: "Subprocessors",
+    description:
+      "The third-party subprocessors PageSpace uses to deliver its service, what data they process, and where they're located.",
+    path: "/subprocessors",
+    keywords: ["subprocessors", "vendors", "data processing", "GDPR", "third parties"],
+  }),
+
+  cookies: createMetadata({
+    title: "Cookie Policy",
+    description:
+      "How PageSpace uses cookies and similar technologies, and how to control your preferences.",
+    path: "/cookies",
+    keywords: ["cookies", "cookie policy", "tracking", "consent", "GDPR"],
   }),
 
   contact: createMetadata({

@@ -17,6 +17,7 @@ import { eq } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
 import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
+import { userEmailMatch, prepareUserWrite } from '@pagespace/lib/auth/user-repository';
 import { parseArgs } from 'node:util';
 
 async function generateSetupLink(userId: string): Promise<string> {
@@ -64,7 +65,7 @@ async function main() {
 
   // Check if user already exists
   const existing = await db.query.users.findFirst({
-    where: eq(users.email, email),
+    where: userEmailMatch(email),
     columns: { id: true, role: true },
   });
 
@@ -92,14 +93,14 @@ async function main() {
 
   const userId = createId();
 
-  await db.insert(users).values({
+  await db.insert(users).values(await prepareUserWrite({
     id: userId,
     name,
     email,
     role: 'admin',
     emailVerified: new Date(),
     ...getOnPremUserDefaults(),
-  });
+  }));
 
   const link = await generateSetupLink(userId);
 

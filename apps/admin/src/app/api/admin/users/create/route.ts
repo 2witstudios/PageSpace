@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { createId } from '@paralleldrive/cuid2';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
+import { userEmailMatch, prepareUserWrite } from '@pagespace/lib/auth/user-repository';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -33,7 +33,7 @@ export const POST = withAdminAuth(async (adminUser, request) => {
 
     // Check for existing user
     const existing = await db.query.users.findFirst({
-      where: eq(users.email, normalizedEmail),
+      where: userEmailMatch(normalizedEmail),
       columns: { id: true },
     });
 
@@ -47,14 +47,14 @@ export const POST = withAdminAuth(async (adminUser, request) => {
     const userId = createId();
     const onPrem = isOnPrem();
 
-    await db.insert(users).values({
+    await db.insert(users).values(await prepareUserWrite({
       id: userId,
       name: name.trim(),
       email: normalizedEmail,
       role,
       emailVerified: new Date(), // Admin-created accounts are pre-verified
       ...(onPrem ? getOnPremUserDefaults() : { subscriptionTier: 'free' }),
-    });
+    }));
 
     // Provision the Home drive (idempotent; seeded since the user is brand-new)
     try {

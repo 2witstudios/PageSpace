@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Boundary-level test double: see test-doubles/db.ts for the design rationale.
 import { testDbState } from './test-doubles/db';
@@ -25,6 +25,9 @@ vi.mock('@pagespace/db/schema/storage', async () => {
 });
 
 import { dmMessageRepository } from '../dm-message-repository';
+// Real encryption helpers (NOT mocked) — prove ciphertext seeded at rest is
+// decrypted at the read edge. Legacy plaintext must still pass through.
+import { encryptField, looksEncrypted } from '../../encryption/field-crypto';
 
 interface AssertParams {
   given: string;
@@ -1061,6 +1064,80 @@ describe('dmMessageRepository surface', () => {
         removeDmReaction: true,
         loadDmReactionWithUser: true,
       },
+    });
+  });
+});
+
+describe('dmMessageRepository — PII decryption at the read edge (GDPR #965)', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.ENCRYPTION_KEY = 'dm-repo-pii-test-master-key-32-chars-long!';
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('listActiveMessages decrypts the joined sender and reactor names', async () => {
+    const aliceCipher = await encryptField('Alice');
+    const bobCipher = await encryptField('Bob');
+    expect(looksEncrypted(aliceCipher)).toBe(true);
+    expect(looksEncrypted(bobCipher)).toBe(true);
+
+    testDbState.seed('users', [
+      { id: 'u-1', name: aliceCipher },
+      { id: 'u-2', name: bobCipher },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'm-1', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: null, replyCount: 0, createdAt: new Date('2026-05-01T00:00:00Z') },
+    ]);
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-1', messageId: 'm-1', userId: 'u-2', emoji: '👍' },
+    ]);
+
+    const rows = await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 10 });
+
+    assert({
+      given: 'sender + reactor names stored as AES-GCM ciphertext at rest',
+      should: 'return plaintext names at the read edge for both the sender and the reactor',
+      actual: {
+        sender: (rows[0]?.sender as { name: string } | null)?.name,
+        reactor: (rows[0]?.reactions as Array<{ user: { name: string } }> | undefined)?.[0]?.user?.name,
+      },
+      expected: { sender: 'Alice', reactor: 'Bob' },
+    });
+  });
+
+  it('loadDmReactionWithUser decrypts the reactor name before broadcast', async () => {
+    const cipher = await encryptField('Dave');
+    testDbState.seed('users', [{ id: 'u-7', name: cipher }]);
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-7', messageId: 'm-7', userId: 'u-7', emoji: '🎉' },
+    ]);
+
+    const row = await dmMessageRepository.loadDmReactionWithUser('rx-7');
+
+    assert({
+      given: 'a DM reaction whose reactor name is ciphertext at rest',
+      should: 'decrypt the reactor name before the row is broadcast/returned',
+      actual: (row?.user as { name: string } | null)?.name,
+      expected: 'Dave',
+    });
+  });
+
+  it('passes legacy plaintext sender names through unchanged (mixed-state safety)', async () => {
+    testDbState.seed('users', [{ id: 'u-legacy', name: 'Plain Pat' }]);
+    testDbState.seed('directMessages', [
+      { id: 'm-legacy', conversationId: 'conv-1', senderId: 'u-legacy', isActive: true, parentId: null, replyCount: 0 },
+    ]);
+
+    const rows = await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 10 });
+
+    assert({
+      given: 'a legacy row whose sender name is still plaintext (mid-backfill)',
+      should: 'pass the plaintext name through unchanged',
+      actual: (rows[0]?.sender as { name: string } | null)?.name,
+      expected: 'Plain Pat',
     });
   });
 });

@@ -7,6 +7,7 @@ import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
 import type { SubscriptionTier } from '@/lib/subscription/plans';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 import { classifyDedupeOutcome, DEFAULT_LEASE_MS, type DedupeOutcome } from './dedupe';
@@ -460,7 +461,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
           stripeCustomerId: customerId,
           updatedAt: new Date(),
         })
-        .where(eq(users.email, customerEmail));
+        .where(userEmailMatch(customerEmail));
 
       loggers.api.info('Linked Stripe customer to user', { customerId, email: maskEmail(customerEmail) });
     }
