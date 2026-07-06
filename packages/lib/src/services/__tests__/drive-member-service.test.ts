@@ -71,7 +71,9 @@ import {
   updateMemberRole,
   updateMemberPermissions,
   listDriveMembers,
+  getDriveOwnerAsMember,
 } from '../drive-member-service';
+import { encryptField } from '../../encryption/field-crypto';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
@@ -278,6 +280,45 @@ describe('drive-member-service', () => {
       expect(result).not.toBeNull();
       expect(result!.userId).toBe('user-1');
       expect(result!.customRole).toBeNull();
+    });
+  });
+
+  describe('getDriveOwnerAsMember', () => {
+    it('should return null when drive not found', async () => {
+      const chain = {
+        innerJoin: vi.fn().mockReturnThis(),
+        leftJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+      };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      const result = await getDriveOwnerAsMember('drive-1');
+      expect(result).toBeNull();
+    });
+
+    it('should decrypt the owner PII before returning', async () => {
+      const encryptedEmail = await encryptField('owner@example.com');
+      const encryptedName = await encryptField('Drive Owner');
+      const row = {
+        id: 'owner-1',
+        email: encryptedEmail,
+        name: encryptedName,
+        username: 'owner1',
+        displayName: 'Owner Display',
+        avatarUrl: null,
+      };
+      const chain = {
+        innerJoin: vi.fn().mockReturnThis(),
+        leftJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([row]) }),
+      };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+
+      const result = await getDriveOwnerAsMember('drive-1');
+      expect(result).not.toBeNull();
+      expect(result!.role).toBe('OWNER');
+      expect(result!.user.email).toBe('owner@example.com');
+      expect(result!.user.name).toBe('Drive Owner');
     });
   });
 

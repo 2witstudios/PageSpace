@@ -307,7 +307,7 @@ export async function getDriveOwnerAsMember(driveId: string): Promise<MemberWith
     invitedAt: null,
     acceptedAt: null,
     lastAccessedAt: null,
-    user: { id: row.id, email: row.email, name: row.name },
+    user: await decryptUserRow({ id: row.id, email: row.email, name: row.name }),
     profile: { username: row.username, displayName: row.displayName, avatarUrl: row.avatarUrl },
     customRole: null,
     permissionCounts: { view: 0, edit: 0, share: 0 },
