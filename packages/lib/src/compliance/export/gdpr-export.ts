@@ -2,7 +2,7 @@ import { eq, inArray, or, and, ne } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
-import { aiUsageLogs, activityLogs } from '@pagespace/db/schema/monitoring';
+import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs } from '@pagespace/db/schema/monitoring';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { channelMessages } from '@pagespace/db/schema/chat';
@@ -75,6 +75,48 @@ export interface UserActivityExport {
   metadata: Record<string, unknown> | null;
 }
 
+// Excludes errorStack/ip/userAgent/sessionId/requestId/metadata — internal
+// diagnostic and network telemetry, not data about the subject's own activity.
+export interface UserSystemLogExport {
+  id: string;
+  timestamp: Date;
+  level: string;
+  message: string;
+  category: string | null;
+  endpoint: string | null;
+  method: string | null;
+  duration: number | null;
+}
+
+// Excludes ip/userAgent/sessionId/requestId/error/cache fields — internal
+// diagnostic and network telemetry, not data about the subject's own activity.
+export interface UserApiMetricExport {
+  id: string;
+  timestamp: Date;
+  endpoint: string;
+  method: string;
+  statusCode: number;
+  duration: number;
+  requestSize: number | null;
+  responseSize: number | null;
+}
+
+// Excludes stack/ip/userAgent/sessionId/requestId/metadata/resolvedBy —
+// internal diagnostic telemetry and internal admin references, not data
+// about the subject's own activity.
+export interface UserErrorLogExport {
+  id: string;
+  timestamp: Date;
+  name: string;
+  message: string;
+  endpoint: string | null;
+  method: string | null;
+  file: string | null;
+  line: number | null;
+  column: number | null;
+  resolved: boolean | null;
+}
+
 export interface UserAiUsageExport {
   id: string;
   provider: string;
@@ -144,6 +186,9 @@ export interface AllUserData {
   messages: UserMessageExport[];
   files: UserFileExport[];
   activity: UserActivityExport[];
+  systemLogs: UserSystemLogExport[];
+  apiMetrics: UserApiMetricExport[];
+  errorLogs: UserErrorLogExport[];
   aiUsage: UserAiUsageExport[];
   tasks: UserTaskExport[];
   sessions: UserSessionExport[];
@@ -420,6 +465,62 @@ export async function collectUserActivity(database: DB, userId: string): Promise
   return result;
 }
 
+export async function collectUserSystemLogs(database: DB, userId: string): Promise<UserSystemLogExport[]> {
+  const result = await database
+    .select({
+      id: systemLogs.id,
+      timestamp: systemLogs.timestamp,
+      level: systemLogs.level,
+      message: systemLogs.message,
+      category: systemLogs.category,
+      endpoint: systemLogs.endpoint,
+      method: systemLogs.method,
+      duration: systemLogs.duration,
+    })
+    .from(systemLogs)
+    .where(eq(systemLogs.userId, userId));
+
+  return result;
+}
+
+export async function collectUserApiMetrics(database: DB, userId: string): Promise<UserApiMetricExport[]> {
+  const result = await database
+    .select({
+      id: apiMetrics.id,
+      timestamp: apiMetrics.timestamp,
+      endpoint: apiMetrics.endpoint,
+      method: apiMetrics.method,
+      statusCode: apiMetrics.statusCode,
+      duration: apiMetrics.duration,
+      requestSize: apiMetrics.requestSize,
+      responseSize: apiMetrics.responseSize,
+    })
+    .from(apiMetrics)
+    .where(eq(apiMetrics.userId, userId));
+
+  return result;
+}
+
+export async function collectUserErrorLogs(database: DB, userId: string): Promise<UserErrorLogExport[]> {
+  const result = await database
+    .select({
+      id: errorLogs.id,
+      timestamp: errorLogs.timestamp,
+      name: errorLogs.name,
+      message: errorLogs.message,
+      endpoint: errorLogs.endpoint,
+      method: errorLogs.method,
+      file: errorLogs.file,
+      line: errorLogs.line,
+      column: errorLogs.column,
+      resolved: errorLogs.resolved,
+    })
+    .from(errorLogs)
+    .where(eq(errorLogs.userId, userId));
+
+  return result;
+}
+
 export async function collectUserAiUsage(database: DB, userId: string): Promise<UserAiUsageExport[]> {
   const result = await database
     .select({
@@ -567,11 +668,14 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   const userDrives = await collectUserDrives(database, userId);
   const driveIds = userDrives.map(d => d.id);
 
-  const [userPages, userMessages, userFiles, activity, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userPersonalizationData] = await Promise.all([
+  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userPersonalizationData] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
     collectUserActivity(database, userId),
+    collectUserSystemLogs(database, userId),
+    collectUserApiMetrics(database, userId),
+    collectUserErrorLogs(database, userId),
     collectUserAiUsage(database, userId),
     collectUserTasks(database, userId),
     collectUserSessions(database, userId),
@@ -587,6 +691,9 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     messages: userMessages,
     files: userFiles,
     activity,
+    systemLogs: userSystemLogs,
+    apiMetrics: userApiMetrics,
+    errorLogs: userErrorLogs,
     aiUsage,
     tasks,
     sessions: userSessions,
