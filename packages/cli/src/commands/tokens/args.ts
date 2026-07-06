@@ -1,16 +1,16 @@
 /**
- * Pure argv → request mapping for `tokens create`/`tokens revoke` (Phase 4
- * task 6). Operates on the leftover raw tokens the router hands a matched
+ * Pure argv → request mapping for `tokens create`/`tokens revoke` (Phase 8
+ * task 2). Operates on the leftover raw tokens the router hands a matched
  * route (`CommandIntent.args` after the path prefix is stripped) — global
- * flags (`--json`, `--yes`, `--host`, `--token`) are already extracted by
- * `parseArgv` and never appear here.
+ * flags (`--json`, `--yes`, `--host`, `--token`, `--profile`) are already
+ * extracted by `parseArgv` and never appear here.
  *
- * Role vocabulary mirrors the server's `/api/auth/mcp-tokens` route exactly
- * (`apps/web/src/app/api/auth/mcp-tokens/route.ts`): `member`/`admin` map to
- * the `MEMBER`/`ADMIN` enum (case-insensitive), any other value is treated as
- * a `customRoleId` reference. The server owns all capping/authorization
- * decisions (MEMBER-cannot-grant-ADMIN, custom-role ownership) — this module
- * only shapes the request, never validates authority.
+ * Role vocabulary mirrors the OAuth drive-scope grammar
+ * (`packages/lib/src/auth/oauth/scopes.ts`): `member`/`admin` map to the
+ * `MEMBER`/`ADMIN` enum (case-insensitive), any other value is treated as a
+ * `customRoleId` reference. This module only shapes the flags into data —
+ * `create.ts`'s `buildTokenScope` owns validating that data against the wire
+ * grammar before a scope string ever reaches the server.
  */
 
 export interface DriveScopeArg {
@@ -20,8 +20,8 @@ export interface DriveScopeArg {
 }
 
 export interface CreateTokenArgs {
-  readonly name: string;
   readonly drives: readonly DriveScopeArg[];
+  readonly saveAsProfile?: string;
 }
 
 export type ParseTokensCreateArgsResult =
@@ -36,20 +36,12 @@ function normalizeRole(value: string): Pick<DriveScopeArg, 'role' | 'customRoleI
 }
 
 export function parseTokensCreateArgs(rest: readonly string[]): ParseTokensCreateArgsResult {
-  let name: string | undefined;
+  let saveAsProfile: string | undefined;
   const drives: DriveScopeArg[] = [];
 
   let i = 0;
   while (i < rest.length) {
     const token = rest[i];
-
-    if (token === '--name') {
-      const value = rest[i + 1];
-      if (value === undefined) return { ok: false, message: 'Flag --name requires a value.' };
-      name = value;
-      i += 2;
-      continue;
-    }
 
     if (token === '--drive') {
       const value = rest[i + 1];
@@ -72,12 +64,21 @@ export function parseTokensCreateArgs(rest: readonly string[]): ParseTokensCreat
       continue;
     }
 
+    if (token === '--save-as-profile') {
+      const value = rest[i + 1];
+      if (value === undefined) return { ok: false, message: 'Flag --save-as-profile requires a value.' };
+      if (saveAsProfile !== undefined) {
+        return { ok: false, message: 'Flag --save-as-profile was given more than once.' };
+      }
+      saveAsProfile = value;
+      i += 2;
+      continue;
+    }
+
     return { ok: false, message: `Unknown flag: ${token}` };
   }
 
-  if (!name) return { ok: false, message: 'Flag --name is required.' };
-
-  return { ok: true, args: { name, drives } };
+  return { ok: true, args: { drives, saveAsProfile } };
 }
 
 export interface RevokeTokenArgs {

@@ -21,6 +21,7 @@ import type { ExitCode } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 import { createRevokeToken } from '../auth/revoke-token.js';
 import type { RevokeToken } from '../auth/revoke-token.js';
+import { resolveProfileName } from '../auth/resolve.js';
 
 export type LogoutHostOutcome =
   | { readonly host: string; readonly kind: 'not_logged_in' }
@@ -59,8 +60,14 @@ export function summarizeLogout(outcomes: readonly LogoutHostOutcome[]): ExitCod
   return outcomes.some((outcome) => outcome.kind === 'revoke_failed') ? EXIT_RUNTIME_ERROR : EXIT_SUCCESS;
 }
 
-async function logoutHost(host: string, store: CredentialStore, revokeToken: RevokeToken, force: boolean): Promise<LogoutHostOutcome> {
-  const credential = await store.get(host);
+async function logoutHost(
+  host: string,
+  store: CredentialStore,
+  revokeToken: RevokeToken,
+  force: boolean,
+  profile: string,
+): Promise<LogoutHostOutcome> {
+  const credential = await store.get(host, profile);
   if (!credential) {
     return { host, kind: 'not_logged_in' };
   }
@@ -68,12 +75,12 @@ async function logoutHost(host: string, store: CredentialStore, revokeToken: Rev
   const result = await revokeToken({ host, refreshToken: credential.refreshToken, clientId: credential.clientId });
 
   if (result.outcome === 'revoked') {
-    await store.delete(host);
+    await store.delete(host, profile);
     return { host, kind: 'revoked' };
   }
 
   if (force) {
-    await store.delete(host);
+    await store.delete(host, profile);
     return { host, kind: 'forced', reason: result.message };
   }
 
@@ -87,9 +94,13 @@ export function createLogoutHandler(deps: LogoutHandlerDeps): CommandHandler {
       env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
       profile: null,
     });
+    const profileName = resolveProfileName(
+      { profile: intent.flags.profile },
+      { PAGESPACE_PROFILE: ctx.env.PAGESPACE_PROFILE },
+    );
 
     const store = deps.createCredentialStore();
-    const hosts = intent.flags.all ? (await store.list()).map((summary) => summary.host) : [host];
+    const hosts = intent.flags.all ? (await store.list(profileName)).map((summary) => summary.host) : [host];
 
     if (hosts.length === 0) {
       ctx.stdout.write('No stored credentials to log out of.\n');
@@ -98,7 +109,7 @@ export function createLogoutHandler(deps: LogoutHandlerDeps): CommandHandler {
 
     const outcomes: LogoutHostOutcome[] = [];
     for (const target of hosts) {
-      outcomes.push(await logoutHost(target, store, deps.revokeToken, intent.flags.force));
+      outcomes.push(await logoutHost(target, store, deps.revokeToken, intent.flags.force, profileName));
     }
 
     for (const outcome of outcomes) {

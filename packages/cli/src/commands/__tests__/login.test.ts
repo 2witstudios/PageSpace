@@ -15,16 +15,27 @@ const FIXED_TOKENS = {
   scope: 'account offline_access',
 };
 
+/** Seeds every entry as that host's "default" profile -- named profiles are added independently via set(). */
 function fakeStore(initial: Map<string, HostCredential> = new Map()): CredentialStore {
+  const hosts = new Map<string, Map<string, HostCredential>>();
+  for (const [host, credential] of initial) {
+    hosts.set(host, new Map([['default', credential]]));
+  }
+
   return {
-    get: async (host) => initial.get(host) ?? null,
-    set: async (host, credential) => {
-      initial.set(host, credential);
+    get: async (host, profile = 'default') => hosts.get(host)?.get(profile) ?? null,
+    set: async (host, credential, profile = 'default') => {
+      const profiles = hosts.get(host) ?? new Map<string, HostCredential>();
+      profiles.set(profile, credential);
+      hosts.set(host, profiles);
     },
-    delete: async (host) => {
-      initial.delete(host);
+    delete: async (host, profile = 'default') => {
+      hosts.get(host)?.delete(profile);
     },
-    list: async () => [...initial.entries()].map(([host, credential]) => ({ host, tokenPrefix: credential.refreshToken.slice(0, 12) })),
+    list: async () =>
+      [...hosts.entries()]
+        .filter(([, profiles]) => profiles.has('default'))
+        .map(([host, profiles]) => ({ host, tokenPrefix: profiles.get('default')!.refreshToken.slice(0, 12) })),
   };
 }
 
@@ -107,8 +118,35 @@ describe('createLoginHandler', () => {
     expect(code).toBe(EXIT_SUCCESS);
     const allOutput = [...stdout.lines, ...stderr.lines].join('');
     expect(allOutput).toContain('ada@example.com');
+    expect(allOutput).toContain(FIXED_TOKENS.scope);
+    expect(allOutput).toMatch(/personal account access/i);
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
+  });
+
+  it('prints the scope the server actually granted, not just the requested scope, when the server narrows it', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createLoginHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      exchangeCode: async () => ({ ...FIXED_TOKENS, scope: 'account' }),
+      openBrowser: async (url) => {
+        const state = new URL(url).searchParams.get('state')!;
+        queueMicrotask(() => fake.deliver({ code: 'auth-code', state }));
+        return true;
+      },
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    const code = await handler(ctx, commandIntent(['login']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const output = stdout.lines.join('');
+    expect(output).toContain('Scope: account —');
+    expect(output).not.toContain('offline_access');
   });
 
   it('never writes the access or refresh token to stdout/stderr even on a token-exchange failure', async () => {

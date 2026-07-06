@@ -19,16 +19,27 @@ const AUTHORIZATION: DeviceAuthorization = {
   intervalSeconds: 5,
 };
 
+/** Seeds every entry as that host's "default" profile -- named profiles are added independently via set(). */
 function fakeStore(initial: Map<string, HostCredential> = new Map()): CredentialStore {
+  const hosts = new Map<string, Map<string, HostCredential>>();
+  for (const [host, credential] of initial) {
+    hosts.set(host, new Map([['default', credential]]));
+  }
+
   return {
-    get: async (host) => initial.get(host) ?? null,
-    set: async (host, credential) => {
-      initial.set(host, credential);
+    get: async (host, profile = 'default') => hosts.get(host)?.get(profile) ?? null,
+    set: async (host, credential, profile = 'default') => {
+      const profiles = hosts.get(host) ?? new Map<string, HostCredential>();
+      profiles.set(profile, credential);
+      hosts.set(host, profiles);
     },
-    delete: async (host) => {
-      initial.delete(host);
+    delete: async (host, profile = 'default') => {
+      hosts.get(host)?.delete(profile);
     },
-    list: async () => [...initial.entries()].map(([host, credential]) => ({ host, tokenPrefix: credential.refreshToken.slice(0, 12) })),
+    list: async () =>
+      [...hosts.entries()]
+        .filter(([, profiles]) => profiles.has('default'))
+        .map(([host, profiles]) => ({ host, tokenPrefix: profiles.get('default')!.refreshToken.slice(0, 12) })),
   };
 }
 
@@ -72,8 +83,31 @@ describe('createLoginDeviceHandler', () => {
     expect(allOutput).toContain(AUTHORIZATION.userCode);
     expect(allOutput).toContain(AUTHORIZATION.verificationUriComplete);
     expect(allOutput).toContain('ada@example.com');
+    expect(allOutput).toContain(FIXED_TOKENS.scope);
+    expect(allOutput).toMatch(/personal account access/i);
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
+  });
+
+  it('prints the scope the server actually granted, not just the requested scope, when the server narrows it', async () => {
+    const store = fakeStore();
+    const handler = createLoginDeviceHandler({
+      ...baseHandlerDeps(store),
+      pollDeviceToken: async (): Promise<DeviceTokenResult> => ({
+        kind: 'success',
+        tokens: { ...FIXED_TOKENS, scope: 'account' },
+      }),
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    const code = await handler(ctx, commandIntent(['login', '--device']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const output = stdout.lines.join('');
+    expect(output).toContain('Scope: account —');
+    expect(output).not.toContain('offline_access');
   });
 
   it('never writes the access or refresh token to stdout/stderr even on a poll failure', async () => {
@@ -171,5 +205,65 @@ describe('createLoginDeviceHandler', () => {
       expect(code).toBe(EXIT_RUNTIME_ERROR);
       expect(stderr.lines.join('')).toMatch(message);
     }
+  });
+});
+
+describe('createLoginDeviceHandler — named profiles', () => {
+  it('--profile stores the device-login credential under the named profile, leaving "default" for the same host untouched', async () => {
+    const store = fakeStore(
+      new Map([['https://pagespace.ai', { refreshToken: 'ps_rt_existing_default', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
+    );
+    const handler = createLoginDeviceHandler(baseHandlerDeps(store));
+
+    const ctx = createFakeContext({ env: {} });
+    const code = await handler(ctx, commandIntent(['login', '--device', '--profile', 'work']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const workCredential = await store.get('https://pagespace.ai', 'work');
+    expect(workCredential?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    const defaultCredential = await store.get('https://pagespace.ai', 'default');
+    expect(defaultCredential?.refreshToken).toBe('ps_rt_existing_default');
+  });
+
+  it('PAGESPACE_PROFILE env selects the profile when --profile is absent', async () => {
+    const store = fakeStore();
+    const handler = createLoginDeviceHandler(baseHandlerDeps(store));
+
+    const ctx = createFakeContext({ env: { PAGESPACE_PROFILE: 'work' } });
+    const code = await handler(ctx, commandIntent(['login', '--device']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect((await store.get('https://pagespace.ai', 'work'))?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    expect(await store.get('https://pagespace.ai', 'default')).toBeNull();
+  });
+
+  it('the existing-credential check is scoped to the named profile, not just the host', async () => {
+    const store = fakeStore(
+      new Map([['https://pagespace.ai', { refreshToken: 'ps_rt_existing_default', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
+    );
+    const handler = createLoginDeviceHandler(baseHandlerDeps(store));
+
+    const ctx = createFakeContext({ env: {} });
+    const code = await handler(ctx, commandIntent(['login', '--device', '--profile', 'work']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+  });
+
+  it('refuses to overwrite an existing named profile without --yes, naming the profile in the message', async () => {
+    const store = fakeStore();
+    await store.set(
+      'https://pagespace.ai',
+      { refreshToken: 'ps_rt_existing_work', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' },
+      'work',
+    );
+    const handler = createLoginDeviceHandler(baseHandlerDeps(store));
+
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+    const code = await handler(ctx, commandIntent(['login', '--device', '--profile', 'work']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toContain('profile "work"');
+    expect(stderr.lines.join('')).not.toContain('ps_rt_existing_work');
   });
 });

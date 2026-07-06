@@ -56,6 +56,10 @@ vi.mock('@/components/devices/RevokeAllDevicesDialog', () => ({
   RevokeAllDevicesDialog: () => null,
 }));
 
+vi.mock('@/components/oauth-grants/ConnectedAppsList', () => ({
+  ConnectedAppsList: () => <div data-testid="connected-apps-list" />,
+}));
+
 vi.mock('@/components/dialogs/DeleteAccountDialog', () => ({
   DeleteAccountDialog: () => null,
 }));

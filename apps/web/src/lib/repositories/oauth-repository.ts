@@ -623,6 +623,57 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
   });
 }
 
+// ---------------------------------------------------------------------------
+// Connected-apps listing + revoke-by-id (Phase 8 task k58h61obmc91sn1ndngrsev5).
+// ---------------------------------------------------------------------------
+
+export interface ActiveOAuthGrantRow {
+  id: string;
+  clientName: string;
+  scopes: string[];
+  createdAt: Date;
+}
+
+/** Active (unrevoked) grants for the settings > connected-apps listing page. */
+export async function listActiveOAuthGrantsForUser(userId: string): Promise<ActiveOAuthGrantRow[]> {
+  return db
+    .select({
+      id: oauthRefreshTokens.id,
+      clientName: oauthClients.name,
+      scopes: oauthRefreshTokens.scopes,
+      createdAt: oauthRefreshTokens.createdAt,
+    })
+    .from(oauthRefreshTokens)
+    .innerJoin(oauthClients, eq(oauthRefreshTokens.clientId, oauthClients.id))
+    .where(and(eq(oauthRefreshTokens.userId, userId), isNull(oauthRefreshTokens.revokedAt)));
+}
+
+export interface OAuthGrantRow {
+  id: string;
+  userId: string;
+  familyId: string;
+}
+
+/**
+ * Look up a grant by its row id alone — ownership is NOT checked here (the
+ * route layer runs `isGrantOwnedByUser` against this result); already-revoked
+ * rows are excluded so a double-revoke attempt gets the same `null` an
+ * unknown id gets, rather than silently succeeding a second time.
+ */
+export async function findOAuthGrantById(grantId: string): Promise<OAuthGrantRow | null> {
+  const rows = await db
+    .select({ id: oauthRefreshTokens.id, userId: oauthRefreshTokens.userId, familyId: oauthRefreshTokens.familyId })
+    .from(oauthRefreshTokens)
+    .where(and(eq(oauthRefreshTokens.id, grantId), isNull(oauthRefreshTokens.revokedAt)));
+
+  return rows[0] ?? null;
+}
+
+/** Reuses `revokeTokenFamily` — the exact same helper RFC 7009 revocation uses above. */
+export async function revokeOAuthGrantFamily(familyId: string, now: Date): Promise<void> {
+  await revokeTokenFamily(db, familyId, now, 'user_revoked');
+}
+
 export interface VerifyDeviceUserCodeInput {
   /** Already-normalized user code (uppercased, hyphen-free); hashed here. */
   userCode: string;

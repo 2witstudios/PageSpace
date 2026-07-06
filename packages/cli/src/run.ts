@@ -10,15 +10,17 @@ import { buildAuthProvider, enforceAuth } from './auth/auth-context.js';
 import { createDiscoverMetadata } from './auth/discover.js';
 import { resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
-import { resolveAuth } from './auth/resolve.js';
+import { hasExplicitCredential, noExplicitCredentialMessage, resolveAuth, resolveProfileName } from './auth/resolve.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
+import { mcpHandler } from './commands/mcp.js';
+import { tokensCreateHandler } from './commands/tokens/create.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
 import { resolveConfig } from './config/resolve.js';
 import type { CredentialStore } from './credentials/store.js';
-import { EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
+import { EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
 import type { HandlerContext, OutputSink } from './handler-context.js';
 import { resolveRoute } from './router/router.js';
 import { helpHandler, ROUTES } from './router/routes.js';
@@ -43,10 +45,26 @@ export interface RunDependencies {
  * "not logged in" is a normal, graceful outcome for them, not a hard
  * failure — routing them through `enforceAuth` first would print this
  * resolver's generic message (and attempt a redundant refresh) ahead of
- * their own, more specific handling. `mcp` is NOT exempt — it authenticates
- * through `ctx.sdk` exactly like every other command below.
+ * their own, more specific handling. `tokens create` belongs here for the
+ * same reason `login` does: it mints its credential through its own
+ * browser-consent OAuth flow (Phase 8 task 2) and never touches `ctx.sdk`,
+ * so enforcing ambient auth first would both break it for a fresh CLI with
+ * nothing stored and needlessly refresh/rotate the personal credential as a
+ * side effect of minting an unrelated scoped token. `mcp` is NOT in this
+ * set: when given an explicit credential it authenticates through `ctx.sdk`
+ * exactly like every other command below. But it can't be blanket-exempted
+ * either, so it gets its own pre-`enforceAuth` gate just below — without
+ * it, `enforceAuth` would materialize (and, on a stored default profile,
+ * silently refresh and rotate) the ambient personal credential before
+ * `mcp`'s own fail-closed check ever ran (Phase 8 task 4).
  */
-const AUTH_EXEMPT_HANDLERS = new Set([helpHandler, loginHandler, logoutHandler, whoamiHandler]);
+const AUTH_EXEMPT_HANDLERS = new Set([
+  helpHandler,
+  loginHandler,
+  logoutHandler,
+  whoamiHandler,
+  tokensCreateHandler,
+]);
 
 export async function run(deps: RunDependencies): Promise<ExitCode> {
   const parsed = parseArgv(deps.argv);
@@ -66,12 +84,14 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     deps.stderr.write(`${envToken.deprecationNotice}\n`);
   }
 
-  const credential = await deps.credentialStore.get(host);
+  const profileName = resolveProfileName({ profile: parsed.flags.profile }, { PAGESPACE_PROFILE: deps.env.PAGESPACE_PROFILE });
+  const credential = await deps.credentialStore.get(host, profileName);
   const source = resolveAuth(
     { token: parsed.flags.token },
     { PAGESPACE_TOKEN: envToken.token },
-    credential ? { [host]: credential } : {},
+    credential ? { [host]: { [profileName]: credential } } : {},
     host,
+    profileName,
   );
 
   const auth = buildAuthProvider(source, {
@@ -105,6 +125,22 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   if (resolution.kind === 'usage-error') {
     deps.stderr.write(`${resolution.message}\n`);
     return EXIT_USAGE_ERROR;
+  }
+
+  if (
+    resolution.route.handler === mcpHandler &&
+    !hasExplicitCredential({ token: parsed.flags.token, profile: parsed.flags.profile }, deps.env)
+  ) {
+    // Must run before `enforceAuth` below: that call materializes `source` by
+    // calling `auth.getAccessToken()`, which for a `kind: 'profile'` source
+    // (the ambient "default" profile falling through here with nothing
+    // explicit given) performs a real discovery + refresh-token network
+    // exchange and rotates the stored personal credential — exactly the
+    // fallback this gate exists to block. Checking first means that
+    // network/store effect never happens at all, not just that the server
+    // never starts afterward.
+    deps.stderr.write(`${noExplicitCredentialMessage()}\n`);
+    return EXIT_RUNTIME_ERROR;
   }
 
   if (!AUTH_EXEMPT_HANDLERS.has(resolution.route.handler)) {
