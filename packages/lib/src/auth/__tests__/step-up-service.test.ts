@@ -75,6 +75,7 @@ import {
   completeMagicLinkStepUp,
 } from '../step-up-service';
 import { computeActionBindingHash } from '../step-up-decisions';
+import { computeMcpTokenActionBinding, normalizeDriveScopes } from '../mcp-token-scopes';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
@@ -199,6 +200,83 @@ describe('step-up-service', () => {
       if (result.ok) expect(result.data.stepUpToken).toBe('ps_stepup_rawtoken');
     });
 
+    it('rejects when the challenge was already consumed by a concurrent request between decide and consume (TOCTOU race)', async () => {
+      mockDb.query.verificationTokens.findFirst.mockResolvedValue({
+        id: 'challenge-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        metadata: JSON.stringify({ actionBindingHash }),
+      });
+      // The pure decision layer saw `usedAt: null` and approved the ceremony,
+      // but by the time the atomic `usedAt IS NULL` update runs, a
+      // concurrent request already consumed this same challenge — the
+      // `.returning()` comes back empty even though `decideStepUpChallenge`
+      // was satisfied.
+      mockDb.update.mockReturnValueOnce({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([]) }),
+        }),
+      });
+
+      const result = await verifyWebauthnStepUp({
+        userId: 'user-1',
+        response: { id: 'cred-1' },
+        expectedChallenge: 'server-challenge',
+        actionBinding,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('STEP_UP_INVALID');
+      // Never reaches the passkey lookup / assertion verification — the race loss is fatal.
+      expect(mockDb.query.passkeys.findFirst).not.toHaveBeenCalled();
+      expect(mockVerifyAuthResponse).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the passkey counter update loses a concurrent race (replay-detection guard)', async () => {
+      mockDb.query.verificationTokens.findFirst.mockResolvedValue({
+        id: 'challenge-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        metadata: JSON.stringify({ actionBindingHash }),
+      });
+      mockDb.query.passkeys.findFirst.mockResolvedValue({
+        id: 'passkey-1',
+        userId: 'user-1',
+        credentialId: 'cred-1',
+        publicKey: Buffer.from('pk').toString('base64url'),
+        counter: 0,
+      });
+      mockVerifyAuthResponse.mockResolvedValue({
+        verified: true,
+        authenticationInfo: { newCounter: 1 },
+      });
+      // First update() call: consumedChallenge succeeds normally.
+      mockDb.update.mockReturnValueOnce({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'challenge-1' }]) }),
+        }),
+      });
+      // Second update() call: the counter-monotonicity guard
+      // (`counter = 0 OR counter < newCounter`) finds no matching row — a
+      // concurrent authentication already advanced the counter past this
+      // assertion's, the classic WebAuthn clone/replay signal.
+      mockDb.update.mockReturnValueOnce({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([]) }),
+        }),
+      });
+
+      const result = await verifyWebauthnStepUp({
+        userId: 'user-1',
+        response: { id: 'cred-1' },
+        expectedChallenge: 'server-challenge',
+        actionBinding,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('STEP_UP_INVALID');
+    });
+
     it('rejects when the crypto assertion itself fails to verify', async () => {
       mockDb.query.verificationTokens.findFirst.mockResolvedValue({
         id: 'challenge-1',
@@ -252,6 +330,53 @@ describe('step-up-service', () => {
       const result = await consumeStepUpGrant({ userId: 'user-1', token: 'ps_stepup_x', actionBinding });
 
       expect(result.ok).toBe(true);
+    });
+
+    it('rejects an mcp-token mint grant when presented against the update (PATCH) action binding for the same name + drive scopes, and vice versa', async () => {
+      const driveScopes = normalizeDriveScopes([{ id: 'drive-1', role: 'ADMIN' }]);
+      const mintBinding = computeMcpTokenActionBinding({ op: 'mint', name: 'tok-1', driveScopes });
+      const updateBinding = computeMcpTokenActionBinding({ op: 'update', name: 'tok-1', driveScopes });
+      const mintBindingHash = computeActionBindingHash(mintBinding);
+
+      // A grant minted for `op: 'mint'` ...
+      mockDb.query.verificationTokens.findFirst.mockResolvedValue({
+        id: 'grant-1',
+        userId: 'user-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        metadata: JSON.stringify({ actionBindingHash: mintBindingHash }),
+      });
+
+      // ... must not be redeemable against the `op: 'update'` binding for the identical name + drive scopes.
+      const result = await consumeStepUpGrant({ userId: 'user-1', token: 'ps_stepup_x', actionBinding: updateBinding });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('STEP_UP_REQUIRED');
+    });
+
+    it('rejects when the grant was already consumed by a concurrent request between decide and consume (TOCTOU race)', async () => {
+      mockDb.query.verificationTokens.findFirst.mockResolvedValue({
+        id: 'grant-1',
+        userId: 'user-1',
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        metadata: JSON.stringify({ actionBindingHash }),
+      });
+      // `decideStepUpGrant` saw `usedAt: null` and approved consumption, but
+      // the atomic `usedAt IS NULL` update's `.returning()` comes back empty
+      // — a concurrent request already consumed this same single-use grant
+      // first. This is the actual replay defense; a mock that always
+      // returns a row (the suite's default) would never exercise it.
+      mockDb.update.mockReturnValueOnce({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([]) }),
+        }),
+      });
+
+      const result = await consumeStepUpGrant({ userId: 'user-1', token: 'ps_stepup_x', actionBinding });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('STEP_UP_REQUIRED');
     });
 
     it('rejects a grant belonging to a different user', async () => {
