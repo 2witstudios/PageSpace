@@ -17,6 +17,8 @@ import {
   type SpritesSdk,
   type SpriteInstanceLike,
 } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
+import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 
 let cachedSdk: SpritesSdk | null = null;
@@ -35,5 +37,10 @@ async function getSpritesSDK(): Promise<SpritesSdk> {
 
 export async function createProductionSpritesSandboxClient(): Promise<ExecSandboxClient> {
   const sdk = await getSpritesSDK();
-  return createSpritesSandboxClient({ sdk });
+  const client = createSpritesSandboxClient({ sdk });
+  // Route through the MachineHost seam (Terminal Epic 2, T2.1) rather than
+  // handing the raw Sprite client straight to callers — the adapter re-expresses
+  // it as the same ExecSandboxClient shape, so nothing downstream changes.
+  const host = createSpriteMachineHost({ sdk, client });
+  return createExecClientFromMachineHost(host, { kind: 'sprite' });
 }

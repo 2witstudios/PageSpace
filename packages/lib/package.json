@@ -417,6 +417,21 @@
       "import": "./dist/services/sandbox/sandbox-client/sprites.js",
       "require": "./dist/services/sandbox/sandbox-client/sprites.js"
     },
+    "./services/sandbox/sandbox-client/sprite-machine-host": {
+      "types": "./dist/services/sandbox/sandbox-client/sprite-machine-host.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sprite-machine-host.js",
+      "require": "./dist/services/sandbox/sandbox-client/sprite-machine-host.js"
+    },
+    "./services/sandbox/sandbox-client/machine-host-adapter": {
+      "types": "./dist/services/sandbox/sandbox-client/machine-host-adapter.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/machine-host-adapter.js",
+      "require": "./dist/services/sandbox/sandbox-client/machine-host-adapter.js"
+    },
+    "./services/sandbox/machine-host": {
+      "types": "./dist/services/sandbox/machine-host.d.ts",
+      "import": "./dist/services/sandbox/machine-host.js",
+      "require": "./dist/services/sandbox/machine-host.js"
+    },
     "./services/sandbox/tool-runners": {
       "types": "./dist/services/sandbox/tool-runners.d.ts",
       "import": "./dist/services/sandbox/tool-runners.js",
@@ -1430,6 +1445,15 @@
       ],
       "services/sandbox/sandbox-client/sprites": [
         "./dist/services/sandbox/sandbox-client/sprites.d.ts"
+      ],
+      "services/sandbox/sandbox-client/sprite-machine-host": [
+        "./dist/services/sandbox/sandbox-client/sprite-machine-host.d.ts"
+      ],
+      "services/sandbox/sandbox-client/machine-host-adapter": [
+        "./dist/services/sandbox/sandbox-client/machine-host-adapter.d.ts"
+      ],
+      "services/sandbox/machine-host": [
+        "./dist/services/sandbox/machine-host.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
