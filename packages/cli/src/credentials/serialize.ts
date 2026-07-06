@@ -203,13 +203,17 @@ export function removeHost(file: CredentialsFile, host: string, profile: string 
   const remainingProfiles = { ...existingProfiles };
   delete remainingProfiles[profile];
 
-  const hosts = { ...file.hosts };
   if (Object.keys(remainingProfiles).length === 0) {
+    const hosts = { ...file.hosts };
     delete hosts[host];
-  } else {
-    hosts[host] = { profiles: remainingProfiles };
+    return { version: 2, hosts };
   }
-  return { version: 2, hosts };
+
+  // Computed-key object literal, not a bracket assignment: same reason the
+  // parse/migrate constructors above avoid `hosts[host] = value` — a `host`
+  // literally named "__proto__" would otherwise trigger the prototype setter
+  // instead of creating an own data property.
+  return { version: 2, hosts: { ...file.hosts, [host]: { profiles: remainingProfiles } } };
 }
 
 /** Lists every host that has the given profile stored (defaults to "default") — never the full token. */

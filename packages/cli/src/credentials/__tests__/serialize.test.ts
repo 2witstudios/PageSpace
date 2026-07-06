@@ -15,7 +15,7 @@ import {
   tokenPrefix,
   upsertHost,
 } from '@pagespace/cli';
-import type { CredentialsFile, HostCredential } from '@pagespace/cli';
+import type { CredentialsFile, HostCredential, HostProfiles } from '@pagespace/cli';
 
 const CRED_A: HostCredential = {
   refreshToken: 'ps_rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -281,6 +281,48 @@ describe('prototype-named profiles are ordinary data, never Object.prototype loo
       const file = upsertHost(emptyCredentialsFile(), 'pagespace.ai', CRED_B, name);
       expect(listSummaries(file, name)).toEqual([{ host: 'pagespace.ai', tokenPrefix: tokenPrefix(CRED_B.refreshToken) }]);
     }
+  });
+
+  it('removeHost with a prototype-named host still removes only the named profile, leaving the host and siblings intact', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      let file = upsertHost(emptyCredentialsFile(), name, CRED_A, 'default');
+      file = upsertHost(file, name, CRED_B, 'work');
+
+      const next = removeHost(file, name, 'work');
+
+      expect(getHost(next, name, 'work')).toBeNull();
+      expect(getHost(next, name, 'default')).toEqual(CRED_A);
+      expect(Object.hasOwn(next.hosts, name)).toBe(true);
+      expect(Object.getPrototypeOf(next.hosts)).toBe(Object.prototype);
+    }
+  });
+
+  it('removeHost never lets a bracket assignment on the outer hosts object reach the __proto__ setter', () => {
+    // Every real constructor in this file (parse/migrate/upsertHost) always makes a
+    // "__proto__" own property enumerable, so `{ ...file.hosts }` always copies it
+    // forward and a later `hosts[host] = value` assignment just updates that existing
+    // own property rather than falling through to Object.prototype's accessor. To
+    // exercise the assignment itself (the thing the computed-key-literal fix guards),
+    // this builds a host entry the one way a plain object can carry an own "__proto__"
+    // key that `{ ...x }` will NOT carry forward: a non-enumerable own property, made
+    // with `Object.defineProperty` (which — unlike bracket assignment — never triggers
+    // the exotic setter).
+    const rawHosts: Record<string, HostProfiles> = {};
+    Object.defineProperty(rawHosts, '__proto__', {
+      value: { profiles: { default: CRED_A, work: CRED_B } },
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    const file: CredentialsFile = { version: 2, hosts: rawHosts };
+    expect(Object.hasOwn(file.hosts, '__proto__')).toBe(true);
+
+    const next = removeHost(file, '__proto__', 'work');
+
+    expect(Object.getPrototypeOf(next.hosts)).toBe(Object.prototype);
+    expect(Object.hasOwn(next.hosts, '__proto__')).toBe(true);
+    expect(getHost(next, '__proto__', 'default')).toEqual(CRED_A);
+    expect(getHost(next, '__proto__', 'work')).toBeNull();
   });
 
   it('round-trips a prototype-named profile through serialize/parse without corrupting the object', () => {
