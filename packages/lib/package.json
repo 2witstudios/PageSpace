@@ -452,6 +452,21 @@
       "import": "./dist/services/sandbox/github-token.js",
       "require": "./dist/services/sandbox/github-token.js"
     },
+    "./services/machines/project-paths": {
+      "types": "./dist/services/machines/project-paths.d.ts",
+      "import": "./dist/services/machines/project-paths.js",
+      "require": "./dist/services/machines/project-paths.js"
+    },
+    "./services/machines/machine-projects-store": {
+      "types": "./dist/services/machines/machine-projects-store.d.ts",
+      "import": "./dist/services/machines/machine-projects-store.js",
+      "require": "./dist/services/machines/machine-projects-store.js"
+    },
+    "./services/machines/machine-projects": {
+      "types": "./dist/services/machines/machine-projects.d.ts",
+      "import": "./dist/services/machines/machine-projects.js",
+      "require": "./dist/services/machines/machine-projects.js"
+    },
     "./services/sandbox/tool-gate": {
       "types": "./dist/services/sandbox/tool-gate.d.ts",
       "import": "./dist/services/sandbox/tool-gate.js",
@@ -1447,6 +1462,15 @@
       ],
       "services/sandbox/github-token": [
         "./dist/services/sandbox/github-token.d.ts"
+      ],
+      "services/machines/project-paths": [
+        "./dist/services/machines/project-paths.d.ts"
+      ],
+      "services/machines/machine-projects-store": [
+        "./dist/services/machines/machine-projects-store.d.ts"
+      ],
+      "services/machines/machine-projects": [
+        "./dist/services/machines/machine-projects.d.ts"
       ],
       "services/sandbox/sandbox-client/types": [
         "./dist/services/sandbox/sandbox-client/types.d.ts"

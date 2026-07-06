@@ -31,6 +31,10 @@
       "types": "./dist/schema/terminal-sessions.d.ts",
       "default": "./dist/schema/terminal-sessions.js"
     },
+    "./schema/machine-projects": {
+      "types": "./dist/schema/machine-projects.d.ts",
+      "default": "./dist/schema/machine-projects.js"
+    },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
       "default": "./dist/schema/share-links.js"
