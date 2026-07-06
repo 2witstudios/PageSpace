@@ -459,4 +459,12 @@ describe('manage-keys-only credential — deny-first short-circuit', () => {
     expect(getAppAccessiblePagesInDrive).not.toHaveBeenCalled();
     expect(getScopedAccessiblePagesInDrive).not.toHaveBeenCalled();
   });
+
+  it.each(cases)('getPrincipalBatchPagePermissions denies every requested page, never the owning user\'s batch (%s)', async (_label, auth) => {
+    const result = await getPrincipalBatchPagePermissions(auth, [PAGE_ID]);
+    expect(result.get(PAGE_ID)).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+    expect(getBatchPagePermissions).not.toHaveBeenCalled();
+    expect(getAppAccessiblePagesInDrive).not.toHaveBeenCalled();
+    expect(getScopedAccessiblePagesInDrive).not.toHaveBeenCalled();
+  });
 });

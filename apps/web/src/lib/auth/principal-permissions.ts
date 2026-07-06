@@ -208,11 +208,20 @@ export async function getPrincipalBatchPagePermissions(
   auth: AuthResult,
   pageIds: string[],
 ): Promise<Map<string, PermissionLevel>> {
+  const deny: PermissionLevel = { canView: false, canEdit: false, canShare: false, canDelete: false };
+
+  if (isManageKeysOnly(auth)) {
+    const results = new Map<string, PermissionLevel>();
+    for (const pageId of pageIds) {
+      results.set(pageId, { ...deny });
+    }
+    return results;
+  }
+
   if (!isScopedMCPAuth(auth) && !isScopedOAuthAuth(auth)) {
     return getBatchPagePermissions(auth.userId, pageIds);
   }
 
-  const deny: PermissionLevel = { canView: false, canEdit: false, canShare: false, canDelete: false };
   const results = new Map<string, PermissionLevel>();
   for (const pageId of pageIds) {
     results.set(pageId, { ...deny });
