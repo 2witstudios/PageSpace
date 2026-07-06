@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CLI_VERSION, EXIT_SUCCESS, EXIT_USAGE_ERROR, run } from '@pagespace/cli';
-import type { RunDependencies } from '@pagespace/cli';
+import type { HostCredential, RunDependencies } from '@pagespace/cli';
 import { createFakeCredentialStore, createRecordingSink } from './fake-context.js';
 
 function makeDeps(argv: string[], env: Record<string, string | undefined> = {}): RunDependencies & {
@@ -96,6 +96,42 @@ describe('run', () => {
     const code = await run(deps);
     expect(code).not.toBe(EXIT_SUCCESS);
     expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
+  });
+
+  describe('"mcp" with a stored default profile but no explicit credential (Phase 8 task 4)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('never touches the personal credential at all: no discovery/refresh network call, no rotation', async () => {
+      let networkCalls = 0;
+      vi.stubGlobal(
+        'fetch',
+        (async () => {
+          networkCalls += 1;
+          throw new Error('run() must never make a network call for mcp with no explicit credential');
+        }) as unknown as typeof fetch,
+      );
+
+      const store = createFakeCredentialStore();
+      const personalCredential: HostCredential = {
+        refreshToken: 'ps_rt_personal_secret',
+        clientId: 'cli',
+        scopes: ['full'],
+        createdAt: new Date(0).toISOString(),
+      };
+      await store.set('https://pagespace.ai', personalCredential, 'default');
+
+      const deps = { ...makeDeps(['mcp']), credentialStore: store };
+      const code = await run(deps);
+
+      expect(code).not.toBe(EXIT_SUCCESS);
+      expect(deps.stderr.lines.join('')).toContain('tokens create');
+      expect(networkCalls).toBe(0);
+
+      const stillStored = await store.get('https://pagespace.ai', 'default');
+      expect(stillStored?.refreshToken).toBe('ps_rt_personal_secret');
+    });
   });
 
   it('resolves the profile from --profile and looks up the credential store under that profile name', async () => {

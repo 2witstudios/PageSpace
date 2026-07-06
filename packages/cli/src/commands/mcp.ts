@@ -11,8 +11,15 @@
  * predicate over the parsed flags/env, deliberately independent of
  * `resolveAuth`/`resolveProfileName`, which both intentionally fall back to
  * the stored "default" profile — and refuses to start the stdio server at
- * all unless this invocation names a credential itself. Once past that
- * gate, it authenticates through `ctx.sdk` exactly like every other
+ * all unless this invocation names a credential itself. `run.ts` runs this
+ * same check even earlier, before dispatching here at all — needed because
+ * by the time this handler runs, `run.ts` has already resolved and would
+ * otherwise be about to enforce the ambient auth source (a real
+ * discovery+refresh network call, and a credential rotation, for a stored
+ * default profile) via `enforceAuth`. The check here is what makes this
+ * handler safe to call directly (as the unit tests below do, bypassing
+ * `run.ts` entirely) rather than a redundant no-op. Once past both gates,
+ * it authenticates through `ctx.sdk` exactly like every other
  * command, ONLY through the resolver built once by `run.ts` (Phase 4 task 7
  * precedence, extended with the legacy credential env var support in
  * `auth/legacy-token-env.ts` — so existing `npx pagespace-mcp` configs keep
