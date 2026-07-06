@@ -668,6 +668,9 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   const userDrives = await collectUserDrives(database, userId);
   const driveIds = userDrives.map(d => d.id);
 
+  // Positional: this destructuring order must exactly match the Promise.all array
+  // order below (each collector returns a differently-shaped array, so TypeScript
+  // cannot catch a reorder/insert mismatch here).
   const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userPersonalizationData] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserMessages(database, userId),

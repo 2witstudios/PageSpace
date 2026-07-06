@@ -398,6 +398,21 @@ describe('collectUserSystemLogs', () => {
     expect(result).toHaveLength(1);
     expect(result[0].message).toBe('boom');
   });
+
+  it('given_nullableFieldsAreNull_passesThroughNull', async () => {
+    const log = {
+      id: 'sl2', timestamp: new Date(), level: 'info', message: 'no context',
+      category: null, endpoint: null, method: null, duration: null,
+    };
+    const db = createChainDb([[log]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(result[0].category).toBeNull();
+    expect(result[0].endpoint).toBeNull();
+    expect(result[0].method).toBeNull();
+    expect(result[0].duration).toBeNull();
+  });
 });
 
 describe('collectUserApiMetrics', () => {
@@ -412,6 +427,19 @@ describe('collectUserApiMetrics', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].statusCode).toBe(200);
+  });
+
+  it('given_requestAndResponseSizeAreNull_passesThroughNull', async () => {
+    const metric = {
+      id: 'am2', timestamp: new Date(), endpoint: '/api/bar', method: 'DELETE',
+      statusCode: 204, duration: 5, requestSize: null, responseSize: null,
+    };
+    const db = createChainDb([[metric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(result[0].requestSize).toBeNull();
+    expect(result[0].responseSize).toBeNull();
   });
 });
 
@@ -428,6 +456,21 @@ describe('collectUserErrorLogs', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe('TypeError');
+  });
+
+  it('given_resolvedTrueAndNullableFieldsNull_passesThroughCorrectly', async () => {
+    const errorLog = {
+      id: 'el2', timestamp: new Date(), name: 'RangeError', message: 'fixed now',
+      endpoint: null, method: null, file: null, line: null, column: null,
+      resolved: true,
+    };
+    const db = createChainDb([[errorLog]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result[0].resolved).toBe(true);
+    expect(result[0].endpoint).toBeNull();
+    expect(result[0].file).toBeNull();
   });
 });
 

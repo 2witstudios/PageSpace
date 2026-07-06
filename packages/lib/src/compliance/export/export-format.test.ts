@@ -196,9 +196,9 @@ describe('toPortableExport', () => {
     const full = makeData({
       files: [{ id: 'f1', driveId: 'd1', sizeBytes: 1, mimeType: null, storagePath: null, createdAt: D1 }],
       activity: [{ id: 'a1', operation: 'create', resourceType: 'page', resourceId: 'p1', timestamp: D1, metadata: null }],
-      systemLogs: [{ id: 'sl1', timestamp: D1, level: 'error', message: 'boom', category: 'api', endpoint: '/api/foo', method: 'POST', duration: 12 }],
-      apiMetrics: [{ id: 'am1', timestamp: D1, endpoint: '/api/foo', method: 'GET', statusCode: 200, duration: 42, requestSize: 100, responseSize: 200 }],
-      errorLogs: [{ id: 'el1', timestamp: D1, name: 'TypeError', message: 'oops', endpoint: '/api/foo', method: 'POST', file: 'foo.ts', line: 10, column: 5, resolved: false }],
+      systemLogs: [{ id: 'sl1', timestamp: D1, level: 'error', message: 'boom', category: null, endpoint: '/api/foo', method: null, duration: null }],
+      apiMetrics: [{ id: 'am1', timestamp: D1, endpoint: '/api/foo', method: 'GET', statusCode: 200, duration: 42, requestSize: null, responseSize: null }],
+      errorLogs: [{ id: 'el1', timestamp: D1, name: 'TypeError', message: 'oops', endpoint: null, method: null, file: null, line: null, column: null, resolved: null }],
       aiUsage: [{ id: 'ai1', provider: 'openrouter', model: 'm', inputTokens: 1, outputTokens: 2, cost: 0.1, timestamp: D1 }],
       tasks: [{ listId: 'l1', listTitle: 'L', items: [] }],
       sessions: [{ id: 's1', type: 'session', deviceId: null, scopes: [], createdByIp: null, lastUsedAt: null, lastUsedIp: null, expiresAt: D2, revokedAt: null, revokedReason: null, createdAt: D1 }],
