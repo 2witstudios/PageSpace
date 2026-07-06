@@ -17,6 +17,8 @@ import {
 } from '@pagespace/lib/services/sandbox/containment';
 import { getSandboxSessionSecret, acquireTerminalSandbox, createDbTerminalSessionStore, deriveTerminalSessionKey } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
+import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -93,7 +95,13 @@ async function makeTerminalCheckAuth({ userId, pageId }: { userId: string; pageI
   const releaseSlot = () => releaseCodeExecutionSlot({ userId });
 
   const [store, sdk] = await Promise.all([dbTerminalSessionStorePromise, getRealtimeSpritesSdk()]);
-  const client = createSpritesSandboxClient({ sdk });
+  // Route through the MachineHost seam (Terminal Epic 2, T2.1) rather than
+  // handing the raw Sprite client straight to acquireTerminalSandbox — the
+  // adapter re-expresses it as the same ExecSandboxClient shape used below,
+  // so nothing past this point (or the raw `sdk` used for the PTY bridge) changes.
+  const rawClient = createSpritesSandboxClient({ sdk });
+  const host = createSpriteMachineHost({ sdk, client: rawClient });
+  const client = createExecClientFromMachineHost(host, { kind: 'sprite' });
 
   const sandboxResult = await acquireTerminalSandbox({
     pageId,
