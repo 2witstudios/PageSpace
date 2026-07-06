@@ -27,16 +27,27 @@ function isSiteFileKey(key: string): boolean {
 /**
  * Return all active custom domain records for a drive. Only domains with
  * `status = 'active'` (DNS-verified + cert provisioned) are included.
+ * Excludes `platformOwned` rows (e.g. pagespace.ai) — those are an additional
+ * serving alias, never the drive's canonical/SEO identity, so they must never
+ * win primary-host selection (`resolvePrimaryPublishedHost`).
  * Exported so publish-page.ts can resolve the primary host without a
  * duplicate DB query.
  */
 export async function getActiveDomainRecords(driveId: string): Promise<ActiveDomainRecord[]> {
   const rows = await db
-    .select({ hostname: customDomains.hostname, status: customDomains.status, createdAt: customDomains.createdAt, isPrimary: customDomains.isPrimary })
+    .select({
+      hostname: customDomains.hostname,
+      status: customDomains.status,
+      createdAt: customDomains.createdAt,
+      isPrimary: customDomains.isPrimary,
+      platformOwned: customDomains.platformOwned,
+    })
     .from(customDomains)
     .where(eq(customDomains.driveId, driveId));
 
-  return rows.filter((r) => r.status === 'active').map((r) => ({ hostname: r.hostname, createdAt: r.createdAt, isPrimary: r.isPrimary }));
+  return rows
+    .filter((r) => r.status === 'active' && !r.platformOwned)
+    .map((r) => ({ hostname: r.hostname, createdAt: r.createdAt, isPrimary: r.isPrimary }));
 }
 
 /**

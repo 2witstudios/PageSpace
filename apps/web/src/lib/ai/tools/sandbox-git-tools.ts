@@ -20,7 +20,15 @@ import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-r
 import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { runGitInSandbox } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { resolveSandboxPath, SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
-import { MAX_PATH_LENGTH, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
+import {
+  MAX_PATH_LENGTH,
+  machineRefId,
+  resolveActiveMachine,
+  type MachineDirectoryDeps,
+  type ResolveSandboxContext,
+  type SandboxGate,
+} from './sandbox-tools';
+import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 import type { ToolExecutionContext } from '../core/types';
 
 // Optional per-call working directory, relative to the sandbox root (/workspace).
@@ -80,6 +88,7 @@ export interface GitSandboxToolsDeps {
   gitRunDeps: GitSandboxRunDeps;
   resolveContext: ResolveSandboxContext;
   gate: SandboxGate;
+  machines: MachineDirectoryDeps;
 }
 
 function readContext(options: unknown): ToolExecutionContext | undefined {
@@ -121,19 +130,59 @@ const RESOLVE_THREAD_MUTATION = `mutation($threadId: ID!) {
   }
 }`;
 
-export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitSandboxToolsDeps): Record<string, Tool> {
-  /** Resolve context + gate check shared by every tool. */
+export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machines }: GitSandboxToolsDeps): Record<string, Tool> {
+  /**
+   * Resolve context + gate check shared by every tool. Also resolves the
+   * ACTIVE machine and threads it onto ctx — the same seam bash/file tools
+   * use in sandbox-tools.ts, so git commands run against the same active
+   * machine as the rest of the terminal tool group.
+   */
   const open = async (
     options: unknown,
   ): Promise<
-    | { ok: true; userId: string; ctx: SandboxActorContext }
+    | { ok: true; userId: string; ctx: SandboxActorContext & { activeMachine: MachineRef } }
     | { ok: false; error: { success: false; error: string } }
   > => {
-    const ctx = await resolveContext(readContext(options));
+    const rawContext = readContext(options);
+    const ctx = await resolveContext(rawContext);
     if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
     const decision = await gate(ctx);
     if (!decision.ok) return { ok: false, error: { success: false, error: decision.error } };
-    return { ok: true, userId: ctx.userId, ctx };
+    const activeMachine = await resolveActiveMachine(rawContext, machines);
+    if (!activeMachine) {
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: 'Terminal access is not enabled for this agent. Ask an admin to turn on Terminal Access in this agent\'s settings.',
+        },
+      };
+    }
+    // Re-verify page-view access on EVERY call, mirroring sandbox-tools.ts —
+    // the actual execution boundary must not trust a machine reference that
+    // was accessible only at a past switch_machine call (OWASP A01).
+    const accessible = await machines.isMachineAccessible(rawContext, activeMachine);
+    if (!accessible) {
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: `You no longer have access to the active machine ("${machineRefId(activeMachine)}"). Call list_machines to see the available options.`,
+        },
+      };
+    }
+    // Mirror sandbox-tools.ts's driveId/tenantId resolution: an 'existing'
+    // machine can reference a Terminal page outside the ambient drive/tenant
+    // (global assistant, or a switched active machine in a shared drive).
+    // Leaving these ambient would derive a different session key here than
+    // bash/writeFile/readFile derive for the SAME active machine.
+    const driveId = machines.resolveDriveId
+      ? await machines.resolveDriveId(rawContext, activeMachine, ctx.driveId)
+      : ctx.driveId;
+    const tenantId = machines.resolveTenantId
+      ? await machines.resolveTenantId(rawContext, activeMachine, ctx.tenantId)
+      : ctx.tenantId;
+    return { ok: true, userId: ctx.userId, ctx: { ...ctx, driveId, tenantId, activeMachine } };
   };
 
   /** Direct-exec helper for local git commands (no token needed). */

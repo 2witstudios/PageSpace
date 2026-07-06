@@ -17,6 +17,7 @@ export const USAGE_SOURCES = [
   'integration',
   'tool',
   'compaction',
+  'terminal',
   'other',
 ] as const;
 
@@ -46,5 +47,6 @@ export const USAGE_SOURCE_LABELS: Record<AIUsageSource, string> = {
   integration: 'Integrations',
   tool: 'Tools',
   compaction: 'Context compaction',
+  terminal: 'Terminal',
   other: 'Other',
 };

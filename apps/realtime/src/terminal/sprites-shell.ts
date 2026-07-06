@@ -33,6 +33,17 @@ export type OpenPtyShellArgs = {
    * a realtime-process restart, replaying its scrollback.
    */
   sessionId?: string;
+  /**
+   * The command a FRESH session launches (ignored when reattaching via
+   * `sessionId` — an already-running session keeps whatever it was started
+   * with). Defaults to an interactive human shell (`bash`); a pluggable agent
+   * terminal (Terminal Epic 2 Runtime tier) passes its resolved
+   * `AgentLaunchSpec.command`/`args` instead — see
+   * `services/machines/agent-terminal-types.ts`.
+   */
+  command?: string;
+  args?: string[];
+  cwd?: string;
   onOutput(data: string): void;
   onExit(exitCode: number): void;
 };
@@ -53,7 +64,17 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 const TERMINAL_ENV = { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' };
 
-export function openPtyShell({ sprite, cols, rows, sessionId, onOutput, onExit }: OpenPtyShellArgs): PtyShell {
+export function openPtyShell({
+  sprite,
+  cols,
+  rows,
+  sessionId,
+  command = 'bash',
+  args = [],
+  cwd = SANDBOX_ROOT,
+  onOutput,
+  onExit,
+}: OpenPtyShellArgs): PtyShell {
   const toStr = (chunk: unknown) => (typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8'));
 
   let current: SpriteCommandLike;
@@ -139,11 +160,11 @@ export function openPtyShell({ sprite, cols, rows, sessionId, onOutput, onExit }
   if (currentSessionId !== undefined) {
     current = sprite.attachSession(currentSessionId, { cols, rows });
   } else {
-    current = sprite.createSession('bash', [], {
+    current = sprite.createSession(command, args, {
       tty: true,
       cols,
       rows,
-      cwd: SANDBOX_ROOT,
+      cwd,
       env: TERMINAL_ENV,
     });
     // Resolve our own session id so a keepalive drop can reattach to it. Best

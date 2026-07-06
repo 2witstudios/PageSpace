@@ -15,6 +15,14 @@ export const customDomains = pgTable('custom_domains', {
   // (enforced by the partial unique index below). When none is set, the primary
   // is resolved automatically — see resolvePrimaryPublishedHost.
   isPrimary: boolean('is_primary').default(false).notNull(),
+  // True only for platform-owned domains (e.g. pagespace.ai) registered by a
+  // platform admin to alias a drive's published content onto the app's own
+  // domain. These rows skip DNS verification and Fly cert provisioning
+  // entirely (the host already has valid DNS/TLS via the main app) and are
+  // inserted directly as `active`. Never set by the normal drive-owner
+  // custom-domain flow. Excluded from primary/canonical host selection so the
+  // drive's pagespace.site subdomain stays the canonical SEO host.
+  platformOwned: boolean('platform_owned').default(false).notNull(),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   hostnameKey: uniqueIndex('custom_domains_hostname_key').on(table.hostname),

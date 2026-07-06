@@ -16,7 +16,27 @@ export type TerminalSession = {
   closedFn: (exitCode: number) => void;
   scrollback: string[];
   scrollbackBytes: number;
+  /**
+   * Terminal Epic 3 metering (optional — set only when a `billing` seam is
+   * wired). `payerId` + `connectedAt` are always set together with `holdId` so
+   * the session's end hook can settle the active-runtime hold to its real cost.
+   */
+  payerId?: string;
+  holdId?: string;
+  connectedAt?: number;
+  /** The Terminal page this session is for — the usage-breakdown's per-machine attribution key. */
+  pageId?: string;
 };
+
+export function appendScrollback(session: Pick<TerminalSession, 'scrollback' | 'scrollbackBytes'>, data: string): void {
+  const bytes = Buffer.byteLength(data, 'utf8');
+  session.scrollback.push(data);
+  session.scrollbackBytes += bytes;
+  while (session.scrollbackBytes > MAX_SCROLLBACK_BYTES && session.scrollback.length > 0) {
+    const removed = session.scrollback.shift()!;
+    session.scrollbackBytes -= Buffer.byteLength(removed, 'utf8');
+  }
+}
 
 export type TerminalSessionMap = {
   getBySocket(socketId: string): TerminalSession | undefined;

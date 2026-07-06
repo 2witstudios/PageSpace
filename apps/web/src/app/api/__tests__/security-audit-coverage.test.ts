@@ -154,6 +154,12 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
 
   // --- Monitoring with admin auth (already audited via withAdminAuth wrapper) ---
   ['monitoring/[metric]', 'Uses withAdminAuth which includes audit — verify after merge'],
+
+  // --- Machine sandbox routes (audited via the shared writeCodeExecutionAudit
+  // pipeline deep in the machines orchestration layer, not directly in route.ts) ---
+  ['machines/branches', 'Audited via writeCodeExecutionAudit in machine-branches.ts (git clone/checkout on the branch Sprite)'],
+  ['machines/projects', 'Audited via writeCodeExecutionAudit in machine-projects.ts (git clone on the owning Machine)'],
+  ['machines/agent-terminals', 'Reserves/kills a named PTY session tracking row; the PTY itself is audited via writeCodeExecutionAudit when opened (see apps/realtime/src/index.ts)'],
 ]);
 
 function collectRouteFiles(dir: string): string[] {

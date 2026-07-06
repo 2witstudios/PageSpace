@@ -52,7 +52,12 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'col_drives_id', ownerId: 'col_drives_ownerId' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
-  users: { id: 'col_users_id', subscriptionTier: 'col_subscriptionTier' },
+  users: { id: 'col_users_id', subscriptionTier: 'col_subscriptionTier', role: 'col_role' },
+}));
+
+const mirrorDriveToCustomHost = vi.fn();
+vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
+  mirrorDriveToCustomHost: (...args: unknown[]) => mirrorDriveToCustomHost(...args),
 }));
 
 vi.mock('@/lib/subscription/plans', () => ({
@@ -78,16 +83,25 @@ const makeReq = (body?: unknown): Request =>
 const ctx = (driveId = DRIVE_ID) => ({ params: Promise.resolve({ driveId }) });
 
 /**
- * Mock for POST: three sequential dbSelect calls inside the handler.
- *  1. Tier lookup (outside transaction): drives JOIN users → [{tier}]
- *  2. Drive row lock (inside transaction): SELECT drives.id FOR UPDATE
- *  3. Count query (inside transaction): SELECT count() FROM customDomains
+ * Mock for POST (non-platform-domain path): four sequential dbSelect calls.
+ *  1. Platform-admin role lookup: SELECT role FROM users WHERE id
+ *  2. Tier lookup (outside transaction): drives JOIN users → [{tier}]
+ *  3. Drive row lock (inside transaction): SELECT drives.id FOR UPDATE
+ *  4. Count query (inside transaction): SELECT count() FROM customDomains
  */
-function mockPostSelects({ ownerTier = 'pro', domainCount = 0 } = {}) {
+function mockPostSelects({ ownerTier = 'pro', domainCount = 0, role = 'user' } = {}) {
   let callIndex = 0;
   dbSelect.mockImplementation(() => {
     callIndex++;
     if (callIndex === 1) {
+      // Platform-admin role lookup
+      return {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([{ role }]),
+      };
+    }
+    if (callIndex === 2) {
       // Tier lookup
       return {
         from: vi.fn().mockReturnThis(),
@@ -96,7 +110,7 @@ function mockPostSelects({ ownerTier = 'pro', domainCount = 0 } = {}) {
         limit: vi.fn().mockResolvedValue([{ tier: ownerTier }]),
       };
     }
-    if (callIndex === 2) {
+    if (callIndex === 3) {
       // Drive row lock: tx.select({id}).from(drives).where().for('update')
       return {
         from: vi.fn().mockReturnThis(),
@@ -112,11 +126,28 @@ function mockPostSelects({ ownerTier = 'pro', domainCount = 0 } = {}) {
   });
 }
 
+/** Mock for the platform-owned-domain POST path: a single role-lookup dbSelect call. */
+function mockPlatformAdminSelect() {
+  dbSelect.mockImplementation(() => ({
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockResolvedValue([{ role: 'admin' }]),
+  }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   authenticateRequestWithOptions.mockResolvedValue(mockAuth);
   checkMCPDriveScope.mockReturnValue(null);
   isPrincipalDriveOwnerOrAdmin.mockResolvedValue(true);
+  // Default role lookup: non-admin, so existing behavior is unaffected unless a
+  // test explicitly opts into the platform-admin path.
+  dbSelect.mockImplementation(() => ({
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockResolvedValue([{ role: 'user' }]),
+  }));
+  mirrorDriveToCustomHost.mockResolvedValue(undefined);
   // Default reconcile: no-op echoing the input status (overridden per-test).
   reconcileCustomDomainCert.mockImplementation(async (d: { status: string }) => ({ status: d.status, action: null }));
   // Default transaction: pass a tx stub that delegates to the same dbSelect/dbInsert mocks.
@@ -357,6 +388,72 @@ describe('POST /api/drives/[driveId]/domains', () => {
       }),
     });
     const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());
+    expect(res.status).toBe(409);
+  });
+
+  // ── platform-owned domain (admin bypass) ──────────────────────────────────
+
+  it('still rejects pagespace.ai for a non-platform-admin caller', async () => {
+    // role defaults to 'user' via beforeEach
+    const res = await POST(makeReq({ hostname: 'pagespace.ai' }), ctx());
+    expect(res.status).toBe(400);
+  });
+
+  it('allows a platform admin to register pagespace.ai for a drive they do not own, skipping the tier cap', async () => {
+    mockPlatformAdminSelect();
+    isPrincipalDriveOwnerOrAdmin.mockResolvedValue(false); // not a drive member — must not matter
+    const inserted = { id: 'dom-1', driveId: DRIVE_ID, hostname: 'pagespace.ai', status: 'active', platformOwned: true, createdAt: new Date() };
+    const valuesMock = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([inserted]) });
+    dbInsert.mockReturnValue({ values: valuesMock });
+
+    const res = await POST(makeReq({ hostname: 'pagespace.ai' }), ctx());
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.domain.status).toBe('active');
+    expect(body.domain.platformOwned).toBe(true);
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hostname: 'pagespace.ai', status: 'active', platformOwned: true }),
+    );
+    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'pagespace.ai');
+  });
+
+  it('does not let a platform admin bypass the blocklist for an unrelated pagespace.* host', async () => {
+    mockPlatformAdminSelect();
+    const res = await POST(makeReq({ hostname: 'evil.pagespace.xyz' }), ctx());
+    expect(res.status).toBe(400);
+  });
+
+  it('audits the platform-owned registration with platformOwned: true', async () => {
+    mockPlatformAdminSelect();
+    const inserted = { id: 'dom-1', driveId: DRIVE_ID, hostname: 'pagespace.ai', status: 'active', platformOwned: true, createdAt: new Date() };
+    dbInsert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([inserted]) }) });
+
+    await POST(makeReq({ hostname: 'pagespace.ai' }), ctx());
+
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      details: expect.objectContaining({ hostname: 'pagespace.ai', platformOwned: true }),
+    }));
+  });
+
+  it('a normal (non-platform-domain) POST audits with platformOwned: false', async () => {
+    mockPostSelects({ ownerTier: 'pro', domainCount: 0 });
+    const inserted = { id: 'dom-1', driveId: DRIVE_ID, hostname: 'acme.com', status: 'pending', createdAt: new Date() };
+    dbInsert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([inserted]) }) });
+
+    await POST(makeReq({ hostname: 'acme.com' }), ctx());
+
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      details: expect.objectContaining({ platformOwned: false }),
+    }));
+  });
+
+  it('returns 409 when pagespace.ai is already registered', async () => {
+    mockPlatformAdminSelect();
+    const uniqueErr = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+    dbInsert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockRejectedValue(uniqueErr) }) });
+
+    const res = await POST(makeReq({ hostname: 'pagespace.ai' }), ctx());
     expect(res.status).toBe(409);
   });
 });

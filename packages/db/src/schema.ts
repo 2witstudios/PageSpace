@@ -41,7 +41,6 @@ export * from './schema/share-links';
 export * from './schema/zoom';
 export * from './schema/webhook-triggers';
 export * from './schema/drafts';
-export * from './schema/sandbox-sessions';
 export * from './schema/terminal-sessions';
 export * from './schema/published-pages';
 export * from './schema/credits';
@@ -52,6 +51,9 @@ export * from './schema/incidents';
 export * from './schema/data-subject-requests';
 export * from './schema/oauth';
 export * from './schema/form-targets';
+export * from './schema/machine-projects';
+export * from './schema/machine-branches';
+export * from './schema/machine-agent-terminals';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -96,7 +98,6 @@ import * as shareLinks from './schema/share-links';
 import * as zoom from './schema/zoom';
 import * as webhookTriggers from './schema/webhook-triggers';
 import * as drafts from './schema/drafts';
-import * as sandboxSessions from './schema/sandbox-sessions';
 import * as terminalSessions from './schema/terminal-sessions';
 import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
@@ -107,6 +108,9 @@ import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
 import * as oauth from './schema/oauth';
 import * as formTargets from './schema/form-targets';
+import * as machineProjects from './schema/machine-projects';
+import * as machineBranches from './schema/machine-branches';
+import * as machineAgentTerminals from './schema/machine-agent-terminals';
 
 export const schema = {
   ...auth,
@@ -152,7 +156,6 @@ export const schema = {
   ...zoom,
   ...webhookTriggers,
   ...drafts,
-  ...sandboxSessions,
   ...terminalSessions,
   ...publishedPages,
   ...credits,
@@ -163,4 +166,7 @@ export const schema = {
   ...dataSubjectRequests,
   ...oauth,
   ...formTargets,
+  ...machineProjects,
+  ...machineBranches,
+  ...machineAgentTerminals,
 };

@@ -113,6 +113,25 @@ describe('validateCustomDomain', () => {
     expect(result.valid).toBe(false);
   });
 
+  it('still rejects pagespace.ai when allowPlatformDomain is false', () => {
+    const result = validateCustomDomain('pagespace.ai', { allowPlatformDomain: false });
+    expect(result.valid).toBe(false);
+  });
+
+  it('accepts pagespace.ai when allowPlatformDomain is true', () => {
+    expect(validateCustomDomain('pagespace.ai', { allowPlatformDomain: true })).toEqual({ valid: true });
+  });
+
+  it('still rejects pagespace.site when allowPlatformDomain is true (not in PLATFORM_OWNED_DOMAINS)', () => {
+    const result = validateCustomDomain('pagespace.site', { allowPlatformDomain: true });
+    expect(result.valid).toBe(false);
+  });
+
+  it('still rejects an unrelated *.pagespace.* host even when allowPlatformDomain is true', () => {
+    const result = validateCustomDomain('evil.pagespace.xyz', { allowPlatformDomain: true });
+    expect(result.valid).toBe(false);
+  });
+
   it('rejects hostnames exceeding 253 chars', () => {
     const long = 'a'.repeat(64) + '.' + 'b'.repeat(64) + '.' + 'c'.repeat(64) + '.' + 'd'.repeat(64);
     const result = validateCustomDomain(long);

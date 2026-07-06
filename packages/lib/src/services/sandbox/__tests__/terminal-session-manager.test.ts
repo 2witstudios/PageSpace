@@ -5,8 +5,8 @@ import {
   acquireTerminalSandbox,
   type TerminalSessionStore,
   type TerminalSessionRecord,
+  type SandboxClient,
 } from '../terminal-session-manager';
-import type { SandboxClient } from '../session-manager';
 import { resolveSandboxNetworkOptions } from '../network-options';
 
 const SECRET = 'x'.repeat(32);

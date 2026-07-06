@@ -1,0 +1,478 @@
+/**
+ * Agent Terminals: spawn / resolve (attach) / kill / list named, pluggable-
+ * agent-typed PTY sessions at one of the three universal Terminal scopes
+ * (tasks/terminal.md), mirroring PurePoint's `AgentLocation::Root` /
+ * `AgentLocation::Worktree` (`crates/pu-core/src/types/manifest.rs`):
+ * `machine` (the owning Machine's OWN persistent Sprite, cwd = its home dir),
+ * `project` (the SAME Machine Sprite, cwd = a cloned project's checkout), or
+ * `branch` (the branch-terminal's OWN isolated Sprite, `machine_branches`).
+ *
+ * `spawnAgentTerminal` and `listAgentTerminals` are addressed by scope
+ * (`terminalId` + optional `projectName`/`branchName` — neither → machine,
+ * `projectName` only → project, both → branch), since creating or enumerating
+ * within a scope requires knowing which one. `resolveAgentTerminal` and
+ * `killAgentTerminal` (by-name equivalents, kept for today's only wired
+ * consumer — the branch-scoped realtime PTY bridge / navigator API) also take
+ * a scope target. `resolveAgentTerminalById`/`killAgentTerminalById` are
+ * LEVEL-AGNOSTIC — keyed purely on the row's own id, exactly like PurePoint's
+ * `Attach{agent_id}` (`Manifest::find_agent` searches root + every worktree by
+ * id, no location path needed): once an agent terminal exists, attaching to
+ * or killing it never requires re-supplying which scope it lives in.
+ *
+ * `spawnAgentTerminal` only reserves the (scope, name, agentType) tracking
+ * row — it does NOT eagerly open the Sprite exec session, and (for
+ * machine/project scope) does NOT acquire the Machine's Sprite either, since
+ * that Sprite is provisioned/reconnected elsewhere (the Terminal page's own
+ * shell, or a page-agent's "own machine" tool calls). The actual PTY is
+ * created lazily by the realtime bridge on first connect (mirrors how a
+ * Terminal page's shell is never opened until a socket connects — see
+ * `apps/realtime/src/terminal/terminal-handler.ts`), which then persists the
+ * discovered/created Sprite session id back via `updateStreamSessionId` so a
+ * later reconnect can reattach instead of spawning a duplicate process.
+ * Resolving/killing DOES need a live sandbox: a branch's Sprite is looked up
+ * directly (by name or by id), but machine/project scope goes through the
+ * injected `machineSandbox.acquire` (the same `acquireTerminalSandbox`-backed
+ * path a Terminal page shell uses) since that Sprite may need to be
+ * reconnected or resumed from hibernation.
+ */
+
+import type { MachineHost } from '../sandbox/machine-host';
+import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
+import { BRANCH_REPO_PATH } from './machine-branches';
+import {
+  isUniqueViolation,
+  type MachineAgentTerminalStore,
+  type MachineAgentTerminalRecord,
+  type AgentTerminalScopeKey,
+  type AgentTerminalScope,
+  deriveAgentTerminalScope,
+} from './agent-terminals-store';
+import { isValidAgentTerminalName, isValidAgentTerminalCommand, isAgentRuntimeType, type AgentRuntimeType } from './agent-terminal-types';
+
+export type { AgentTerminalScopeKey, AgentTerminalScope };
+export { deriveAgentTerminalScope };
+
+/** The minimal slice of the Branches store this module needs — resolving a branch's Sprite (`sandboxId`) either by (project, branch) name or by the branch row's OWN id. */
+export interface AgentTerminalBranchLookup {
+  findByName(terminalId: string, projectName: string, branchName: string): Promise<{ id: string; sandboxId: string } | null>;
+  /** Level-agnostic lookup, used by the id-keyed resolve/kill path — no project/branch name required. */
+  findById(machineBranchId: string): Promise<{ sandboxId: string } | null>;
+}
+
+/** The minimal slice of the Projects store this module needs — just enough to resolve a project's clone path. */
+export interface AgentTerminalProjectLookup {
+  findByName(terminalId: string, name: string): Promise<{ path: string } | null>;
+}
+
+export type AgentTerminalMachineSandboxResult =
+  | { ok: true; sandboxId: string }
+  | { ok: false; reason: string };
+
+/** Acquires the OWNING Machine's persistent Sprite (machine/project scope share this one Sprite) — see `services/sandbox/machine-session.ts` for the production implementation. */
+export interface AgentTerminalMachineSandbox {
+  acquire(terminalId: string): Promise<AgentTerminalMachineSandboxResult>;
+}
+
+export interface AgentTerminalsDeps {
+  branchStore: AgentTerminalBranchLookup;
+  /** Required only for project/machine-scope targets — a branch-only caller (today's only wired consumer) never needs it. */
+  projectStore?: AgentTerminalProjectLookup;
+  /** Required only for project/machine-scope targets. */
+  machineSandbox?: AgentTerminalMachineSandbox;
+  store: MachineAgentTerminalStore;
+  host: MachineHost;
+  now: () => Date;
+}
+
+/** Each function below asks for exactly the slice of `AgentTerminalsDeps` it touches — e.g. a read-only resolver never needs `host`, so a caller (like the realtime PTY bridge) doesn't have to fabricate one just to satisfy the type. */
+export type SpawnAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store' | 'now'>;
+export type ResolveAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox' | 'store'>;
+export type ListAgentTerminalsDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store'>;
+export type KillAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox' | 'store' | 'host'>;
+
+export interface AgentTerminalActor {
+  userId: string;
+}
+
+/**
+ * `projectName`/`branchName` together select the scope: neither set →
+ * machine, `projectName` only → project, both set → branch. `branchName`
+ * without `projectName` is not a valid target (a branch always belongs to a
+ * named project) and is rejected as `invalid_target`.
+ */
+export interface AgentTerminalTarget {
+  terminalId: string;
+  projectName?: string;
+  branchName?: string;
+  name: string;
+}
+
+export type AgentTerminalScopeDenialReason =
+  | 'invalid_target'
+  | 'project_not_found'
+  | 'branch_not_found'
+  | 'machine_unavailable'
+  /** A project/machine-scope target was requested but the caller's deps didn't wire `projectStore`/`machineSandbox`. */
+  | 'scope_unsupported';
+
+type ScopeKeyResolution =
+  | { ok: true; scopeKey: AgentTerminalScopeKey }
+  | { ok: false; reason: 'invalid_target' | 'project_not_found' | 'branch_not_found' | 'scope_unsupported' };
+
+/** Resolve WHICH scope row a target addresses, without touching any Sprite — enough for spawn/list. */
+async function resolveScopeKey({
+  terminalId,
+  projectName,
+  branchName,
+  deps,
+}: {
+  terminalId: string;
+  projectName?: string;
+  branchName?: string;
+  deps: Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore'>;
+}): Promise<ScopeKeyResolution> {
+  if (branchName !== undefined) {
+    if (!projectName) return { ok: false, reason: 'invalid_target' };
+    const branch = await deps.branchStore.findByName(terminalId, projectName, branchName);
+    if (!branch) return { ok: false, reason: 'branch_not_found' };
+    return { ok: true, scopeKey: { terminalId, projectName, machineBranchId: branch.id } };
+  }
+
+  if (projectName !== undefined) {
+    if (!deps.projectStore) return { ok: false, reason: 'scope_unsupported' };
+    const project = await deps.projectStore.findByName(terminalId, projectName);
+    if (!project) return { ok: false, reason: 'project_not_found' };
+    return { ok: true, scopeKey: { terminalId, projectName, machineBranchId: null } };
+  }
+
+  return { ok: true, scopeKey: { terminalId, projectName: null, machineBranchId: null } };
+}
+
+type LocationResolution =
+  | { ok: true; sandboxId: string; cwd: string }
+  | { ok: false; reason: AgentTerminalScopeDenialReason };
+
+/** Shared project/machine-scope location resolution — the SAME Machine Sprite either way, differing only in `cwd`. */
+async function resolveProjectOrMachineLocation({
+  terminalId,
+  projectName,
+  deps,
+}: {
+  terminalId: string;
+  projectName: string | null;
+  deps: Pick<AgentTerminalsDeps, 'projectStore' | 'machineSandbox'>;
+}): Promise<LocationResolution> {
+  let cwd = SANDBOX_ROOT;
+  if (projectName !== null) {
+    if (!deps.projectStore) return { ok: false, reason: 'scope_unsupported' };
+    const project = await deps.projectStore.findByName(terminalId, projectName);
+    if (!project) return { ok: false, reason: 'project_not_found' };
+    cwd = project.path;
+  }
+
+  if (!deps.machineSandbox) return { ok: false, reason: 'scope_unsupported' };
+  const acquired = await deps.machineSandbox.acquire(terminalId);
+  if (!acquired.ok) return { ok: false, reason: 'machine_unavailable' };
+  return { ok: true, sandboxId: acquired.sandboxId, cwd };
+}
+
+type ScopeLocationResolution =
+  | { ok: true; scopeKey: AgentTerminalScopeKey; sandboxId: string; cwd: string }
+  | { ok: false; reason: AgentTerminalScopeDenialReason };
+
+/** Resolve WHERE a scope target's Sprite + working directory live, by (project, branch) NAME — used by the by-name resolve/kill path. */
+async function resolveScopeLocation({
+  terminalId,
+  projectName,
+  branchName,
+  deps,
+}: {
+  terminalId: string;
+  projectName?: string;
+  branchName?: string;
+  deps: Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox'>;
+}): Promise<ScopeLocationResolution> {
+  if (branchName !== undefined) {
+    if (!projectName) return { ok: false, reason: 'invalid_target' };
+    const branch = await deps.branchStore.findByName(terminalId, projectName, branchName);
+    if (!branch) return { ok: false, reason: 'branch_not_found' };
+    return {
+      ok: true,
+      scopeKey: { terminalId, projectName, machineBranchId: branch.id },
+      sandboxId: branch.sandboxId,
+      cwd: BRANCH_REPO_PATH,
+    };
+  }
+
+  const resolvedProjectName = projectName ?? null;
+  const located = await resolveProjectOrMachineLocation({ terminalId, projectName: resolvedProjectName, deps });
+  if (!located.ok) return located;
+  return {
+    ok: true,
+    scopeKey: { terminalId, projectName: resolvedProjectName, machineBranchId: null },
+    sandboxId: located.sandboxId,
+    cwd: located.cwd,
+  };
+}
+
+/** Resolve WHERE an already-known ROW's Sprite + working directory live, by its OWN scope columns — the level-agnostic path (no name lookup at all). */
+async function resolveLocationForRow(
+  row: Pick<MachineAgentTerminalRecord, 'terminalId' | 'projectName' | 'machineBranchId'>,
+  deps: Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox'>,
+): Promise<LocationResolution> {
+  if (row.machineBranchId) {
+    const branch = await deps.branchStore.findById(row.machineBranchId);
+    if (!branch) return { ok: false, reason: 'branch_not_found' };
+    return { ok: true, sandboxId: branch.sandboxId, cwd: BRANCH_REPO_PATH };
+  }
+  return resolveProjectOrMachineLocation({ terminalId: row.terminalId, projectName: row.projectName, deps });
+}
+
+export type SpawnAgentTerminalDenialReason =
+  | 'invalid_name'
+  | 'invalid_agent_type'
+  | 'invalid_command'
+  | AgentTerminalScopeDenialReason
+  | 'name_in_use'
+  | 'error';
+
+/** Pure decision: is this (name, agentType, command?) safe to reserve as an agent terminal? */
+export function planSpawnAgentTerminal(input: { name: string; agentType: string; command?: string }):
+  | { ok: true }
+  | { ok: false; reason: 'invalid_name' | 'invalid_agent_type' | 'invalid_command' } {
+  if (!isValidAgentTerminalName(input.name)) return { ok: false, reason: 'invalid_name' };
+  if (!isAgentRuntimeType(input.agentType)) return { ok: false, reason: 'invalid_agent_type' };
+  if (input.command !== undefined && !isValidAgentTerminalCommand(input.command)) {
+    return { ok: false, reason: 'invalid_command' };
+  }
+  return { ok: true };
+}
+
+export type SpawnAgentTerminalResult =
+  | { ok: true; id: string; agentType: AgentRuntimeType; resumed: boolean }
+  | { ok: false; reason: SpawnAgentTerminalDenialReason };
+
+/**
+ * Spawn (or resume) a named agent terminal at a scope. Idempotent by (scope,
+ * name) with the SAME agentType — a second call for an already-reserved name
+ * returns the existing reservation instead of erroring; reusing the name
+ * under a DIFFERENT agentType is rejected (`name_in_use`) rather than
+ * silently repurposing an existing session's identity. `command` (an
+ * optional program override, PurePoint `AgentEntry.command` parity) is only
+ * consulted on a FRESH reservation — a resume reattaches to whatever the
+ * original spawn already fixed.
+ */
+export async function spawnAgentTerminal({
+  terminalId,
+  projectName,
+  branchName,
+  name,
+  agentType,
+  command,
+  actor,
+  deps,
+}: AgentTerminalTarget & { agentType: string; command?: string; actor: AgentTerminalActor; deps: SpawnAgentTerminalDeps }): Promise<SpawnAgentTerminalResult> {
+  const plan = planSpawnAgentTerminal({ name, agentType, command });
+  if (!plan.ok) return plan;
+  const resolvedType = agentType as AgentRuntimeType;
+
+  const scope = await resolveScopeKey({ terminalId, projectName, branchName, deps });
+  if (!scope.ok) return scope;
+
+  const existing = await deps.store.findByName(scope.scopeKey, name);
+  if (existing) {
+    if (existing.agentType !== resolvedType) return { ok: false, reason: 'name_in_use' };
+    return { ok: true, id: existing.id, agentType: resolvedType, resumed: true };
+  }
+
+  try {
+    const row = await deps.store.create({
+      ownerId: actor.userId,
+      terminalId: scope.scopeKey.terminalId,
+      scope: deriveAgentTerminalScope(scope.scopeKey),
+      projectName: scope.scopeKey.projectName,
+      machineBranchId: scope.scopeKey.machineBranchId,
+      name,
+      agentType: resolvedType,
+      command: command ?? null,
+      now: deps.now(),
+    });
+    return { ok: true, id: row.id, agentType: resolvedType, resumed: false };
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      // Lost a race against a concurrent spawn of the same name.
+      const reconciled = await deps.store.findByName(scope.scopeKey, name);
+      if (reconciled && reconciled.agentType === resolvedType) {
+        return { ok: true, id: reconciled.id, agentType: resolvedType, resumed: true };
+      }
+      if (reconciled) return { ok: false, reason: 'name_in_use' };
+    }
+    return { ok: false, reason: 'error' };
+  }
+}
+
+export type ResolveAgentTerminalResult =
+  | {
+      ok: true;
+      agentTerminalId: string;
+      sandboxId: string;
+      cwd: string;
+      agentType: AgentRuntimeType;
+      command: string | null;
+      streamSessionId: string | null;
+    }
+  | { ok: false; reason: AgentTerminalScopeDenialReason | 'not_found' };
+
+function toResolveResult(row: MachineAgentTerminalRecord, location: { sandboxId: string; cwd: string }): ResolveAgentTerminalResult {
+  if (!isAgentRuntimeType(row.agentType)) return { ok: false, reason: 'not_found' };
+  return {
+    ok: true,
+    agentTerminalId: row.id,
+    sandboxId: location.sandboxId,
+    cwd: location.cwd,
+    agentType: row.agentType,
+    command: row.command,
+    streamSessionId: row.streamSessionId,
+  };
+}
+
+/**
+ * Resolve a named agent terminal down to what the realtime PTY bridge needs
+ * to open (or reattach) its stream: which Sprite (`sandboxId`), which working
+ * directory (`cwd`), which launch spec (`agentType`/`command`), and any
+ * already-known Sprite session id to reattach to. Read-only for branch scope
+ * (never provisions); for machine/project scope it may reconnect/resume the
+ * Machine's Sprite via `machineSandbox.acquire`, since that Sprite can be
+ * hibernating.
+ */
+export async function resolveAgentTerminal({
+  terminalId,
+  projectName,
+  branchName,
+  name,
+  deps,
+}: AgentTerminalTarget & { deps: ResolveAgentTerminalDeps }): Promise<ResolveAgentTerminalResult> {
+  const location = await resolveScopeLocation({ terminalId, projectName, branchName, deps });
+  if (!location.ok) return location;
+
+  const row = await deps.store.findByName(location.scopeKey, name);
+  if (!row) return { ok: false, reason: 'not_found' };
+  return toResolveResult(row, location);
+}
+
+/**
+ * Level-agnostic resolve, keyed PURELY on the agent terminal's own id —
+ * mirrors PurePoint's `Attach{agent_id}` (`Manifest::find_agent` searches
+ * root + every worktree by id; no scope path needed). The row's own
+ * `projectName`/`machineBranchId` columns tell us where its Sprite lives.
+ *
+ * PERFORMS NO ACCESS CHECK — unlike the by-name path (whose callers already
+ * hold a `terminalId` from the request and check page access to it BEFORE
+ * calling in), a by-id caller only learns which page a row belongs to AFTER
+ * this resolves. No route wires this today; whoever adds one MUST check the
+ * caller's access to the *resolved* `row.terminalId` (e.g. via
+ * `packages/lib/src/permissions/`) before trusting or acting on the result.
+ */
+export async function resolveAgentTerminalById({
+  agentTerminalId,
+  deps,
+}: {
+  agentTerminalId: string;
+  deps: ResolveAgentTerminalDeps;
+}): Promise<ResolveAgentTerminalResult> {
+  const row = await deps.store.findById(agentTerminalId);
+  if (!row) return { ok: false, reason: 'not_found' };
+
+  const location = await resolveLocationForRow(row, deps);
+  if (!location.ok) return location;
+  return toResolveResult(row, location);
+}
+
+export async function listAgentTerminals({
+  terminalId,
+  projectName,
+  branchName,
+  deps,
+}: {
+  terminalId: string;
+  projectName?: string;
+  branchName?: string;
+  deps: ListAgentTerminalsDeps;
+}): Promise<{ ok: true; terminals: MachineAgentTerminalRecord[] } | { ok: false; reason: 'invalid_target' | 'project_not_found' | 'branch_not_found' | 'scope_unsupported' }> {
+  const scope = await resolveScopeKey({ terminalId, projectName, branchName, deps });
+  if (!scope.ok) return scope;
+  const terminals = await deps.store.list(scope.scopeKey);
+  return { ok: true, terminals };
+}
+
+export type KillAgentTerminalResult = { ok: true } | { ok: false; reason: AgentTerminalScopeDenialReason | 'not_found' | 'error' };
+
+async function killAtLocation(
+  row: MachineAgentTerminalRecord,
+  location: { sandboxId: string },
+  deps: Pick<AgentTerminalsDeps, 'store' | 'host'>,
+): Promise<KillAgentTerminalResult> {
+  if (row.streamSessionId) {
+    try {
+      const handle = await deps.host.attach({ machineId: location.sandboxId });
+      if (handle) {
+        const stream = await handle.stream({ sessionId: row.streamSessionId });
+        stream.kill('SIGKILL');
+      }
+    } catch {
+      return { ok: false, reason: 'error' };
+    }
+  }
+
+  await deps.store.remove({ terminalId: row.terminalId, projectName: row.projectName, machineBranchId: row.machineBranchId }, row.name);
+  return { ok: true };
+}
+
+/**
+ * Tear down a named agent terminal: if its process was ever actually
+ * launched (`streamSessionId` set), attach the scope's Sprite through the
+ * `MachineHost` seam and kill that specific PTY session, then drop the
+ * tracking row. A vanished Sprite has nothing left to kill, so the row is
+ * still dropped rather than orphaned; a live Sprite that fails to kill its
+ * session keeps the row so a retry can find it again.
+ */
+export async function killAgentTerminal({
+  terminalId,
+  projectName,
+  branchName,
+  name,
+  deps,
+}: AgentTerminalTarget & { deps: KillAgentTerminalDeps }): Promise<KillAgentTerminalResult> {
+  const location = await resolveScopeLocation({ terminalId, projectName, branchName, deps });
+  if (!location.ok) return location;
+
+  const row = await deps.store.findByName(location.scopeKey, name);
+  if (!row) return { ok: false, reason: 'not_found' };
+
+  return killAtLocation(row, location, deps);
+}
+
+/**
+ * Level-agnostic kill, keyed PURELY on the agent terminal's own id — same
+ * PurePoint `Attach{agent_id}` parity as `resolveAgentTerminalById`.
+ *
+ * PERFORMS NO ACCESS CHECK — see the identical warning on
+ * `resolveAgentTerminalById`. A future caller MUST authorize against the
+ * resolved row's `terminalId` itself; this function will happily kill any
+ * agent terminal on the machine's Sprite given only its id.
+ */
+export async function killAgentTerminalById({
+  agentTerminalId,
+  deps,
+}: {
+  agentTerminalId: string;
+  deps: KillAgentTerminalDeps;
+}): Promise<KillAgentTerminalResult> {
+  const row = await deps.store.findById(agentTerminalId);
+  if (!row) return { ok: false, reason: 'not_found' };
+
+  const location = await resolveLocationForRow(row, deps);
+  if (!location.ok) return location;
+
+  return killAtLocation(row, location, deps);
+}
