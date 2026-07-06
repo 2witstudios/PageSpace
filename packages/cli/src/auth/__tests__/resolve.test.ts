@@ -173,6 +173,47 @@ describe('resolveAuth — prototype-named profiles are ordinary data, never Obje
   });
 });
 
+describe('resolveAuth — prototype-named hosts are ordinary data, never Object.prototype lookups', () => {
+  const PROTOTYPE_NAMES = ['__proto__', 'constructor', 'toString'] as const;
+
+  it('a prototype-named host that was never stored resolves to none, not a bogus Object.prototype credential', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      expect(resolveAuth({}, {}, {}, name)).toEqual({ kind: 'none', host: name });
+    }
+  });
+
+  it('a prototype-named host that was never stored resolves to none even with a genuinely stored host present', () => {
+    const profiles = { [HOST]: { default: CREDENTIAL } };
+    for (const name of PROTOTYPE_NAMES) {
+      expect(resolveAuth({}, {}, profiles, name)).toEqual({ kind: 'none', host: name });
+    }
+  });
+
+  it('a bracket read of a never-stored prototype-named host must not surface an own property of the prototype chain as a bogus credential', () => {
+    // `profiles['__proto__']` bracket-reads to `Object.prototype` itself (not
+    // undefined), `profiles['constructor']` to the `Object` function, and
+    // `profiles['toString']` to `Function.prototype.toString` — each of
+    // which owns real properties (`toString`, `name`) that a bare
+    // `Object.hasOwn(hostProfiles, profileName)` check would happily find,
+    // returning that unrelated prototype member as `credential`.
+    expect(resolveAuth({}, {}, {}, '__proto__', 'toString')).toEqual({ kind: 'none', host: '__proto__' });
+    expect(resolveAuth({}, {}, {}, 'constructor', 'name')).toEqual({ kind: 'none', host: 'constructor' });
+    expect(resolveAuth({}, {}, {}, 'toString', 'name')).toEqual({ kind: 'none', host: 'toString' });
+  });
+
+  it('stores and resolves a genuinely prototype-named host like any other host', () => {
+    for (const name of PROTOTYPE_NAMES) {
+      const profiles = { [name]: { default: CREDENTIAL } };
+      expect(resolveAuth({}, {}, profiles, name)).toEqual({
+        kind: 'profile',
+        host: name,
+        profileName: 'default',
+        credential: CREDENTIAL,
+      });
+    }
+  });
+});
+
 describe('resolveProfileName — precedence table', () => {
   it('flag alone -> flag value', () => {
     expect(resolveProfileName({ profile: 'work' }, {})).toBe('work');
