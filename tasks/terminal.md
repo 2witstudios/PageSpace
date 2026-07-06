@@ -6,7 +6,7 @@ Canonical requirements + file paths for the three Terminal epics. The PageSpace 
 
 - **Terminal** — the top-level surface/product (right-sidebar workspace; long-term: files left / splittable terminals middle / navigator right = Projects(git) → Branches(docker) → terminals(agent sessions), PurePoint-shaped). A Terminal is page-backed.
 - **Machine** — the substrate a Terminal runs on. Sprite today, Modal for beefy/GPU later. Abstracted behind a substrate seam; never a user-facing tier. Persistent + installable: hibernates, filesystem preserved. The value over throwaway code-exec is "my tools are already installed."
-- **Agents use Terminals.** Global assistant + page agents reference a Machine and run their code-exec tools there. Multiple machines: the agent holds an ACTIVE machine as state and moves between them with a `switch_machine` tool; a `status` tool reports current + available machines.
+- **Agents use Terminals.** Global assistant + page agents reference a Machine and run their code-exec tools there. Multiple machines: the agent holds an ACTIVE machine as state and moves between them with a `switch_machine` tool; a `list_machines` tool (mirrors `list_pages`) reports its configured machines + which is active + an optional description. The agent is BLIND to warm state — no running/hibernated exposed; waking is transparent on switch/use.
 - **Scope = page permissions.** A Terminal/Machine is a resource governed by page access — no per-drive/per-user scoping model. (The earlier "Sandboxes Per Drive" rearchitecture is abandoned; this replaces it.)
 - **Billing:** meter Machine active runtime at a floor of 1.5× actual substrate cost through the credits pipeline, to the owner.
 
@@ -21,7 +21,7 @@ Canonical requirements + file paths for the three Terminal epics. The PageSpace 
 
 ## Epics (PR-node lists live on the board; specs on each PR-node page)
 
-**Epic 1 — Agent ⇄ Terminal communication** (ship first): config model (`terminalAccess` default off + `machines[]`); terminal tools + `switch_machine` + `status` (active-machine); route tools to the active machine (unify sandbox/terminal session); PageAgentSettingsTab surface (toggle gates tools + machine selection: own / existing / add multiple); permissions + activity-visibility + minimal runtime guardrail; global-assistant parallel (same flow, user-level settings).
+**Epic 1 — Agent ⇄ Terminal communication** (ship first): config model (`terminalAccess` default off + `machines[]`); terminal tools + `switch_machine` + `list_machines` (active-machine, blind to warm state); route tools to the active machine (unify sandbox/terminal session); PageAgentSettingsTab surface (toggle gates tools + machine selection: own / existing / add multiple); permissions + activity-visibility + minimal runtime guardrail; global-assistant parallel (same flow, user-level settings).
 
 **Epic 2 — Terminals as the agent workspace** (probe-first): T2.0 docker-in-machine probe (decision-spec — gates the Branches tier); machine-substrate abstraction (Sprite now, Modal/docker-host later); Projects tier (git repos per machine); Branches tier (docker per branch); Runtime (multi-terminal per branch, pluggable agent type — pagespace-cli/claude/codex); UI (3-panel IDE); live per-branch diffs.
 
