@@ -11,6 +11,36 @@ import { db } from '@pagespace/db/db';
 import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql, type InferSelectModel } from '@pagespace/db/operators';
 import { dmConversations, directMessages, dmMessageReactions, dmThreadFollowers } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
+import { decryptField } from '../encryption/field-crypto';
+
+/**
+ * Decrypt the joined sender/reactor `name` PII on a loaded DM row in place
+ * (GDPR #965). `dmMessageWith` joins `users.name` (AES-GCM ciphertext at rest),
+ * so every DM read must decrypt it at this seam. Legacy plaintext passes through.
+ */
+async function decryptDmRowPii(
+  row:
+    | {
+        sender?: { name: string | null } | null;
+        reactions?: Array<{ user?: { name: string | null } | null }> | null;
+      }
+    | null
+    | undefined,
+): Promise<void> {
+  if (!row) return;
+  if (row.sender && row.sender.name != null) {
+    row.sender.name = await decryptField(row.sender.name);
+  }
+  if (row.reactions) {
+    await Promise.all(
+      row.reactions.map(async (r) => {
+        if (r.user && r.user.name != null) {
+          r.user.name = await decryptField(r.user.name);
+        }
+      }),
+    );
+  }
+}
 
 // Mirrors `messageWith` in channel-message-repository.ts. Kept duplicated
 // because the author relation is named differently (`sender` here vs `user`
@@ -466,12 +496,14 @@ async function listActiveMessages(input: ListActiveMessagesInput) {
     baseFilters.push(lt(directMessages.createdAt, input.before));
   }
 
-  return db.query.directMessages.findMany({
+  const rows = await db.query.directMessages.findMany({
     where: and(...baseFilters),
     with: dmMessageWith,
     orderBy: [desc(directMessages.createdAt)],
     limit: input.limit,
   });
+  await Promise.all(rows.map(decryptDmRowPii));
+  return rows;
 }
 
 export interface MarkMessagesReadInput {
@@ -669,12 +701,14 @@ async function listDmThreadReplies(
     );
   }
 
-  return db.query.directMessages.findMany({
+  const rows = await db.query.directMessages.findMany({
     where: and(...conditions),
     with: dmMessageWith,
     orderBy: [asc(directMessages.createdAt), asc(directMessages.id)],
     limit: input.limit,
   });
+  await Promise.all(rows.map(decryptDmRowPii));
+  return rows;
 }
 
 async function addDmThreadFollower(
@@ -740,7 +774,7 @@ async function addDmReaction(input: DmReactionInput): Promise<DmReactionRow> {
 }
 
 async function loadDmReactionWithUser(reactionId: string) {
-  return db.query.dmMessageReactions.findFirst({
+  const row = await db.query.dmMessageReactions.findFirst({
     where: eq(dmMessageReactions.id, reactionId),
     with: {
       user: {
@@ -751,6 +785,12 @@ async function loadDmReactionWithUser(reactionId: string) {
       },
     },
   });
+  // Decrypt the reactor's name PII at the edge (GDPR #965) — this row is
+  // broadcast and returned to clients (legacy plaintext passes through).
+  if (row?.user && row.user.name != null) {
+    row.user.name = await decryptField(row.user.name);
+  }
+  return row;
 }
 
 async function removeDmReaction(input: DmReactionInput): Promise<number> {

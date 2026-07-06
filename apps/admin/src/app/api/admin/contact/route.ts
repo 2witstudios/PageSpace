@@ -1,7 +1,8 @@
 import { db } from '@pagespace/db/db'
-import { asc, desc, ilike, or, and, count, gte, sql, eq, isNull, isNotNull } from '@pagespace/db/operators'
+import { asc, desc, ilike, or, and, count, gte, sql, isNull, isNotNull } from '@pagespace/db/operators'
 import { contactSubmissions } from '@pagespace/db/schema/contact';
 import { users } from '@pagespace/db/schema/auth';
+import { userEmailInListMatch, decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
@@ -84,7 +85,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
     const sortColumn = validSortColumns[sortBy as keyof typeof validSortColumns] || contactSubmissions.createdAt;
     const orderBy = sortOrder === 'asc' ? asc(sortColumn) : desc(sortColumn);
 
-    // Get submissions with pagination, left-joining users by email
+    // Get submissions with pagination (no SQL join — users.email may be an
+    // AES-GCM ciphertext that can't equality-match contactSubmissions.email directly).
     const rows = await db
       .select({
         id: contactSubmissions.id,
@@ -94,28 +96,41 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
         message: contactSubmissions.message,
         createdAt: contactSubmissions.createdAt,
         resolvedAt: contactSubmissions.resolvedAt,
-        userId: users.id,
-        userSubscriptionTier: users.subscriptionTier,
       })
       .from(contactSubmissions)
-      .leftJoin(users, eq(users.email, contactSubmissions.email))
       .where(whereClause)
       .orderBy(orderBy)
       .limit(pageSize)
       .offset(offset);
 
-    const submissions = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      email: r.email,
-      subject: r.subject,
-      message: r.message,
-      createdAt: r.createdAt,
-      resolvedAt: r.resolvedAt,
-      registeredUser: r.userId
-        ? { id: r.userId, subscriptionTier: r.userSubscriptionTier }
-        : null,
-    }));
+    // Batch-resolve registered users for this page via the dual blind-index/raw
+    // lookup (mirrors mapAttendeesToUsers in the calendar-sync integration).
+    const pageEmails = [...new Set(rows.map((r) => r.email.toLowerCase()))];
+    const matchedUsers = pageEmails.length
+      ? await decryptUserRows(
+          await db
+            .select({ id: users.id, email: users.email, subscriptionTier: users.subscriptionTier })
+            .from(users)
+            .where(userEmailInListMatch(pageEmails))
+        )
+      : [];
+    const userByEmail = new Map(matchedUsers.map((u) => [u.email.toLowerCase(), u]));
+
+    const submissions = rows.map((r) => {
+      const matched = userByEmail.get(r.email.toLowerCase());
+      return {
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        subject: r.subject,
+        message: r.message,
+        createdAt: r.createdAt,
+        resolvedAt: r.resolvedAt,
+        registeredUser: matched
+          ? { id: matched.id, subscriptionTier: matched.subscriptionTier }
+          : null,
+      };
+    });
 
     // Calculate pagination info
     const total = totalCountResult[0]?.count || 0;

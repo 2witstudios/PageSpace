@@ -9,7 +9,7 @@
  * repository instead (rubric §3, §4).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockSelectChain = vi.hoisted(() => ({ from: vi.fn() }));
 const mockInsertChain = vi.hoisted(() => ({ values: vi.fn() }));
@@ -62,6 +62,11 @@ vi.mock('@pagespace/db/schema/members', () => ({
     pageId: 'pagePermissions.pageId',
     userId: 'pagePermissions.userId',
   },
+  driveRoles: {
+    id: 'driveRoles.id',
+    name: 'driveRoles.name',
+    color: 'driveRoles.color',
+  },
 }));
 
 vi.mock('@pagespace/db/schema/pending-invites', () => ({
@@ -80,6 +85,9 @@ vi.mock('@pagespace/db/schema/pending-invites', () => ({
 
 import { driveInviteRepository } from '../drive-invite-repository';
 import { isNotNull, isNull } from '@pagespace/db/operators';
+// Real encryption helpers (NOT mocked) — prove a ciphertext inviter name seeded
+// at rest is decrypted at the read edge before flowing to invite/signup screens.
+import { encryptField, looksEncrypted } from '@pagespace/lib/encryption/field-crypto';
 
 const setupSelectLimit = (rows: unknown[]) => {
   const limit = vi.fn().mockResolvedValue(rows);
@@ -576,6 +584,87 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     await expect(
       driveInviteRepository.consumeInviteAndCreateMembership(baseInput)
     ).rejects.toThrow('connection lost');
+  });
+});
+
+describe('driveInviteRepository — inviter name PII decryption at the read edge (GDPR #965)', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.ENCRYPTION_KEY = 'drive-invite-pii-test-master-key-32chars!';
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('findPendingInviteByTokenHash decrypts the joined inviter name', async () => {
+    const cipher = await encryptField('Jane Doe');
+    expect(looksEncrypted(cipher)).toBe(true);
+
+    const limit = vi.fn().mockResolvedValue([
+      {
+        id: 'inv_1',
+        email: 'invitee@example.com',
+        driveId: 'drive_1',
+        role: 'MEMBER',
+        customRoleId: null,
+        invitedBy: 'inviter_1',
+        expiresAt: new Date('2030-01-01'),
+        consumedAt: null,
+        driveName: 'Alpha',
+        inviterName: cipher,
+      },
+    ]);
+    const where = vi.fn().mockReturnValue({ limit });
+    const innerJoin2 = vi.fn().mockReturnValue({ where });
+    const innerJoin1 = vi.fn().mockReturnValue({ innerJoin: innerJoin2 });
+    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin: innerJoin1 });
+
+    const result = await driveInviteRepository.findPendingInviteByTokenHash('hash_xyz');
+
+    expect(result?.inviterName).toBe('Jane Doe');
+  });
+
+  it('findUnconsumedInvitesByDrive decrypts each inviter name', async () => {
+    const cipherA = await encryptField('Alice');
+    const cipherB = await encryptField('Bob');
+
+    const where = vi.fn().mockResolvedValue([
+      { id: 'i1', email: 'a@x.com', role: 'MEMBER', customRoleId: null, customRoleName: null, customRoleColor: null, driveId: 'd1', invitedByName: cipherA, createdAt: new Date(), expiresAt: null },
+      { id: 'i2', email: 'b@x.com', role: 'ADMIN', customRoleId: null, customRoleName: null, customRoleColor: null, driveId: 'd1', invitedByName: cipherB, createdAt: new Date(), expiresAt: null },
+    ]);
+    const leftJoin = vi.fn().mockReturnValue({ where });
+    const innerJoin = vi.fn().mockReturnValue({ leftJoin });
+    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin });
+
+    const rows = await driveInviteRepository.findUnconsumedInvitesByDrive('d1');
+
+    expect(rows.map((r) => r.invitedByName)).toEqual(['Alice', 'Bob']);
+  });
+
+  it('passes a legacy plaintext inviter name through unchanged (mixed-state safety)', async () => {
+    const limit = vi.fn().mockResolvedValue([
+      {
+        id: 'inv_2',
+        email: 'invitee@example.com',
+        driveId: 'drive_1',
+        role: 'MEMBER',
+        customRoleId: null,
+        invitedBy: 'inviter_2',
+        expiresAt: null,
+        consumedAt: null,
+        driveName: 'Alpha',
+        inviterName: 'Legacy Plain',
+      },
+    ]);
+    const where = vi.fn().mockReturnValue({ limit });
+    const innerJoin2 = vi.fn().mockReturnValue({ where });
+    const innerJoin1 = vi.fn().mockReturnValue({ innerJoin: innerJoin2 });
+    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin: innerJoin1 });
+
+    const result = await driveInviteRepository.findPendingInviteByTokenHash('hash_legacy');
+
+    expect(result?.inviterName).toBe('Legacy Plain');
   });
 });
 

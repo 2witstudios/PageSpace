@@ -7,6 +7,7 @@ import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-detai
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveRoles } from '@pagespace/db/schema/members';
@@ -381,33 +382,46 @@ export async function GET(request: Request) {
         }
       }
 
-      // Search for users only within the authorized set
+      // Search for users only within the authorized set.
+      //
+      // GDPR #965: `users.name` is AES-GCM ciphertext at rest, so a SQL
+      // `ilike(users.name, …)` substring match cannot work (ciphertext is
+      // opaque). The candidate set is already bounded to authorized members, so
+      // we fetch those rows, decrypt the names at the edge (legacy plaintext
+      // passes through), and filter by the query words in memory — preserving
+      // the multi-word substring-match behaviour for both plaintext and
+      // ciphertext rows.
       if (authorizedUserIds.size > 0) {
-        // Build multi-word search for users (escaped to prevent LIKE injection)
-        const userSearchConditions: SQL[] = [];
-        if (query.trim()) {
-          const words = query.trim().split(/\s+/).filter(Boolean);
-          for (const word of words) {
-            userSearchConditions.push(ilike(users.name, `%${escapeLikePattern(word)}%`));
-          }
-        }
+        const words = query.trim()
+          ? query.trim().split(/\s+/).filter(Boolean).map((w) => w.toLowerCase())
+          : [];
 
-        const userResults = await db.select({
+        const userRows = await db.select({
           id: users.id,
           name: users.name,
           image: users.image,
         })
         .from(users)
-        .where(
-          and(
-            inArray(users.id, Array.from(authorizedUserIds)),
-            userSearchConditions.length > 0 ? and(...userSearchConditions) : undefined
-          )
-        )
-        .limit(10);
+        .where(inArray(users.id, Array.from(authorizedUserIds)));
+
+        // Decryption runs scrypt per value, so avoid decrypting the whole
+        // authorized set when we don't have to. With no query, nothing is
+        // filtered by name and only the first 10 rows can ever be shown — so
+        // decrypt just those. With a query present we must decrypt every
+        // candidate (ciphertext can't be substring-matched in SQL); that scan
+        // is bounded to authorized drive members, and a name blind index is the
+        // follow-up that removes it (mirrors the deferred email blind-index work).
+        const rowsToDecrypt = words.length === 0 ? userRows.slice(0, 10) : userRows;
+        const decryptedUsers = await decryptUserRows(rowsToDecrypt);
+
+        const matches = decryptedUsers.filter((user) => {
+          if (words.length === 0) return true;
+          const name = (user.name ?? '').toLowerCase();
+          return words.every((word) => name.includes(word));
+        }).slice(0, 10);
 
         // Create suggestions without exposing email addresses or avatars
-        for (const user of userResults) {
+        for (const user of matches) {
           suggestions.push({
             id: user.id,
             label: user.name || 'Unnamed User',

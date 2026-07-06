@@ -15,6 +15,7 @@ import { createHash, randomBytes } from 'crypto';
 import { desc, isNotNull, sql } from 'drizzle-orm';
 import { stableStringify } from '../utils/stable-stringify';
 import { classifyProcessing } from '../compliance/art30/classify-processing';
+import { decryptField } from '../encryption/field-crypto';
 
 /**
  * Advisory lock key for serializing activity log hash chain writes.
@@ -48,9 +49,20 @@ export async function getActorInfo(userId: string): Promise<ActorInfo> {
       return { actorEmail: 'unknown@system' };
     }
 
+    // Decrypt PII at the edge (GDPR #965): `activity_logs.actorEmail` /
+    // `actorDisplayName` are denormalized plaintext snapshots (NOT encrypted
+    // columns), so the actor email/name must be decrypted before being persisted
+    // here — otherwise a profile update during the cutover would write ciphertext
+    // blobs that activity views / Pulse summaries surface verbatim. Legacy
+    // plaintext passes through unchanged.
+    const [actorEmail, actorDisplayName] = await Promise.all([
+      decryptField(user.email),
+      decryptField(user.name),
+    ]);
+
     return {
-      actorEmail: user.email,
-      actorDisplayName: user.name ?? undefined,
+      actorEmail,
+      actorDisplayName: actorDisplayName ?? undefined,
     };
   } catch (error) {
     console.error('[ActivityLogger] Failed to fetch actor info:', error);

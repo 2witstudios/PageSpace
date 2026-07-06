@@ -66,6 +66,7 @@ vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
   channelMessageRepository: {
     findChannelMessageInPage: vi.fn(),
     softDeleteChannelMessage: vi.fn(),
+    loadChannelMessageWithRelations: vi.fn(),
   },
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -119,10 +120,10 @@ const mockGetActorInfo = vi.mocked(getActorInfo);
 const mockBroadcastInboxEvent = vi.mocked(broadcastInboxEvent);
 const mockDbInsert = db.insert as unknown as Mock;
 const mockPagesFindFirst = db.query.pages.findFirst as unknown as Mock;
-const mockChannelMessagesFindFirst = db.query.channelMessages.findFirst as unknown as Mock;
 const mockDriveMembersFindMany = db.query.driveMembers.findMany as unknown as Mock;
 const mockFindChannelMessageInPage = vi.mocked(channelMessageRepository.findChannelMessageInPage);
 const mockSoftDeleteChannelMessage = vi.mocked(channelMessageRepository.softDeleteChannelMessage);
+const mockLoadChannelMessageWithRelations = vi.mocked(channelMessageRepository.loadChannelMessageWithRelations);
 
 // Helper to safely extract result from tool execution (handles AsyncIterable union)
 type ToolResult = Record<string, unknown>;
@@ -146,13 +147,16 @@ describe('channel-tools', () => {
       actorDisplayName: 'Test User',
     });
     mockCanActorEditPage.mockResolvedValue(true);
-    mockChannelMessagesFindFirst.mockResolvedValue({
+    // The AI send path now fetches the broadcast row via the repository loader
+    // (which decrypts the joined author/reactor name PII at the edge) instead of
+    // an inline db query.
+    mockLoadChannelMessageWithRelations.mockResolvedValue({
       id: 'msg-1',
       createdAt: new Date('2026-02-10T12:00:00.000Z'),
       user: { id: 'user-123', name: 'Alice', image: null },
       file: null,
       reactions: [],
-    });
+    } as unknown as Awaited<ReturnType<typeof channelMessageRepository.loadChannelMessageWithRelations>>);
     mockDriveMembersFindMany.mockResolvedValue([]);
     mockFindChannelMessageInPage.mockResolvedValue({
       id: 'msg-1',

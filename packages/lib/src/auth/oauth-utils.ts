@@ -14,6 +14,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { loggers } from '../logging/logger-config';
 import { OAuthProvider, type OAuthUserInfo, type OAuthVerificationResult } from './oauth-types';
 import { resolveOAuthMatch } from './oauth-account-match';
+import { userEmailMatch, prepareUserWrite, decryptUserRow } from './user-repository';
 
 type UserRecord = typeof users.$inferSelect;
 
@@ -200,7 +201,7 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo): Promise<OA
     : provider === OAuthProvider.APPLE
       ? await db.query.users.findFirst({ where: eq(users.appleId, providerId) })
       : undefined;
-  const emailMatch = await db.query.users.findFirst({ where: eq(users.email, email) });
+  const emailMatch = await db.query.users.findFirst({ where: userEmailMatch(email) });
 
   const decision = resolveOAuthMatch({
     providerSubMatch: !!subMatch,
@@ -255,8 +256,10 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo): Promise<OA
 
     // Apply updates if there are any changes
     if (Object.keys(updateData).length > 0) {
+      // Encrypt PII (name) per the rollout flag before persisting. Email is not
+      // changed on link, so no emailBidx recompute is needed here.
       await db.update(users)
-        .set(updateData)
+        .set(await prepareUserWrite(updateData))
         .where(eq(users.id, user.id));
 
       // Refetch user to get updated data
@@ -287,14 +290,18 @@ export async function createOrLinkOAuthUser(userInfo: OAuthUserInfo): Promise<OA
       : baseUserData;
 
     const [newUser] = await db.insert(users)
-      .values(newUserData)
+      .values(await prepareUserWrite(newUserData))
       .returning();
 
     user = newUser;
   }
 
+  // Decrypt PII at the edge so callers (and the returned row) see plaintext
+  // email/name regardless of whether the row is ciphertext or legacy plaintext.
+  const decryptedUser = await decryptUserRow(user);
+
   // Drive provisioning is NOT done here. Callers provision the user's Home
   // drive (provisionHomeDriveIfNeeded) so account creation/linking stays
   // drive-agnostic and every signup path shares one provisioning invariant.
-  return { status: 'linked', user };
+  return { status: 'linked', user: decryptedUser };
 }
