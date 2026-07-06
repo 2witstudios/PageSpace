@@ -40,8 +40,11 @@ interface FormTarget {
 
 interface CanvasFormsSettingsTabProps {
   pageId: string;
-  /** Splices freshly-created form HTML into the Canvas page content and saves it. */
-  onEmbedFormHtml: (html: string, formTargetId: string) => void;
+  /** Splices freshly-created form HTML into the Canvas page content and saves
+   *  it. `replacesFormTargetId` is set when this create is standing up a
+   *  replacement for an archived target — the embed lands in the old one's
+   *  marker position instead of just appending at the end. */
+  onEmbedFormHtml: (html: string, formTargetId: string, replacesFormTargetId?: string) => void;
 }
 
 const FIELD_TYPE_OPTIONS: { value: FormFieldType; label: string }[] = [
@@ -170,7 +173,10 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
         return;
       }
       const data = (await res.json()) as { formTargetId: string; formHtml: string };
-      onEmbedFormHtml(data.formHtml, data.formTargetId);
+      // formTarget still holds the archived target being replaced here — it
+      // isn't cleared until loadFormTarget() re-fetches below.
+      const replacesFormTargetId = creatingNew ? formTarget?.id : undefined;
+      onEmbedFormHtml(data.formHtml, data.formTargetId, replacesFormTargetId);
       toast.success('Form created and embedded into this Canvas page');
       setCreatingNew(false);
       await loadFormTarget();
@@ -179,7 +185,7 @@ export default function CanvasFormsSettingsTab({ pageId, onEmbedFormHtml }: Canv
     } finally {
       setIsBusy(false);
     }
-  }, [draftSheetPageId, draftFields, pageId, onEmbedFormHtml, loadFormTarget]);
+  }, [draftSheetPageId, draftFields, pageId, onEmbedFormHtml, loadFormTarget, creatingNew, formTarget]);
 
   const patch = useCallback(
     async (body: object) => {

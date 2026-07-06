@@ -11,6 +11,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { useFindStore } from '@/stores/useFindStore';
+import { spliceFormHtml } from '@pagespace/lib/forms/embed-html';
 import CanvasPublishControls from './CanvasPublishControls';
 import CanvasFormsSettingsTab from './CanvasFormsSettingsTab';
 
@@ -151,10 +152,12 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   // Splices a freshly-created form's HTML into the Canvas content (wrapped in
   // a marker comment) and saves it — the Forms tab only ever needs to do this
   // once, at creation, since that's the only moment the raw submit token
-  // (and therefore a complete formHtml) is available at all.
-  const handleEmbedFormHtml = useCallback((html: string, formTargetId: string) => {
-    const marker = `<!-- pagespace:form:${formTargetId} start -->\n${html}\n<!-- pagespace:form:${formTargetId} end -->`;
-    const value = content ? `${content}\n\n${marker}\n` : `${marker}\n`;
+  // (and therefore a complete formHtml) is available at all. When
+  // replacesFormTargetId is given (setting up a replacement for an archived
+  // target), the new block lands in the old one's marker position instead of
+  // just appending after whatever the page has grown to since.
+  const handleEmbedFormHtml = useCallback((html: string, formTargetId: string, replacesFormTargetId?: string) => {
+    const value = spliceFormHtml({ content, html, formTargetId, replacesFormTargetId });
     updateContent(value);
     saveWithDebounce(value);
   }, [content, updateContent, saveWithDebounce]);

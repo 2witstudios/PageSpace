@@ -60,7 +60,13 @@ Call `update_form_target_status` with the `formTargetId` (returned by
   disables the status control once archived. To replace an archived form,
   use the tab's "Set up a new form" — it provisions a fresh target against
   (optionally) a different Sheet and takes over the Canvas page's embed;
-  the archived target's history and Sheet data are untouched.
+  the archived target's history and Sheet data are untouched. The
+  replacement's HTML is embedded in the OLD form's position — the Canvas
+  content is marked with `<!-- pagespace:form:{id} start/end -->` comments
+  (see `packages/lib/src/forms/embed-html.ts`) so the tab can find and
+  replace that block in place rather than appending after content that may
+  have changed substantially since. If those markers were hand-edited away,
+  the replacement is appended at the end instead, same as a first-time create.
 
 Both take effect on the very next submission — there is no cache or
 propagation delay, since the submit endpoint re-reads status on every request.
