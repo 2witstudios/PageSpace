@@ -154,11 +154,19 @@ Each step is reversible and never leaves auth in a broken state:
    `ENCRYPTION_KEY` (live since #1715's audit-IP encryption) confirmed present on
    `pagespace-web`/`pagespace-realtime`/`pagespace-admin`; a digest mismatch on
    `pagespace-admin` (stale value from initial provisioning, never previously
-   exercised for this purpose) was found and corrected before proceeding —
-   `fly secrets list` only shows digests, so the fix was reading the live value
-   via `fly ssh console -a pagespace-web -C "printenv ENCRYPTION_KEY"` and staging
-   it onto `pagespace-admin`. `realtime`/`processor` don't write `users` and don't
-   need `PII_ENCRYPTION_ENABLED`.
+   exercised for this purpose) was found and corrected before proceeding.
+   `fly secrets list` only shows digests, never values, so the fix requires
+   reading the value straight out of a running machine that already has the
+   correct one and copying it to the mismatched app — **do this interactively,
+   never in a recorded/logged shell (CI, screen recording, shared terminal)**,
+   since the command's output is the live production master key:
+   `fly ssh console -a <known-good-app> -C "printenv ENCRYPTION_KEY"`, then
+   `fly secrets set --app <mismatched-app> ENCRYPTION_KEY=<value> --stage` +
+   `fly secrets deploy --app <mismatched-app>` (applies the staged secret via
+   the existing image, no rebuild). Prefer capturing the value into a shell
+   variable rather than letting it print to stdout when scripting this.
+   `realtime`/`processor` don't write `users` and don't need
+   `PII_ENCRYPTION_ENABLED`.
 3. **Turn on ciphertext writes:** set `PII_ENCRYPTION_ENABLED=true`. New/updated
    rows now store ciphertext `email`/`name` + `emailBidx`; existing rows remain
    plaintext-but-readable (mixed state is safe). Verify again. ✅ **Done** —
