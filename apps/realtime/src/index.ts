@@ -15,8 +15,7 @@ import {
   decideFullEgressEnablement,
   isContainmentVerified,
 } from '@pagespace/lib/services/sandbox/containment';
-import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/session-manager';
-import { acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import { getSandboxSessionSecret, acquireTerminalSandbox, createDbTerminalSessionStore } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';

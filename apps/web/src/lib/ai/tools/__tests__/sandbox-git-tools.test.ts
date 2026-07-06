@@ -815,6 +815,20 @@ describe('cwd threading', () => {
   });
 });
 
+// ── active machine access ───────────────────────────────────────────────────
+
+describe('active machine access', () => {
+  it('git_status: given the resolved active machine is no longer accessible, should deny without acquiring a sandbox', async () => {
+    const deps = makeDeps();
+    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', terminalId: 't1' }]);
+    deps.machines.isMachineAccessible = vi.fn().mockResolvedValue(false);
+    const { git_status } = createSandboxGitTools(deps);
+    const result = await git_status.execute!({}, {} as never);
+    expect(result).toMatchObject({ success: false });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+  });
+});
+
 // ── schema strictness ────────────────────────────────────────────────────
 
 describe('schema strictness', () => {

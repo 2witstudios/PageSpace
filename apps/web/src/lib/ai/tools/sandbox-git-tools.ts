@@ -22,6 +22,7 @@ import { runGitInSandbox } from '@pagespace/lib/services/sandbox/git-tool-runner
 import { resolveSandboxPath, SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import {
   MAX_PATH_LENGTH,
+  machineRefId,
   resolveActiveMachine,
   type MachineDirectoryDeps,
   type ResolveSandboxContext,
@@ -94,6 +95,19 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     const decision = await gate(ctx);
     if (!decision.ok) return { ok: false, error: { success: false, error: decision.error } };
     const activeMachine = await resolveActiveMachine(rawContext, machines);
+    // Re-verify page-view access on EVERY call, mirroring sandbox-tools.ts —
+    // the actual execution boundary must not trust a machine reference that
+    // was accessible only at a past switch_machine call (OWASP A01).
+    const accessible = await machines.isMachineAccessible(rawContext, activeMachine);
+    if (!accessible) {
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: `You no longer have access to the active machine ("${machineRefId(activeMachine)}"). Call list_machines to see the available options.`,
+        },
+      };
+    }
     return { ok: true, userId: ctx.userId, ctx: { ...ctx, activeMachine } };
   };
 

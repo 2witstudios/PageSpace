@@ -6,6 +6,7 @@ import {
   type MachineDirectoryRuntimeDeps,
 } from '../sandbox-tools-runtime';
 import type { ToolExecutionContext } from '../../core/types';
+import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {
@@ -157,15 +158,65 @@ function makeMachineDirectoryDeps(
   return {
     findPage: async () => ({ title: 'Shared Terminal', type: 'TERMINAL' }),
     canViewPage: async () => true,
+    getAgentConfig: async () => ({ terminalAccess: false, machines: [] }),
     ...overrides,
   };
 }
 
+const pageContext: ToolExecutionContext = {
+  userId: 'u1',
+  chatSource: { type: 'page', agentPageId: 'agent-1' },
+};
+
 describe('createMachineDirectory', () => {
   describe('listMachines', () => {
-    it('should return a fixed single own machine (config-model seam not yet wired)', async () => {
+    it('given no agentPageId (global assistant, no per-page config surface yet), should return a fixed own machine', async () => {
       const directory = createMachineDirectory(makeMachineDirectoryDeps());
       await expect(directory.listMachines(undefined)).resolves.toEqual([{ kind: 'own' }]);
+      await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual([
+        { kind: 'own' },
+      ]);
+    });
+
+    it('given a page agent with terminalAccess off, should return no machines (fail closed)', async () => {
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ terminalAccess: false, machines: [{ kind: 'own' }] }) }),
+      );
+      await expect(directory.listMachines(pageContext)).resolves.toEqual([]);
+    });
+
+    it('given a page agent with terminalAccess on and configured machines, should return the configured machines', async () => {
+      const machines: MachineRef[] = [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }];
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ terminalAccess: true, machines }) }),
+      );
+      await expect(directory.listMachines(pageContext)).resolves.toEqual(machines);
+    });
+
+    it('given a page agent with terminalAccess on but no machines configured, should default to the own machine', async () => {
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ terminalAccess: true, machines: [] }) }),
+      );
+      await expect(directory.listMachines(pageContext)).resolves.toEqual([{ kind: 'own' }]);
+    });
+
+    it('given no agent config found for the page, should return no machines (fail closed)', async () => {
+      const directory = createMachineDirectory(makeMachineDirectoryDeps({ getAgentConfig: async () => null }));
+      await expect(directory.listMachines(pageContext)).resolves.toEqual([]);
+    });
+
+    it('given a sub-agent context (parentAgentId, no chatSource), should resolve config for the parent agent', async () => {
+      const seen: string[] = [];
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({
+          getAgentConfig: async (agentPageId) => {
+            seen.push(agentPageId);
+            return { terminalAccess: true, machines: [{ kind: 'own' }] };
+          },
+        }),
+      );
+      await directory.listMachines({ userId: 'u1', parentAgentId: 'parent-agent-1' });
+      expect(seen).toEqual(['parent-agent-1']);
     });
   });
 

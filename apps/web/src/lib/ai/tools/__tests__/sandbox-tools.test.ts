@@ -59,6 +59,27 @@ describe('createSandboxTools', () => {
     expect(result).toMatchObject({ success: true, stdout: 'hi', exitCode: 0 });
   });
 
+  it('bash: given the resolved active machine is no longer accessible (page view revoked), should deny without acquiring a sandbox', async () => {
+    let acquired = false;
+    const runDeps = fakeRunDeps();
+    runDeps.acquireSandbox = async () => {
+      acquired = true;
+      return { ok: true, sandboxId: 'sbx', resumed: false };
+    };
+    // The machine is still CONFIGURED (so resolveActiveMachine would happily
+    // resolve it as the default), but the actor's page-view access to that
+    // Terminal page has since been revoked.
+    const machines: MachineDirectoryDeps = {
+      listMachines: async () => [{ kind: 'existing', terminalId: 't1' }],
+      describeMachine: async () => ({ name: 'Shared Terminal' }),
+      isMachineAccessible: async () => false,
+    };
+    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+    const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
+    expect(result).toMatchObject({ success: false });
+    expect(acquired).toBe(false);
+  });
+
   it('bash: given an unresolvable context, should surface the resolver error without running', async () => {
     let acquired = false;
     const runDeps = fakeRunDeps();
@@ -311,6 +332,29 @@ describe('createSandboxTools', () => {
       const result = await exec(tools.switch_machine, { machine: 't1' }, rawContext);
       expect(result).toMatchObject({ success: false, reason: 'inaccessible' });
       expect(rawContext.activeMachine).toBeUndefined();
+    });
+
+    it('given a switch_machine call followed by bash, should route the acquire request to the switched machine', async () => {
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+        describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
+        isMachineAccessible: async () => true,
+      };
+      const seenAcquisitions: unknown[] = [];
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async (input) => {
+        seenAcquisitions.push(input);
+        return { ok: true, sandboxId: 'sbx', resumed: false };
+      };
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+      const rawContext: ToolExecutionContext = { userId: 'u1' };
+
+      await exec(tools.switch_machine, { machine: 't1' }, rawContext);
+      await exec(tools.bash, { command: 'echo hi' }, rawContext);
+
+      expect(seenAcquisitions).toEqual([
+        expect.objectContaining({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+      ]);
     });
 
     it('inputSchema: should reject an empty machine id', () => {
