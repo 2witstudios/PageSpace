@@ -14,10 +14,13 @@ import { isStandaloneTool, isHiddenTool, resolveEffectiveToolName } from './tool
  * Groups message parts for rendering.
  * - Consecutive text parts are grouped together
  * - Consecutive file parts are grouped together
- * - Runs of 2+ consecutive non-standalone tool calls are grouped into one
- *   ToolRunGroupPart; a lone call renders as before; standalone tools (diff-
- *   producing edits, task tools, ask_agent — see
- *   tool-calls/tool-significance.ts) always stand alone, breaking any run
+ * - Every run of 1+ consecutive non-standalone tool calls becomes one
+ *   ToolRunGroupPart, carrying a runKey derived from the run's first
+ *   toolCallId. The runKey stays identical as the run grows (more calls
+ *   join), so the component rendering it never remounts — only a run split
+ *   by a standalone/diff tool starts a genuinely new run with a new runKey.
+ *   Standalone tools (diff-producing edits, task tools, ask_agent — see
+ *   tool-calls/tool-significance.ts) always stand alone, breaking any run.
  * - Skips step-start and reasoning parts
  */
 export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedPart[] {
@@ -30,6 +33,7 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
     let currentTextGroup: TextPart[] = [];
     let currentFileGroup: FilePart[] = [];
     let currentToolRun: ProcessedToolPart[] = [];
+    let currentRunKey: string | undefined;
 
     const flushTextGroup = () => {
       if (currentTextGroup.length > 0) {
@@ -46,15 +50,14 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
     };
 
     const flushToolRun = () => {
-      if (currentToolRun.length >= 2) {
-        groups.push({ type: 'tool-run-group', parts: currentToolRun });
-      } else if (currentToolRun.length === 1) {
-        groups.push(currentToolRun[0]);
+      if (currentToolRun.length > 0) {
+        groups.push({ type: 'tool-run-group', runKey: currentRunKey!, parts: currentToolRun });
       }
       currentToolRun = [];
+      currentRunKey = undefined;
     };
 
-    parts.forEach((part) => {
+    parts.forEach((part, partIndex) => {
       // Skip step-start and reasoning parts
       if (part.type === 'step-start' || part.type === 'reasoning') {
         return;
@@ -122,6 +125,9 @@ export function useGroupedParts(parts: UIMessage['parts'] | undefined): GroupedP
           flushToolRun();
           groups.push(processedPart);
         } else {
+          if (currentToolRun.length === 0) {
+            currentRunKey = toolCallId ? `run:${toolCallId}` : `run:idx-${partIndex}`;
+          }
           currentToolRun.push(processedPart);
         }
       }

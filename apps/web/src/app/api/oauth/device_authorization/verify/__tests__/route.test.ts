@@ -146,6 +146,16 @@ describe('POST /api/oauth/device_authorization/verify — outcomes', () => {
     expect(body.scopeDescriptions.length).toBeGreaterThan(0);
   });
 
+  it('narrates a manage_keys scope as key-management access with no content access', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['manage_keys'] });
+
+    const res = await POST(verifyRequest({ userCode: 'ABCD-EFGH' }) as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.scopeDescriptions).toEqual([expect.stringMatching(/manage.*keys/i)]);
+  });
+
   it('missing userCode → invalid_request', async () => {
     const res = await POST(verifyRequest({}) as never);
     expect(res.status).toBe(400);

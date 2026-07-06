@@ -69,6 +69,19 @@ const { mockTable } = vi.hoisted(() => {
     expiresAt: `${name}.expiresAt`,
     revokedAt: `${name}.revokedAt`,
     revokedReason: `${name}.revokedReason`,
+    level: `${name}.level`,
+    category: `${name}.category`,
+    duration: `${name}.duration`,
+    statusCode: `${name}.statusCode`,
+    requestSize: `${name}.requestSize`,
+    responseSize: `${name}.responseSize`,
+    stack: `${name}.stack`,
+    file: `${name}.file`,
+    line: `${name}.line`,
+    column: `${name}.column`,
+    resolved: `${name}.resolved`,
+    method: `${name}.method`,
+    endpoint: `${name}.endpoint`,
   });
   return { mockTable: fn };
 });
@@ -82,6 +95,9 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: mockTable('activityLogs'),
   aiUsageLogs: mockTable('aiUsageLogs'),
+  systemLogs: mockTable('systemLogs'),
+  apiMetrics: mockTable('apiMetrics'),
+  errorLogs: mockTable('errorLogs'),
 }));
 vi.mock('@pagespace/db/schema/storage', () => ({
   files: mockTable('files'),
@@ -121,6 +137,9 @@ import {
   collectUserMessages,
   collectUserFiles,
   collectUserActivity,
+  collectUserSystemLogs,
+  collectUserApiMetrics,
+  collectUserErrorLogs,
   collectUserAiUsage,
   collectUserTasks,
   collectUserSessions,
@@ -366,6 +385,95 @@ describe('collectUserActivity', () => {
   });
 });
 
+describe('collectUserSystemLogs', () => {
+  it('given_systemLogsExist_returnsLogs', async () => {
+    const log = {
+      id: 'sl1', timestamp: new Date(), level: 'error', message: 'boom',
+      category: 'api', endpoint: '/api/foo', method: 'POST', duration: 12,
+    };
+    const db = createChainDb([[log]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].message).toBe('boom');
+  });
+
+  it('given_nullableFieldsAreNull_passesThroughNull', async () => {
+    const log = {
+      id: 'sl2', timestamp: new Date(), level: 'info', message: 'no context',
+      category: null, endpoint: null, method: null, duration: null,
+    };
+    const db = createChainDb([[log]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(result[0].category).toBeNull();
+    expect(result[0].endpoint).toBeNull();
+    expect(result[0].method).toBeNull();
+    expect(result[0].duration).toBeNull();
+  });
+});
+
+describe('collectUserApiMetrics', () => {
+  it('given_apiMetricsExist_returnsMetrics', async () => {
+    const metric = {
+      id: 'am1', timestamp: new Date(), endpoint: '/api/foo', method: 'GET',
+      statusCode: 200, duration: 42, requestSize: 100, responseSize: 200,
+    };
+    const db = createChainDb([[metric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].statusCode).toBe(200);
+  });
+
+  it('given_requestAndResponseSizeAreNull_passesThroughNull', async () => {
+    const metric = {
+      id: 'am2', timestamp: new Date(), endpoint: '/api/bar', method: 'DELETE',
+      statusCode: 204, duration: 5, requestSize: null, responseSize: null,
+    };
+    const db = createChainDb([[metric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(result[0].requestSize).toBeNull();
+    expect(result[0].responseSize).toBeNull();
+  });
+});
+
+describe('collectUserErrorLogs', () => {
+  it('given_errorLogsExist_returnsLogs', async () => {
+    const errorLog = {
+      id: 'el1', timestamp: new Date(), name: 'TypeError', message: 'oops',
+      endpoint: '/api/foo', method: 'POST', file: 'foo.ts', line: 10, column: 5,
+      resolved: false,
+    };
+    const db = createChainDb([[errorLog]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('TypeError');
+  });
+
+  it('given_resolvedTrueAndNullableFieldsNull_passesThroughCorrectly', async () => {
+    const errorLog = {
+      id: 'el2', timestamp: new Date(), name: 'RangeError', message: 'fixed now',
+      endpoint: null, method: null, file: null, line: null, column: null,
+      resolved: true,
+    };
+    const db = createChainDb([[errorLog]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result[0].resolved).toBe(true);
+    expect(result[0].endpoint).toBeNull();
+    expect(result[0].file).toBeNull();
+  });
+});
+
 describe('collectUserAiUsage', () => {
   it('given_usageExists_returnsLogs', async () => {
     const usage = {
@@ -575,6 +683,9 @@ describe('collectAllUserData', () => {
     expect(Array.isArray(result!.messages)).toBe(true);
     expect(Array.isArray(result!.files)).toBe(true);
     expect(Array.isArray(result!.activity)).toBe(true);
+    expect(Array.isArray(result!.systemLogs)).toBe(true);
+    expect(Array.isArray(result!.apiMetrics)).toBe(true);
+    expect(Array.isArray(result!.errorLogs)).toBe(true);
     expect(Array.isArray(result!.aiUsage)).toBe(true);
     expect(Array.isArray(result!.tasks)).toBe(true);
     expect(Array.isArray(result!.sessions)).toBe(true);

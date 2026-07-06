@@ -20,7 +20,7 @@ const CODE_CHALLENGE_METHODS_SUPPORTED = ['S256'] as const;
 const TOKEN_ENDPOINT_AUTH_METHODS_SUPPORTED = ['none'] as const;
 
 /** ADR 0002 Decision 1 grammar. `drive:*` stands for the templated `drive:<driveId>[:role]` family. */
-const SCOPES_SUPPORTED = ['account', 'offline_access', 'drive:*'] as const;
+const SCOPES_SUPPORTED = ['account', 'offline_access', 'manage_keys', 'drive:*'] as const;
 
 export interface OAuthServerConfig {
   /** Canonical deployment origin, e.g. `https://pagespace.ai`. Trailing slash tolerated. */

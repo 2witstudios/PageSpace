@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
+  DEFAULT_PROFILE_NAME,
   emptyCredentialsFile,
   getHost,
   isSecureMode,
@@ -47,23 +48,23 @@ export class FileCredentialStore {
     this.path = options.path ?? defaultCredentialsPath();
   }
 
-  async get(host: string): Promise<HostCredential | null> {
+  async get(host: string, profile: string = DEFAULT_PROFILE_NAME): Promise<HostCredential | null> {
     const file = await this.readFile();
-    return getHost(file, host);
+    return getHost(file, host, profile);
   }
 
-  async set(host: string, credential: HostCredential): Promise<void> {
+  async set(host: string, credential: HostCredential, profile: string = DEFAULT_PROFILE_NAME): Promise<void> {
     const file = await this.readFile();
-    await this.writeFile(upsertHost(file, host, credential));
+    await this.writeFile(upsertHost(file, host, credential, profile));
   }
 
-  async delete(host: string): Promise<void> {
+  async delete(host: string, profile: string = DEFAULT_PROFILE_NAME): Promise<void> {
     const file = await this.readFile();
-    await this.writeFile(removeHost(file, host));
+    await this.writeFile(removeHost(file, host, profile));
   }
 
-  async list(): Promise<readonly CredentialSummary[]> {
-    return listSummaries(await this.readFile());
+  async list(profile: string = DEFAULT_PROFILE_NAME): Promise<readonly CredentialSummary[]> {
+    return listSummaries(await this.readFile(), profile);
   }
 
   private async readFile(): Promise<CredentialsFile> {

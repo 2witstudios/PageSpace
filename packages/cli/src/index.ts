@@ -24,10 +24,11 @@ export { CompositeCredentialStore, createCredentialStore } from './credentials/s
 export type { CredentialStore, CreateCredentialStoreOptions } from './credentials/store.js';
 export { FileCredentialStore, PermissionError, defaultCredentialsPath } from './credentials/file-store.js';
 export type { FileCredentialStoreOptions } from './credentials/file-store.js';
-export { createNativeKeychainAdapter } from './credentials/keychain.js';
-export type { KeychainAdapter, KeychainCredential } from './credentials/keychain.js';
+export { createNativeKeychainAdapter, keychainAccountKey, parseKeychainAccountKey } from './credentials/keychain.js';
+export type { KeychainAccount, KeychainAdapter, KeychainCredential } from './credentials/keychain.js';
 export {
   CredentialsFileFormatError,
+  DEFAULT_PROFILE_NAME,
   emptyCredentialsFile,
   getHost,
   isSecureMode,
@@ -41,15 +42,15 @@ export {
   tokenPrefix,
   upsertHost,
 } from './credentials/serialize.js';
-export type { CredentialSummary, CredentialsFile, HostCredential } from './credentials/serialize.js';
+export type { CredentialSummary, CredentialsFile, HostCredential, HostProfiles } from './credentials/serialize.js';
 
 // Fixed exit code contract.
 export { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from './exit-codes.js';
 export type { ExitCode } from './exit-codes.js';
 
 // Built-in commands.
-export { createHelpHandler } from './commands/help.js';
-export type { HelpCommandDescriptor } from './commands/help.js';
+export { createHelpHandler, groupHelpCommands } from './commands/help.js';
+export type { HelpCommandDescriptor, HelpGroup } from './commands/help.js';
 export { helpHandler, ROUTES } from './router/routes.js';
 export type { RouteEntry } from './router/routes.js';
 export { CLI_VERSION, versionHandler } from './commands/version.js';
@@ -223,8 +224,14 @@ export type { LoginDeviceHandlerDeps } from './commands/login-device.js';
 // grant effect in the CLI (SDK OAuthTokenProvider contract: absolute expiry
 // timestamps, classifyHttpError-based retry vs. terminal classification) —
 // shared by this resolver's silent-refresh wiring and by `pagespace whoami`.
-export { missingCredentialsMessage, resolveAuth } from './auth/resolve.js';
-export type { AuthSource, ResolveAuthEnv, ResolveAuthFlags } from './auth/resolve.js';
+export { missingCredentialsMessage, resolveAuth, resolveProfileName } from './auth/resolve.js';
+export type {
+  AuthSource,
+  ResolveAuthEnv,
+  ResolveAuthFlags,
+  ResolveProfileNameEnv,
+  ResolveProfileNameFlags,
+} from './auth/resolve.js';
 export { createRefreshAccessToken } from './auth/silent-refresh.js';
 export { buildAuthProvider, enforceAuth, FailingAuthProvider } from './auth/auth-context.js';
 export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } from './auth/auth-context.js';
@@ -234,7 +241,13 @@ export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } fr
 // commands have no auth wiring of their own.
 export { parseTokensCreateArgs, parseTokensRevokeArgs } from './commands/tokens/args.js';
 export type { CreateTokenArgs, DriveScopeArg, RevokeTokenArgs } from './commands/tokens/args.js';
-export { tokensCreateHandler } from './commands/tokens/create.js';
+export {
+  buildTokenScope,
+  createTokensCreateHandler,
+  resolveTokenProfileName,
+  tokensCreateHandler,
+} from './commands/tokens/create.js';
+export type { BuildTokenScopeResult, ResolveTokenProfileNameResult, TokensCreateHandlerDeps } from './commands/tokens/create.js';
 export { tokensListHandler } from './commands/tokens/list.js';
 export { tokensRevokeHandler } from './commands/tokens/revoke.js';
 

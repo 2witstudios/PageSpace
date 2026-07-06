@@ -15,6 +15,7 @@
  * promise from `getSecret`/`setSecret`/etc., which `CompositeCredentialStore`
  * already catches and degrades on.
  */
+import { DEFAULT_PROFILE_NAME } from './serialize.js';
 
 export type KeyringModule = typeof import('@napi-rs/keyring');
 export type LoadKeyring = () => Promise<KeyringModule>;
@@ -22,6 +23,58 @@ export type LoadKeyring = () => Promise<KeyringModule>;
 const SERVICE = 'pagespace-cli';
 
 const defaultLoadKeyring: LoadKeyring = () => import('@napi-rs/keyring');
+
+/**
+ * Every existing keychain entry was written with the account key set to the
+ * plain host string (one credential per host). A NUL byte can never appear
+ * in a URL/hostname, so using it as a separator lets a "default"-profile
+ * account key stay byte-for-byte identical to what's already on disk in
+ * users' OS keychains (zero behavior change on upgrade) while any
+ * additionally-named profile gets a distinct, unambiguous account key —
+ * unlike a printable delimiter such as ":", which collides with hosts that
+ * already contain one (e.g. "https://..." or "localhost:3000").
+ */
+const PROFILE_KEY_SEPARATOR = '\u0000';
+
+/**
+ * `keychainAccountKey`/`parseKeychainAccountKey` are re-exported as public
+ * library API (see `index.ts`), so a caller other than this package's own
+ * CLI argv parsing (which can never carry a NUL byte) could otherwise pass a
+ * `host`/`profile` containing the separator itself and collide two distinct
+ * pairs onto the same account key — e.g. `("A\0B", "C")` and `("A", "B\0C")`
+ * both encode to `"A\0B\0C"`, so one pair's `set()` would silently overwrite
+ * the other's keychain entry.
+ *
+ * Exported (rather than kept private) so `CompositeCredentialStore` (`store.ts`)
+ * can call it as a choke point *before* attempting either backend — a throw
+ * from inside `keychainAccountKey` alone would be caught by the store's
+ * generic keychain-error fallback and silently degrade to the file store,
+ * which has no equivalent check, letting a NUL-containing pair through via
+ * that code path instead of being rejected outright.
+ */
+export function assertValidAccountKeyInputs(host: string, profile: string): void {
+  if (host.includes(PROFILE_KEY_SEPARATOR) || profile.includes(PROFILE_KEY_SEPARATOR)) {
+    throw new Error('Host and profile names must not contain a NUL byte.');
+  }
+}
+
+export function keychainAccountKey(host: string, profile: string = DEFAULT_PROFILE_NAME): string {
+  assertValidAccountKeyInputs(host, profile);
+  return profile === DEFAULT_PROFILE_NAME ? host : `${host}${PROFILE_KEY_SEPARATOR}${profile}`;
+}
+
+export interface KeychainAccount {
+  readonly host: string;
+  readonly profile: string;
+}
+
+export function parseKeychainAccountKey(account: string): KeychainAccount {
+  const separatorIndex = account.indexOf(PROFILE_KEY_SEPARATOR);
+  if (separatorIndex === -1) {
+    return { host: account, profile: DEFAULT_PROFILE_NAME };
+  }
+  return { host: account.slice(0, separatorIndex), profile: account.slice(separatorIndex + 1) };
+}
 
 export interface KeychainCredential {
   readonly account: string;

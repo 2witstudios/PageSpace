@@ -8,12 +8,14 @@ import { useCallback, useState } from 'react';
 /**
  * Tracks manually-toggled tool-call expand/collapse state, keyed by
  * toolCallId rather than render position. Lives in MessageRenderer /
- * CompactMessageRenderer — an ancestor that never remounts — so a
- * toolCallId's open state survives the standalone -> ToolRunGroup structural
- * change that happens when useGroupedParts retroactively folds a lone call
- * into a run (the resulting key/type change forces React to remount that
- * slot, which would otherwise silently discard the row's uncontrolled
- * Collapsible state).
+ * CompactMessageRenderer — an ancestor that never remounts — so state
+ * survives useGroupedParts recomputing groups as a message streams in.
+ *
+ * Holds two id-spaces in the same map: a nested row's own toolCallId, and a
+ * run's own header open state keyed by its `runKey` (see message-types.ts's
+ * ToolRunGroupPart) — always closed by default when absent, exactly like a
+ * standalone tool call. runKey is derived from a toolCallId with a `run:`
+ * prefix, so the two spaces never collide.
  *
  * Absence of an entry means "no manual toggle yet" — callers should treat
  * `undefined` as "use the component's own default" rather than a boolean.

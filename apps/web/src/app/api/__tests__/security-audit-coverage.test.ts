@@ -38,6 +38,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['contact', 'Public contact form, no authenticated user'],
   ['avatar/[userId]/[filename]', 'Public asset serving, no auth required'],
   ['track', 'Analytics fire-and-forget, no data read/write'],
+  ['public/forms/[token]/submit', 'Public Canvas-form submission, no authenticated user — every accepted row-append is audit-logged via applyPageMutation activity logging inside appendFormSubmission (changeGroupType: automation), not SecurityAuditService directly'],
 
   // --- Internal system endpoints ---
   ['internal/*', 'Internal service-to-service endpoints'],

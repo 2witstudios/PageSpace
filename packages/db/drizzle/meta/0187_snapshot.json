@@ -1,6 +1,6 @@
 {
-  "id": "93c57e49-ef72-4160-99e2-5f86bbe631ec",
-  "prevId": "915b16c4-6afc-4899-83c3-2425c9f12dad",
+  "id": "4b65b843-b281-4366-b4e8-6abe5c4a4c3f",
+  "prevId": "839df3f0-cbc3-47e0-a53c-225b90ae0e56",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -15999,13 +15999,6 @@
           "notNull": true,
           "default": "now()"
         },
-        "storageLastBilledAt": {
-          "name": "storageLastBilledAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp",
@@ -18479,8 +18472,8 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "public.machine_branches": {
-      "name": "machine_branches",
+    "public.form_targets": {
+      "name": "form_targets",
       "schema": "",
       "columns": {
         "id": {
@@ -18489,62 +18482,115 @@
           "primaryKey": true,
           "notNull": true
         },
-        "ownerId": {
-          "name": "ownerId",
+        "token_hash": {
+          "name": "token_hash",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "terminalId": {
-          "name": "terminalId",
+        "token_prefix": {
+          "name": "token_prefix",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "projectName": {
-          "name": "projectName",
+        "drive_id": {
+          "name": "drive_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "branchName": {
-          "name": "branchName",
+        "page_id": {
+          "name": "page_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "sessionKey": {
-          "name": "sessionKey",
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'sheet:append'"
+        },
+        "canvas_page_id": {
+          "name": "canvas_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fields": {
+          "name": "fields",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "header_row": {
+          "name": "header_row",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "next_row": {
+          "name": "next_row",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "status_reason": {
+          "name": "status_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "sandboxId": {
-          "name": "sandboxId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "createdAt": {
-          "name": "createdAt",
+        "created_at": {
+          "name": "created_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
         },
-        "updatedAt": {
-          "name": "updatedAt",
+        "updated_at": {
+          "name": "updated_at",
           "type": "timestamp",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_submitted_at": {
+          "name": "last_submitted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "submission_count": {
+          "name": "submission_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         }
       },
       "indexes": {
-        "machine_branches_terminal_id_idx": {
-          "name": "machine_branches_terminal_id_idx",
+        "form_targets_page_id_idx": {
+          "name": "form_targets_page_id_idx",
           "columns": [
             {
-              "expression": "terminalId",
+              "expression": "page_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -18555,41 +18601,75 @@
           "method": "btree",
           "with": {}
         },
-        "machine_branches_terminal_project_branch_idx": {
-          "name": "machine_branches_terminal_project_branch_idx",
+        "form_targets_drive_id_idx": {
+          "name": "form_targets_drive_id_idx",
           "columns": [
             {
-              "expression": "terminalId",
+              "expression": "drive_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
-            },
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "form_targets_status_idx": {
+          "name": "form_targets_status_idx",
+          "columns": [
             {
-              "expression": "projectName",
+              "expression": "status",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
-            },
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "form_targets_canvas_page_id_idx": {
+          "name": "form_targets_canvas_page_id_idx",
+          "columns": [
             {
-              "expression": "branchName",
+              "expression": "canvas_page_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "form_targets_one_active_per_page_idx": {
+          "name": "form_targets_one_active_per_page_idx",
+          "columns": [
+            {
+              "expression": "page_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": true,
+          "where": "\"form_targets\".\"status\" = 'active'",
           "concurrently": false,
           "method": "btree",
           "with": {}
         }
       },
       "foreignKeys": {
-        "machine_branches_ownerId_users_id_fk": {
-          "name": "machine_branches_ownerId_users_id_fk",
-          "tableFrom": "machine_branches",
-          "tableTo": "users",
+        "form_targets_drive_id_drives_id_fk": {
+          "name": "form_targets_drive_id_drives_id_fk",
+          "tableFrom": "form_targets",
+          "tableTo": "drives",
           "columnsFrom": [
-            "ownerId"
+            "drive_id"
           ],
           "columnsTo": [
             "id"
@@ -18597,12 +18677,38 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "machine_branches_terminalId_pages_id_fk": {
-          "name": "machine_branches_terminalId_pages_id_fk",
-          "tableFrom": "machine_branches",
+        "form_targets_page_id_pages_id_fk": {
+          "name": "form_targets_page_id_pages_id_fk",
+          "tableFrom": "form_targets",
           "tableTo": "pages",
           "columnsFrom": [
-            "terminalId"
+            "page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "form_targets_canvas_page_id_pages_id_fk": {
+          "name": "form_targets_canvas_page_id_pages_id_fk",
+          "tableFrom": "form_targets",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "canvas_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "form_targets_created_by_users_id_fk": {
+          "name": "form_targets_created_by_users_id_fk",
+          "tableFrom": "form_targets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
           ],
           "columnsTo": [
             "id"
@@ -18613,201 +18719,14 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "machine_branches_sessionKey_unique": {
-          "name": "machine_branches_sessionKey_unique",
+        "form_targets_token_hash_unique": {
+          "name": "form_targets_token_hash_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "sessionKey"
+            "token_hash"
           ]
         }
       }
-    },
-    "public.machine_agent_terminals": {
-      "name": "machine_agent_terminals",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "ownerId": {
-          "name": "ownerId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "terminalId": {
-          "name": "terminalId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "scope": {
-          "name": "scope",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "projectName": {
-          "name": "projectName",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "machineBranchId": {
-          "name": "machineBranchId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "agentType": {
-          "name": "agentType",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "command": {
-          "name": "command",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "streamSessionId": {
-          "name": "streamSessionId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updatedAt": {
-          "name": "updatedAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "machine_agent_terminals_terminal_id_idx": {
-          "name": "machine_agent_terminals_terminal_id_idx",
-          "columns": [
-            {
-              "expression": "terminalId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "machine_agent_terminals_branch_id_idx": {
-          "name": "machine_agent_terminals_branch_id_idx",
-          "columns": [
-            {
-              "expression": "machineBranchId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "machine_agent_terminals_scope_name_idx": {
-          "name": "machine_agent_terminals_scope_name_idx",
-          "columns": [
-            {
-              "expression": "terminalId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "coalesce(\"projectName\", '')",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "coalesce(\"machineBranchId\", '')",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "name",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "machine_agent_terminals_ownerId_users_id_fk": {
-          "name": "machine_agent_terminals_ownerId_users_id_fk",
-          "tableFrom": "machine_agent_terminals",
-          "tableTo": "users",
-          "columnsFrom": [
-            "ownerId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "machine_agent_terminals_terminalId_pages_id_fk": {
-          "name": "machine_agent_terminals_terminalId_pages_id_fk",
-          "tableFrom": "machine_agent_terminals",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "terminalId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "machine_agent_terminals_machineBranchId_machine_branches_id_fk": {
-          "name": "machine_agent_terminals_machineBranchId_machine_branches_id_fk",
-          "tableFrom": "machine_agent_terminals",
-          "tableTo": "machine_branches",
-          "columnsFrom": [
-            "machineBranchId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
     }
   },
   "enums": {

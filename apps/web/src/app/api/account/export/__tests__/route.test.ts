@@ -85,6 +85,9 @@ const mockUserData = {
   messages: [],
   files: [],
   activity: [],
+  systemLogs: [],
+  apiMetrics: [],
+  errorLogs: [],
   aiUsage: [],
   tasks: [],
   sessions: [],
@@ -190,8 +193,8 @@ describe('GET /api/account/export', () => {
 
       await GET(createRequest());
 
-      // 11 data files (personalization omitted when null) + manifest.json
-      expect(mockArchive.append).toHaveBeenCalledTimes(12);
+      // 14 data files (personalization omitted when null) + manifest.json
+      expect(mockArchive.append).toHaveBeenCalledTimes(15);
       // Verify each data category name pattern
       const appendCalls = mockArchive.append.mock.calls.map(
         (call: unknown[]) => (call[1] as { name: string }).name
@@ -202,6 +205,9 @@ describe('GET /api/account/export', () => {
       expect(appendCalls.some((n: string) => n.includes('messages.json'))).toBe(true);
       expect(appendCalls.some((n: string) => n.includes('files-metadata.json'))).toBe(true);
       expect(appendCalls.some((n: string) => n.includes('activity.json'))).toBe(true);
+      expect(appendCalls.some((n: string) => n.includes('system-logs.json'))).toBe(true);
+      expect(appendCalls.some((n: string) => n.includes('api-metrics.json'))).toBe(true);
+      expect(appendCalls.some((n: string) => n.includes('error-logs.json'))).toBe(true);
       expect(appendCalls.some((n: string) => n.includes('ai-usage.json'))).toBe(true);
       expect(appendCalls.some((n: string) => n.includes('tasks.json'))).toBe(true);
       expect(appendCalls.some((n: string) => n.includes('sessions.json'))).toBe(true);
@@ -255,8 +261,8 @@ describe('GET /api/account/export', () => {
 
       await GET(createRequest());
 
-      // 12 data files + manifest.json
-      expect(mockArchive.append).toHaveBeenCalledTimes(13);
+      // 15 data files + manifest.json
+      expect(mockArchive.append).toHaveBeenCalledTimes(16);
       const appendCalls = mockArchive.append.mock.calls.map(
         (call: unknown[]) => (call[1] as { name: string }).name
       );

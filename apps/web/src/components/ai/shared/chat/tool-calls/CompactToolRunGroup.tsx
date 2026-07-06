@@ -1,28 +1,53 @@
 import React, { useMemo } from 'react';
 import { ChevronDown, ChevronRight, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
-import { CompactToolCallRenderer, TOOL_NAME_MAP } from './CompactToolCallRenderer';
-import { summarizeToolRun, computeToolRunStatus } from './tool-significance';
-import { useAutoCollapseOnComplete } from './useAutoCollapseOnComplete';
+import { CompactToolCallRenderer, TOOL_NAME_MAP, useCompactToolCallDisplay } from './CompactToolCallRenderer';
+import { summarizeToolRun, type RunStatus } from './tool-significance';
+import { useToolRun } from './useToolRun';
 import type { ProcessedToolPart } from '../message-types';
 
-interface CompactToolRunGroupProps {
-  parts: ProcessedToolPart[];
-  /** See ToolRunGroup.tsx's identical props for why this is needed. */
-  getToolCallOpen: (toolCallId: string) => boolean | undefined;
-  setToolCallOpen: (toolCallId: string, open: boolean) => void;
-}
+/**
+ * Renders a length-1 run exactly like a standalone row (button + expanded
+ * details below it). Split into its own component (rather than inlined
+ * behind a ternary in CompactToolRunGroup) so useCompactToolCallDisplay's
+ * real work — JSON-parsing input/output and building expandedDetails via
+ * the tool-renderer registry — only ever runs when this run genuinely is
+ * solo; a 2+-call run never mounts this component, so that work is never
+ * done and discarded. Mirrors ToolRunGroup.tsx's SoloRunBody.
+ */
+const SoloRunBody: React.FC<{ part: ProcessedToolPart; toolName: string; expanded: boolean; onToggle: () => void }> = React.memo(function SoloRunBody({ part, toolName, expanded, onToggle }) {
+  const { toolIcon, statusIcon, descriptiveTitle, compactSummary, expandedDetails } = useCompactToolCallDisplay(part, toolName, expanded);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
+        <div className="flex-shrink-0">{toolIcon}</div>
+        <span className="font-medium truncate flex-1 min-w-0" title={descriptiveTitle}>{descriptiveTitle}</span>
+        <div className="flex-shrink-0">{statusIcon}</div>
+        <span className="text-gray-500 dark:text-gray-400 truncate max-w-[80px] min-w-0">{compactSummary}</span>
+      </button>
+      {expandedDetails}
+    </>
+  );
+});
 
 /**
- * Compact sibling of ToolRunGroup for the sidebar AI assistant tab, which
- * uses a bespoke useState expand pattern rather than shadcn Collapsible.
- * Shares useAutoCollapseOnComplete with ToolRunGroup so both surfaces
- * auto-expand while running/erroring and auto-collapse once complete, but
- * respect a manual toggle afterward.
+ * Renders the "Ran N commands" summary row plus each call nested one level
+ * deeper via the unmodified CompactToolCallRenderer. Only mounted for
+ * 2+-call runs, symmetric with SoloRunBody above.
  */
-export const CompactToolRunGroup: React.FC<CompactToolRunGroupProps> = React.memo(function CompactToolRunGroup({ parts, getToolCallOpen, setToolCallOpen }) {
-  const status = useMemo(() => computeToolRunStatus(parts), [parts]);
-  const { open: expanded, onOpenChange } = useAutoCollapseOnComplete(status);
-
+const GroupRunBody: React.FC<{
+  parts: ProcessedToolPart[];
+  status: RunStatus;
+  expanded: boolean;
+  onToggle: () => void;
+  getToolCallOpen: (key: string) => boolean | undefined;
+  setToolCallOpen: (key: string, open: boolean) => void;
+}> = React.memo(function GroupRunBody({ parts, status, expanded, onToggle, getToolCallOpen, setToolCallOpen }) {
   const summary = useMemo(() => summarizeToolRun(parts, TOOL_NAME_MAP), [parts]);
 
   const statusIcon = useMemo(() => {
@@ -33,10 +58,10 @@ export const CompactToolRunGroup: React.FC<CompactToolRunGroupProps> = React.mem
   }, [status]);
 
   return (
-    <div className="py-0.5 text-[11px] max-w-full">
+    <>
       <button
         type="button"
-        onClick={() => onOpenChange(!expanded)}
+        onClick={onToggle}
         aria-expanded={expanded}
         className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full"
       >
@@ -62,6 +87,44 @@ export const CompactToolRunGroup: React.FC<CompactToolRunGroupProps> = React.mem
             );
           })}
         </div>
+      )}
+    </>
+  );
+});
+
+interface CompactToolRunGroupProps {
+  /** Always 1+. A length-1 run renders identically to a standalone row. */
+  parts: ProcessedToolPart[];
+  /** Stable across the run's growth — see message-types.ts's ToolRunGroupPart. */
+  runKey: string;
+  /** See ToolRunGroup.tsx's identical props for why this is needed. */
+  getToolCallOpen: (key: string) => boolean | undefined;
+  setToolCallOpen: (key: string, open: boolean) => void;
+}
+
+/**
+ * Compact sibling of ToolRunGroup for the sidebar AI assistant tab, which
+ * uses a bespoke button/div expand pattern rather than shadcn Collapsible.
+ * Same design: one persistent component instance across a run's growth,
+ * closed by default, no auto-expand from running/error status.
+ */
+export const CompactToolRunGroup: React.FC<CompactToolRunGroupProps> = React.memo(function CompactToolRunGroup({ parts, runKey, getToolCallOpen, setToolCallOpen }) {
+  const { isSolo, open: expanded, onOpenChange, status, soloToolName, soloPart } = useToolRun(parts, runKey, getToolCallOpen, setToolCallOpen);
+  const onToggle = () => onOpenChange(!expanded);
+
+  return (
+    <div className="py-0.5 text-[11px] max-w-full">
+      {isSolo ? (
+        <SoloRunBody part={soloPart} toolName={soloToolName} expanded={expanded} onToggle={onToggle} />
+      ) : (
+        <GroupRunBody
+          parts={parts}
+          status={status}
+          expanded={expanded}
+          onToggle={onToggle}
+          getToolCallOpen={getToolCallOpen}
+          setToolCallOpen={setToolCallOpen}
+        />
       )}
     </div>
   );

@@ -37,11 +37,19 @@ out-of-band knowledge.
 ## Native format
 
 Per-category JSON files: `profile.json`, `drives.json`, `pages.json`,
-`messages.json`, `files-metadata.json`, `activity.json`, `ai-usage.json`,
-`tasks.json`, `sessions.json`, `notifications.json`, `display-preferences.json`,
-and `personalization.json` (only when the user has personalization). Shapes are
+`messages.json`, `files-metadata.json`, `activity.json`, `system-logs.json`,
+`api-metrics.json`, `error-logs.json`, `ai-usage.json`, `tasks.json`,
+`sessions.json`, `notifications.json`, `display-preferences.json`, and
+`personalization.json` (only when the user has personalization). Shapes are
 the `*Export` interfaces in
-`packages/lib/src/compliance/export/gdpr-export.ts`.
+`packages/lib/src/compliance/export/gdpr-export.ts`. `system-logs.json`,
+`api-metrics.json`, and `error-logs.json` cover rows in the monitoring tables
+keyed to the user's (nullable, non-FK) `userId` — a deliberately
+redaction-conscious subset that excludes raw stack traces, IP addresses, user
+agents, session/request correlation IDs, and internal admin references
+(e.g. `resolvedBy`), keeping only what/when/where fields (timestamp,
+level/name, message, category, endpoint, method, duration/status,
+file/line/column, resolved).
 
 ## Portable format (schema.org)
 
@@ -60,8 +68,9 @@ it can be ingested by other tools without bespoke parsers:
   (`encodingFormat`, `contentSize`, `contentUrl`, `isPartOf`, `dateCreated`).
 
 The portable format is **lossless**: categories without a natural schema.org
-type (activity, AI usage, tasks, sessions, notifications, display preferences,
-personalization) are carried verbatim as
+type (activity, system logs, API metrics, error logs, AI usage, tasks,
+sessions, notifications, display preferences, personalization) are carried
+verbatim as
 [`PropertyValue`](https://schema.org/PropertyValue) entries under
 `additionalProperty`, so the portable bundle contains exactly the same data as
 the native export.

@@ -7,6 +7,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **21 new sandbox git/GitHub tools** — agents with code execution can now edit PR titles and
+  descriptions (`gh_pr_edit`), leave top-level PR and issue comments, edit/close/reopen issues,
+  discover repositories (`gh_repo_view`/`gh_repo_list`), search GitHub code/issues/PRs/repos
+  (`gh_search`), list repo labels, inspect commits (`git_show`, `git_blame`), revert a commit,
+  recover from conflicted merges/rebases (`action: abort/continue`), re-run failed CI
+  (`gh_run_rerun`), list and dispatch workflows, list and resolve PR review threads, and fork or
+  create repositories.
+- **12 new GitHub integration tools** — agents without code execution get a full write path to
+  code: create branches, commit and delete files, open/update/merge pull requests, plus CI
+  visibility (check runs, workflow runs), commit listing, branch comparison, issue search, and
+  label listing. A new **Contributor** tool bundle covers the branch → commit → PR → merge flow.
+- The GitHub connection now requests the `workflow` scope so agents can commit changes to GitHub
+  Actions workflow files. Existing connections keep working; reconnect GitHub in Settings >
+  Integrations to pick up the new permission.
+
 - **`pagespace` CLI** — install `@pagespace/cli`, run `pagespace login`, and use verbs like
   `pagespace drives list`, `pagespace pages read`, `pagespace search text`, and `pagespace tasks
   create` without hand-minting a token first.
@@ -26,11 +41,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   agents as visual context (capped at 5 images per consultation, matching the per-message chat
   limit). Agents without a vision-capable model get a text note instead, so they know an
   attachment existed but couldn't be viewed.
+- **`packages/cli/docs/agent-access.md`** — states plainly what a scoped `pagespace tokens create`
+  credential does and doesn't protect against: it limits what a leaked/misused credential can do,
+  not who else on the same machine can use it. A process with real shell access reads whatever its
+  OS user can read, credential store included — no CLI feature changes that. The actual isolation
+  boundary is a dedicated OS user, container, or VM that receives only a scoped token via
+  `PAGESPACE_TOKEN`.
 
 ### Changed
 
-- The MCP integration docs and the Settings > MCP page now lead with `pagespace login` for
-  personal use, keeping token creation for agents, CI, and drive-scoped access.
+- **`pagespace login` is for you, personally; `pagespace tokens create` is for an agent** — the
+  README, `docs/agent-access.md`, and the Settings > MCP page now say this explicitly and point
+  agent/MCP setups at `pagespace tokens create --drive <id> --save-as-profile agent` (paired with
+  `--profile agent` / `PAGESPACE_PROFILE`) instead of `pagespace login`, which grants full personal
+  account access.
+- **`pagespace login` (and `--device`) now print the scope granted on success**, e.g. `Scope:
+  account offline_access — this is your full personal account access.`, bringing it to parity with
+  `whoami`, which already reported scope.
+- **`pagespace help` is grouped by resource** (Auth, Drives, Pages, Search, Tasks, Agents, Tokens,
+  MCP, Other) with one runnable example per group, replacing the previous flat ~46-line list.
 
 ### Deprecated
 
@@ -39,8 +68,45 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   prints a one-line migration notice to stderr. See the
   [migration guide](packages/cli/docs/migrating-from-pagespace-mcp.md).
 
+### Security
+
+- **Settings > Account now lists and revokes connected apps** — every OAuth-authorized client
+  currently holding a grant on your account (including the `pagespace` CLI), with its scope in
+  plain language and when it was connected, is now visible from a "Connected Apps" section.
+  Previously the only way to revoke a `pagespace login` credential was `pagespace logout` from the
+  same machine that held it — if a laptop was lost or stolen, there was no way to shut off its
+  access from the web. Revoking a grant here immediately invalidates its refresh token and
+  requires a fresh step-up confirmation (passkey tap, or a confirmation email if you have no
+  passkey), the same as minting one.
+- **`pagespace tokens create` now requires browser consent** — minting a scoped credential from
+  the CLI opens the same OAuth consent screen `pagespace login` uses, scoped to the requested
+  drive(s), instead of POSTing directly to the token-minting API with whatever ambient credential
+  was on hand. That direct-POST path let a script or agent with shell access mint itself a new
+  token unattended; it's gone. The resulting credential is stored locally under a named profile
+  (`--save-as-profile`, defaulting to the drive id) rather than printed, so it isn't a source for a
+  portable secret — mint one of those from **Settings → MCP** instead. As a consequence, `tokens
+  create` no longer supports `--json` output — there's no portable token left to emit, and the
+  command now blocks on an interactive browser consent screen either way — while `tokens list
+  --json` and `tokens revoke` are unaffected.
+- **BREAKING: `pagespace mcp` no longer falls back to your personal login.** Previously, running
+  `pagespace mcp` with no `--token`/`PAGESPACE_TOKEN`/`--profile` silently authenticated as
+  whichever profile `pagespace login` had stored — so an MCP client config missing its intended
+  scoped token would unknowingly hand an automated agent your full personal account access instead
+  of failing loudly. `mcp` now refuses to start the stdio server at all unless the invocation
+  names a credential itself (`--token`, `PAGESPACE_TOKEN`, `--profile`, or `PAGESPACE_PROFILE`),
+  and exits with a message pointing at `pagespace tokens create ... --save-as-profile <name>`. The
+  legacy `PAGESPACE_AUTH_TOKEN` env var (`npx pagespace-mcp`) still counts as explicit and is
+  unaffected. Every other command's ambient-fallback convenience is unchanged — this is specific
+  to `mcp`, whose whole purpose is being invoked unattended.
+
 ### Fixed
 
+- **GDPR data exports now include system logs, API metrics, and error logs** — the account data
+  export (`Settings > Privacy > Download my data`) previously omitted these three monitoring
+  tables even though they can carry your user ID until account deletion. They're now included in
+  both the native ZIP (`system-logs.json`, `api-metrics.json`, `error-logs.json`) and the portable
+  schema.org export, with raw stack traces, IP addresses, user agents, and internal admin fields
+  redacted.
 - **`pagespace login` no longer hangs after a successful login** — the post-login identity
   lookup used to retry for up to 2 minutes before the CLI would return control to your terminal;
   it's now bounded to a few seconds so the command finishes promptly. The browser callback page

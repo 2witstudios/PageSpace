@@ -679,6 +679,11 @@ export async function POST(request: Request) {
     // correctly included in search mode where non-core tools become callable via execute_tool
     // and disappear from filteredTools.
     const allowedToolNames = Object.keys(filteredTools);
+    // Captured before exposure-mode transforms filteredTools below — 'search' mode
+    // moves non-core tools (including all sandbox git/gh tools) behind execute_tool,
+    // hiding their names from a top-level key scan. Integration-tool suppression
+    // needs the pre-exposure set to correctly detect an active sandbox toolkit.
+    const preExposureTools = filteredTools;
     const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
     filteredTools = exposure.tools;
     const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -699,6 +704,7 @@ export async function POST(request: Request) {
         agentId: chatId,
         userId,
         driveId: page.driveId,
+        currentTools: preExposureTools,
       });
       if (Object.keys(integrationTools).length > 0) {
         filteredTools = mergeToolSets(filteredTools, integrationTools);

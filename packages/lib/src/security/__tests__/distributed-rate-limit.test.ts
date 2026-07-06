@@ -480,6 +480,12 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.CONTACT_FORM.progressiveDelay).toBe(false);
     });
 
+    it('FORM_SUBMISSION has 10 attempts per minute with no progressive delay', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.FORM_SUBMISSION.maxAttempts).toBe(10);
+      expect(DISTRIBUTED_RATE_LIMITS.FORM_SUBMISSION.windowMs).toBe(60 * 1000);
+      expect(DISTRIBUTED_RATE_LIMITS.FORM_SUBMISSION.progressiveDelay).toBe(false);
+    });
+
     it('TRACKING has 100 attempts per minute', () => {
       expect(DISTRIBUTED_RATE_LIMITS.TRACKING.maxAttempts).toBe(100);
       expect(DISTRIBUTED_RATE_LIMITS.TRACKING.windowMs).toBe(60 * 1000);

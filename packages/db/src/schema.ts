@@ -50,6 +50,7 @@ export * from './schema/custom-domains';
 export * from './schema/incidents';
 export * from './schema/data-subject-requests';
 export * from './schema/oauth';
+export * from './schema/form-targets';
 export * from './schema/machine-projects';
 export * from './schema/machine-branches';
 export * from './schema/machine-agent-terminals';
@@ -106,6 +107,7 @@ import * as customDomains from './schema/custom-domains';
 import * as incidents from './schema/incidents';
 import * as dataSubjectRequests from './schema/data-subject-requests';
 import * as oauth from './schema/oauth';
+import * as formTargets from './schema/form-targets';
 import * as machineProjects from './schema/machine-projects';
 import * as machineBranches from './schema/machine-branches';
 import * as machineAgentTerminals from './schema/machine-agent-terminals';
@@ -163,6 +165,7 @@ export const schema = {
   ...incidents,
   ...dataSubjectRequests,
   ...oauth,
+  ...formTargets,
   ...machineProjects,
   ...machineBranches,
   ...machineAgentTerminals,

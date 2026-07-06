@@ -11,7 +11,7 @@ import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { renderToolContent } from './registry';
 import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
 
-interface ToolPart {
+export interface ToolPart {
   type: string;
   toolName?: string;
   toolCallId?: string;
@@ -119,8 +119,32 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   'delete_workflow': 'Delete Workflow',
 };
 
-// Internal renderer component with hooks
-const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; open?: boolean; onOpenChange?: (open: boolean) => void }> = memo(function ToolCallRendererInternal({ part, toolName, open, onOpenChange }) {
+/**
+ * Fallback body shown when the tool renderer registry has nothing rich for
+ * this tool — shared by ToolCallRendererInternal and ToolRunGroup's
+ * length-1 (solo) branch so the two never drift.
+ */
+export function renderToolFallbackContent(state: string): React.ReactNode {
+  return (
+    <div className="px-3 py-2 text-sm text-muted-foreground">
+      {state === 'input-streaming' || state === 'streaming' ? (
+        'Processing...'
+      ) : state === 'input-available' ? (
+        'Waiting for result...'
+      ) : (
+        'Completed'
+      )}
+    </div>
+  );
+}
+
+/**
+ * Computes everything ToolCallRendererInternal needs to render a tool
+ * call's title/state/content, extracted so ToolRunGroup can render a
+ * length-1 run identically to a standalone card without duplicating this
+ * logic.
+ */
+export function useToolCallDisplay(part: ToolPart, toolName: string) {
   const state = part.state || 'input-available';
   const input = part.input;
   const output = part.output;
@@ -198,6 +222,13 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; ope
     [toolName, parsedInput, parsedOutput, output, error]
   );
 
+  return { state, toolState, descriptiveTitle, richContent };
+}
+
+// Internal renderer component with hooks
+const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; open?: boolean; onOpenChange?: (open: boolean) => void }> = memo(function ToolCallRendererInternal({ part, toolName, open, onOpenChange }) {
+  const { state, toolState, descriptiveTitle, richContent } = useToolCallDisplay(part, toolName);
+
   // Render with rich content (no Parameters/Result wrappers)
   // Only pass open/onOpenChange (making the Collapsible controlled) when a
   // caller actually provides onOpenChange — otherwise Radix's
@@ -217,18 +248,7 @@ const ToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; ope
         state={toolState}
       />
       <ToolContent>
-        {richContent || (
-          // Fallback: minimal loading/pending state
-          <div className="px-3 py-2 text-sm text-muted-foreground">
-            {state === 'input-streaming' || state === 'streaming' ? (
-              'Processing...'
-            ) : state === 'input-available' ? (
-              'Waiting for result...'
-            ) : (
-              'Completed'
-            )}
-          </div>
-        )}
+        {richContent || renderToolFallbackContent(state)}
       </ToolContent>
     </Tool>
   );

@@ -33,6 +33,7 @@ describe('pseudonymizeActivityLogsForUser', () => {
     expect(setFn.mock.calls[0][0]).toEqual({
       actorEmail: 'erased@pseudonymized',
       actorDisplayName: null,
+      resourceTitle: null,
     });
   });
 });

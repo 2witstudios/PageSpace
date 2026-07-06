@@ -1,5 +1,5 @@
 /**
- * Agent git/GitHub tools: all 34 tools running inside a sandbox.
+ * Agent git/GitHub tools: all 56 tools running inside a sandbox.
  *
  * Pure factory — no DB imports, no Sprites SDK. Production wiring lives in
  * `sandbox-git-tools-runtime.ts`. Each tool's execute handler:
@@ -58,6 +58,32 @@ function isDeleteRefspec(refspec: string): boolean {
   return spec.includes(':') && spec.slice(0, spec.lastIndexOf(':')).trim() === '';
 }
 
+// A value starting with "-" passed as a bare positional CLI arg can be
+// reinterpreted as a flag by git/gh's argument parser (e.g. a ref of
+// "--exec=whoami"). Identifier-like params (refs, repo slugs, workflow names)
+// never legitimately start with "-", so reject rather than pass through.
+const startsLikeFlag = (value: string): boolean => value.startsWith('-');
+
+// Tool names returned by createSandboxGitTools, kept next to the factory so a
+// new tool is one glance away from being added here too. Consumed by
+// tool-filtering.ts to detect whether the sandbox git/gh toolkit is active —
+// checked against the factory's return keys in this file's own test suite.
+export const SANDBOX_GIT_TOOL_NAMES: readonly string[] = [
+  'git_clone', 'git_init', 'git_config', 'git_remote_add', 'git_status', 'git_diff',
+  'git_add', 'git_reset', 'git_stash', 'git_commit', 'git_log', 'git_show', 'git_blame',
+  'git_merge', 'git_rebase', 'git_revert', 'git_checkout', 'git_branch',
+  'git_fetch', 'git_pull', 'git_push',
+  'gh_pr_create', 'gh_pr_list', 'gh_pr_view', 'gh_pr_diff', 'gh_pr_checks', 'gh_pr_merge',
+  'gh_pr_checkout', 'gh_pr_review', 'gh_pr_review_comment', 'gh_pr_comment', 'gh_pr_edit',
+  'gh_pr_update_branch', 'gh_pr_thread_list', 'gh_pr_thread_resolve', 'gh_pr_close',
+  'gh_pr_reopen', 'gh_pr_ready',
+  'gh_run_list', 'gh_run_view', 'gh_run_rerun', 'gh_workflow_list', 'gh_workflow_run',
+  'gh_issue_create', 'gh_issue_list', 'gh_issue_view', 'gh_issue_comment', 'gh_issue_edit',
+  'gh_issue_close', 'gh_issue_reopen',
+  'gh_repo_view', 'gh_repo_list', 'gh_repo_fork', 'gh_repo_create',
+  'gh_search', 'gh_label_list',
+];
+
 export interface GitSandboxToolsDeps {
   gitRunDeps: GitSandboxRunDeps;
   resolveContext: ResolveSandboxContext;
@@ -75,6 +101,34 @@ const NO_CONNECTION_ERROR = {
     'No GitHub connection found. Connect your GitHub account in Settings → Integrations to use remote git operations.',
   reason: 'error' as const,
 };
+
+// GraphQL documents for review-thread tools. These MUST stay module-level
+// constants — variables are passed via separate -f/-F flags, never interpolated
+// into the document, so tool input can't alter the query shape.
+const LIST_THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first: 10) {
+            nodes { databaseId author { login } body }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+const RESOLVE_THREAD_MUTATION = `mutation($threadId: ID!) {
+  resolveReviewThread(input: {threadId: $threadId}) {
+    thread { id isResolved }
+  }
+}`;
 
 export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machines }: GitSandboxToolsDeps): Record<string, Tool> {
   /**
@@ -414,17 +468,101 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     },
   });
 
-  const gitMerge = tool({
-    description: 'Merge a branch.',
-    inputSchema: z.object({
-      branch: z.string().min(1),
-      strategy: z.enum(['merge', 'squash', 'ff-only']).optional(),
-      cwd: cwdField,
-    })
-      .strict(),
-    execute: async ({ branch, strategy, cwd }, options) => {
+  const gitShow = tool({
+    description:
+      'Show a commit: message, author, and full diff (or --stat summary). Use with SHAs from git_log.',
+    inputSchema: z
+      .object({
+        ref: z.string().min(1).optional().describe('Commit SHA or ref (defaults to HEAD)'),
+        stat: z.boolean().optional().describe('Show a diffstat summary instead of the full patch'),
+        path: z.string().optional().describe('Limit output to a single file path'),
+        cwd: cwdField,
+      })
+      .strict()
+      .refine((d) => d.ref === undefined || !startsLikeFlag(d.ref), {
+        message: 'ref must not start with "-"',
+      }),
+    execute: async ({ ref, stat, path, cwd }, options) => {
+      if (ref !== undefined && startsLikeFlag(ref)) {
+        return { success: false as const, error: 'ref must not start with "-"' };
+      }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
+      return git(
+        'git',
+        ['show', ...(stat ? ['--stat'] : []), ref ?? 'HEAD', ...(path ? ['--', path] : [])],
+        opened.ctx,
+        cwd,
+      );
+    },
+  });
+
+  const gitBlame = tool({
+    description: 'Show which commit and author last modified each line of a file.',
+    inputSchema: z
+      .object({
+        path: z.string().min(1),
+        start_line: z.number().int().positive().optional(),
+        end_line: z.number().int().positive().optional(),
+        cwd: cwdField,
+      })
+      .strict()
+      .refine((d) => (d.start_line === undefined) === (d.end_line === undefined), {
+        message: 'start_line and end_line must be provided together',
+      }),
+    execute: async ({ path, start_line, end_line, cwd }, options) => {
+      if ((start_line === undefined) !== (end_line === undefined)) {
+        return { success: false as const, error: 'start_line and end_line must be provided together' };
+      }
+      const opened = await open(options);
+      if (!opened.ok) return opened.error;
+      return git(
+        'git',
+        [
+          'blame',
+          ...(start_line !== undefined ? ['-L', `${start_line},${end_line}`] : []),
+          '--',
+          path,
+        ],
+        opened.ctx,
+        cwd,
+      );
+    },
+  });
+
+  const gitMerge = tool({
+    description:
+      'Merge a branch. If a previous merge stopped on conflicts, use action "abort" to back out or "continue" after resolving.',
+    inputSchema: z
+      .object({
+        branch: z.string().min(1).optional().describe('Branch to merge (required unless aborting/continuing)'),
+        strategy: z.enum(['merge', 'squash', 'ff-only']).optional(),
+        action: z
+          .enum(['run', 'abort', 'continue'])
+          .optional()
+          .describe('run (default) merges a branch; abort/continue recover a conflicted merge'),
+        cwd: cwdField,
+      })
+      .strict()
+      .refine((d) => (d.action ?? 'run') !== 'run' || !!d.branch, {
+        message: 'branch is required when running a merge',
+      })
+      .refine((d) => d.branch === undefined || !startsLikeFlag(d.branch), {
+        message: 'branch must not start with "-"',
+      }),
+    execute: async ({ branch, strategy, action, cwd }, options) => {
+      const opened = await open(options);
+      if (!opened.ok) return opened.error;
+      const mode = action ?? 'run';
+      if (mode !== 'run') {
+        return git('git', ['merge', `--${mode}`], opened.ctx, cwd);
+      }
+      if (!branch) {
+        return { success: false as const, error: 'branch is required when running a merge' };
+      }
+      if (startsLikeFlag(branch)) {
+        return { success: false as const, error: 'branch must not start with "-"' };
+      }
       const strategyFlag =
         strategy === 'squash' ? ['--squash'] : strategy === 'ff-only' ? ['--ff-only'] : [];
       return git('git', ['merge', ...strategyFlag, branch], opened.ctx, cwd);
@@ -432,12 +570,92 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
   });
 
   const gitRebase = tool({
-    description: 'Rebase onto a branch or ref. Non-interactive only.',
-    inputSchema: z.object({ branch_or_ref: z.string().min(1), cwd: cwdField }).strict(),
-    execute: async ({ branch_or_ref, cwd }, options) => {
+    description:
+      'Rebase onto a branch or ref. Non-interactive only. If a previous rebase stopped on conflicts, use action "abort" to back out or "continue" after resolving.',
+    inputSchema: z
+      .object({
+        branch_or_ref: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Branch or ref to rebase onto (required unless aborting/continuing)'),
+        action: z
+          .enum(['run', 'abort', 'continue'])
+          .optional()
+          .describe('run (default) starts a rebase; abort/continue recover a conflicted rebase'),
+        cwd: cwdField,
+      })
+      .strict()
+      .refine((d) => (d.action ?? 'run') !== 'run' || !!d.branch_or_ref, {
+        message: 'branch_or_ref is required when running a rebase',
+      })
+      .refine((d) => d.branch_or_ref === undefined || !startsLikeFlag(d.branch_or_ref), {
+        message: 'branch_or_ref must not start with "-"',
+      }),
+    execute: async ({ branch_or_ref, action, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
+      const mode = action ?? 'run';
+      if (mode !== 'run') {
+        return git('git', ['rebase', `--${mode}`], opened.ctx, cwd);
+      }
+      if (!branch_or_ref) {
+        return { success: false as const, error: 'branch_or_ref is required when running a rebase' };
+      }
+      if (startsLikeFlag(branch_or_ref)) {
+        return { success: false as const, error: 'branch_or_ref must not start with "-"' };
+      }
       return git('git', ['rebase', branch_or_ref], opened.ctx, cwd);
+    },
+  });
+
+  const gitRevert = tool({
+    description:
+      'Revert a single commit by creating a new commit that undoes it. Safe forward-fix — history is not rewritten. Takes one commit SHA (no ranges). If a previous revert stopped on conflicts, use action "abort" to back out or "continue" after resolving. Reverting a merge commit requires "mainline" (the parent number to revert to).',
+    inputSchema: z
+      .object({
+        sha: z
+          .string()
+          .regex(/^[0-9a-f]{4,40}$/, 'sha must be a single lowercase commit SHA (no ranges or refs)')
+          .optional()
+          .describe('Commit to revert (required unless aborting/continuing)'),
+        action: z
+          .enum(['run', 'abort', 'continue'])
+          .optional()
+          .describe('run (default) reverts a commit; abort/continue recover a conflicted revert'),
+        mainline: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Parent number to revert to; required when sha is a merge commit'),
+        cwd: cwdField,
+      })
+      .strict()
+      .refine((d) => (d.action ?? 'run') !== 'run' || !!d.sha, {
+        message: 'sha is required when running a revert',
+      }),
+    execute: async ({ sha, action, mainline, cwd }, options) => {
+      const mode = action ?? 'run';
+      if (mode !== 'run') {
+        const opened = await open(options);
+        if (!opened.ok) return opened.error;
+        return git('git', ['revert', `--${mode}`], opened.ctx, cwd);
+      }
+      if (!sha || !/^[0-9a-f]{4,40}$/.test(sha)) {
+        return {
+          success: false as const,
+          error: 'sha must be a single lowercase commit SHA (no ranges or refs)',
+        };
+      }
+      const opened = await open(options);
+      if (!opened.ok) return opened.error;
+      return git(
+        'git',
+        ['revert', '--no-edit', ...(mainline ? ['-m', String(mainline)] : []), sha],
+        opened.ctx,
+        cwd,
+      );
     },
   });
 
@@ -507,7 +725,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
 
   const gitPush = tool({
     description:
-      'Push to a remote. Requires a connected GitHub account. cwd defaults to /workspace — pass it to push from a cloned subdir. Force-push (--force-with-lease) is allowed on feature/PR branches but refused for the default branch (main/master); to update an open PR, push to its branch rather than opening a new one.',
+      'Push to a remote. Requires a connected GitHub account. cwd defaults to /workspace — pass it to push from a cloned subdir. Force-push (--force-with-lease) is allowed on feature/PR branches but refused for the default branch (main/master); to update an open PR, push to its branch rather than opening a new one. Note: pushes touching .github/workflows files require a GitHub connection made after workflow permissions were added — ask the user to reconnect GitHub in Settings → Integrations if GitHub refuses the push.',
     inputSchema: z.object({
       remote: z.string().optional(),
       branch: z.string().optional(),
@@ -733,6 +951,195 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       ),
   });
 
+  const ghPrReviewComment = tool({
+    description:
+      'Add a review comment on a pull request. For inline comments: provide path, commit_id, and line. For file-level comments: provide path, commit_id, and subject_type "file". For replies: provide in_reply_to (comment ID) and body only. Use head sha from gh_pr_view for commit_id. Requires a connected GitHub account.',
+    inputSchema: z.object({
+      number: z.number().int().positive(),
+      body: z.string().min(1),
+      path: z.string().optional(),
+      line: z.number().int().positive().optional(),
+      side: z.enum(['LEFT', 'RIGHT']).optional(),
+      commit_id: z.string().optional(),
+      start_line: z.number().int().positive().optional(),
+      start_side: z.enum(['LEFT', 'RIGHT']).optional(),
+      in_reply_to: z.number().int().positive().optional(),
+      subject_type: z.enum(['line', 'file']).optional(),
+      cwd: cwdField,
+    })
+      .strict(),
+    execute: async (
+      { number, body, path, line, side, commit_id, start_line, start_side, in_reply_to, subject_type, cwd },
+      options,
+    ) => {
+      if (!body) {
+        return { success: false as const, error: 'body is required' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'api', `repos/{owner}/{repo}/pulls/${number}/comments`,
+            '-f', `body=${body}`,
+            ...(path !== undefined ? ['-f', `path=${path}`] : []),
+            ...(line !== undefined ? ['-F', `line=${line}`] : []),
+            ...(side ? ['-f', `side=${side}`] : []),
+            ...(commit_id !== undefined ? ['-f', `commit_id=${commit_id}`] : []),
+            ...(start_line !== undefined ? ['-F', `start_line=${start_line}`] : []),
+            ...(start_side ? ['-f', `start_side=${start_side}`] : []),
+            ...(in_reply_to !== undefined ? ['-F', `in_reply_to=${in_reply_to}`] : []),
+            ...(subject_type ? ['-f', `subject_type=${subject_type}`] : []),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      );
+    },
+  });
+
+  const ghPrComment = tool({
+    description:
+      'Add a top-level conversation comment on a pull request (not a review). For inline code comments use gh_pr_review_comment; to approve/request changes use gh_pr_review. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        number: z.number().int().positive(),
+        body: z.string().min(1),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ number, body, cwd }, options) => {
+      if (!body) {
+        return { success: false as const, error: 'body is required' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR('gh', ['pr', 'comment', String(number), '--body', body], ctx, token, cwd),
+      );
+    },
+  });
+
+  const ghPrEdit = tool({
+    description:
+      'Edit a pull request: title, body, base branch, labels, or reviewers. Use to keep the PR description current as follow-up commits land. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        number: z.number().int().positive(),
+        title: z.string().optional(),
+        body: z.string().optional(),
+        base: z.string().optional().describe('New base branch'),
+        add_labels: z.array(z.string()).optional(),
+        remove_labels: z.array(z.string()).optional(),
+        add_reviewers: z.array(z.string()).optional().describe('GitHub usernames to request review from'),
+        cwd: cwdField,
+      })
+      .strict()
+      .refine(
+        (d) =>
+          d.title !== undefined ||
+          d.body !== undefined ||
+          d.base !== undefined ||
+          !!d.add_labels?.length ||
+          !!d.remove_labels?.length ||
+          !!d.add_reviewers?.length,
+        { message: 'Provide at least one field to edit' },
+      ),
+    execute: async ({ number, title, body, base, add_labels, remove_labels, add_reviewers, cwd }, options) => {
+      if (
+        title === undefined &&
+        body === undefined &&
+        base === undefined &&
+        !add_labels?.length &&
+        !remove_labels?.length &&
+        !add_reviewers?.length
+      ) {
+        return { success: false as const, error: 'Provide at least one field to edit' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'pr', 'edit', String(number),
+            ...(title !== undefined ? ['--title', title] : []),
+            ...(body !== undefined ? ['--body', body] : []),
+            ...(base !== undefined ? ['--base', base] : []),
+            ...(add_labels?.length ? ['--add-label', add_labels.join(',')] : []),
+            ...(remove_labels?.length ? ['--remove-label', remove_labels.join(',')] : []),
+            ...(add_reviewers?.length ? ['--add-reviewer', add_reviewers.join(',')] : []),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      );
+    },
+  });
+
+  const ghPrUpdateBranch = tool({
+    description:
+      'Update a pull request branch with the latest changes from its base branch (like the "Update branch" button). Requires a connected GitHub account.',
+    inputSchema: z
+      .object({ number: z.number().int().positive(), cwd: cwdField })
+      .strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR('gh', ['pr', 'update-branch', String(number)], ctx, token, cwd),
+      ),
+  });
+
+  const ghPrThreadList = tool({
+    description:
+      'List review threads on a pull request with their resolved state and thread IDs. Use the thread id with gh_pr_thread_resolve after addressing feedback. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        owner: z.string().min(1).describe('Repository owner'),
+        repo: z.string().min(1).describe('Repository name'),
+        number: z.number().int().positive(),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ owner, repo, number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'api', 'graphql',
+            '-f', `query=${LIST_THREADS_QUERY}`,
+            '-f', `owner=${owner}`,
+            '-f', `repo=${repo}`,
+            '-F', `number=${number}`,
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghPrThreadResolve = tool({
+    description:
+      'Resolve a pull request review thread after its feedback has been addressed. Get thread IDs from gh_pr_thread_list. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        thread_id: z.string().min(1).describe('Review thread node ID from gh_pr_thread_list'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ thread_id, cwd }, options) => {
+      if (!thread_id) {
+        return { success: false as const, error: 'thread_id is required' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          ['api', 'graphql', '-f', `query=${RESOLVE_THREAD_MUTATION}`, '-f', `threadId=${thread_id}`],
+          ctx,
+          token,
+          cwd,
+        ),
+      );
+    },
+  });
+
   const ghPrClose = tool({
     description: 'Close a pull request with an optional comment. Requires a connected GitHub account.',
     inputSchema: z
@@ -835,6 +1242,86 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       ),
   });
 
+  const ghRunRerun = tool({
+    description:
+      'Re-run a GitHub Actions workflow run. Pass failed_only: true to re-run only the failed jobs (the usual choice for flaky CI). Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        runId: z.number().int().positive().describe('Run databaseId from gh_run_list'),
+        failed_only: z.boolean().optional().describe('Re-run only the failed jobs'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ runId, failed_only, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR('gh', ['run', 'rerun', String(runId), ...(failed_only ? ['--failed'] : [])], ctx, token, cwd),
+      ),
+  });
+
+  const ghWorkflowList = tool({
+    description: 'List GitHub Actions workflows in the repository. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        limit: z.number().int().positive().max(100).optional(),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ limit, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          ['workflow', 'list', '--limit', String(limit ?? 50), '--json', 'id,name,path,state'],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghWorkflowRun = tool({
+    description:
+      'Dispatch a GitHub Actions workflow run on a ref. WARNING: this triggers real automation (deploys, releases, jobs) — only dispatch workflows you understand. The workflow must have a workflow_dispatch trigger. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        workflow: z.string().min(1).describe('Workflow file name (e.g. "ci.yml") or ID'),
+        ref: z.string().min(1).describe('Branch or tag to run the workflow on'),
+        inputs: z
+          .record(z.string().regex(/^[A-Za-z0-9_-]+$/, 'input names must be alphanumeric/_/-'), z.string())
+          .optional()
+          .describe('workflow_dispatch inputs as key/value pairs'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ workflow, ref, inputs, cwd }, options) => {
+      if (!workflow || !ref) {
+        return { success: false as const, error: 'workflow and ref are required' };
+      }
+      if (startsLikeFlag(workflow)) {
+        return { success: false as const, error: 'workflow must not start with "-"' };
+      }
+      const badInput = Object.keys(inputs ?? {}).find((k) => !/^[A-Za-z0-9_-]+$/.test(k));
+      if (badInput !== undefined) {
+        return {
+          success: false as const,
+          error: `Invalid workflow input name "${badInput}" — input names must be alphanumeric/_/-`,
+        };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'workflow', 'run', workflow,
+            '--ref', ref,
+            ...Object.entries(inputs ?? {}).flatMap(([key, value]) => ['-f', `${key}=${value}`]),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      );
+    },
+  });
+
   // ── GitHub Issues (token required) ──────────────────────────────────────
 
   const ghIssueCreate = tool({
@@ -911,6 +1398,315 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       ),
   });
 
+  const ghIssueComment = tool({
+    description: 'Add a comment to an issue. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        number: z.number().int().positive(),
+        body: z.string().min(1),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ number, body, cwd }, options) => {
+      if (!body) {
+        return { success: false as const, error: 'body is required' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR('gh', ['issue', 'comment', String(number), '--body', body], ctx, token, cwd),
+      );
+    },
+  });
+
+  const ghIssueEdit = tool({
+    description:
+      'Edit an issue: title, body, labels, or assignees. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        number: z.number().int().positive(),
+        title: z.string().optional(),
+        body: z.string().optional(),
+        add_labels: z.array(z.string()).optional(),
+        remove_labels: z.array(z.string()).optional(),
+        add_assignees: z.array(z.string()).optional().describe('GitHub usernames to assign'),
+        remove_assignees: z.array(z.string()).optional().describe('GitHub usernames to unassign'),
+        cwd: cwdField,
+      })
+      .strict()
+      .refine(
+        (d) =>
+          d.title !== undefined ||
+          d.body !== undefined ||
+          !!d.add_labels?.length ||
+          !!d.remove_labels?.length ||
+          !!d.add_assignees?.length ||
+          !!d.remove_assignees?.length,
+        { message: 'Provide at least one field to edit' },
+      ),
+    execute: async (
+      { number, title, body, add_labels, remove_labels, add_assignees, remove_assignees, cwd },
+      options,
+    ) => {
+      if (
+        title === undefined &&
+        body === undefined &&
+        !add_labels?.length &&
+        !remove_labels?.length &&
+        !add_assignees?.length &&
+        !remove_assignees?.length
+      ) {
+        return { success: false as const, error: 'Provide at least one field to edit' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'issue', 'edit', String(number),
+            ...(title !== undefined ? ['--title', title] : []),
+            ...(body !== undefined ? ['--body', body] : []),
+            ...(add_labels?.length ? ['--add-label', add_labels.join(',')] : []),
+            ...(remove_labels?.length ? ['--remove-label', remove_labels.join(',')] : []),
+            ...(add_assignees?.length ? ['--add-assignee', add_assignees.join(',')] : []),
+            ...(remove_assignees?.length ? ['--remove-assignee', remove_assignees.join(',')] : []),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      );
+    },
+  });
+
+  const ghIssueClose = tool({
+    description:
+      'Close an issue with an optional comment and reason. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        number: z.number().int().positive(),
+        comment: z.string().optional().describe('Comment to post when closing'),
+        reason: z.enum(['completed', 'not_planned']).optional(),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ number, comment, reason, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'issue', 'close', String(number),
+            ...(comment ? ['--comment', comment] : []),
+            ...(reason ? ['--reason', reason === 'not_planned' ? 'not planned' : 'completed'] : []),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
+  const ghIssueReopen = tool({
+    description: 'Reopen a closed issue. Requires a connected GitHub account.',
+    inputSchema: z.object({ number: z.number().int().positive(), cwd: cwdField }).strict(),
+    execute: async ({ number, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR('gh', ['issue', 'reopen', String(number)], ctx, token, cwd),
+      ),
+  });
+
+  // ── GitHub repos, search, labels (token required) ───────────────────────
+
+  const ghRepoView = tool({
+    description:
+      'View a repository: default branch, visibility, and description. Use before cloning to discover the default branch instead of guessing main/master. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        repo: z.string().optional().describe('Repository as "owner/repo" (defaults to the repo in cwd)'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ repo, cwd }, options) => {
+      if (repo !== undefined && startsLikeFlag(repo)) {
+        return { success: false as const, error: 'repo must not start with "-"' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'repo', 'view',
+            ...(repo ? [repo] : []),
+            '--json', 'nameWithOwner,description,defaultBranchRef,visibility,url,isFork',
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      );
+    },
+  });
+
+  const ghRepoList = tool({
+    description:
+      'List repositories for the connected account or a given owner/org. Use to discover repos to clone. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        owner: z.string().optional().describe('User or org to list repos for (defaults to the connected account)'),
+        limit: z.number().int().positive().max(100).optional(),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ owner, limit, cwd }, options) => {
+      if (owner !== undefined && startsLikeFlag(owner)) {
+        return { success: false as const, error: 'owner must not start with "-"' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'repo', 'list',
+            ...(owner ? [owner] : []),
+            '--limit', String(limit ?? 30),
+            '--json', 'nameWithOwner,description,visibility,updatedAt,url',
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      );
+    },
+  });
+
+  const ghRepoFork = tool({
+    description:
+      'Fork a repository to the connected account (fork only — clone it explicitly with git_clone afterwards). Use to contribute to repos without push access. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        repo: z.string().min(1).describe('Repository to fork as "owner/repo"'),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ repo, cwd }, options) => {
+      if (!repo) {
+        return { success: false as const, error: 'repo is required' };
+      }
+      if (startsLikeFlag(repo)) {
+        return { success: false as const, error: 'repo must not start with "-"' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR('gh', ['repo', 'fork', repo, '--clone=false', '--remote=false'], ctx, token, cwd),
+      );
+    },
+  });
+
+  const ghRepoCreate = tool({
+    description:
+      'Create a new repository on the connected account. Visibility must be chosen explicitly. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        name: z
+          .string()
+          .regex(
+            /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
+            'name must start with a letter or digit and may otherwise contain only letters, digits, ".", "_", and "-"',
+          ),
+        visibility: z.enum(['private', 'public']),
+        description: z.string().optional(),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ name, visibility, description, cwd }, options) => {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+        return {
+          success: false as const,
+          error:
+            'name must start with a letter or digit and may otherwise contain only letters, digits, ".", "_", and "-"',
+        };
+      }
+      if (!visibility) {
+        return { success: false as const, error: 'visibility is required (private or public)' };
+      }
+      return withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'repo', 'create', name,
+            visibility === 'private' ? '--private' : '--public',
+            ...(description ? ['--description', description] : []),
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      );
+    },
+  });
+
+  const ghSearch = tool({
+    description:
+      'Search GitHub for code, issues, pull requests, or repositories. Uses GitHub search syntax — include "repo:owner/repo" to scope to a repository. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        type: z.enum(['code', 'issues', 'prs', 'repos']),
+        query: z.string().min(1),
+        limit: z.number().int().positive().max(100).optional(),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ type, query, limit, cwd }, options) => {
+      if (!query) {
+        return { success: false as const, error: 'query is required' };
+      }
+      const jsonFields =
+        type === 'code'
+          ? 'repository,path,url'
+          : type === 'repos'
+            ? 'fullName,description,url'
+            : 'number,title,state,url,repository';
+      return withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'search', type,
+            '--limit', String(limit ?? 20),
+            '--json', jsonFields,
+            // query is genuine free text (may legitimately start with "-", e.g. "-1"
+            // or a search qualifier) — the "--" separator, not a regex reject, is
+            // what keeps gh from reinterpreting it as a flag.
+            '--', query,
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      );
+    },
+  });
+
+  const ghLabelList = tool({
+    description:
+      'List the labels available in a repository. Check here before applying labels to issues or PRs. Requires a connected GitHub account.',
+    inputSchema: z
+      .object({
+        repo: z.string().optional().describe('Repository as "owner/repo" (defaults to the repo in cwd)'),
+        limit: z.number().int().positive().max(100).optional(),
+        cwd: cwdField,
+      })
+      .strict(),
+    execute: async ({ repo, limit, cwd }, options) =>
+      withToken(options, (ctx, token) =>
+        gitR(
+          'gh',
+          [
+            'label', 'list',
+            ...(repo ? ['--repo', repo] : []),
+            '--limit', String(limit ?? 50),
+            '--json', 'name,description,color',
+          ],
+          ctx,
+          token,
+          cwd,
+        ),
+      ),
+  });
+
   return {
     git_clone: gitClone,
     git_init: gitInit,
@@ -923,8 +1719,11 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     git_stash: gitStash,
     git_commit: gitCommit,
     git_log: gitLog,
+    git_show: gitShow,
+    git_blame: gitBlame,
     git_merge: gitMerge,
     git_rebase: gitRebase,
+    git_revert: gitRevert,
     git_checkout: gitCheckout,
     git_branch: gitBranch,
     git_fetch: gitFetch,
@@ -938,13 +1737,32 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     gh_pr_merge: ghPrMerge,
     gh_pr_checkout: ghPrCheckout,
     gh_pr_review: ghPrReview,
+    gh_pr_review_comment: ghPrReviewComment,
+    gh_pr_comment: ghPrComment,
+    gh_pr_edit: ghPrEdit,
+    gh_pr_update_branch: ghPrUpdateBranch,
+    gh_pr_thread_list: ghPrThreadList,
+    gh_pr_thread_resolve: ghPrThreadResolve,
     gh_pr_close: ghPrClose,
     gh_pr_reopen: ghPrReopen,
     gh_pr_ready: ghPrReady,
     gh_run_list: ghRunList,
     gh_run_view: ghRunView,
+    gh_run_rerun: ghRunRerun,
+    gh_workflow_list: ghWorkflowList,
+    gh_workflow_run: ghWorkflowRun,
     gh_issue_create: ghIssueCreate,
     gh_issue_list: ghIssueList,
     gh_issue_view: ghIssueView,
+    gh_issue_comment: ghIssueComment,
+    gh_issue_edit: ghIssueEdit,
+    gh_issue_close: ghIssueClose,
+    gh_issue_reopen: ghIssueReopen,
+    gh_repo_view: ghRepoView,
+    gh_repo_list: ghRepoList,
+    gh_repo_fork: ghRepoFork,
+    gh_repo_create: ghRepoCreate,
+    gh_search: ghSearch,
+    gh_label_list: ghLabelList,
   };
 }

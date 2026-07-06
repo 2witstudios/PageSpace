@@ -16,6 +16,7 @@
  */
 import { AuthenticationError, isAuthenticationError, OAuthTokenProvider, StaticTokenProvider } from '@pagespace/sdk';
 import type { AuthProvider, OAuthTokens, RefreshAccessToken } from '@pagespace/sdk';
+import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
 import type { CredentialStore } from '../credentials/store.js';
 import { EXIT_RUNTIME_ERROR, type ExitCode } from '../exit-codes.js';
 import type { OutputSink } from '../handler-context.js';
@@ -57,6 +58,7 @@ export function buildAuthProvider(source: AuthSource, deps: BuildAuthProviderDep
 
     case 'profile': {
       const { host, credential } = source;
+      const profileName = source.profileName ?? DEFAULT_PROFILE_NAME;
       const refreshAccessToken: RefreshAccessToken = async (refreshToken) => {
         const metadata = await deps.discoverMetadata(host);
         const doRefresh = deps.createRefreshAccessToken(metadata.tokenEndpoint, credential.clientId);
@@ -82,12 +84,16 @@ export function buildAuthProvider(source: AuthSource, deps: BuildAuthProviderDep
           // server-side scope narrowing from silently going stale until the
           // user happens to run `whoami`.
           const scopes = tokens.scope !== undefined ? tokens.scope.split(' ').filter(Boolean) : credential.scopes;
-          await deps.credentialStore.set(host, {
-            refreshToken: tokens.refreshToken,
-            clientId: credential.clientId,
-            scopes,
-            createdAt: new Date(deps.now()).toISOString(),
-          });
+          await deps.credentialStore.set(
+            host,
+            {
+              refreshToken: tokens.refreshToken,
+              clientId: credential.clientId,
+              scopes,
+              createdAt: new Date(deps.now()).toISOString(),
+            },
+            profileName,
+          );
         },
       });
     }
@@ -117,7 +123,7 @@ export async function enforceAuth(deps: EnforceAuthDeps): Promise<ExitCode | nul
     return null;
   } catch (error) {
     if (deps.source.kind === 'profile' && isAuthenticationError(error)) {
-      await deps.credentialStore.delete(deps.source.host);
+      await deps.credentialStore.delete(deps.source.host, deps.source.profileName ?? DEFAULT_PROFILE_NAME);
       deps.stderr.write(
         `Your stored credentials for ${deps.source.host} could not be refreshed. Run "pagespace login" again.\n`,
       );

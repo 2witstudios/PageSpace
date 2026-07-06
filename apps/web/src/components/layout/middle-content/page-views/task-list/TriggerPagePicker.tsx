@@ -27,6 +27,7 @@ interface PageSuggestion {
   label: string;
   type: 'page' | 'user';
   description?: string;
+  data?: { pageType?: string };
 }
 
 const searchFetcher = async (url: string): Promise<PageSuggestion[]> => {
@@ -49,6 +50,8 @@ interface SingleProps {
   onChange: (id: string | null) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Restrict suggestions to one page type, e.g. 'SHEET'. Omit for all types. */
+  pageTypeFilter?: string;
 }
 
 interface MultiProps {
@@ -59,6 +62,8 @@ interface MultiProps {
   placeholder?: string;
   disabled?: boolean;
   max?: number;
+  /** Restrict suggestions to one page type, e.g. 'SHEET'. Omit for all types. */
+  pageTypeFilter?: string;
 }
 
 type Props = SingleProps | MultiProps;
@@ -92,7 +97,7 @@ function PageLabel({ pageId }: { pageId: string }) {
 }
 
 export function TriggerPagePicker(props: Props) {
-  const { driveId, mode, placeholder, disabled } = props;
+  const { driveId, mode, placeholder, disabled, pageTypeFilter } = props;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebounce(query, 200);
@@ -181,7 +186,7 @@ export function TriggerPagePicker(props: Props) {
                 {searching ? 'Searching…' : 'No pages found.'}
               </CommandEmpty>
               {results
-                .filter((r) => r.type === 'page')
+                .filter((r) => r.type === 'page' && (!pageTypeFilter || r.data?.pageType === pageTypeFilter))
                 .map((page) => {
                   const isSelected = selectedIds.has(page.id);
                   const blocked = !isSelected && atMax;

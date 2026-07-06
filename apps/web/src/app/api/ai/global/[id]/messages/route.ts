@@ -816,6 +816,10 @@ MENTION PROCESSING:
         userId,
         driveId: currentDriveId,
         userDriveRole,
+        // filteredAllTools (not finalTools) carries raw tool names as top-level
+        // keys — finalTools is always { ...coreTools, tool_search, execute_tool },
+        // which never contains sandbox git/gh tool names directly.
+        currentTools: filteredAllTools,
       });
       if (Object.keys(integrationTools).length > 0) {
         finalTools = mergeToolSets(finalTools, integrationTools);

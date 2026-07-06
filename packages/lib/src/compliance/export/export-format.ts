@@ -61,6 +61,9 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     { name: 'messages.json', description: 'Chat, channel, conversation and direct messages', recordCount: data.messages.length, data: data.messages },
     { name: 'files-metadata.json', description: 'Uploaded file metadata', recordCount: data.files.length, data: data.files },
     { name: 'activity.json', description: 'Activity / audit trail entries', recordCount: data.activity.length, data: data.activity },
+    { name: 'system-logs.json', description: 'System log entries associated with your account', recordCount: data.systemLogs.length, data: data.systemLogs },
+    { name: 'api-metrics.json', description: 'API request metrics associated with your account', recordCount: data.apiMetrics.length, data: data.apiMetrics },
+    { name: 'error-logs.json', description: 'Error log entries associated with your account', recordCount: data.errorLogs.length, data: data.errorLogs },
     { name: 'ai-usage.json', description: 'AI usage records', recordCount: data.aiUsage.length, data: data.aiUsage },
     { name: 'tasks.json', description: 'Task lists and items', recordCount: data.tasks.length, data: data.tasks },
     { name: 'sessions.json', description: 'Authentication sessions', recordCount: data.sessions.length, data: data.sessions },
@@ -99,8 +102,9 @@ function toIso(value: Date | null | undefined): string | null {
  * Map the collected data onto a documented, interoperable schema.org structure
  * (https://schema.org): the data subject as a `Person`, with drives/pages as
  * `CreativeWork`, messages as `Message`, and files as `MediaObject`. The
- * remaining operational categories (activity, AI usage, tasks, sessions,
- * notifications, display preferences, personalization) are carried verbatim as
+ * remaining operational categories (activity, system logs, API metrics, error
+ * logs, AI usage, tasks, sessions, notifications, display preferences,
+ * personalization) are carried verbatim as
  * `PropertyValue` entries so the portable bundle is **complete** — no data
  * category is dropped (GDPR Art 20). Dates are ISO-8601 strings (mapped fields
  * explicitly; values inside `additionalProperty` serialize to ISO-8601 via
@@ -164,6 +168,9 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
     // bundle loses nothing relative to the native export.
     additionalProperty: [
       { '@type': 'PropertyValue', name: 'activity', value: data.activity },
+      { '@type': 'PropertyValue', name: 'systemLogs', value: data.systemLogs },
+      { '@type': 'PropertyValue', name: 'apiMetrics', value: data.apiMetrics },
+      { '@type': 'PropertyValue', name: 'errorLogs', value: data.errorLogs },
       { '@type': 'PropertyValue', name: 'aiUsage', value: data.aiUsage },
       { '@type': 'PropertyValue', name: 'tasks', value: data.tasks },
       { '@type': 'PropertyValue', name: 'sessions', value: data.sessions },
