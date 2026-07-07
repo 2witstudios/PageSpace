@@ -1,164 +1,77 @@
 /**
- * Monitoring Middleware for PageSpace
- * Tracks API requests, performance, and user interactions
+ * Monitoring Middleware for PageSpace — edge-safe.
+ *
+ * Runs inside the Edge runtime (imported by src/middleware.ts), so this module
+ * must never touch the database, Node built-ins, or @pagespace/lib's Node-only
+ * logger. Persistence happens at the Node layer instead: every /api request is
+ * forwarded as a fire-and-forget POST to /api/internal/monitoring/ingest
+ * (authenticated via x-monitoring-ingest-key), whose route handler writes the
+ * apiMetrics and systemLogs rows the admin dashboard reads. The old in-process
+ * MetricsCollector (setInterval + direct db.insert from middleware) was
+ * deleted: it was Node-only, never once ran in production, and wrote from the
+ * wrong layer.
+ *
+ * Non-API page requests are logged to the console stream only, by design —
+ * they were previously tracked only by the deleted collector.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { logger, loggers, extractRequestContext, logResponse } from '@pagespace/lib/logging/logger-config';
+import { createEdgeLogger } from '@/lib/logging/edge-logger';
 import {
   getOrCreateRequestId,
   REQUEST_ID_HEADER,
 } from '@/lib/request-id/request-id';
-import { db } from '@pagespace/db/db'
-import { apiMetrics } from '@pagespace/db/schema/monitoring';
 import { sanitizeEndpoint } from '@/lib/monitoring/ingest-sanitizer';
 
-// In-memory buffer for metrics (flushed to database every 30s or when buffer is full)
-interface RequestMetrics {
+const systemLogger = createEdgeLogger('system');
+const performanceLogger = createEdgeLogger('performance');
+const apiLogger = createEdgeLogger('api');
+
+interface RequestContext {
   endpoint: string;
   method: string;
-  statusCode: number;
-  duration: number;
-  timestamp: Date;
-  userId?: string;
-  sessionId?: string;
-  requestId?: string;
-  ip?: string;
+  ip: string;
   userAgent?: string;
-  requestSize?: number;
-  responseSize?: number;
-  error?: string;
 }
 
-interface EndpointMetrics {
-  count: number;
-  avgDuration: number;
-  errors: number;
+/**
+ * Extract logging context from the request. Local, pure equivalent of
+ * @pagespace/lib logger-config's extractRequestContext (which lives in the
+ * Node-only logger graph).
+ */
+function extractRequestContext(request: NextRequest): RequestContext {
+  return {
+    endpoint: request.nextUrl.pathname,
+    method: request.method,
+    ip:
+      request.headers.get('x-forwarded-for')?.split(',')[0] ||
+      request.headers.get('x-real-ip') ||
+      'unknown',
+    userAgent: request.headers.get('user-agent') || undefined,
+  };
 }
 
-interface MetricsSummary {
-  total: number;
-  errors: number;
-  errorRate: number;
-  avgDuration: number;
-  endpoints: number;
-  topEndpoints: Array<[string, EndpointMetrics]>;
-}
+/**
+ * Log the response line (same message format as @pagespace/lib logResponse:
+ * "METHOD /endpoint STATUS DURATIONms", warn at 4xx, error at 5xx).
+ */
+function logResponse(
+  context: RequestContext,
+  statusCode: number,
+  duration: number,
+  metadata: Record<string, unknown>
+): void {
+  const message = `${context.method} ${context.endpoint} ${statusCode} ${duration}ms`;
+  const fullMetadata = { ...metadata, ...context, statusCode, duration };
 
-class MetricsCollector {
-  private static instance: MetricsCollector;
-  private metrics: RequestMetrics[] = [];
-  private readonly maxBufferSize = 1000;
-  private readonly flushInterval = 30000; // 30 seconds
-  private flushTimer: NodeJS.Timeout | null = null;
-
-  private constructor() {
-    this.startFlushTimer();
-  }
-
-  static getInstance(): MetricsCollector {
-    if (!MetricsCollector.instance) {
-      MetricsCollector.instance = new MetricsCollector();
-    }
-    return MetricsCollector.instance;
-  }
-
-  private startFlushTimer(): void {
-    if (this.flushTimer) {
-      clearInterval(this.flushTimer);
-    }
-
-    this.flushTimer = setInterval(() => {
-      this.flush();
-    }, this.flushInterval);
-  }
-
-  track(metric: RequestMetrics): void {
-    this.metrics.push(metric);
-
-    if (this.metrics.length >= this.maxBufferSize) {
-      this.flush().catch(() => {});
-    }
-  }
-
-  async flush(): Promise<void> {
-    if (this.metrics.length === 0) return;
-
-    const metricsToFlush = [...this.metrics];
-    this.metrics = [];
-
-    try {
-      // Write metrics to database
-      await db.insert(apiMetrics).values(
-        metricsToFlush.map(metric => ({
-          endpoint: metric.endpoint,
-          method: metric.method as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS',
-          statusCode: metric.statusCode,
-          duration: metric.duration,
-          timestamp: metric.timestamp,
-          userId: metric.userId,
-          sessionId: metric.sessionId,
-          requestId: metric.requestId,
-          ip: metric.ip,
-          userAgent: metric.userAgent,
-          requestSize: metric.requestSize,
-          responseSize: metric.responseSize,
-          error: metric.error,
-        }))
-      );
-
-      // Also log summary for real-time monitoring
-      const summary = this.summarizeMetrics(metricsToFlush);
-      loggers.performance.info('Metrics flushed to database', {
-        ...summary,
-        flushedCount: metricsToFlush.length
-      });
-    } catch (error) {
-      // If database write fails, fall back to logging only
-      loggers.performance.error('Failed to write metrics to database', error as Error);
-      const summary = this.summarizeMetrics(metricsToFlush);
-      loggers.performance.info('Metrics flush (fallback to logs only)', { ...summary });
-    }
-  }
-
-  private summarizeMetrics(metrics: RequestMetrics[]): MetricsSummary {
-    const total = metrics.length;
-    const errors = metrics.filter(m => m.statusCode >= 400).length;
-    const avgDuration = metrics.reduce((sum, m) => sum + m.duration, 0) / total;
-    
-    const byEndpoint = metrics.reduce((acc, m) => {
-      const key = `${m.method} ${m.endpoint}`;
-      if (!acc[key]) acc[key] = { count: 0, avgDuration: 0, errors: 0 };
-      acc[key].count++;
-      acc[key].avgDuration += m.duration;
-      if (m.statusCode >= 400) acc[key].errors++;
-      return acc;
-    }, {} as Record<string, EndpointMetrics>);
-
-    // Calculate averages
-    Object.keys(byEndpoint).forEach(key => {
-      byEndpoint[key].avgDuration /= byEndpoint[key].count;
-    });
-
-    return {
-      total,
-      errors,
-      errorRate: (errors / total) * 100,
-      avgDuration: Math.round(avgDuration),
-      endpoints: Object.keys(byEndpoint).length,
-      topEndpoints: Object.entries(byEndpoint)
-        .sort((a, b) => b[1].count - a[1].count)
-        .slice(0, 5) as Array<[string, EndpointMetrics]>
-    };
-  }
-
-  getMetrics(): RequestMetrics[] {
-    return [...this.metrics];
+  if (statusCode >= 500) {
+    apiLogger.error(message, undefined, fullMetadata);
+  } else if (statusCode >= 400) {
+    apiLogger.warn(message, fullMetadata);
+  } else {
+    apiLogger.info(message, fullMetadata);
   }
 }
-
-// Initialize metrics collector
-const metricsCollector = MetricsCollector.getInstance();
 
 interface MonitoringIngestPayload {
   type: 'api-request';
@@ -211,13 +124,13 @@ function logMonitoringStatus(): void {
   if (status === 'misconfigured') {
     const isProduction = process.env.NODE_ENV === 'production';
     const prefix = isProduction ? '[PRODUCTION WARNING]' : '[WARNING]';
-    loggers.system.warn(
+    systemLogger.warn(
       `${prefix} MONITORING_INGEST_KEY is not configured and MONITORING_INGEST_DISABLED is not set. ` +
       'Monitoring ingest is silently degraded. Set MONITORING_INGEST_KEY to enable monitoring, ' +
       'or set MONITORING_INGEST_DISABLED=true to explicitly opt out.'
     );
   } else if (status === 'disabled') {
-    loggers.system.info('Monitoring ingest explicitly disabled via MONITORING_INGEST_DISABLED=true');
+    systemLogger.info('Monitoring ingest explicitly disabled via MONITORING_INGEST_DISABLED=true');
   }
 }
 
@@ -227,7 +140,7 @@ function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPa
   if (status !== 'active') {
     if (status === 'misconfigured' && !hasWarnedMissingIngestKey) {
       hasWarnedMissingIngestKey = true;
-      loggers.system.warn(
+      systemLogger.warn(
         'MONITORING_INGEST_KEY is not configured; monitoring ingest is disabled. ' +
         'Set MONITORING_INGEST_KEY to enable monitoring or MONITORING_INGEST_DISABLED=true to silence this warning.'
       );
@@ -251,13 +164,13 @@ function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPa
       cache: 'no-store',
       keepalive: true,
     }).catch((error) => {
-      loggers.performance.debug('Failed to forward monitoring payload', {
+      performanceLogger.debug('Failed to forward monitoring payload', {
         error: (error as Error).message,
         endpoint: payload.endpoint,
       });
     });
   } catch (error) {
-    loggers.performance.debug('Unable to construct monitoring ingest request', {
+    performanceLogger.debug('Unable to construct monitoring ingest request', {
       error: (error as Error).message,
       endpoint: payload.endpoint,
     });
@@ -267,7 +180,7 @@ function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPa
 /**
  * Extract user ID from request headers (set by main middleware)
  */
-async function extractUserId(request: NextRequest): Promise<string | undefined> {
+function extractUserId(request: NextRequest): string | undefined {
   const userIdHeader = request.headers.get('x-user-id');
   return userIdHeader ?? undefined;
 }
@@ -345,19 +258,16 @@ export async function monitoringMiddleware(
 
   // Extract context
   const context = extractRequestContext(request);
-  const userId = await extractUserId(request);
+  const userId = extractUserId(request);
   const cleanEndpoint = sanitizeEndpoint(pathname);
   const requestSize = getRequestSize(request);
 
-  // Create request-scoped logger
-  const requestLogger = logger.child({
+  // Log request start
+  apiLogger.info(`Request started: ${context.method} ${context.endpoint}`, {
     requestId,
     userId,
-    ...context
+    ...context,
   });
-
-  // Log request start
-  requestLogger.info(`Request started: ${context.method} ${context.endpoint}`);
 
   try {
     // Execute the request
@@ -367,22 +277,6 @@ export async function monitoringMiddleware(
     const duration = Date.now() - startTime;
     const responseSize = getResponseSize(response);
     const statusCode = response.status;
-
-    // Track metrics
-    metricsCollector.track({
-      endpoint: cleanEndpoint,
-      method: request.method,
-      statusCode,
-      duration,
-      timestamp: startedAt,
-      userId,
-      sessionId: context.sessionId,
-      requestId,
-      ip: context.ip,
-      userAgent: context.userAgent,
-      requestSize,
-      responseSize
-    });
 
     if (pathname.startsWith('/api')) {
       const isServerError = statusCode >= 500;
@@ -397,7 +291,6 @@ export async function monitoringMiddleware(
         requestSize,
         responseSize,
         userId,
-        sessionId: context.sessionId,
         ip: context.ip,
         userAgent: context.userAgent,
         error: isServerError ? `HTTP ${statusCode}` : undefined,
@@ -406,7 +299,7 @@ export async function monitoringMiddleware(
     }
 
     // Log response
-    logResponse(request, statusCode, startTime, {
+    logResponse(context, statusCode, duration, {
       requestId,
       userId,
       requestSize,
@@ -415,9 +308,12 @@ export async function monitoringMiddleware(
 
     // Log slow requests
     if (duration > 1000) {
-      requestLogger.warn(`Slow request detected: ${duration}ms`, {
+      performanceLogger.warn(`Slow request detected: ${duration}ms`, {
         threshold: 1000,
-        actual: duration
+        actual: duration,
+        requestId,
+        userId,
+        ...context,
       });
     }
 
@@ -432,21 +328,6 @@ export async function monitoringMiddleware(
     const errorName = error instanceof Error ? error.name : 'Error';
     const errorStack = error instanceof Error ? error.stack : undefined;
 
-    // Track error metrics
-    metricsCollector.track({
-      endpoint: cleanEndpoint,
-      method: request.method,
-      statusCode: 500,
-      duration,
-      timestamp: startedAt,
-      userId,
-      sessionId: context.sessionId,
-      requestId,
-      ip: context.ip,
-      userAgent: context.userAgent,
-      error: errorMessage
-    });
-
     if (pathname.startsWith('/api')) {
       queueMonitoringIngest(request, {
         type: 'api-request',
@@ -459,7 +340,6 @@ export async function monitoringMiddleware(
         requestSize,
         responseSize: 0,
         userId,
-        sessionId: context.sessionId,
         ip: context.ip,
         userAgent: context.userAgent,
         error: errorMessage,
@@ -469,66 +349,13 @@ export async function monitoringMiddleware(
     }
 
     // Log error
-    requestLogger.error(`Request failed: ${context.method} ${context.endpoint}`, error as Error, {
-      duration,
-      requestId
-    });
+    apiLogger.error(
+      `Request failed: ${context.method} ${context.endpoint}`,
+      error instanceof Error ? error : undefined,
+      { duration, requestId, userId, ...context }
+    );
 
     // Re-throw the error
     throw error;
   }
 }
-
-/**
- * Export metrics for dashboard
- */
-export function getMetricsSummary(): MetricsSummary | { message: string } {
-  const metrics = metricsCollector.getMetrics();
-  
-  if (metrics.length === 0) {
-    return { message: 'No metrics collected yet' };
-  }
-
-  const now = Date.now();
-  const recentMetrics = metrics.filter(m => 
-    now - m.timestamp.getTime() < 300000 // Last 5 minutes
-  );
-
-  const total = recentMetrics.length;
-  
-  if (total === 0) {
-    return { message: 'No recent metrics in the last 5 minutes' };
-  }
-  
-  const errors = recentMetrics.filter(m => m.statusCode >= 400).length;
-  const avgDuration = recentMetrics.reduce((sum, m) => sum + m.duration, 0) / total;
-
-  // Build byEndpoint for topEndpoints
-  const byEndpoint = recentMetrics.reduce((acc, m) => {
-    const key = `${m.method} ${m.endpoint}`;
-    if (!acc[key]) acc[key] = { count: 0, avgDuration: 0, errors: 0 };
-    acc[key].count++;
-    acc[key].avgDuration += m.duration;
-    if (m.statusCode >= 400) acc[key].errors++;
-    return acc;
-  }, {} as Record<string, EndpointMetrics>);
-
-  // Calculate averages
-  Object.keys(byEndpoint).forEach(key => {
-    byEndpoint[key].avgDuration /= byEndpoint[key].count;
-  });
-
-  return {
-    total,
-    errors,
-    errorRate: (errors / total) * 100,
-    avgDuration: Math.round(avgDuration),
-    endpoints: Object.keys(byEndpoint).length,
-    topEndpoints: Object.entries(byEndpoint)
-      .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, 5) as Array<[string, EndpointMetrics]>
-  };
-}
-
-// Export everything
-export { metricsCollector };
