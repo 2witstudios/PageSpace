@@ -36,24 +36,24 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getBatchPagePermissions: vi.fn(),
 }));
 
-// Wrap (not replace) the real decryptUsersByIdOnce so call counts can be
-// asserted at the route's call boundary — proves the route batches decryption
-// once per request instead of once per row (the actual regression this test
-// guards). A bare `vi.spyOn` doesn't work here because `@pagespace/lib`
-// resolves to its built CJS dist output, and the per-row-dedup internals
-// (decryptUserRow -> decryptField) are a *nested* require inside that
-// compiled module, invisible to any mock declared at this level.
-vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@pagespace/lib/auth/user-repository')>();
-  return { ...actual, decryptUsersByIdOnce: vi.fn(actual.decryptUsersByIdOnce) };
+// Wrap (not replace) the real decryptFieldValuesOnce so call counts and batch
+// contents can be asserted at the route's call boundary — proves the route
+// batches decryption once per request instead of once per row (the actual
+// regression this test guards). A bare `vi.spyOn` doesn't work here because
+// `@pagespace/lib` resolves to its built CJS dist output, and the inner
+// per-value decrypt (decryptField) is a *nested* require inside that compiled
+// module, invisible to any mock declared at this level. encryptField stays
+// real via the spread.
+vi.mock('@pagespace/lib/encryption/field-crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/encryption/field-crypto')>();
+  return { ...actual, decryptFieldValuesOnce: vi.fn(actual.decryptFieldValuesOnce) };
 });
 
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
-import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
-import { encryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptFieldValuesOnce, encryptField } from '@pagespace/lib/encryption/field-crypto';
 
 const mockUserId = 'user_123';
 
@@ -212,7 +212,7 @@ describe('GET /api/inbox PII decryption dedup', () => {
     }
     // Decryption is batched once per request (dedup happens inside), not
     // once per of the 5 channel rows.
-    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(decryptFieldValuesOnce)).toHaveBeenCalledTimes(1);
   });
 
   it('decrypts DM sender names and channel sender names in ONE batch for a type=all request', async () => {
@@ -232,7 +232,7 @@ describe('GET /api/inbox PII decryption dedup', () => {
     const channel = body.items.find((i: { type: string }) => i.type === 'channel');
     expect(dm.name).toBe('Dm Counterpart');
     expect(channel.lastMessageSender).toBe('Channel Sender');
-    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(decryptFieldValuesOnce)).toHaveBeenCalledTimes(1);
   });
 
   it('decrypts a repeated encrypted sender once in the drive-scoped inbox', async () => {
@@ -253,7 +253,7 @@ describe('GET /api/inbox PII decryption dedup', () => {
     for (const item of body.items) {
       expect(item.lastMessageSender).toBe('Drive Sender');
     }
-    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(decryptFieldValuesOnce)).toHaveBeenCalledTimes(1);
   });
 
   it('passes through plaintext AI sender names and profile display names unchanged', async () => {
@@ -315,7 +315,7 @@ describe('GET /api/inbox PII decryption dedup', () => {
     expect(res.status).toBe(200);
     expect(body.items).toHaveLength(1);
     expect(body.items[0].lastMessageSender).toBe('Visible Sender');
-    const batched = vi.mocked(decryptUsersByIdOnce).mock.calls[0][0];
+    const batched = vi.mocked(decryptFieldValuesOnce).mock.calls[0][0];
     expect(batched).toHaveLength(1);
   });
 
@@ -330,7 +330,33 @@ describe('GET /api/inbox PII decryption dedup', () => {
     expect(res.status).toBe(200);
     expect(body.items).toHaveLength(1);
     expect(body.items[0].lastMessageSender).toBe('Visible Sender');
-    const batched = vi.mocked(decryptUsersByIdOnce).mock.calls[0][0];
+    const batched = vi.mocked(decryptFieldValuesOnce).mock.calls[0][0];
     expect(batched).toHaveLength(1);
+  });
+
+  it('never decrypts sender names of rows the page limit discards (decrypt after slice)', async () => {
+    const survivingSender = await encryptField('Surviving Sender');
+    const slicedSender = await encryptField('Sliced Sender');
+    // Distinct timestamps make the survivor deterministic: the newer row wins
+    // the lastMessageAt sort, the older row is sliced off by limit=1.
+    const channelRows = [
+      { ...channelRow, id: 'ch_new', sender_name: survivingSender, last_message_at: '2026-05-02T00:00:00.000Z' },
+      { ...channelRow, id: 'ch_old', sender_name: slicedSender, last_message_at: '2026-05-01T00:00:00.000Z' },
+    ];
+    mockExecute([], channelRows);
+    allowChannels(['ch_new', 'ch_old']);
+
+    const res = await GET(new Request('http://localhost/api/inbox?type=channel&limit=1'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].lastMessageSender).toBe('Surviving Sender');
+    expect(body.pagination.hasMore).toBe(true);
+    // Only the surviving row's value enters the batch — the sliced row's
+    // ciphertext is never decrypted.
+    expect(vi.mocked(decryptFieldValuesOnce)).toHaveBeenCalledTimes(1);
+    const batched = vi.mocked(decryptFieldValuesOnce).mock.calls[0][0];
+    expect(batched).toEqual([survivingSender]);
   });
 });
