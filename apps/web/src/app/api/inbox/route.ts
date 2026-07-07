@@ -133,18 +133,21 @@ export async function GET(request: Request) {
         userId,
         channelResults.rows.map((row) => row.id)
       );
+      // Permission-filter BEFORE decrypting: a non-viewable channel's sender
+      // PII must never enter the decrypt batch (an undecryptable value there
+      // would otherwise fail the whole request, where it used to be skipped).
+      const visibleChannelRows = channelResults.rows.filter(
+        (row) => channelPermissions.get(row.id)?.canView
+      );
 
       // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
       // (plaintext) with users.name (ciphertext); the lookup handles both. One
       // batched decrypt per request, not one per row.
       const decryptSenderName = await decryptValuesOnce(
-        channelResults.rows.map((row) => row.sender_name)
+        visibleChannelRows.map((row) => row.sender_name)
       );
 
-      for (const row of channelResults.rows) {
-        const permissions = channelPermissions.get(row.id);
-        if (!permissions?.canView) continue;
-
+      for (const row of visibleChannelRows) {
         items.push({
           id: row.id,
           type: 'channel',
@@ -236,8 +239,7 @@ export async function GET(request: Request) {
       }
 
       // Fetch channels from all drives user is member of or owns (skipped when filter excludes channels)
-      let channelRows: ChannelRow[] = [];
-      let channelPermissions: Awaited<ReturnType<typeof getBatchPagePermissions>> = new Map();
+      let visibleChannelRows: ChannelRow[] = [];
       if (type !== 'dm') {
         const channelResults = await db.execute<ChannelRow>(sql`
           WITH user_channels AS (
@@ -296,11 +298,15 @@ export async function GET(request: Request) {
           ORDER BY clm.last_message_at DESC NULLS LAST
           LIMIT ${fetchLimit}
         `);
-        channelRows = channelResults.rows;
-
-        channelPermissions = await getBatchPagePermissions(
+        const channelPermissions = await getBatchPagePermissions(
           userId,
-          channelRows.map((row) => row.id)
+          channelResults.rows.map((row) => row.id)
+        );
+        // Permission-filter BEFORE decrypting: a non-viewable channel's sender
+        // PII must never enter the decrypt batch (an undecryptable value there
+        // would otherwise fail the whole request, where it used to be skipped).
+        visibleChannelRows = channelResults.rows.filter(
+          (row) => channelPermissions.get(row.id)?.canView
         );
       }
 
@@ -311,7 +317,7 @@ export async function GET(request: Request) {
       // short-circuit.
       const decryptName = await decryptValuesOnce([
         ...dmRows.map((row) => (row.other_user_display_name ? null : row.other_user_name)),
-        ...channelRows.map((row) => row.sender_name),
+        ...visibleChannelRows.map((row) => row.sender_name),
       ]);
 
       for (const row of dmRows) {
@@ -327,10 +333,7 @@ export async function GET(request: Request) {
         });
       }
 
-      for (const row of channelRows) {
-        const permissions = channelPermissions.get(row.id);
-        if (!permissions?.canView) continue;
-
+      for (const row of visibleChannelRows) {
         items.push({
           id: row.id,
           type: 'channel',

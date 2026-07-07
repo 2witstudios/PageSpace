@@ -286,4 +286,51 @@ describe('GET /api/inbox PII decryption dedup', () => {
     expect(res.status).toBe(200);
     expect(body.items[0].lastMessageSender).toBeNull();
   });
+
+  // The permission filter must run BEFORE the decrypt batch is built: a
+  // non-viewable channel's sender_name never entered the old per-row decrypt
+  // path, and an undecryptable value on such a row must not be able to fail
+  // (or even reach) the batch for the rest of the inbox.
+  const mixedVisibilityChannels = (visibleSender: string, hiddenSender: string) => {
+    (getBatchPagePermissions as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Map([
+        ['ch_visible', { canView: true, canEdit: false, canShare: false, canDelete: false }],
+        ['ch_hidden', { canView: false, canEdit: false, canShare: false, canDelete: false }],
+      ])
+    );
+    return [
+      { ...channelRow, id: 'ch_visible', sender_name: visibleSender },
+      { ...channelRow, id: 'ch_hidden', sender_name: hiddenSender },
+    ];
+  };
+
+  it('never decrypts sender names of channels the requester cannot view (drive inbox)', async () => {
+    const visibleSender = await encryptField('Visible Sender');
+    const hiddenSender = await encryptField('Hidden Sender');
+    mockExecute([], mixedVisibilityChannels(visibleSender, hiddenSender));
+
+    const res = await GET(new Request('http://localhost/api/inbox?driveId=drv_1&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].lastMessageSender).toBe('Visible Sender');
+    const batched = vi.mocked(decryptUsersByIdOnce).mock.calls[0][0];
+    expect(batched).toHaveLength(1);
+  });
+
+  it('never decrypts sender names of channels the requester cannot view (dashboard inbox)', async () => {
+    const visibleSender = await encryptField('Visible Sender');
+    const hiddenSender = await encryptField('Hidden Sender');
+    mockExecute([], mixedVisibilityChannels(visibleSender, hiddenSender));
+
+    const res = await GET(new Request('http://localhost/api/inbox?type=channel&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].lastMessageSender).toBe('Visible Sender');
+    const batched = vi.mocked(decryptUsersByIdOnce).mock.calls[0][0];
+    expect(batched).toHaveLength(1);
+  });
 });
