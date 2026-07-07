@@ -17,9 +17,10 @@ export interface ConversationRow extends Record<string, unknown> {
   participant2LastRead: string | null;
   createdAt: string;
   last_read: string | null;
-  other_user_id: string;
-  other_user_name: string;
-  other_user_email: string;
+  // LEFT JOIN users — nullable so consumers must handle a missing join row.
+  other_user_id: string | null;
+  other_user_name: string | null;
+  other_user_email: string | null;
   other_user_image: string | null;
   other_user_username: string | null;
   other_user_display_name: string | null;
@@ -55,7 +56,8 @@ export interface DMRow extends Record<string, unknown> {
   id: string;
   last_message_at: string | null;
   last_message: string | null;
-  other_user_name: string;
+  // LEFT JOIN users — nullable so consumers must handle a missing join row.
+  other_user_name: string | null;
   other_user_display_name: string | null;
   other_user_image: string | null;
   other_user_avatar_url: string | null;
@@ -71,9 +73,10 @@ export interface ConversationDetailRow extends Record<string, unknown> {
   lastMessagePreview: string | null;
   createdAt: string;
   other_user_id: string;
-  user_id: string;
-  user_name: string;
-  user_email: string;
+  // LEFT JOIN users — nullable so consumers must handle a missing join row.
+  user_id: string | null;
+  user_name: string | null;
+  user_email: string | null;
   user_image: string | null;
   user_username: string | null;
   user_display_name: string | null;

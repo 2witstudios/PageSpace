@@ -78,8 +78,10 @@ export async function GET(
       createdAt: row.createdAt,
       otherUser: {
         id: row.user_id,
-        name: decryptedUser?.name ?? row.user_name,
-        email: decryptedUser?.email ?? row.user_email,
+        // Fail closed: on a missing join row emit null, never the raw
+        // (potentially ciphertext) column value.
+        name: decryptedUser?.name ?? null,
+        email: decryptedUser?.email ?? null,
         image: row.user_image,
         username: row.user_username,
         displayName: row.user_display_name,

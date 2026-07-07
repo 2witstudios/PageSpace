@@ -131,8 +131,10 @@ async function fetchDMConversations(userId: string) {
       lastRead: row.last_read ? new Date(row.last_read).toISOString() : null,
       otherUser: {
         id: row.other_user_id,
-        name: decryptedOtherUser?.name ?? row.other_user_name,
-        email: decryptedOtherUser?.email ?? row.other_user_email,
+        // Fail closed: on a missing join row emit null, never the raw
+        // (potentially ciphertext) column value.
+        name: decryptedOtherUser?.name ?? null,
+        email: decryptedOtherUser?.email ?? null,
         image: row.other_user_image,
         username: row.other_user_username,
         displayName: row.other_user_display_name,
