@@ -48,6 +48,9 @@ describe('edge-logger', () => {
         level: 'INFO',
         category: 'api',
         message: 'GET /api/health 200 12ms',
+        // context.category mirrors the Node logger's nesting so log-drain
+        // queries keyed on either shape match both runtimes.
+        context: { category: 'api' },
         metadata: { requestId: 'req-1', statusCode: 200 },
       });
     });
@@ -109,6 +112,54 @@ describe('edge-logger', () => {
     });
   });
 
+  describe('sensitive-key redaction (parity with the Node logger sanitizer)', () => {
+    it('redacts substring-sensitive keys (token, authorization, …) and exact PII keys (email, name)', () => {
+      createEdgeLogger('auth').warn('probe', {
+        accessToken: 'ps_at_secret_value',
+        authorization: 'Bearer abc',
+        email: 'user@example.com',
+        name: 'Ada',
+        pathname: '/dashboard',
+      });
+
+      const entry = parseOnlyCall(warnSpy);
+      expect(entry.metadata).toEqual({
+        accessToken: '[REDACTED]',
+        authorization: '[REDACTED]',
+        email: '[REDACTED]',
+        name: '[REDACTED]',
+        pathname: '/dashboard',
+      });
+    });
+
+    it('redacts nested sensitive keys', () => {
+      createEdgeLogger('auth').warn('probe', { headers: { cookie: 'sid=1', host: 'x' } });
+      const entry = parseOnlyCall(warnSpy);
+      expect(entry.metadata).toEqual({ headers: { cookie: '[REDACTED]', host: 'x' } });
+    });
+
+    it('survives circular metadata instead of throwing into the caller', () => {
+      const loop: Record<string, unknown> = { pathname: '/x' };
+      loop.self = loop;
+      expect(() => createEdgeLogger('api').warn('circular', loop)).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(() => JSON.parse(warnSpy.mock.calls[0][0] as string)).not.toThrow();
+    });
+
+    it('falls back to a metadata-free line when metadata cannot be serialized (BigInt)', () => {
+      expect(() => createEdgeLogger('api').warn('bigint', { big: BigInt(1) })).not.toThrow();
+      const entry = parseOnlyCall(warnSpy);
+      expect(entry.message).toBe('bigint');
+      expect(entry.metadata).toEqual({ serialization: 'failed' });
+    });
+
+    it('does not redact the constructed error object fields (error.name is safe)', () => {
+      createEdgeLogger('api').error('failed', new TypeError('boom'));
+      const entry = parseOnlyCall(errorSpy);
+      expect(entry.metadata).toMatchObject({ error: { name: 'TypeError', message: 'boom' } });
+    });
+  });
+
   describe('logSecurityEvent', () => {
     it('warns with category security and the same message format as the Node logger', () => {
       logSecurityEvent('unauthorized', { pathname: '/dashboard', reason: 'No session token', ip: '1.2.3.4' });
@@ -118,6 +169,36 @@ describe('edge-logger', () => {
       expect(entry.category).toBe('security');
       expect(entry.message).toBe('Security event: unauthorized');
       expect(entry.metadata).toEqual({ pathname: '/dashboard', reason: 'No session token', ip: '1.2.3.4' });
+    });
+  });
+
+  describe('SecurityEventName drift guard', () => {
+    // The union is duplicated (edge-logger must not import from
+    // @pagespace/lib, and the Node union is an anonymous parameter type), so
+    // nothing at the type level couples them. This test parses both unions
+    // from source and fails when they diverge.
+    const extractUnionMembers = (source: string, anchor: RegExp): Set<string> => {
+      const anchorMatch = source.match(anchor);
+      expect(anchorMatch, `anchor ${anchor} not found`).toBeTruthy();
+      const fromAnchor = source.slice(anchorMatch!.index!);
+      // Union members are single-quoted names; the union ends at the first
+      // line that is not part of the quoted-union block.
+      const unionBlock = fromAnchor.match(/(?:\s*\|?\s*'[a-z0-9_]+')+/i);
+      expect(unionBlock, 'quoted union block not found after anchor').toBeTruthy();
+      return new Set([...unionBlock![0].matchAll(/'([a-z0-9_]+)'/gi)].map((m) => m[1]));
+    };
+
+    it('matches the union in packages/lib logger-config logSecurityEvent exactly', () => {
+      const edgeSource = fs.readFileSync(path.resolve(__dirname, '../edge-logger.ts'), 'utf8');
+      const nodeSource = fs.readFileSync(
+        path.resolve(__dirname, '../../../../../../packages/lib/src/logging/logger-config.ts'),
+        'utf8'
+      );
+
+      const edgeEvents = extractUnionMembers(edgeSource, /export type SecurityEventName =/);
+      const nodeEvents = extractUnionMembers(nodeSource, /export function logSecurityEvent\(\s*event:/);
+
+      expect([...edgeEvents].sort()).toEqual([...nodeEvents].sort());
     });
   });
 

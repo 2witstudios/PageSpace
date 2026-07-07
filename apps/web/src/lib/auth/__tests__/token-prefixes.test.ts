@@ -80,6 +80,22 @@ describe('@/lib/auth barrel re-export integrity', () => {
   });
 });
 
+describe('packages/lib token-lookup drift guard', () => {
+  // packages/lib/src/auth/token-lookup.ts keeps its own private copies of the
+  // mcp_/ps_at_ prefixes (packages/lib cannot import from apps/web). Nothing
+  // at the type level couples them to the leaf, so pin them here: if either
+  // side changes a prefix, this fails instead of tokens silently failing to
+  // authenticate.
+  it('token-lookup.ts private prefix literals match the leaf', () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../../../../../../packages/lib/src/auth/token-lookup.ts'),
+      'utf8'
+    );
+    expect(source).toContain(`const MCP_TOKEN_PREFIX = '${leaf.MCP_TOKEN_PREFIX}'`);
+    expect(source).toContain(`const OAUTH_ACCESS_TOKEN_PREFIX = '${leaf.OAUTH_ACCESS_TOKEN_PREFIX}'`);
+  });
+});
+
 describe('middleware.ts edge-safety (acceptance criterion)', () => {
   it('has zero imports from the @/lib/auth barrel — leaf modules only', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../../../middleware.ts'), 'utf8');

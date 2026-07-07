@@ -5,6 +5,7 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
+import { OAUTH_ACCESS_TOKEN_PREFIX } from '@/lib/auth/token-prefixes';
 import { db } from '@pagespace/db/db';
 import { eq, and, isNull } from '@pagespace/db/operators';
 import { oauthClients, oauthAuthorizationCodes, oauthRefreshTokens, oauthAccessTokens, oauthDeviceCodes } from '@pagespace/db/schema/oauth';
@@ -285,7 +286,6 @@ export interface RevokeOAuthTokenInput {
 }
 
 const OAUTH_REFRESH_TOKEN_PREFIX = 'ps_rt_';
-const OAUTH_ACCESS_TOKEN_PREFIX = 'ps_at_';
 
 /**
  * RFC 7009 revocation (task qyqgrjbvntpsdh578k0yiwgr). A refresh token

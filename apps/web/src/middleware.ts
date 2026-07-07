@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { NextFetchEvent } from 'next/server';
 import { monitoringMiddleware } from '@/middleware/monitoring';
 import {
   createSecureResponse,
@@ -51,7 +52,10 @@ const CLOUD_ONLY_ROUTE_PREFIXES = [
   '/api/auth/mobile/signup',
 ];
 
-export async function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest, event?: NextFetchEvent) {
+  // `event` lets the monitoring layer register its ingest POST with
+  // waitUntil(), so the Edge runtime can't cancel it when the response
+  // returns — it is the only persistence path for API metrics.
   return monitoringMiddleware(req, async () => {
     const { pathname } = req.nextUrl;
     const isProduction = process.env.NODE_ENV === 'production';
@@ -260,7 +264,7 @@ export async function middleware(req: NextRequest) {
     const { response } = createSecureResponse(isProduction, req, { isAPIRoute, disableCOEP: shouldDisableCOEP(pathname) });
 
     return response;
-  });
+  }, event);
 }
 
 export const config = {

@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import path from "path";
 import fs from "fs";
+import { builtinModules } from "module";
 import CopyPlugin from "copy-webpack-plugin";
 import { withSentryConfig } from "@sentry/nextjs";
 import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
@@ -14,6 +15,64 @@ const dbDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/db/di
 const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/dist"));
 const workspaceDistReady =
   process.env.NODE_ENV === "production" && dbDistExists && libDistExists;
+
+type ExternalsFn = (
+  data: { context: string; request: string; contextInfo?: { issuer?: string } },
+  callback: (err?: Error | null, result?: string) => void
+) => void;
+
+// webpack's `externals` can be an array, a single entry, or unset; normalize
+// to an array and append. Shared by the nodejs externalization and the edge
+// guard below so a fix to the merge logic can't apply to one runtime only.
+type WebpackConfig = { externals?: unknown };
+function pushExternal(config: WebpackConfig, external: ExternalsFn): void {
+  if (Array.isArray(config.externals)) {
+    config.externals.push(external);
+  } else if (config.externals) {
+    config.externals = [config.externals, external];
+  } else {
+    config.externals = [external];
+  }
+}
+
+// Node built-ins the Edge runtime actually provides (per Next.js edge-runtime
+// docs). Everything else in `module`'s builtinModules is Node-only.
+const EDGE_SUPPORTED_BUILTINS = new Set(["buffer", "events", "util", "assert", "async_hooks"]);
+const nodeOnlyBuiltins = new Set(
+  builtinModules.filter((m) => !m.startsWith("_") && !EDGE_SUPPORTED_BUILTINS.has(m))
+);
+// Node-only npm packages that don't necessarily import a built-in at their
+// entry point (native bindings, lazy requires) — deny them by name.
+const NODE_ONLY_PACKAGES = new Set([
+  "pg", "pg-pool", "pg-protocol", "pg-native", "pg-connection-string", "dotenv",
+]);
+
+// Fail the BUILD when an edge bundle (middleware) reaches a Node-only module.
+// Next.js itself only WARNS ("A Node.js API is used (…) which is not supported
+// in the Edge Runtime") and defers the crash to request time — verified
+// empirically: a probe import of the Node-only logger built green and then
+// 500'd every request, which is exactly how prod went down the day middleware
+// first registered. Built-ins are an allowlist inversion (everything Node
+// ships minus what edge provides) so new Node-only imports — crypto, vm,
+// worker_threads, whatever ships next — are denied by default rather than
+// waiting for someone to extend a hand-maintained list.
+const edgeNodeOnlyGuard: ExternalsFn = ({ request, contextInfo }, callback) => {
+  const bare = request.startsWith("node:") ? request.slice("node:".length) : request;
+  if (
+    nodeOnlyBuiltins.has(bare) ||
+    NODE_ONLY_PACKAGES.has(bare) ||
+    request.startsWith("@pagespace/db")
+  ) {
+    return callback(new Error(
+      `Edge bundle imports Node-only module '${request}'` +
+      (contextInfo?.issuer ? ` (via ${contextInfo.issuer})` : "") +
+      `. The Edge runtime cannot execute it at request time — middleware and ` +
+      `everything it imports must stay on edge-safe leaf modules ` +
+      `(see apps/web/src/middleware.ts header comment).`
+    ));
+  }
+  callback();
+};
 
 // Named export so tests can assert on rewrites()/redirects() without going
 // through withSentryConfig's wrapping.
@@ -60,57 +119,11 @@ export const nextConfig: NextConfig = {
         callback();
       };
 
-      if (Array.isArray(config.externals)) {
-        config.externals.push(bunWorkspaceExternals);
-      } else if (config.externals) {
-        config.externals = [config.externals as NonNullable<typeof config.externals>, bunWorkspaceExternals];
-      } else {
-        config.externals = [bunWorkspaceExternals];
-      }
+      pushExternal(config, bunWorkspaceExternals);
     }
 
     if (isServer && nextRuntime === 'edge') {
-      // Fail the BUILD when the edge bundle (middleware) reaches a Node-only
-      // module. Next.js itself only WARNS ("A Node.js API is used (…) which is
-      // not supported in the Edge Runtime") and defers the crash to request
-      // time — verified empirically; a probe import of the Node-only logger
-      // built green and then would 500 every request, which is exactly how
-      // prod went down the day middleware first registered. This hook turns
-      // those imports into hard build errors instead. Node built-ins the Edge
-      // runtime DOES provide (buffer, events, util, assert, async_hooks) are
-      // deliberately not listed.
-      const nodeOnlyModules = new Set([
-        'os', 'fs', 'fs/promises', 'path', 'net', 'tls', 'dns', 'dgram',
-        'child_process', 'cluster', 'http', 'https', 'http2', 'module',
-        'perf_hooks', 'readline', 'repl', 'tty', 'v8', 'vm', 'worker_threads',
-        'zlib', 'stream', 'stream/promises', 'string_decoder', 'inspector',
-        'pg', 'pg-pool', 'pg-protocol', 'pg-native', 'pg-connection-string',
-        'dotenv',
-      ]);
-      const edgeNodeOnlyGuard = (
-        { request, contextInfo }: { context: string; request: string; contextInfo?: { issuer?: string } },
-        callback: (err?: Error | null, result?: string) => void
-      ) => {
-        const bare = request.startsWith('node:') ? request.slice('node:'.length) : request;
-        if (nodeOnlyModules.has(bare) || request.startsWith('@pagespace/db')) {
-          return callback(new Error(
-            `Edge bundle imports Node-only module '${request}'` +
-            (contextInfo?.issuer ? ` (via ${contextInfo.issuer})` : '') +
-            `. The Edge runtime cannot execute it at request time — middleware and ` +
-            `everything it imports must stay on edge-safe leaf modules ` +
-            `(see apps/web/src/middleware.ts header comment).`
-          ));
-        }
-        callback();
-      };
-
-      if (Array.isArray(config.externals)) {
-        config.externals.push(edgeNodeOnlyGuard);
-      } else if (config.externals) {
-        config.externals = [config.externals as NonNullable<typeof config.externals>, edgeNodeOnlyGuard];
-      } else {
-        config.externals = [edgeNodeOnlyGuard];
-      }
+      pushExternal(config, edgeNodeOnlyGuard);
     }
     if (!isServer) {
       config.resolve.fallback = {

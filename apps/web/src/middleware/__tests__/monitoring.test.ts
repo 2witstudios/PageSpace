@@ -190,6 +190,34 @@ describe('monitoringMiddleware', () => {
     });
   });
 
+  it('registers the ingest POST with event.waitUntil so the Edge runtime cannot cancel it', async () => {
+    const waitUntil = vi.fn();
+    const event = { waitUntil } as unknown as import('next/server').NextFetchEvent;
+
+    await monitoringMiddleware(
+      buildRequest('/api/pages/xyz'),
+      async () => NextResponse.json({ ok: true }),
+      event
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    expect(waitUntil.mock.calls[0][0]).toBeInstanceOf(Promise);
+  });
+
+  it('registers the error-path ingest POST with event.waitUntil too', async () => {
+    const waitUntil = vi.fn();
+    const event = { waitUntil } as unknown as import('next/server').NextFetchEvent;
+
+    await expect(
+      monitoringMiddleware(buildRequest('/api/pages/xyz'), async () => {
+        throw new Error('boom');
+      }, event)
+    ).rejects.toThrow('boom');
+
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+  });
+
   it('survives an ingest fetch rejection without failing the request', async () => {
     fetchMock.mockRejectedValue(new Error('network down'));
 

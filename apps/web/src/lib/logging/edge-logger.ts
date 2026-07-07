@@ -8,23 +8,31 @@
  * logging surface instead: synchronous structured JSON to the console, which
  * Fly log drains ingest the same way they ingest the Node logger's output.
  *
- * Output shape mirrors the existing logger's JSON so downstream parsing keeps
- * working: { timestamp, level, category, message, metadata? }. Level is
- * uppercase to match packages/lib/src/logging/logger.ts.
+ * Output shape: { timestamp, level, category, message, context, metadata? }.
+ * Level is uppercase and `context.category` is set to match the Node logger's
+ * console JSON (packages/lib/src/logging/logger.ts nests category there), so
+ * drain queries keyed on either `category` or `context.category` match lines
+ * from both runtimes. Known, accepted divergences from the Node logger: no
+ * hostname/pid (no `os` on edge), no SIEM error-hook fan-out (middleware
+ * errors reach the Node layer via the monitoring ingest POST instead), and
+ * response-log fields sit flat under `metadata` rather than
+ * `metadata.context`.
  *
- * MUST stay edge-safe: imports nothing (types only), no Node built-ins, no
- * process.on, no timers, no dynamic imports, no @pagespace/* imports.
- * `process.env` reads are supported in the Edge runtime and are the only
- * ambient state touched.
+ * Sensitive-key redaction mirrors the Node logger's sanitizer (same
+ * substring/exact lists) so a metadata field like `token` or `email` never
+ * reaches the log stream verbatim from either runtime.
+ *
+ * MUST stay edge-safe: imports nothing, no Node built-ins, no process.on, no
+ * timers, no dynamic imports, no @pagespace/* imports. `process.env` reads
+ * are supported in the Edge runtime and are the only ambient state touched.
  */
 
 /**
- * Security event names — keep in sync with logSecurityEvent's union in
- * packages/lib/src/logging/logger-config.ts. Duplicated (not imported) because
- * importing anything from @pagespace/lib would pull the Node-only logger into
- * the edge bundle; the token-prefixes re-export test pattern doesn't apply to
- * a pure type, and a drift here fails loudly at typecheck the moment a caller
- * uses a new event name.
+ * Security event names — keep in sync with logSecurityEvent's parameter union
+ * in packages/lib/src/logging/logger-config.ts. Duplicated (not imported)
+ * because this module must not import from @pagespace/lib, and the Node-side
+ * union is an anonymous parameter type. Drift is caught by the sync test in
+ * __tests__/edge-logger.test.ts, which parses both unions from source.
  */
 export type SecurityEventName =
   | 'rate_limit' | 'invalid_token' | 'unauthorized' | 'suspicious_activity'
@@ -40,13 +48,15 @@ export type SecurityEventName =
 
 export type EdgeLogMetadata = Record<string, unknown>;
 
-export type EdgeLogLevel = 'debug' | 'info' | 'warn' | 'error';
+type EdgeLogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface EdgeLogEntry {
   timestamp: string;
   level: string;
   category: string;
   message: string;
+  /** Mirrors the Node logger's `context.category` nesting for drain parity. */
+  context: { category: string };
   metadata?: EdgeLogMetadata;
 }
 
@@ -60,23 +70,69 @@ const LEVEL_ORDER: Record<EdgeLogLevel, number> = {
 /**
  * Minimum level to emit, from LOG_LEVEL (same env var the Node logger reads).
  * The Node logger's extra levels map onto this module's four: trace → debug,
- * fatal → error, silent → suppress everything. Unknown values → info.
- * Read per-call, not at module load, so tests (and runtime reconfiguration)
- * see current env.
+ * fatal → error, silent → suppress everything. Unknown values → info (the
+ * Node logger's default too). Read per-call, not at module load, so tests
+ * (and runtime reconfiguration) see current env.
  */
 function minimumLevel(): number {
   const raw = (process.env.LOG_LEVEL || 'info').trim().toLowerCase();
   if (raw === 'silent') return Number.POSITIVE_INFINITY;
   if (raw === 'trace') return LEVEL_ORDER.debug;
   if (raw === 'fatal') return LEVEL_ORDER.error;
-  return raw in LEVEL_ORDER ? LEVEL_ORDER[raw as EdgeLogLevel] : LEVEL_ORDER.info;
+  return Object.hasOwn(LEVEL_ORDER, raw) ? LEVEL_ORDER[raw as EdgeLogLevel] : LEVEL_ORDER.info;
+}
+
+// Sensitive-key redaction — same two-tier matching as the Node logger's
+// sanitizeData (packages/lib/src/logging/logger.ts): substrings that always
+// mean credentials, exact names that mean PII. Keep the lists aligned.
+const SUBSTRING_SENSITIVE = [
+  'password', 'token', 'secret', 'api_key', 'apikey',
+  'authorization', 'cookie', 'credit_card', 'jwt',
+];
+const EXACT_SENSITIVE = new Set([
+  'ssn',
+  'email', 'emailaddress',
+  'phone', 'phonenumber', 'mobilenumber',
+  'address', 'streetaddress', 'homeaddress', 'mailingaddress',
+  'dob', 'dateofbirth', 'birthdate',
+  'name', 'firstname', 'lastname', 'fullname', 'displayname',
+  'username', 'filename', 'originalname',
+]);
+
+const MAX_SANITIZE_DEPTH = 6;
+
+/**
+ * Redact sensitive keys, depth-limited. The depth cap doubles as circular-
+ * reference protection: a cycle bottoms out as '[depth_limited]' instead of
+ * recursing forever (and instead of JSON.stringify throwing later).
+ */
+function sanitizeMetadata(value: unknown, depth = 0): unknown {
+  if (depth > MAX_SANITIZE_DEPTH) return '[depth_limited]';
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeMetadata(item, depth + 1));
+  }
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const sanitized: Record<string, unknown> = {};
+    for (const key of Object.keys(source)) {
+      const lower = key.toLowerCase();
+      if (SUBSTRING_SENSITIVE.some((s) => lower.includes(s)) || EXACT_SENSITIVE.has(lower)) {
+        sanitized[key] = '[REDACTED]';
+      } else {
+        sanitized[key] = sanitizeMetadata(source[key], depth + 1);
+      }
+    }
+    return sanitized;
+  }
+  return value;
 }
 
 function emit(
   level: EdgeLogLevel,
   category: string,
   message: string,
-  metadata?: EdgeLogMetadata
+  metadata?: EdgeLogMetadata,
+  error?: Error
 ): void {
   if (LEVEL_ORDER[level] < minimumLevel()) return;
 
@@ -85,12 +141,29 @@ function emit(
     level: level.toUpperCase(),
     category,
     message,
+    context: { category },
   };
   if (metadata && Object.keys(metadata).length > 0) {
-    entry.metadata = metadata;
+    entry.metadata = sanitizeMetadata(metadata) as EdgeLogMetadata;
+  }
+  if (error) {
+    // Attached after sanitization on purpose: `name` is on the exact-match
+    // redaction list, but error.name here is a constructed, safe field.
+    entry.metadata = {
+      ...entry.metadata,
+      error: { name: error.name, message: error.message, stack: error.stack },
+    };
   }
 
-  const line = JSON.stringify(entry);
+  // A logger must never throw into its caller: metadata can still contain
+  // non-serializable values (BigInt), so fall back to a metadata-free line.
+  let line: string;
+  try {
+    line = JSON.stringify(entry);
+  } catch {
+    line = JSON.stringify({ ...entry, metadata: { serialization: 'failed' } });
+  }
+
   if (level === 'error') {
     console.error(line);
   } else if (level === 'warn') {
@@ -98,15 +171,6 @@ function emit(
   } else {
     console.log(line);
   }
-}
-
-/** Serialize an Error into plain metadata (Errors JSON.stringify to {}). */
-function errorMetadata(error: Error | undefined, metadata?: EdgeLogMetadata): EdgeLogMetadata | undefined {
-  if (!error) return metadata;
-  return {
-    ...metadata,
-    error: { name: error.name, message: error.message, stack: error.stack },
-  };
 }
 
 export interface EdgeLogger {
@@ -125,7 +189,7 @@ export function createEdgeLogger(category: string): EdgeLogger {
     debug: (message, metadata) => emit('debug', category, message, metadata),
     info: (message, metadata) => emit('info', category, message, metadata),
     warn: (message, metadata) => emit('warn', category, message, metadata),
-    error: (message, error, metadata) => emit('error', category, message, errorMetadata(error, metadata)),
+    error: (message, error, metadata) => emit('error', category, message, metadata, error),
   };
 }
 

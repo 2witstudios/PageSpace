@@ -16,6 +16,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import type { NextFetchEvent } from 'next/server';
 import { createEdgeLogger } from '@/lib/logging/edge-logger';
 import {
   getOrCreateRequestId,
@@ -73,6 +74,10 @@ function logResponse(
   }
 }
 
+// Fields this middleware actually sends. The ingest route's IngestPayload
+// (@/lib/monitoring/ingest-sanitizer) accepts a wider optional set
+// (sessionId, cacheHit, driveId, …) for other producers; middleware has no
+// values for those, so they are deliberately absent here.
 interface MonitoringIngestPayload {
   type: 'api-request';
   requestId: string;
@@ -84,17 +89,11 @@ interface MonitoringIngestPayload {
   requestSize?: number;
   responseSize?: number;
   userId?: string;
-  sessionId?: string;
   ip?: string;
   userAgent?: string;
   error?: string;
   errorName?: string;
   errorStack?: string;
-  cacheHit?: boolean;
-  cacheKey?: string;
-  driveId?: string;
-  pageId?: string;
-  metadata?: Record<string, unknown>;
 }
 
 const DEFAULT_INGEST_PATH = '/api/internal/monitoring/ingest';
@@ -134,7 +133,11 @@ function logMonitoringStatus(): void {
   }
 }
 
-function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPayload): void {
+function queueMonitoringIngest(
+  request: NextRequest,
+  payload: MonitoringIngestPayload,
+  event?: NextFetchEvent
+): void {
   const status = getMonitoringIngestStatus();
 
   if (status !== 'active') {
@@ -154,7 +157,7 @@ function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPa
     const ingestPath = process.env.MONITORING_INGEST_PATH || DEFAULT_INGEST_PATH;
     const url = new URL(ingestPath, request.nextUrl.origin);
 
-    fetch(url.toString(), {
+    const forward = fetch(url.toString(), {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -169,6 +172,12 @@ function queueMonitoringIngest(request: NextRequest, payload: MonitoringIngestPa
         endpoint: payload.endpoint,
       });
     });
+
+    // Fire-and-forget is not enough on Edge: the runtime may cancel in-flight
+    // work as soon as the response is returned. waitUntil() keeps this POST —
+    // the ONLY persistence path for API metrics — alive until it settles.
+    // (`forward` already has a .catch, so it never rejects inside waitUntil.)
+    event?.waitUntil(forward);
   } catch (error) {
     performanceLogger.debug('Unable to construct monitoring ingest request', {
       error: (error as Error).message,
@@ -204,42 +213,47 @@ function getResponseSize(response: NextResponse): number {
   if (contentLength) {
     return parseInt(contentLength, 10);
   }
-  // Estimate size from response body if available
   return 0;
 }
+
+// Static assets and Next.js internals to skip (module-level: this check runs
+// first thing on every request).
+const SKIP_PATHS = [
+  '/_next',
+  '/favicon.ico',
+  '/robots.txt',
+  '/sitemap.xml',
+  '/api/internal/monitoring/ingest',
+  '.js',
+  '.css',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.svg',
+  '.ico',
+  '.woff',
+  '.woff2'
+];
 
 /**
  * Check if path should be monitored
  */
 function shouldMonitor(pathname: string): boolean {
-  // Skip static assets and Next.js internals
-  const skipPaths = [
-    '/_next',
-    '/favicon.ico',
-    '/robots.txt',
-    '/sitemap.xml',
-    '/api/internal/monitoring/ingest',
-    '.js',
-    '.css',
-    '.png',
-    '.jpg',
-    '.jpeg',
-    '.gif',
-    '.svg',
-    '.ico',
-    '.woff',
-    '.woff2'
-  ];
-
-  return !skipPaths.some(path => pathname.includes(path));
+  return !SKIP_PATHS.some(path => pathname.includes(path));
 }
 
 /**
- * Main monitoring middleware
+ * Main monitoring middleware.
+ *
+ * `event` is the NextFetchEvent Next passes to middleware; when provided, the
+ * ingest POST is registered via event.waitUntil() so the Edge runtime keeps it
+ * alive after the response returns (otherwise it may be cancelled in flight).
  */
 export async function monitoringMiddleware(
   request: NextRequest,
-  next: () => Promise<NextResponse>
+  next: () => Promise<NextResponse>,
+  event?: NextFetchEvent
 ): Promise<NextResponse> {
   // Log monitoring configuration status once on first request
   logMonitoringStatus();
@@ -253,7 +267,6 @@ export async function monitoringMiddleware(
 
   // Get or generate request ID (preserves incoming ID for distributed tracing)
   const requestId = getOrCreateRequestId(request);
-  const startedAt = new Date();
   const startTime = Date.now();
 
   // Extract context
@@ -269,6 +282,20 @@ export async function monitoringMiddleware(
     ...context,
   });
 
+  // Fields common to the success- and error-path ingest payloads, so a new
+  // field can't be added to one path and silently missed on the other.
+  const basePayload = {
+    type: 'api-request' as const,
+    requestId,
+    timestamp: new Date(startTime).toISOString(),
+    method: request.method.toUpperCase(),
+    endpoint: cleanEndpoint,
+    requestSize,
+    userId,
+    ip: context.ip,
+    userAgent: context.userAgent,
+  };
+
   try {
     // Execute the request
     const response = await next();
@@ -281,21 +308,13 @@ export async function monitoringMiddleware(
     if (pathname.startsWith('/api')) {
       const isServerError = statusCode >= 500;
       queueMonitoringIngest(request, {
-        type: 'api-request',
-        requestId,
-        timestamp: startedAt.toISOString(),
-        method: request.method.toUpperCase(),
-        endpoint: cleanEndpoint,
+        ...basePayload,
         statusCode,
         duration,
-        requestSize,
         responseSize,
-        userId,
-        ip: context.ip,
-        userAgent: context.userAgent,
         error: isServerError ? `HTTP ${statusCode}` : undefined,
         errorName: isServerError ? 'HttpError' : undefined,
-      });
+      }, event);
     }
 
     // Log response
@@ -330,22 +349,14 @@ export async function monitoringMiddleware(
 
     if (pathname.startsWith('/api')) {
       queueMonitoringIngest(request, {
-        type: 'api-request',
-        requestId,
-        timestamp: startedAt.toISOString(),
-        method: request.method.toUpperCase(),
-        endpoint: cleanEndpoint,
+        ...basePayload,
         statusCode: 500,
         duration,
-        requestSize,
         responseSize: 0,
-        userId,
-        ip: context.ip,
-        userAgent: context.userAgent,
         error: errorMessage,
         errorName,
         errorStack,
-      });
+      }, event);
     }
 
     // Log error
