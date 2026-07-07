@@ -56,6 +56,13 @@ export async function POST(req: NextRequest) {
     if (!parsed.ok) {
       return noStoreJson({ error: 'invalid_scope' }, 400);
     }
+    // update_key is loopback-consent-only: its ownership/narration checks
+    // live on the consent screen + authorize POST, and pollDeviceToken has
+    // no ok_mcp_update branch — reject at the door rather than mint a device
+    // code that could only dead-end (fail closed).
+    if (parsed.scopes.updateKeyId !== null) {
+      return noStoreJson({ error: 'invalid_scope' }, 400);
+    }
     scopes = formatScopeSet(parsed.scopes).split(' ').filter(Boolean);
   }
 

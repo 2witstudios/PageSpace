@@ -61,4 +61,18 @@ describe('describeScopeForConsent', () => {
     expect(text).toMatch(/Marketing/);
     expect(text).toMatch(/can edit pages, cannot delete/);
   });
+
+  it('describes update_key as an in-place re-scope of a named existing key with an unchanged secret', () => {
+    const scope: ParsedScope = { kind: 'update_key', tokenId: 'tok123' };
+    const text = describeScopeForConsent(scope, { keyName: 'CI agent key' });
+    expect(text).toMatch(/CI agent key/);
+    expect(text).toMatch(/existing key/i);
+    expect(text).toMatch(/secret stay/i);
+    expect(text).not.toMatch(/tok123/);
+  });
+
+  it('falls back to the token id when no key name is resolved for update_key', () => {
+    const text = describeScopeForConsent({ kind: 'update_key', tokenId: 'tok123' }, {});
+    expect(text).toMatch(/tok123/);
+  });
 });

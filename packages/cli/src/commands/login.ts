@@ -23,6 +23,7 @@ import { createDiscoverMetadata } from '../auth/discover.js';
 import { createExchangeCode } from '../auth/exchange-code.js';
 import { createLoopbackServer } from '../auth/create-loopback-server.js';
 import { openBrowser } from '../auth/open-browser.js';
+import { unrefWaitMs } from '../auth/wait.js';
 import { runLoopbackLogin } from '../auth/loopback-flow.js';
 import { resolveProfileName } from '../auth/resolve.js';
 import type {
@@ -150,7 +151,7 @@ export const loginHandler: CommandHandler = createLoginHandler({
   discoverMetadata: createDiscoverMetadata(),
   startServer: createLoopbackServer,
   openBrowser,
-  waitMs: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
   now: Date.now,

@@ -38,6 +38,7 @@ import {
   pollDeviceToken,
 } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 
 function noStoreJson(body: Record<string, unknown>, status: number): NextResponse {
@@ -75,6 +76,24 @@ function mcpTokenSuccessBody(mcpToken: string, scopes: string[]): Record<string,
   return {
     access_token: mcpToken,
     token_type: 'mcp',
+    scope: scopes.join(' '),
+  };
+}
+
+/**
+ * Success body for an `update_key` authorization_code grant — the exchange
+ * applied an in-place re-scope of an existing `mcp_tokens` row
+ * (`ok_mcp_update`, `oauth-repository.ts`) and minted NOTHING, so there is
+ * deliberately no `access_token` of any kind here: returning the (unchanged)
+ * secret would turn a scope edit into a secret-disclosure oracle. The CLI
+ * needs only the PKCE-verified success signal plus the granted scope;
+ * `token_type: 'mcp_update'` is its discriminator (`exchange-code.ts`), and
+ * `token_id` names which key was re-scoped.
+ */
+function mcpUpdateSuccessBody(tokenId: string, scopes: string[]): Record<string, unknown> {
+  return {
+    token_type: 'mcp_update',
+    token_id: tokenId,
     scope: scopes.join(' '),
   };
 }
@@ -194,6 +213,28 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
       details: { clientId: client.clientId, oauthEvent: 'code_exchange_mcp_token' },
     });
     return noStoreJson(mcpTokenSuccessBody(result.mcpToken, result.scopes), 200);
+  }
+
+  if (result.outcome === 'ok_mcp_update') {
+    // Mirror the web Settings PATCH's audit + activity trail
+    // (mcp-tokens/[tokenId]/route.ts) — same logical operation, different
+    // door. Fire-and-forget end to end: getActorInfo does a user lookup +
+    // PII decrypts, and it feeds only logTokenActivity (itself explicitly
+    // never awaited), so none of it belongs on the exchange response path.
+    const { userId, tokenId } = result;
+    void getActorInfo(userId)
+      .then((actorInfo) => {
+        logTokenActivity(userId, 'token_update', { tokenId, tokenType: 'mcp' }, actorInfo);
+      })
+      .catch(() => {
+        // Activity logging is best-effort; the audit event below is the durable record.
+      });
+    auditRequest(req, {
+      eventType: 'auth.token.updated',
+      userId: result.userId,
+      details: { clientId: client.clientId, oauthEvent: 'code_exchange_mcp_update' },
+    });
+    return noStoreJson(mcpUpdateSuccessBody(result.tokenId, result.scopes), 200);
   }
 
   if (result.outcome !== 'ok') {

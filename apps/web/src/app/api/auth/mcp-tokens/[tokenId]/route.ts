@@ -137,8 +137,14 @@ export async function PATCH(
       }
     }
 
-    // Update drive scopes transactionally
-    await sessionRepository.updateMcpTokenDriveScopes(tokenId, userId, driveScopes);
+    // Update drive scopes transactionally. A null result means the token was
+    // revoked between the ownership check above and here (or was revoked all
+    // along — the update refuses to re-scope a revoked token, which would
+    // resurrect a killed credential's scope rows): same 404 as not-found.
+    const updated = await sessionRepository.updateMcpTokenDriveScopes(tokenId, userId, driveScopes);
+    if (!updated) {
+      return NextResponse.json({ error: 'Token not found' }, { status: 404 });
+    }
 
     // Fetch drive names for response
     let driveScopeNames: { id: string; name: string }[] = [];

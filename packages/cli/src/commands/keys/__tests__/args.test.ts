@@ -4,29 +4,29 @@ import { parseTokensCreateArgs, parseTokensRevokeArgs } from '../args.js';
 describe('parseTokensCreateArgs', () => {
   it('parses no flags as no drives and no --save-as-profile', () => {
     const result = parseTokensCreateArgs([]);
-    expect(result).toEqual({ ok: true, args: { drives: [], saveAsProfile: undefined } });
+    expect(result).toEqual({ ok: true, args: { drives: [], saveAsProfile: undefined, showToken: false } });
   });
 
   it('parses a single --drive with no --role as inherit (role null)', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1']);
-    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: null }], saveAsProfile: undefined } });
+    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: null }], saveAsProfile: undefined, showToken: false } });
   });
 
   it('maps --role member to MEMBER (case-insensitive)', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--role', 'Member']);
-    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: 'MEMBER' }], saveAsProfile: undefined } });
+    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: 'MEMBER' }], saveAsProfile: undefined, showToken: false } });
   });
 
   it('maps --role admin to ADMIN (case-insensitive)', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--role', 'ADMIN']);
-    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: 'ADMIN' }], saveAsProfile: undefined } });
+    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: 'ADMIN' }], saveAsProfile: undefined, showToken: false } });
   });
 
   it('maps any other --role value to a customRoleId, role null', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--role', 'role-xyz']);
     expect(result).toEqual({
       ok: true,
-      args: { drives: [{ id: 'drv1', role: null, customRoleId: 'role-xyz' }], saveAsProfile: undefined },
+      args: { drives: [{ id: 'drv1', role: null, customRoleId: 'role-xyz' }], saveAsProfile: undefined, showToken: false },
     });
   });
 
@@ -45,6 +45,7 @@ describe('parseTokensCreateArgs', () => {
           { id: 'drv3', role: null },
         ],
         saveAsProfile: undefined,
+        showToken: false,
       },
     });
   });
@@ -53,7 +54,7 @@ describe('parseTokensCreateArgs', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--save-as-profile', 'ci-bot']);
     expect(result).toEqual({
       ok: true,
-      args: { drives: [{ id: 'drv1', role: null }], saveAsProfile: 'ci-bot' },
+      args: { drives: [{ id: 'drv1', role: null }], saveAsProfile: 'ci-bot', showToken: false },
     });
   });
 
@@ -85,6 +86,19 @@ describe('parseTokensCreateArgs', () => {
   it('rejects an unknown flag', () => {
     const result = parseTokensCreateArgs(['--bogus']);
     expect(result).toEqual({ ok: false, message: 'Unknown flag: --bogus' });
+  });
+
+  it('parses --show-token as a valueless flag', () => {
+    const result = parseTokensCreateArgs(['--drive', 'drv1', '--show-token']);
+    expect(result).toEqual({
+      ok: true,
+      args: { drives: [{ id: 'drv1', role: null }], saveAsProfile: undefined, showToken: true },
+    });
+  });
+
+  it('rejects a second --show-token', () => {
+    const result = parseTokensCreateArgs(['--drive', 'drv1', '--show-token', '--show-token']);
+    expect(result).toEqual({ ok: false, message: 'Flag --show-token was given more than once.' });
   });
 
   it('is a pure function: identical input produces a deep-equal result', () => {

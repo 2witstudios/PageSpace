@@ -80,12 +80,12 @@ const scopedMcpAuth: AuthResult = { ...base, userId: USER_ID, tokenType: 'mcp', 
 const DRIVE_SCOPES = [{ driveId: DRIVE_ID, role: null, customRoleId: null }];
 const accountOAuthAuth: AuthResult = {
   ...base, userId: USER_ID, tokenType: 'oauth', tokenId: TOKEN_ID,
-  scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false },
+  scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null },
   driveScopes: [], allowedDriveIds: [],
 };
 const scopedOAuthAuth: AuthResult = {
   ...base, userId: USER_ID, tokenType: 'oauth', tokenId: TOKEN_ID,
-  scopes: { account: false, offlineAccess: false, drives: new Map([[DRIVE_ID, { kind: 'drive' as const, driveId: DRIVE_ID, role: { kind: 'inherit' as const } }]]), manageKeys: false },
+  scopes: { account: false, offlineAccess: false, drives: new Map([[DRIVE_ID, { kind: 'drive' as const, driveId: DRIVE_ID, role: { kind: 'inherit' as const } }]]), manageKeys: false, updateKeyId: null },
   driveScopes: DRIVE_SCOPES, allowedDriveIds: [DRIVE_ID],
 };
 
@@ -391,7 +391,7 @@ describe('manage-keys-only credential — deny-first short-circuit', () => {
   // plus a non-empty allowedDriveIds — proves the guard doesn't rely on
   // scopes.account being false or allowedDriveIds being empty.
   const brokenManageKeysAuth = manageKeysScopedAuthResult({
-    scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: true },
+    scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: true, updateKeyId: null },
     allowedDriveIds: ['drive-should-never-be-reachable'],
   });
 

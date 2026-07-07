@@ -226,6 +226,19 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
       return null;
     }
 
+    // Fail closed at the mechanism level: an `update_key:<id>` grant is a
+    // one-shot consent to re-scope an existing key, never a bearer scope —
+    // the authorization-code exchange intercepts it before any token family
+    // is minted (`oauth-repository.ts`'s ok_mcp_update branch), so no access
+    // token should ever carry it. If one somehow does (a future issuance
+    // path persisting scopes verbatim, a reordered exchange branch), honoring
+    // its drive:* entries would grant live drive access from an update
+    // consent. Reject the token outright rather than trusting every mint
+    // door to remember the interception.
+    if (parsed.scopes.updateKeyId !== null) {
+      return null;
+    }
+
     const driveScopes = scopeSetToDriveScopes(parsed.scopes);
     const allowedDriveIds = parsed.scopes.account ? [] : driveScopes.map((scope) => scope.driveId);
 

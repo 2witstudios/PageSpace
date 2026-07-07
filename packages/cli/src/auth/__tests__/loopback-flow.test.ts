@@ -311,6 +311,144 @@ describe('runLoopbackLogin — happy path', () => {
     });
     expect(confirmIdentityAccessToken).toBe('mcp_abc123');
   });
+
+  it('invokes onMintedStaticToken exactly once with the raw token for an mcp-kind mint, while the result stays token-free', async () => {
+    const mcpTokens: ExchangedTokens = { kind: 'mcp', token: 'mcp_abc123', scope: 'drive:d1:member offline_access' };
+    const surfaced: string[] = [];
+    const { deps } = baseDeps({
+      exchangeCode: async () => mcpTokens,
+      onMintedStaticToken: (token) => {
+        surfaced.push(token);
+      },
+    });
+    const fake = createFakeServer();
+
+    const result = await runLoopbackLogin({
+      ...deps,
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(surfaced).toEqual(['mcp_abc123']);
+    expect(JSON.stringify(result)).not.toContain('mcp_abc123');
+  });
+
+  it('a throwing onMintedStaticToken callback fails soft — the mint is already persisted, so the flow still succeeds', async () => {
+    const mcpTokens: ExchangedTokens = { kind: 'mcp', token: 'mcp_abc123', scope: 'drive:d1:member offline_access' };
+    const { deps, store } = baseDeps({
+      exchangeCode: async () => mcpTokens,
+      onMintedStaticToken: () => {
+        throw new Error('buggy caller');
+      },
+    });
+    const fake = createFakeServer();
+
+    const result = await runLoopbackLogin({
+      ...deps,
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(result.outcome).toBe('success');
+    expect(store.size).toBe(1);
+  });
+
+  it('never invokes onMintedStaticToken for an oauth-kind exchange — pagespace login cannot surface a secret even if it wired the callback', async () => {
+    const surfaced: string[] = [];
+    const { deps } = baseDeps({
+      onMintedStaticToken: (token) => {
+        surfaced.push(token);
+      },
+    });
+    const fake = createFakeServer();
+
+    const result = await runLoopbackLogin({
+      ...deps,
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(result.outcome).toBe('success');
+    expect(surfaced).toEqual([]);
+  });
+
+  it('persists NOTHING and skips confirmIdentity for an mcp_update exchange — the existing key keeps its secret; only the granted scope + token id come back', async () => {
+    let confirmIdentityCalled = false;
+    const surfaced: string[] = [];
+    const { deps, store } = baseDeps({
+      exchangeCode: async () => ({ kind: 'mcp_update', tokenId: 'tok123', scope: 'update_key:tok123 drive:d1:member' }),
+      confirmIdentity: async () => {
+        confirmIdentityCalled = true;
+        return IDENTITY;
+      },
+      onMintedStaticToken: (token) => {
+        surfaced.push(token);
+      },
+    });
+    const fake = createFakeServer();
+
+    const result = await runLoopbackLogin({
+      ...deps,
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'success',
+      identity: null,
+      scope: 'update_key:tok123 drive:d1:member',
+      updatedTokenId: 'tok123',
+    });
+    expect(store.size).toBe(0);
+    expect(confirmIdentityCalled).toBe(false);
+    expect(surfaced).toEqual([]);
+  });
+
+  it('fails closed WITHOUT persisting when an update_key request is answered with a real mint — a hostile/outdated server cannot plant a surprise credential', async () => {
+    const surfaced: string[] = [];
+    const mintInsteadOfUpdate: ExchangedTokens = { kind: 'mcp', token: 'mcp_surprise', scope: 'drive:d1:member offline_access' };
+    const { deps, store } = baseDeps({
+      scope: 'update_key:tok123 drive:d1:member',
+      exchangeCode: async () => mintInsteadOfUpdate,
+      onMintedStaticToken: (token) => {
+        surfaced.push(token);
+      },
+    });
+    const fake = createFakeServer();
+
+    const result = await runLoopbackLogin({
+      ...deps,
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(result.outcome).toBe('token_exchange_failed');
+    if (result.outcome !== 'token_exchange_failed') throw new Error('unreachable');
+    expect(result.message).toMatch(/nothing was stored/i);
+    expect(store.size).toBe(0);
+    expect(surfaced).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('mcp_surprise');
+  });
 });
 
 describe('runLoopbackLogin — failure branches', () => {

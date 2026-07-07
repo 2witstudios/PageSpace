@@ -82,6 +82,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('../session-repository', () => ({
   sessionRepository: {
     createMcpTokenWithDriveScopes: vi.fn(),
+    updateMcpTokenDriveScopes: vi.fn(),
   },
 }));
 
@@ -545,5 +546,89 @@ describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_toke
     expect(refreshRows).toHaveLength(1);
     expect(accessRows).toHaveLength(1);
     expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+  });
+});
+
+describe('exchangeAuthorizationCode — update_key grant re-scopes an existing mcp token in place', () => {
+  const UPDATE_SCOPES = ['update_key:tok123', 'drive:drv1:member', 'drive:drv2:admin'];
+
+  function mockUpdateResult(value: unknown): void {
+    vi.mocked(sessionRepository.updateMcpTokenDriveScopes).mockResolvedValue(value as never);
+  }
+
+  it('returns ok_mcp_update, applies the scope replacement via sessionRepository against the SAME transaction, mints nothing', async () => {
+    seedCodeRow({ scopes: UPDATE_SCOPES });
+    mockUpdateResult({ id: 'tok123', isScoped: true });
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok_mcp_update');
+    if (result.outcome !== 'ok_mcp_update') throw new Error('unreachable');
+    expect(result.userId).toBe(USER_ID);
+    expect(result.tokenId).toBe('tok123');
+    expect(result.scopes).toEqual(UPDATE_SCOPES);
+
+    // Nothing minted anywhere: no oauth family rows, no mcp_tokens mint.
+    expect(refreshRows).toHaveLength(0);
+    expect(accessRows).toHaveLength(0);
+    expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+
+    // The code is consumed (single-use) with no issued family — replay hits
+    // already_consumed with nothing to revoke.
+    expect(codeRow?.consumedAt).not.toBeNull();
+    expect(codeRow?.issuedFamilyId).toBeNull();
+
+    expect(sessionRepository.updateMcpTokenDriveScopes).toHaveBeenCalledTimes(1);
+    const [tokenId, userId, drives, txArg] = vi.mocked(sessionRepository.updateMcpTokenDriveScopes).mock.calls[0]!;
+    expect(tokenId).toBe('tok123');
+    // The CONSENTING user bound into the code row — nothing the client
+    // presents at exchange can retarget the update at another user's token.
+    expect(userId).toBe(USER_ID);
+    expect(drives).toEqual([
+      { id: 'drv1', role: 'MEMBER', customRoleId: undefined },
+      { id: 'drv2', role: 'ADMIN', customRoleId: undefined },
+    ]);
+    // Same transaction client, not a second independent transaction.
+    expect(txArg).toBeDefined();
+  });
+
+  it('fails closed as update_target_gone (route: invalid_grant) when the target was revoked between consent and exchange, still consuming the code', async () => {
+    seedCodeRow({ scopes: UPDATE_SCOPES });
+    mockUpdateResult(null);
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('update_target_gone');
+    expect(codeRow?.consumedAt).not.toBeNull();
+    expect(refreshRows).toHaveLength(0);
+    expect(accessRows).toHaveLength(0);
+  });
+
+  it('replaying the consumed update code is already_consumed with no token family to revoke', async () => {
+    seedCodeRow({ scopes: UPDATE_SCOPES });
+    mockUpdateResult({ id: 'tok123', isScoped: true });
+
+    const input = { code: CODE, redirectUri: REDIRECT_URI, codeVerifier: CODE_VERIFIER, clientDbId: CLIENT_DB_ID, now: new Date() };
+    const first = await exchangeAuthorizationCode(input);
+    expect(first.outcome).toBe('ok_mcp_update');
+
+    const replay = await exchangeAuthorizationCode(input);
+    expect(replay.outcome).toBe('rejected');
+    if (replay.outcome !== 'rejected') throw new Error('unreachable');
+    expect(replay.decision.status).toBe('already_consumed');
+    // No second scope update fired.
+    expect(sessionRepository.updateMcpTokenDriveScopes).toHaveBeenCalledTimes(1);
   });
 });

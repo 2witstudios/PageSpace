@@ -7,7 +7,7 @@ import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../../exi
 import { credentialSecret } from '../../../credentials/serialize.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
 import type { DriveScopeArg } from '../args.js';
-import { buildTokenScope, createTokensCreateHandler, resolveTokenProfileName } from '../create.js';
+import { buildKeyUpdateScope, buildTokenScope, createTokensCreateHandler, resolveTokenProfileName } from '../create.js';
 
 function commandIntent(argv: string[]): CommandIntent {
   const parsed = parseArgv(argv);
@@ -112,6 +112,47 @@ describe('buildTokenScope — drift guard vs @pagespace/lib canonical grammar', 
     // token order in the wire string is not semantically significant.
     const reparsed = parseScopeList(formatScopeSet(parsed.scopes));
     expect(reparsed).toEqual(parsed);
+  });
+});
+
+describe('buildKeyUpdateScope', () => {
+  it('builds update_key:<id> + sorted drive tokens WITHOUT offline_access, surfacing the drive tokens separately for display', () => {
+    expect(
+      buildKeyUpdateScope('tok123', [
+        { id: 'zzz', role: 'MEMBER' },
+        { id: 'aaa', role: 'ADMIN' },
+      ]),
+    ).toEqual({
+      ok: true,
+      scope: 'update_key:tok123 drive:aaa:admin drive:zzz:member',
+      driveScope: 'drive:aaa:admin drive:zzz:member',
+    });
+  });
+
+  it('rejects a key id outside the resource-id grammar', () => {
+    const result = buildKeyUpdateScope('Not Valid!', [{ id: 'drv1', role: null }]);
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain('Not Valid!');
+  });
+
+  it('rejects zero drives via buildTokenScope — re-scoping to nothing is revocation, not an update', () => {
+    expect(buildKeyUpdateScope('tok123', []).ok).toBe(false);
+  });
+
+  it('drift guard: the canonical parser accepts the update scope as an update_key grant of exactly those drives', () => {
+    const result = buildKeyUpdateScope('tok123', [
+      { id: 'drv1', role: 'MEMBER' },
+      { id: 'drv2', role: null, customRoleId: 'rolexyz' },
+    ]);
+    if (!result.ok) throw new Error('expected buildKeyUpdateScope to succeed');
+
+    const parsed = parseScopeList(result.scope);
+    if (!parsed.ok) throw new Error(`expected the canonical parser to accept: ${result.scope}`);
+
+    expect(parsed.scopes.updateKeyId).toBe('tok123');
+    expect(parsed.scopes.offlineAccess).toBe(false);
+    expect([...parsed.scopes.drives.keys()]).toEqual(['drv1', 'drv2']);
+    expect(parseScopeList(formatScopeSet(parsed.scopes))).toEqual(parsed);
   });
 });
 
@@ -366,6 +407,93 @@ describe('createTokensCreateHandler', () => {
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
     expect(allOutput).toContain('drv1');
+  });
+
+  it('always prints the agent-wiring guidance (MCP config with PAGESPACE_PROFILE) on success', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const output = stdout.lines.join('');
+    expect(output).toContain('"PAGESPACE_PROFILE": "drv1"');
+    expect(output).toContain('"args": [');
+    expect(output).toMatch(/keychain/i);
+  });
+
+  it('--show-token prints the raw minted mcp_* token exactly once on stdout with a shown-once warning on stderr', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp' as const, token: 'mcp_raw_secret_1', scope: 'drive:drv1:member offline_access' }),
+    });
+
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stdout, stderr, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--show-token']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const stdoutText = stdout.lines.join('');
+    expect(stdoutText.match(/mcp_raw_secret_1/g)).toHaveLength(1);
+    expect(stdoutText).toContain('PAGESPACE_TOKEN=mcp_raw_secret_1');
+    expect(stderr.lines.join('')).toMatch(/shown once/i);
+    expect(stderr.lines.join('')).not.toContain('mcp_raw_secret_1');
+  });
+
+  it('without --show-token the raw mcp_* token appears nowhere in the output', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp' as const, token: 'mcp_raw_secret_1', scope: 'drive:drv1:member offline_access' }),
+    });
+
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stdout, stderr, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect([...stdout.lines, ...stderr.lines].join('')).not.toContain('mcp_raw_secret_1');
+  });
+
+  it('--show-token with an oauth-kind exchange explains there is no raw token to show, leaking nothing', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+    });
+
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stdout, stderr, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--show-token']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(stderr.lines.join('')).toMatch(/no raw token to show/i);
+    const allOutput = [...stdout.lines, ...stderr.lines].join('');
+    expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
+    expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
   });
 
   it('uses --save-as-profile as the storage profile when given', async () => {

@@ -12,6 +12,8 @@ export interface ConsentNarrationContext {
   driveName?: string;
   roleName?: string;
   roleSummary?: string;
+  /** The display name of the existing key an `update_key` scope re-scopes (caller resolves it; falls back to the token id). */
+  keyName?: string;
 }
 
 /** Per-scope narration text (ADR 0002 Decision 5, point 3's table). */
@@ -23,6 +25,10 @@ export function describeScopeForConsent(scope: ParsedScope, ctx: ConsentNarratio
       return 'Stay connected until you revoke access (issues a long-lived refresh credential).';
     case 'manage_keys':
       return 'Create and manage access keys on your behalf — cannot read or write any of your content directly.';
+    case 'update_key': {
+      const keyName = ctx.keyName ?? scope.tokenId;
+      return `Update the drive access of your existing key "${keyName}" — the key itself and its secret stay the same; its access becomes exactly the list below.`;
+    }
     case 'drive': {
       const driveName = ctx.driveName ?? scope.driveId;
       switch (scope.role.kind) {

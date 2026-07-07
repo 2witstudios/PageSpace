@@ -42,10 +42,17 @@ vi.mock('@pagespace/lib/auth/step-up-service', () => ({
   consumeStepUpGrant: vi.fn(),
 }));
 
+vi.mock('@/lib/repositories/session-repository', () => ({
+  sessionRepository: {
+    findActiveMcpTokenByIdAndUser: vi.fn(),
+  },
+}));
+
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createAuthorizationCode } from '@/lib/repositories/oauth-repository';
+import { sessionRepository } from '@/lib/repositories/session-repository';
 import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { nextConfig } from '../../../../../../next.config';
@@ -543,5 +550,55 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
       },
     });
     expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/oauth/authorize — update_key ownership gate', () => {
+  const updateKeyBody = { ...approvalBody, scope: 'update_key:tok123 drive:testdrive1:member' };
+
+  beforeEach(() => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      tokenType: 'session',
+      userId: 'user-1',
+      role: 'user',
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      sessionId: 'sess-1',
+    } as never);
+  });
+
+  it('issues a code carrying the update_key scope when the consenting user owns the active target token', async () => {
+    vi.mocked(sessionRepository.findActiveMcpTokenByIdAndUser).mockResolvedValue({ id: 'tok123', name: 'CI key' });
+
+    const res = await POST(postRequest(updateKeyBody) as never);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(new URL(json.redirectUri).searchParams.get('code')).toBeTruthy();
+
+    // Ownership was checked against the SESSION user, not anything client-supplied.
+    expect(sessionRepository.findActiveMcpTokenByIdAndUser).toHaveBeenCalledWith('tok123', 'user-1');
+
+    expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(createAuthorizationCode).mock.calls[0][0] as { scopes: string[] };
+    expect(call.scopes).toContain('update_key:tok123');
+  });
+
+  it('rejects with the uniform invalid_scope redirect when the target is foreign/revoked/nonexistent, never minting a code', async () => {
+    vi.mocked(sessionRepository.findActiveMcpTokenByIdAndUser).mockResolvedValue(null);
+
+    const res = await POST(postRequest(updateKeyBody) as never);
+    expect(res.status).toBe(200);
+    const location = new URL((await res.json()).redirectUri);
+    expect(location.searchParams.get('error')).toBe('invalid_scope');
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+    // Same shape as a scope-cap failure — no oracle distinguishing "not
+    // yours" from "does not exist".
+  });
+
+  it('rejects the unowned target BEFORE burning the single-use step-up grant', async () => {
+    vi.mocked(sessionRepository.findActiveMcpTokenByIdAndUser).mockResolvedValue(null);
+
+    await POST(postRequest(updateKeyBody) as never);
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
   });
 });

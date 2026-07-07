@@ -13,6 +13,14 @@ export type CommandHandler = (ctx: HandlerContext, intent: CommandIntent) => Pro
 export interface Route {
   readonly path: readonly string[];
   readonly handler: CommandHandler;
+  /**
+   * The handler resolves while its real work keeps running on live handles
+   * (e.g. `mcp`'s stdio server on stdin) — `bin.ts` must NOT force-exit the
+   * process after `run()` settles for such a route. Declared here, on the
+   * route table (the single source of truth for the command tree), so a
+   * future long-running command can't forget to opt out of the force-exit.
+   */
+  readonly longRunning?: true;
 }
 
 export type RouteResolution =

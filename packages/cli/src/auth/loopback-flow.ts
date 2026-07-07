@@ -19,7 +19,10 @@
  * may return a narrower scope than requested), never the access/refresh
  * tokens — the tokens exist solely inside this function's local scope
  * between exchange and persistence, so no caller can accidentally print or
- * log one.
+ * log one. The single deliberate exception is the opt-in
+ * `onMintedStaticToken` callback (see its doc on `LoopbackLoginDeps`),
+ * which fires only for a static `mcp_*` mint — the wizard's show-once
+ * "copy it for .env/CI" affordance — and never for the oauth pair.
  */
 import { deriveCodeChallenge, generateCodeVerifier } from '@pagespace/sdk';
 import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
@@ -59,10 +62,14 @@ export type WaitMs = (ms: number) => Promise<void>;
  * always gets and `pagespace keys create` got before this fix. `'mcp'` is a
  * pure drive:* grant — the server minted a real `mcp_*` token instead (see
  * `oauth-repository.ts`'s `ok_mcp_token` outcome), with no refresh cycle.
+ * `'mcp_update'` is an `update_key:<id>` grant — the server re-scoped an
+ * EXISTING `mcp_*` token in place (`ok_mcp_update`) and returned no secret
+ * at all; the flow below persists nothing for it.
  */
 export type ExchangedTokens =
   | { readonly kind: 'oauth'; readonly accessToken: string; readonly refreshToken: string; readonly expiresIn: number; readonly scope: string }
-  | { readonly kind: 'mcp'; readonly token: string; readonly scope: string };
+  | { readonly kind: 'mcp'; readonly token: string; readonly scope: string }
+  | { readonly kind: 'mcp_update'; readonly tokenId: string; readonly scope: string };
 export interface ExchangeCodeParams {
   readonly tokenEndpoint: string;
   readonly clientId: string;
@@ -98,10 +105,26 @@ export interface LoopbackLoginDeps {
   readonly now: () => number;
   /** Which named profile to store the credential under. Defaults to `"default"`. */
   readonly profile?: string;
+  /**
+   * Opt-in escape hatch for this file's "tokens never leave this function"
+   * rule (header comment): invoked synchronously with the raw `mcp_*` token,
+   * immediately after persistence, ONLY when the exchange minted a static
+   * (`kind: 'mcp'`) token — never for the oauth refresh/access pair, so
+   * `pagespace login` cannot surface a secret even if it wired this.
+   * Callers must capture-and-defer, never print inside the callback (the
+   * wizard has a spinner running at invocation time).
+   */
+  readonly onMintedStaticToken?: (token: string) => void;
 }
 
 export type LoopbackLoginResult =
-  | { readonly outcome: 'success'; readonly identity: Identity | null; readonly scope: string }
+  | {
+      readonly outcome: 'success';
+      readonly identity: Identity | null;
+      readonly scope: string;
+      /** Set only for an `mcp_update` exchange — which existing key was re-scoped in place (no credential was stored). */
+      readonly updatedTokenId?: string;
+    }
   | { readonly outcome: 'timeout' }
   | { readonly outcome: 'state_mismatch' }
   | { readonly outcome: 'access_denied' }
@@ -339,6 +362,30 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
       return { outcome: 'token_exchange_failed', message: error instanceof Error ? error.message : String(error) };
     }
 
+    // An mcp_update exchange re-scoped an EXISTING key in place: the server
+    // returned no secret, the locally stored credential (if any) is
+    // unchanged, and there is no bearer in hand for confirmIdentity — so
+    // nothing is persisted and no identity call is made.
+    if (tokens.kind === 'mcp_update') {
+      await server.finish(SUCCESS_HTML);
+      return { outcome: 'success', identity: null, scope: tokens.scope, updatedTokenId: tokens.tokenId };
+    }
+
+    // Flow-level invariant: a request that asked for an in-place update
+    // (`update_key:*` in the requested scope) must never persist anything.
+    // A compromised or pre-`update_key` server could answer the exchange
+    // with a real mint instead — silently storing that surprise credential
+    // (under whatever profile the caller passed) would leave a live secret
+    // in the keychain the user was never told exists, while the caller
+    // reports the in-place update it asked for. Fail closed instead.
+    if (deps.scope.split(' ').some((token) => token.startsWith('update_key:'))) {
+      await server.finish(ERROR_HTML);
+      return {
+        outcome: 'token_exchange_failed',
+        message: 'The server answered an update-key request by minting a new credential; nothing was stored.',
+      };
+    }
+
     const scopes = tokens.scope.split(' ').filter(Boolean);
     const createdAt = new Date(deps.now()).toISOString();
 
@@ -349,6 +396,16 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
         : { kind: 'static', token: tokens.token, scopes, createdAt },
       deps.profile ?? DEFAULT_PROFILE_NAME,
     );
+
+    if (tokens.kind === 'mcp') {
+      try {
+        deps.onMintedStaticToken?.(tokens.token);
+      } catch {
+        // Best-effort surfacing hook (same fail-soft posture as
+        // confirmIdentity below): the credential is already persisted, so a
+        // buggy callback must not turn a successful mint into a failure.
+      }
+    }
 
     await server.finish(SUCCESS_HTML);
 

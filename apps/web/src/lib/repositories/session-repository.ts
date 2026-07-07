@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray, type InferSelectModel } from '@pagespace/db/operators'
+import { eq, and, inArray, isNull, type InferSelectModel } from '@pagespace/db/operators'
 import { deviceTokens, mcpTokens } from '@pagespace/db/schema/auth'
 import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { drives } from '@pagespace/db/schema/core';
@@ -160,6 +160,25 @@ export const sessionRepository = {
   },
 
   /**
+   * Ownership check that additionally requires the token to be un-revoked —
+   * the gate for the `update_key` consent flow (an in-place re-scope of a
+   * revoked key would silently resurrect a credential the user already killed).
+   * A revoked, foreign, or nonexistent token are deliberately indistinguishable
+   * (all `null`): the consent screen turns every one of them into the same
+   * uniform `invalid_scope`, so probing token ids yields no oracle.
+   */
+  async findActiveMcpTokenByIdAndUser(
+    tokenId: string,
+    userId: string
+  ): Promise<{ id: string; name: string } | null> {
+    const token = await db.query.mcpTokens.findFirst({
+      where: and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)),
+      columns: { id: true, name: true },
+    });
+    return token ?? null;
+  },
+
+  /**
    * Revoke an MCP token (soft delete by setting revokedAt).
    */
   async revokeMcpToken(tokenId: string, userId: string): Promise<void> {
@@ -176,22 +195,36 @@ export const sessionRepository = {
    * If drives is empty, all existing scopes are removed but the token remains
    * scoped (fail-closed: scoped + no drives = deny all access).
    *
-   * Returns the updated token record, or null if the token doesn't belong
-   * to the given user.
+   * Returns the updated token record, or null if the token doesn't belong to
+   * the given user or has been revoked (re-scoping a revoked key would
+   * resurrect a credential the user already killed).
+   *
+   * `txClient`, when given, runs everything (ownership check included)
+   * against that caller-owned transaction instead of opening a new one —
+   * same reasoning as `createMcpTokenWithDriveScopes`: the OAuth
+   * authorization-code exchange applies this update as part of a LARGER
+   * atomic operation (consume code + re-scope, see `oauth-repository.ts`)
+   * and needs a single all-or-nothing commit.
    */
   async updateMcpTokenDriveScopes(
     tokenId: string,
     userId: string,
-    drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[]
+    drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[],
+    txClient?: Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>,
   ): Promise<McpToken | null> {
-    // Ownership check — must match both tokenId AND userId
-    const existing = await db.query.mcpTokens.findFirst({
-      where: and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)),
-      columns: { id: true },
-    });
-    if (!existing) return null;
+    const run = async (tx: Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>): Promise<McpToken | null> => {
+      // Ownership + un-revoked check and the "stays scoped" write are ONE
+      // atomic UPDATE (row-locked until the transaction commits): a plain
+      // SELECT-then-write would let a revoke that commits in between slip
+      // through, silently re-scoping a just-killed credential. An empty
+      // RETURNING is the not-owned/revoked/nonexistent result.
+      const [updated] = await tx
+        .update(mcpTokens)
+        .set({ isScoped: true })
+        .where(and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)))
+        .returning();
+      if (!updated) return null;
 
-    return db.transaction(async (tx) => {
       // Delete all existing drive scopes for this token
       await tx.delete(mcpTokenDrives).where(eq(mcpTokenDrives.tokenId, tokenId));
 
@@ -208,15 +241,10 @@ export const sessionRepository = {
         );
       }
 
-      // Ensure token stays scoped (once scoped, always scoped)
-      const [updated] = await tx
-        .update(mcpTokens)
-        .set({ isScoped: true })
-        .where(eq(mcpTokens.id, tokenId))
-        .returning();
-
       return updated;
-    });
+    };
+
+    return txClient ? run(txClient) : db.transaction(run);
   },
 };
 

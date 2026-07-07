@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseScopeList,
   formatScopeSet,
+  isKeyUpdateGrant,
   isPureDriveGrant,
   isScopeSubset,
   scopeSetToDriveScopes,
@@ -14,7 +15,7 @@ function drives(...entries: Array<[string, ScopeSet['drives'] extends ReadonlyMa
 }
 
 function emptySet(overrides: Partial<ScopeSet> = {}): ScopeSet {
-  return { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, ...overrides };
+  return { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null, ...overrides };
 }
 
 describe('parseScopeList', () => {
@@ -491,6 +492,92 @@ describe('isPureDriveGrant (Phase 9 follow-up: gates OAuth token exchange vs a r
 
   it('false for an empty scope set with no drives at all (e.g. offline_access alone would fail parseScopeList before reaching here, but the predicate itself must not treat "nothing" as a drive grant)', () => {
     expect(isPureDriveGrant(emptySet())).toBe(false);
+  });
+
+  it('false when update_key is set — a key-update grant must never fall into the fresh-mint branch', () => {
+    const scopes = emptySet({
+      updateKeyId: 'tok123',
+      drives: drives(['x', { kind: 'drive', driveId: 'x', role: { kind: 'member' } }]),
+    });
+    expect(isPureDriveGrant(scopes)).toBe(false);
+  });
+});
+
+describe('update_key:<tokenId> (in-place key re-scope grant)', () => {
+  const driveEntry = drives(['abc123', { kind: 'drive', driveId: 'abc123', role: { kind: 'member' } }]);
+
+  it('parses update_key:<id> alongside a drive scope', () => {
+    const result = parseScopeList('update_key:tok123 drive:abc123:member');
+    expect(result).toEqual({ ok: true, scopes: emptySet({ updateKeyId: 'tok123', drives: driveEntry }) });
+  });
+
+  it('round-trips through formatScopeSet with update_key serialized first', () => {
+    const scopes = emptySet({ updateKeyId: 'tok123', drives: driveEntry });
+    const formatted = formatScopeSet(scopes);
+    expect(formatted).toBe('update_key:tok123 drive:abc123:member');
+    expect(parseScopeList(formatted)).toEqual({ ok: true, scopes });
+  });
+
+  it('rejects a malformed token id (uppercase, too long, empty)', () => {
+    expect(parseScopeList('update_key:TOK drive:abc123')).toEqual({
+      ok: false,
+      error: { code: 'malformed_scope', scope: 'update_key:TOK' },
+    });
+    expect(parseScopeList(`update_key:${'a'.repeat(33)} drive:abc123`).ok).toBe(false);
+    expect(parseScopeList('update_key: drive:abc123').ok).toBe(false);
+  });
+
+  it('rejects a duplicate update_key token', () => {
+    expect(parseScopeList('update_key:aaa update_key:bbb drive:abc123')).toEqual({
+      ok: false,
+      error: { code: 'duplicate_update_key' },
+    });
+  });
+
+  it('rejects update_key without any drive scope — re-scoping to nothing is revocation, not an update', () => {
+    expect(parseScopeList('update_key:tok123')).toEqual({
+      ok: false,
+      error: { code: 'update_key_without_drive' },
+    });
+  });
+
+  it.each(['account', 'manage_keys', 'offline_access'])('rejects update_key combined with %s', (conflicting) => {
+    // account/manage_keys alongside drive:* already trip their own parse-time
+    // exclusions before the update_key check runs — the exact code differs,
+    // but every combination fails closed.
+    expect(parseScopeList(`update_key:tok123 ${conflicting} drive:abc123`).ok).toBe(false);
+  });
+
+  it('rejects update_key + offline_access with the update_key_conflict code — no refreshable credential is minted by this grant', () => {
+    expect(parseScopeList('update_key:tok123 offline_access drive:abc123')).toEqual({
+      ok: false,
+      error: { code: 'update_key_conflict' },
+    });
+    // Without a drive:* scope the account/manage_keys exclusions don't fire,
+    // so the update_key conflict is what rejects these shapes too.
+    expect(parseScopeList('update_key:tok123 account')).toEqual({
+      ok: false,
+      error: { code: 'update_key_conflict' },
+    });
+    expect(parseScopeList('update_key:tok123 manage_keys')).toEqual({
+      ok: false,
+      error: { code: 'update_key_conflict' },
+    });
+  });
+
+  it('isKeyUpdateGrant discriminates the update shape from a fresh mint', () => {
+    expect(isKeyUpdateGrant(emptySet({ updateKeyId: 'tok123', drives: driveEntry }))).toBe(true);
+    expect(isKeyUpdateGrant(emptySet({ drives: driveEntry }))).toBe(false);
+    expect(isKeyUpdateGrant(emptySet())).toBe(false);
+  });
+
+  it('isScopeSubset rejects a requested update_key the grant does not carry — refresh grants can never smuggle a re-scope in', () => {
+    const requested = emptySet({ updateKeyId: 'tok123', drives: driveEntry });
+    const grantedWithout = emptySet({ drives: driveEntry });
+    const grantedOther = emptySet({ updateKeyId: 'tok999', drives: driveEntry });
+    expect(isScopeSubset(requested, grantedWithout)).toBe(false);
+    expect(isScopeSubset(requested, grantedOther)).toBe(false);
+    expect(isScopeSubset(requested, emptySet({ updateKeyId: 'tok123', drives: driveEntry }))).toBe(true);
   });
 });
 

@@ -22,6 +22,8 @@ export interface DriveScopeArg {
 export interface CreateTokenArgs {
   readonly drives: readonly DriveScopeArg[];
   readonly saveAsProfile?: string;
+  /** Print the raw minted `mcp_*` token once (for .env/CI use) after a successful mint. */
+  readonly showToken: boolean;
 }
 
 export type ParseTokensCreateArgsResult =
@@ -37,6 +39,7 @@ function normalizeRole(value: string): Pick<DriveScopeArg, 'role' | 'customRoleI
 
 export function parseTokensCreateArgs(rest: readonly string[]): ParseTokensCreateArgsResult {
   let saveAsProfile: string | undefined;
+  let showToken = false;
   const drives: DriveScopeArg[] = [];
 
   let i = 0;
@@ -75,10 +78,19 @@ export function parseTokensCreateArgs(rest: readonly string[]): ParseTokensCreat
       continue;
     }
 
+    if (token === '--show-token') {
+      if (showToken) {
+        return { ok: false, message: 'Flag --show-token was given more than once.' };
+      }
+      showToken = true;
+      i += 1;
+      continue;
+    }
+
     return { ok: false, message: `Unknown flag: ${token}` };
   }
 
-  return { ok: true, args: { drives, saveAsProfile } };
+  return { ok: true, args: { drives, saveAsProfile, showToken } };
 }
 
 export interface RevokeTokenArgs {

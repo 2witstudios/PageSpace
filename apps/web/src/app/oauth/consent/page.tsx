@@ -19,6 +19,14 @@ function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+/** The validated redirect_uri with `error` (+ verbatim `state`) — the same shape the authorize route's buildRedirectWithParams produces for its error redirects. */
+function errorRedirectUrl(redirectUri: string, error: string, state: string | undefined): string {
+  const url = new URL(redirectUri);
+  url.searchParams.set('error', error);
+  if (state) url.searchParams.set('state', state);
+  return url.toString();
+}
+
 export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   const params = await searchParams;
   const query = new URLSearchParams();
@@ -67,10 +75,23 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     }
     // Defense in depth: /api/oauth/authorize should already have redirected
     // this case before ever reaching the consent screen.
-    const url = new URL(result.redirectUri);
-    url.searchParams.set('error', result.error);
-    if (result.state) url.searchParams.set('state', result.state);
-    redirect(url.toString());
+    redirect(errorRedirectUrl(result.redirectUri, result.error, result.state));
+  }
+
+  // An update_key grant re-scopes one of the CONSENTING user's existing keys
+  // in place. Ownership (and un-revoked) is checked here so the consent
+  // screen can only ever narrate the user's own key — a foreign, revoked, or
+  // nonexistent token id all collapse to the same invalid_scope redirect (no
+  // oracle), killing the "point a victim's consent at the attacker's token"
+  // direction. The approval POST re-checks this server-side; this render is
+  // the human-facing half.
+  let updateKeyName: string | null = null;
+  if (result.scopes.updateKeyId !== null) {
+    const target = await sessionRepository.findActiveMcpTokenByIdAndUser(result.scopes.updateKeyId, session.userId);
+    if (!target) {
+      redirect(errorRedirectUrl(result.redirectUri, 'invalid_scope', result.state));
+    }
+    updateKeyName = target.name;
   }
 
   const driveIds = [...result.scopes.drives.keys()];
@@ -87,6 +108,14 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   const roleById = new Map(roleRows.filter((r): r is NonNullable<typeof r> => !!r).map((r) => [r.id, r]));
 
   const scopeDescriptions: string[] = [];
+  if (result.scopes.updateKeyId !== null) {
+    scopeDescriptions.push(
+      describeScopeForConsent(
+        { kind: 'update_key', tokenId: result.scopes.updateKeyId },
+        { keyName: updateKeyName ?? undefined },
+      ),
+    );
+  }
   if (result.scopes.account) {
     scopeDescriptions.push(describeScopeForConsent({ kind: 'account' }, {}));
   }
@@ -111,7 +140,9 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   return (
     <div className="mx-auto max-w-md py-16">
       <h1 className="text-xl font-semibold">
-        {result.client.name} is requesting access
+        {updateKeyName !== null
+          ? `${result.client.name} wants to update the key "${updateKeyName}"`
+          : `${result.client.name} is requesting access`}
         {result.client.firstParty && (
           <span className="ml-2 rounded bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
             Built by PageSpace
