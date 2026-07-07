@@ -398,7 +398,13 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
     );
 
     if (tokens.kind === 'mcp') {
-      deps.onMintedStaticToken?.(tokens.token);
+      try {
+        deps.onMintedStaticToken?.(tokens.token);
+      } catch {
+        // Best-effort surfacing hook (same fail-soft posture as
+        // confirmIdentity below): the credential is already persisted, so a
+        // buggy callback must not turn a successful mint into a failure.
+      }
     }
 
     await server.finish(SUCCESS_HTML);

@@ -337,6 +337,30 @@ describe('runLoopbackLogin — happy path', () => {
     expect(JSON.stringify(result)).not.toContain('mcp_abc123');
   });
 
+  it('a throwing onMintedStaticToken callback fails soft — the mint is already persisted, so the flow still succeeds', async () => {
+    const mcpTokens: ExchangedTokens = { kind: 'mcp', token: 'mcp_abc123', scope: 'drive:d1:member offline_access' };
+    const { deps, store } = baseDeps({
+      exchangeCode: async () => mcpTokens,
+      onMintedStaticToken: () => {
+        throw new Error('buggy caller');
+      },
+    });
+    const fake = createFakeServer();
+
+    const result = await runLoopbackLogin({
+      ...deps,
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(result.outcome).toBe('success');
+    expect(store.size).toBe(1);
+  });
+
   it('never invokes onMintedStaticToken for an oauth-kind exchange — pagespace login cannot surface a secret even if it wired the callback', async () => {
     const surfaced: string[] = [];
     const { deps } = baseDeps({
