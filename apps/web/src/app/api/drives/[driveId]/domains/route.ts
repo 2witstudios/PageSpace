@@ -42,12 +42,6 @@ async function getMaxCustomDomainsForDrive(driveId: string): Promise<number> {
   return getPlan(tier).limits.maxCustomDomains;
 }
 
-/** Platform admin = `users.role === 'admin'` — distinct from drive-level owner/admin membership. */
-async function isPlatformAdmin(userId: string): Promise<boolean> {
-  const [row] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
-  return row?.role === 'admin';
-}
-
 export async function GET(
   request: Request,
   context: { params: Promise<{ driveId: string }> },
@@ -113,7 +107,8 @@ export async function POST(
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
-    const isAdmin = await isPlatformAdmin(auth.userId);
+    // Platform admin = `users.role === 'admin'` — distinct from drive-level owner/admin membership.
+    const isAdmin = auth.role === 'admin';
     if (!isAdmin && !(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       return NextResponse.json({ error: 'Only drive owners and admins can add custom domains' }, { status: 403 });
     }

@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon, FileWarning } from 'lucide-react';
 import Link from 'next/link';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
+import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { fetchWithAuth, del, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
@@ -69,6 +70,11 @@ export default function DomainsSettingsPage() {
 
   const drive = drives.find((d) => d.id === driveId);
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
+  const { user } = useAuth();
+  // Platform admin (users.role === 'admin') — distinct from drive-level admin.
+  // Gates the platform-owned-domain bypass (e.g. registering pagespace.ai),
+  // mirroring the backend's wantsPlatformDomain path.
+  const isPlatformAdmin = user?.role === 'admin';
 
   useEffect(() => {
     if (drive) setNotFoundPageId(drive.notFoundPageId ?? null);
@@ -150,7 +156,7 @@ export default function DomainsSettingsPage() {
 
   const handleAddDomain = async () => {
     const hostname = normalizeHostname(newDomain.trim());
-    const validation = validateCustomDomain(hostname);
+    const validation = validateCustomDomain(hostname, { allowPlatformDomain: isPlatformAdmin });
     if (!validation.valid) {
       toast.error(validation.reason);
       return;
@@ -349,6 +355,7 @@ export default function DomainsSettingsPage() {
         refreshingCertId={refreshingCertId}
         settingPrimaryId={settingPrimaryId}
         verifyReasons={verifyReasons}
+        isPlatformAdmin={isPlatformAdmin}
       />
 
       <UploadableImageSettingCard
@@ -675,15 +682,19 @@ interface CustomDomainsCardProps {
   refreshingCertId: string | null;
   settingPrimaryId: string | null;
   verifyReasons: Record<string, string | undefined>;
+  isPlatformAdmin: boolean;
 }
 
 const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
 const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
 const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
 
-function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, verifyReasons }: CustomDomainsCardProps) {
-  const atCap = limit !== null && limit > 0 && domains.length >= limit;
-  const notAvailable = limit === 0;
+function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, verifyReasons, isPlatformAdmin }: CustomDomainsCardProps) {
+  // A platform admin keeps the input usable regardless of the drive's plan tier
+  // — the backend's platform-domain path skips the subscription cap, and a
+  // non-platform hostname over cap still gets the server's 403 + toast.
+  const atCap = limit !== null && limit > 0 && domains.length >= limit && !isPlatformAdmin;
+  const notAvailable = limit === 0 && !isPlatformAdmin;
   const addDisabled = isAdding || !newDomain.trim() || atCap || notAvailable;
   // "Make primary" only matters once there's a choice to make between domains.
   const showPrimaryControls = domains.length > 1;
