@@ -107,6 +107,21 @@ export type ExchangeAuthorizationCodeResult =
   /** The `update_key` target was revoked/deleted between consent and exchange — the route collapses this to the constant-shape invalid_grant. */
   | { outcome: 'update_target_gone' };
 
+/**
+ * DriveScopeRow → the drive shape `sessionRepository`'s mcp-token writers
+ * take. One helper for BOTH the fresh-mint (`ok_mcp_token`) and in-place
+ * update (`ok_mcp_update`) branches — the `customRoleId ?? undefined`
+ * null-vs-undefined coercion is load-bearing, and maintaining it twice would
+ * let mint and update silently diverge on custom-role rows.
+ */
+function toSessionRepoDrives(scopes: Parameters<typeof scopeSetToDriveScopes>[0]) {
+  return scopeSetToDriveScopes(scopes).map(({ driveId, role, customRoleId }) => ({
+    id: driveId,
+    role,
+    customRoleId: customRoleId ?? undefined,
+  }));
+}
+
 async function revokeTokenFamily(
   tx: Pick<typeof db, 'update'>,
   familyId: string,
@@ -226,7 +241,7 @@ export async function exchangeAuthorizationCode(
     // Deliberately no `issuedFamilyId`: replaying the consumed code hits
     // `already_consumed` above with nothing to revoke, which is correct —
     // no credential family was ever issued for it.
-    if (parsedGrantedScope.ok && isKeyUpdateGrant(parsedGrantedScope.scopes) && parsedGrantedScope.scopes.updateKeyId !== null) {
+    if (parsedGrantedScope.ok && isKeyUpdateGrant(parsedGrantedScope.scopes)) {
       await tx
         .update(oauthAuthorizationCodes)
         .set({ consumedAt: input.now })
@@ -235,11 +250,7 @@ export async function exchangeAuthorizationCode(
       const updated = await sessionRepository.updateMcpTokenDriveScopes(
         parsedGrantedScope.scopes.updateKeyId,
         row.userId,
-        scopeSetToDriveScopes(parsedGrantedScope.scopes).map(({ driveId, role, customRoleId }) => ({
-          id: driveId,
-          role,
-          customRoleId: customRoleId ?? undefined,
-        })),
+        toSessionRepoDrives(parsedGrantedScope.scopes),
         tx,
       );
       if (updated === null) {
@@ -268,11 +279,7 @@ export async function exchangeAuthorizationCode(
           tokenPrefix,
           name: 'pagespace CLI',
           isScoped: true,
-          drives: scopeSetToDriveScopes(parsedGrantedScope.scopes).map(({ driveId, role, customRoleId }) => ({
-            id: driveId,
-            role,
-            customRoleId: customRoleId ?? undefined,
-          })),
+          drives: toSessionRepoDrives(parsedGrantedScope.scopes),
         },
         tx,
       );

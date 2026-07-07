@@ -184,6 +184,30 @@ async function isProfileWriteConfirmed(store: CredentialStore, host: string, pro
   return !clack.isCancel(overwrite) && overwrite;
 }
 
+/**
+ * The runLoopbackLogin dep wiring shared by every wizard consent flow
+ * (Create's mint, Edit's in-place update) — one place to thread a new
+ * effect or default through, so the two flows can't silently diverge.
+ */
+function consentFlowDeps(deps: TokensCreateHandlerDeps, s: ReturnType<typeof clack.spinner>) {
+  return {
+    clientId: PAGESPACE_CLI_CLIENT_ID,
+    randomBytes: deps.randomBytes,
+    discoverMetadata: deps.discoverMetadata,
+    startServer: deps.startServer,
+    maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
+    openBrowser: deps.openBrowser,
+    onBrowserOpenFailed: (url: string) => {
+      s.message(`Could not open a browser automatically. Open this URL to continue: ${url}`);
+    },
+    waitMs: deps.waitMs,
+    timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
+    exchangeCode: deps.exchangeCode,
+    confirmIdentity: deps.confirmIdentity,
+    now: deps.now,
+  };
+}
+
 async function mintScopedKey(
   deps: TokensCreateHandlerDeps,
   store: CredentialStore,
@@ -193,27 +217,14 @@ async function mintScopedKey(
   s.start(`Opening your browser to approve access for profile "${params.profileName}" on ${params.host}...`);
 
   // Captured, never printed while the spinner is live — only surfaced behind
-  // the explicit show-once confirm below, then dropped.
+  // the explicit show-once confirm below.
   let mintedToken: string | null = null;
 
   const result = await runLoopbackLogin({
+    ...consentFlowDeps(deps, s),
     host: params.host,
-    clientId: PAGESPACE_CLI_CLIENT_ID,
     scope: params.scope,
-    randomBytes: deps.randomBytes,
-    discoverMetadata: deps.discoverMetadata,
-    startServer: deps.startServer,
-    maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
-    openBrowser: deps.openBrowser,
-    onBrowserOpenFailed: (url) => {
-      s.message(`Could not open a browser automatically. Open this URL to continue: ${url}`);
-    },
-    waitMs: deps.waitMs,
-    timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
-    exchangeCode: deps.exchangeCode,
-    confirmIdentity: deps.confirmIdentity,
     credentialStore: store,
-    now: deps.now,
     profile: params.profileName,
     onMintedStaticToken: (token) => {
       mintedToken = token;
@@ -227,7 +238,6 @@ async function mintScopedKey(
       if (!clack.isCancel(show) && show) {
         clack.note(`${TOKEN_ENV_VAR_NAME}=${mintedToken}`, 'Copy it now — shown once');
       }
-      mintedToken = null;
     }
     clack.note(renderAgentWiringGuidance({ profileName: params.profileName, host: params.host }).join('\n'), 'Wire up an agent');
   } else {
@@ -317,10 +327,11 @@ async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, hos
  * same browser-consent step-up as a mint, but the server updates the
  * existing token's drive scopes (`ok_mcp_update`) and returns no secret, so
  * nothing is persisted locally and there is no replacement profile to name
- * or old key to revoke. The `profile` passed to `runLoopbackLogin` is a
- * non-"default" sentinel that is only ever written if a hostile or
- * pre-`update_key` server unexpectedly answers with a real mint — it can
- * never clobber the personal login credential or a real named profile.
+ * or old key to revoke. A hostile or pre-`update_key` server answering this
+ * request with a real mint is rejected by `runLoopbackLogin` itself (its
+ * update-request guard fails the flow before anything is persisted); the
+ * non-"default" sentinel `profile` passed below is defense-in-depth only and
+ * is never written on any reachable path.
  */
 async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: string, keys: readonly KeySummary[]): Promise<FlowOutcome> {
   const keyId = await clack.select({ message: 'Which key would you like to edit?', options: [...keySelectOptions(keys)] });
@@ -338,24 +349,15 @@ async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host:
   const selections = await selectDriveRoleScopes(ctx, drives, `Select drives for "${key.name}"`, preselectedDriveIds(key));
   if (selections === null) return abortSubflow();
 
-  const scopeResult = buildWizardScope(selections);
-  if (!scopeResult.ok) {
-    clack.log.error(scopeResult.message);
-    return null;
-  }
   const driveScopeArgs = selections.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice));
   const updateScope = buildKeyUpdateScope(key.id, driveScopeArgs);
   if (!updateScope.ok) {
     clack.log.error(updateScope.message);
     return null;
   }
-  const displayScope = updateScope.scope
-    .split(' ')
-    .filter((token) => !token.startsWith('update_key:'))
-    .join(' ');
 
   const proceed = await clack.confirm({
-    message: `Update "${key.name}" to: ${displayScope}? The key keeps its existing secret.`,
+    message: `Update "${key.name}" to: ${updateScope.driveScope}? The key keeps its existing secret.`,
   });
   if (clack.isCancel(proceed) || !proceed) return abortSubflow();
 
@@ -363,31 +365,32 @@ async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host:
   s.start(`Opening your browser to approve the new scopes for "${key.name}" on ${host}...`);
 
   const result = await runLoopbackLogin({
+    ...consentFlowDeps(deps, s),
     host,
-    clientId: PAGESPACE_CLI_CLIENT_ID,
     scope: updateScope.scope,
-    randomBytes: deps.randomBytes,
-    discoverMetadata: deps.discoverMetadata,
-    startServer: deps.startServer,
-    maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
-    openBrowser: deps.openBrowser,
-    onBrowserOpenFailed: (url) => {
-      s.message(`Could not open a browser automatically. Open this URL to continue: ${url}`);
-    },
-    waitMs: deps.waitMs,
-    timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
-    exchangeCode: deps.exchangeCode,
-    confirmIdentity: deps.confirmIdentity,
     credentialStore: deps.createCredentialStore(),
-    now: deps.now,
     profile: `edit-${key.id}`,
   });
 
-  if (result.outcome === 'success') {
-    s.stop(`Updated "${key.name}". Its secret is unchanged — existing configurations keep working.`);
-  } else {
+  if (result.outcome !== 'success') {
     s.error(describeMintFailure(result));
+    return null;
   }
+
+  // Fail closed on a server that claims success for a DIFFERENT key than
+  // this consent named — nothing was stored locally either way
+  // (runLoopbackLogin's update-request guard), so the only risk is a false
+  // success message, but a false success message about key scopes is still
+  // a lie worth refusing to tell.
+  if (result.updatedTokenId !== key.id) {
+    s.error(`The server reported updating a different key than "${key.name}". Verify this key's scopes with "pagespace keys list".`);
+    return null;
+  }
+
+  s.stop(`Updated "${key.name}". Its secret is unchanged — existing configurations keep working.`);
+  clack.log.info(
+    'If this key is saved as a local profile, the profile\'s stored scope list may still show the old scopes — the server-side scopes above are what\'s enforced.',
+  );
   return null;
 }
 

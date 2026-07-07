@@ -54,7 +54,14 @@ run({
   prompt,
 })
   .then((code) => {
-    if (isLongRunningCommand(argv)) {
+    // Long-running commands are exempt from the force-exit ONLY when they
+    // actually reached their long-running state: `pagespace mcp` resolves
+    // EXIT_SUCCESS exactly when the stdio server connected (commands/mcp.ts),
+    // while every failure path (no explicit credential, enforceAuth refresh
+    // failure, unknown subcommand) resolves nonzero WITHOUT a server — those
+    // must flush-and-exit like any one-shot command, or the mcp command's own
+    // error paths reintroduce the lingering-handle hang this fixes.
+    if (code === 0 && isLongRunningCommand(argv)) {
       process.exitCode = code;
       return;
     }

@@ -217,12 +217,18 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
 
   if (result.outcome === 'ok_mcp_update') {
     // Mirror the web Settings PATCH's audit + activity trail
-    // (mcp-tokens/[tokenId]/route.ts) — same logical operation, different door.
-    const actorInfo = await getActorInfo(result.userId);
-    logTokenActivity(result.userId, 'token_update', {
-      tokenId: result.tokenId,
-      tokenType: 'mcp',
-    }, actorInfo);
+    // (mcp-tokens/[tokenId]/route.ts) — same logical operation, different
+    // door. Fire-and-forget end to end: getActorInfo does a user lookup +
+    // PII decrypts, and it feeds only logTokenActivity (itself explicitly
+    // never awaited), so none of it belongs on the exchange response path.
+    const { userId, tokenId } = result;
+    void getActorInfo(userId)
+      .then((actorInfo) => {
+        logTokenActivity(userId, 'token_update', { tokenId, tokenType: 'mcp' }, actorInfo);
+      })
+      .catch(() => {
+        // Activity logging is best-effort; the audit event below is the durable record.
+      });
     auditRequest(req, {
       eventType: 'auth.token.updated',
       userId: result.userId,

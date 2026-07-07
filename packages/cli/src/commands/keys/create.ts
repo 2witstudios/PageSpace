@@ -27,6 +27,7 @@ import { DEFAULT_PROFILE_NAME } from '../../credentials/serialize.js';
 import { createCredentialStore } from '../../credentials/store.js';
 import type { CredentialStore } from '../../credentials/store.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../exit-codes.js';
+import type { OutputSink } from '../../handler-context.js';
 import type { CommandHandler } from '../../router/router.js';
 import { confirmIdentity } from '../../auth/confirm-identity.js';
 import { createDiscoverMetadata } from '../../auth/discover.js';
@@ -107,6 +108,16 @@ export function buildTokenScope(drives: readonly DriveScopeArg[]): BuildTokenSco
   return { ok: true, scope: [...driveScopeTokens, 'offline_access'].join(' ') };
 }
 
+export type BuildKeyUpdateScopeResult =
+  | {
+      readonly ok: true;
+      /** The full wire scope: `update_key:<tokenId> drive:...`. */
+      readonly scope: string;
+      /** Just the drive tokens — what the wizard shows the user (the update_key token is plumbing, not a grant). */
+      readonly driveScope: string;
+    }
+  | { readonly ok: false; readonly message: string };
+
 /**
  * The in-place re-scope variant of `buildTokenScope` (the wizard's Edit
  * flow): `update_key:<tokenId>` + the same sorted drive tokens, WITHOUT
@@ -115,14 +126,17 @@ export function buildTokenScope(drives: readonly DriveScopeArg[]): BuildTokenSco
  * Same reimplemented-grammar reasoning as `buildTokenScope` above; the test
  * file drift-guards both against `parseScopeList`.
  */
-export function buildKeyUpdateScope(tokenId: string, drives: readonly DriveScopeArg[]): BuildTokenScopeResult {
+export function buildKeyUpdateScope(tokenId: string, drives: readonly DriveScopeArg[]): BuildKeyUpdateScopeResult {
   if (!isResourceId(tokenId)) {
     return { ok: false, message: `Invalid key id "${tokenId}": key ids are 1-32 lowercase letters/digits.` };
   }
   const base = buildTokenScope(drives);
   if (!base.ok) return base;
-  const driveTokens = base.scope.split(' ').filter((token) => token !== 'offline_access');
-  return { ok: true, scope: [`update_key:${tokenId}`, ...driveTokens].join(' ') };
+  const driveScope = base.scope
+    .split(' ')
+    .filter((token) => token !== 'offline_access')
+    .join(' ');
+  return { ok: true, scope: `update_key:${tokenId} ${driveScope}`, driveScope };
 }
 
 export type ResolveTokenProfileNameResult = { readonly ok: true; readonly name: string } | { readonly ok: false; readonly message: string };
@@ -205,7 +219,15 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
       return EXIT_RUNTIME_ERROR;
     }
 
-    ctx.stdout.write(`Opening your browser to approve access for profile "${profileName}" on ${host}...\n`);
+    // With --show-token, stdout is a machine-readable contract: it carries
+    // EXACTLY one line — the token env-var assignment — and nothing else, so
+    // `... --show-token | pbcopy` (or a $(...) capture) yields a usable
+    // value. Every human-readable line — progress, success, guidance —
+    // routes to stderr in that mode; without the flag, stdout keeps its
+    // ordinary informational role.
+    const info: OutputSink = parsedArgs.args.showToken ? ctx.stderr : ctx.stdout;
+
+    info.write(`Opening your browser to approve access for profile "${profileName}" on ${host}...\n`);
 
     // Captured, never printed inline: the callback fires mid-flow, and the
     // token must only ever surface behind the explicit --show-token opt-in.
@@ -237,19 +259,17 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
 
     switch (result.outcome) {
       case 'success':
-        ctx.stdout.write(`Created profile "${profileName}" on ${host}, scoped to: ${scopeResult.scope}.\n`);
+        info.write(`Created profile "${profileName}" on ${host}, scoped to: ${scopeResult.scope}.\n`);
         if (parsedArgs.args.showToken) {
           if (mintedToken !== null) {
-            // Token on stdout (pipeable: `... --show-token | pbcopy`), the
-            // warning on stderr so it never contaminates the piped value.
+            // The ONLY stdout line in --show-token mode (see `info` above).
             ctx.stdout.write(`${TOKEN_ENV_VAR_NAME}=${mintedToken}\n`);
             ctx.stderr.write("This token is shown once and never again. Anyone holding it gets this key's access.\n");
           } else {
             ctx.stderr.write('--show-token: no raw token to show — the server returned a refresh credential instead of a static token.\n');
           }
         }
-        mintedToken = null;
-        ctx.stdout.write(`${renderAgentWiringGuidance({ profileName, host }).join('\n')}\n`);
+        info.write(`${renderAgentWiringGuidance({ profileName, host }).join('\n')}\n`);
         return EXIT_SUCCESS;
       case 'timeout':
         ctx.stderr.write('Consent timed out waiting for the browser redirect. Run "pagespace keys create" again.\n');

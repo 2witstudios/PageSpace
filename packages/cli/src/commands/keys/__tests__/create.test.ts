@@ -116,13 +116,17 @@ describe('buildTokenScope — drift guard vs @pagespace/lib canonical grammar', 
 });
 
 describe('buildKeyUpdateScope', () => {
-  it('builds update_key:<id> + sorted drive tokens WITHOUT offline_access', () => {
+  it('builds update_key:<id> + sorted drive tokens WITHOUT offline_access, surfacing the drive tokens separately for display', () => {
     expect(
       buildKeyUpdateScope('tok123', [
         { id: 'zzz', role: 'MEMBER' },
         { id: 'aaa', role: 'ADMIN' },
       ]),
-    ).toEqual({ ok: true, scope: 'update_key:tok123 drive:aaa:admin drive:zzz:member' });
+    ).toEqual({
+      ok: true,
+      scope: 'update_key:tok123 drive:aaa:admin drive:zzz:member',
+      driveScope: 'drive:aaa:admin drive:zzz:member',
+    });
   });
 
   it('rejects a key id outside the resource-id grammar', () => {

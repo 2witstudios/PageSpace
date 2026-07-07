@@ -84,18 +84,25 @@ const AUTH_EXEMPT_HANDLERS = new Set([
 ]);
 
 /**
- * True when this argv will dispatch to the long-running MCP stdio server
- * (route `['mcp']`): its handler resolves as soon as the transport connects
- * (`commands/mcp.ts`), and the process must then stay alive on the stdin
- * handle serving the MCP client — so `bin.ts` must NOT force-exit after
- * `run()` settles for it, unlike every other (one-shot) command.
- * Conservative by design: a false positive only skips a belt-and-suspenders
- * exit (the natural event-loop drain still exits); a false negative would
- * kill a live server mid-session.
+ * True when this argv will dispatch to a route declared `longRunning` in the
+ * ROUTES table (today only `['mcp']`, whose handler resolves as soon as the
+ * stdio transport connects while the server lives on the stdin handle) — so
+ * `bin.ts` must NOT force-exit after `run()` settles for it, unlike every
+ * other (one-shot) command. Resolved against the same route table `run()`
+ * dispatches with, so adding a future long-running command is one route
+ * property, not a second string check to remember here. Conservative by
+ * design: a false positive only skips a belt-and-suspenders exit (the
+ * natural event-loop drain still exits); a false negative would kill a live
+ * server mid-session. `bin.ts` additionally requires a success exit code —
+ * a long-running route that FAILED never started its server and must still
+ * be force-exited.
  */
 export function isLongRunningCommand(argv: readonly string[]): boolean {
   const parsed = parseArgv(argv);
-  return parsed.kind === 'command' && !parsed.flags.version && parsed.args[0] === 'mcp';
+  if (parsed.kind !== 'command' || parsed.flags.version) return false;
+  if (parsed.flags.help && parsed.args.length === 0) return false;
+  const resolution = resolveRoute(ROUTES, parsed.args);
+  return resolution.kind === 'match' && resolution.route.longRunning === true;
 }
 
 export async function run(deps: RunDependencies): Promise<ExitCode> {

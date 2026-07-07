@@ -252,7 +252,7 @@ export {
   resolveTokenProfileName,
   tokensCreateHandler,
 } from './commands/keys/create.js';
-export type { BuildTokenScopeResult, ResolveTokenProfileNameResult, TokensCreateHandlerDeps } from './commands/keys/create.js';
+export type { BuildKeyUpdateScopeResult, BuildTokenScopeResult, ResolveTokenProfileNameResult, TokensCreateHandlerDeps } from './commands/keys/create.js';
 export { tokensList, tokensListHandler } from './commands/keys/list.js';
 export { tokensRevoke, tokensRevokeHandler } from './commands/keys/revoke.js';
 

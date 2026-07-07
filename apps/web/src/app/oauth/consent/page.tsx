@@ -19,6 +19,14 @@ function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+/** The validated redirect_uri with `error` (+ verbatim `state`) — the same shape the authorize route's buildRedirectWithParams produces for its error redirects. */
+function errorRedirectUrl(redirectUri: string, error: string, state: string | undefined): string {
+  const url = new URL(redirectUri);
+  url.searchParams.set('error', error);
+  if (state) url.searchParams.set('state', state);
+  return url.toString();
+}
+
 export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   const params = await searchParams;
   const query = new URLSearchParams();
@@ -67,10 +75,7 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     }
     // Defense in depth: /api/oauth/authorize should already have redirected
     // this case before ever reaching the consent screen.
-    const url = new URL(result.redirectUri);
-    url.searchParams.set('error', result.error);
-    if (result.state) url.searchParams.set('state', result.state);
-    redirect(url.toString());
+    redirect(errorRedirectUrl(result.redirectUri, result.error, result.state));
   }
 
   // An update_key grant re-scopes one of the CONSENTING user's existing keys
@@ -84,10 +89,7 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   if (result.scopes.updateKeyId !== null) {
     const target = await sessionRepository.findActiveMcpTokenByIdAndUser(result.scopes.updateKeyId, session.userId);
     if (!target) {
-      const url = new URL(result.redirectUri);
-      url.searchParams.set('error', 'invalid_scope');
-      if (result.state) url.searchParams.set('state', result.state);
-      redirect(url.toString());
+      redirect(errorRedirectUrl(result.redirectUri, 'invalid_scope', result.state));
     }
     updateKeyName = target.name;
   }

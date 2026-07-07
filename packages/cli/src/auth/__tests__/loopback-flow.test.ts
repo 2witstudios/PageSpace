@@ -395,6 +395,36 @@ describe('runLoopbackLogin — happy path', () => {
     expect(confirmIdentityCalled).toBe(false);
     expect(surfaced).toEqual([]);
   });
+
+  it('fails closed WITHOUT persisting when an update_key request is answered with a real mint — a hostile/outdated server cannot plant a surprise credential', async () => {
+    const surfaced: string[] = [];
+    const mintInsteadOfUpdate: ExchangedTokens = { kind: 'mcp', token: 'mcp_surprise', scope: 'drive:d1:member offline_access' };
+    const { deps, store } = baseDeps({
+      scope: 'update_key:tok123 drive:d1:member',
+      exchangeCode: async () => mintInsteadOfUpdate,
+      onMintedStaticToken: (token) => {
+        surfaced.push(token);
+      },
+    });
+    const fake = createFakeServer();
+
+    const result = await runLoopbackLogin({
+      ...deps,
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(result.outcome).toBe('token_exchange_failed');
+    if (result.outcome !== 'token_exchange_failed') throw new Error('unreachable');
+    expect(result.message).toMatch(/nothing was stored/i);
+    expect(store.size).toBe(0);
+    expect(surfaced).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('mcp_surprise');
+  });
 });
 
 describe('runLoopbackLogin — failure branches', () => {

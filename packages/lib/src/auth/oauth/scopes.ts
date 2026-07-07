@@ -161,16 +161,9 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     return { ok: false, error: { code: 'manage_keys_conflict' } };
   }
 
-  // Rule 10: offline_access alone has no principal shape (Decision 2) — a
-  // refresh token minted for it could only ever mint access tokens with no
-  // access scope. Reject rather than grant a token that is structurally
-  // useless (fail closed, Codex #1754). manage_keys is its own principal
-  // shape, so offline_access + manage_keys is a valid, expected combination
-  // (a long-lived key-management session).
-  if (offlineAccess && !account && !manageKeys && drives.size === 0 && updateKeyId === null) {
-    return { ok: false, error: { code: 'offline_access_alone' } };
-  }
-
+  // Ordered BEFORE the offline_access_alone check below so update_key error
+  // precedence is explicit in code order and that check keeps its original
+  // shape (no update_key conjunct grafted on).
   if (updateKeyId !== null) {
     // Nothing but drives can be attached to an mcp token, and this grant
     // mints nothing refreshable — offline_access alongside it would promise
@@ -184,6 +177,16 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     if (drives.size === 0) {
       return { ok: false, error: { code: 'update_key_without_drive' } };
     }
+  }
+
+  // Rule 10: offline_access alone has no principal shape (Decision 2) — a
+  // refresh token minted for it could only ever mint access tokens with no
+  // access scope. Reject rather than grant a token that is structurally
+  // useless (fail closed, Codex #1754). manage_keys is its own principal
+  // shape, so offline_access + manage_keys is a valid, expected combination
+  // (a long-lived key-management session).
+  if (offlineAccess && !account && !manageKeys && drives.size === 0) {
+    return { ok: false, error: { code: 'offline_access_alone' } };
   }
 
   return { ok: true, scopes: { account, offlineAccess, drives, manageKeys, updateKeyId } };
@@ -281,9 +284,11 @@ export function isPureDriveGrant(scopes: ScopeSet): boolean {
  * (`update_key:<id>` + ≥1 `drive:*`, the only shape parse admits for
  * `updateKeyId`). The token-issuance sibling of `isPureDriveGrant`: that
  * shape mints a NEW `mcp_tokens` row, this one replaces the drive-scope rows
- * of an existing row and never touches its secret.
+ * of an existing row and never touches its secret. A type predicate, so
+ * callers get `updateKeyId: string` narrowing instead of re-checking the
+ * field themselves.
  */
-export function isKeyUpdateGrant(scopes: ScopeSet): boolean {
+export function isKeyUpdateGrant(scopes: ScopeSet): scopes is ScopeSet & { updateKeyId: string } {
   return scopes.updateKeyId !== null;
 }
 

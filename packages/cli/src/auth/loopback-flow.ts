@@ -371,6 +371,21 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
       return { outcome: 'success', identity: null, scope: tokens.scope, updatedTokenId: tokens.tokenId };
     }
 
+    // Flow-level invariant: a request that asked for an in-place update
+    // (`update_key:*` in the requested scope) must never persist anything.
+    // A compromised or pre-`update_key` server could answer the exchange
+    // with a real mint instead — silently storing that surprise credential
+    // (under whatever profile the caller passed) would leave a live secret
+    // in the keychain the user was never told exists, while the caller
+    // reports the in-place update it asked for. Fail closed instead.
+    if (deps.scope.split(' ').some((token) => token.startsWith('update_key:'))) {
+      await server.finish(ERROR_HTML);
+      return {
+        outcome: 'token_exchange_failed',
+        message: 'The server answered an update-key request by minting a new credential; nothing was stored.',
+      };
+    }
+
     const scopes = tokens.scope.split(' ').filter(Boolean);
     const createdAt = new Date(deps.now()).toISOString();
 

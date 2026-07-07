@@ -213,12 +213,17 @@ export const sessionRepository = {
     txClient?: Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>,
   ): Promise<McpToken | null> {
     const run = async (tx: Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>): Promise<McpToken | null> => {
-      // Ownership check — must match tokenId AND userId AND be un-revoked
-      const existing = await tx
-        .select({ id: mcpTokens.id })
-        .from(mcpTokens)
-        .where(and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)));
-      if (existing.length === 0) return null;
+      // Ownership + un-revoked check and the "stays scoped" write are ONE
+      // atomic UPDATE (row-locked until the transaction commits): a plain
+      // SELECT-then-write would let a revoke that commits in between slip
+      // through, silently re-scoping a just-killed credential. An empty
+      // RETURNING is the not-owned/revoked/nonexistent result.
+      const [updated] = await tx
+        .update(mcpTokens)
+        .set({ isScoped: true })
+        .where(and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)))
+        .returning();
+      if (!updated) return null;
 
       // Delete all existing drive scopes for this token
       await tx.delete(mcpTokenDrives).where(eq(mcpTokenDrives.tokenId, tokenId));
@@ -235,13 +240,6 @@ export const sessionRepository = {
           }))
         );
       }
-
-      // Ensure token stays scoped (once scoped, always scoped)
-      const [updated] = await tx
-        .update(mcpTokens)
-        .set({ isScoped: true })
-        .where(eq(mcpTokens.id, tokenId))
-        .returning();
 
       return updated;
     };
