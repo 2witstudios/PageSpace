@@ -1,37 +1,16 @@
-/**
- * Pure planner for the legacy-ciphertext re-encryption backfill.
- *
- * The 2026-07-06 user-PII backfill wrote every row in the legacy 4-part
- * `salt:iv:authTag:ciphertext` envelope, which costs a full scrypt per decrypt
- * (`deriveLegacyKey`). This planner converts those rows to the fast 3-part
- * `iv:authTag:ciphertext` envelope keyed by the memoized master key. Idempotent:
- * fast-format and plaintext rows are skipped so re-runs converge to zero work.
- */
+/** Tests for planLegacyCiphertextReencrypt and looksLegacyEncrypted. */
 import { describe, it, expect, beforeAll } from 'vitest';
-import { scryptSync, randomBytes, createCipheriv } from 'crypto';
 import { decrypt } from './encryption-utils';
 import { looksEncrypted, looksLegacyEncrypted } from './field-crypto';
 import { planLegacyCiphertextReencrypt } from './legacy-ciphertext-reencrypt';
+import { legacyEncrypt as legacyEncryptWith } from './__tests__/legacy-envelope-fixture';
 
 const MASTER = 'reencrypt-test-master-key-at-least-32-chars!';
+const legacyEncrypt = (plaintext: string): string => legacyEncryptWith(MASTER, plaintext);
 
 beforeAll(() => {
   process.env.ENCRYPTION_KEY = MASTER;
 });
-
-/**
- * Produce ciphertext in the legacy 4-part format exactly as the pre-#1930
- * `encrypt()` did: per-record random salt, scrypt-derived key, AES-256-GCM.
- */
-function legacyEncrypt(plaintext: string): string {
-  const salt = randomBytes(32);
-  const key = scryptSync(MASTER, salt, 32);
-  const iv = randomBytes(16);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-  return [salt, iv, authTag, ciphertext].map((b) => b.toString('hex')).join(':');
-}
 
 describe('looksLegacyEncrypted', () => {
   it('is true for the 4-part legacy envelope and false for fast/plaintext', () => {

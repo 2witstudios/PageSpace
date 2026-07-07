@@ -33,6 +33,12 @@
  *
  * Requires ENCRYPTION_KEY in the environment (same key used at runtime).
  *
+ * Exit codes: 0 = run completed with zero row errors; 1 = the safety gate
+ * refused a live run, the run crashed, or one or more rows failed to convert
+ * (deliberate: an undecryptable PII row should be surfaced loudly, not
+ * converged past — the summary line separates converted vs errors so a
+ * human can tell partial progress from a poison row recurring across runs).
+ *
  * ─── Production procedure (Fly) ────────────────────────────────────────────
  * 1. Verify web, realtime, and processor are all deployed at or after
  *    #1930 (c6e60f97f) + #1931 (da3514c7f).
@@ -104,7 +110,7 @@ export async function backfill(
 
   for (;;) {
     const batch = await (dbInstance as typeof defaultDb)
-      .select({ id: users.id, email: users.email, name: users.name })
+      .select({ id: users.id, email: users.email, name: users.name, updatedAt: users.updatedAt })
       .from(users)
       .where(gt(users.id, cursor))
       .orderBy(asc(users.id))
@@ -129,9 +135,13 @@ export async function backfill(
         // instead of being clobbered back to stale values — which would
         // desync users.email from the app-written emailBidx and break
         // blind-index login lookups. A re-run picks the row up as-is.
+        // updatedAt is pinned to its prior value: the schema's $onUpdate would
+        // otherwise stamp every backfilled row with the run time, and a
+        // ciphertext-format rewrite is not a profile update (users.updatedAt
+        // surfaces in the GDPR Art-15 export as "account last updated").
         const written = await (dbInstance as typeof defaultDb)
           .update(users)
-          .set({ email: update.email, name: update.name })
+          .set({ email: update.email, name: update.name, updatedAt: row.updatedAt })
           .where(and(eq(users.id, update.id), eq(users.email, row.email), eq(users.name, row.name)));
         if (written.rowCount === 0) {
           skipped += 1;

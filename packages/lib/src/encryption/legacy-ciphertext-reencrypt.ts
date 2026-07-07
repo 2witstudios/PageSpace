@@ -27,11 +27,12 @@ export interface LegacyCiphertextRow {
   name: string;
 }
 
-export interface LegacyReencryptUpdate {
-  id: string;
-  email: string;
-  name: string;
-}
+/**
+ * Same shape as the input row on purpose: the update rewrites the ciphertext
+ * envelope in place and never adds or removes columns (unlike the original
+ * backfill, whose output gains a non-null emailBidx).
+ */
+export type LegacyReencryptUpdate = LegacyCiphertextRow;
 
 /**
  * Plan the re-encryption update for one row, or `null` to skip.
