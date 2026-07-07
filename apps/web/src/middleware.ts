@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { NextFetchEvent } from 'next/server';
 import { monitoringMiddleware } from '@/middleware/monitoring';
 import {
   createSecureResponse,
@@ -8,22 +9,27 @@ import {
   isSecureRequest,
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
-import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
+import { logSecurityEvent } from '@/lib/logging/edge-logger';
 import {
   validateOriginForMiddleware,
   isOriginValidationBlocking,
+} from '@/lib/auth/origin-validation';
+import {
   MCP_TOKEN_PREFIX,
   SESSION_TOKEN_PREFIX,
   OAUTH_ACCESS_TOKEN_PREFIX,
-} from '@/lib/auth';
+} from '@/lib/auth/token-prefixes';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { WELL_KNOWN_REWRITES } from '@/lib/well-known/rewrites';
 
 // Edge-safe middleware: only checks presence of auth tokens, not validity.
 // Full validation happens in route handlers via verifyAuth()/validateMCPToken().
-// Bearer prefixes are imported from the real auth layer, not hand-duplicated —
-// see the export site for why (a duplicated ps_at_-less copy previously drifted
-// out of sync here, undetected because middleware never ran in production).
+// Every import above must stay edge-safe — leaf modules only, NEVER the
+// '@/lib/auth' barrel (Node-only graph: db, sessions, permissions) and never
+// @pagespace/lib's logger. Bearer prefixes come from the token-prefixes leaf
+// the auth layer itself re-exports, not a hand-duplicated copy — a duplicated
+// ps_at_-less copy previously drifted out of sync here, undetected because
+// middleware never ran in production.
 
 const MCP_BEARER_PREFIX = `Bearer ${MCP_TOKEN_PREFIX}`;
 const SESSION_BEARER_PREFIX = `Bearer ${SESSION_TOKEN_PREFIX}`;
@@ -46,7 +52,10 @@ const CLOUD_ONLY_ROUTE_PREFIXES = [
   '/api/auth/mobile/signup',
 ];
 
-export async function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest, event?: NextFetchEvent) {
+  // `event` lets the monitoring layer register its ingest POST with
+  // waitUntil(), so the Edge runtime can't cancel it when the response
+  // returns — it is the only persistence path for API metrics.
   return monitoringMiddleware(req, async () => {
     const { pathname } = req.nextUrl;
     const isProduction = process.env.NODE_ENV === 'production';
@@ -255,7 +264,7 @@ export async function middleware(req: NextRequest) {
     const { response } = createSecureResponse(isProduction, req, { isAPIRoute, disableCOEP: shouldDisableCOEP(pathname) });
 
     return response;
-  });
+  }, event);
 }
 
 export const config = {

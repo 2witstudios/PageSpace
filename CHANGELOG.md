@@ -139,6 +139,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Request middleware is now edge-safe and actually deployable** — registering the previously
+  dormant middleware took production down because its import graph reached Node-only code (the
+  database client and server logger) that the Edge runtime cannot execute. Middleware now uses
+  pure leaf modules (token prefixes, an edge-safe structured logger) and forwards API metrics to
+  the internal ingest route instead of writing to the database in-process; the build now fails
+  fast if a Node-only import ever reaches the middleware bundle again. Admin monitoring
+  dashboards begin receiving API request metrics once this deploys — the previous in-middleware
+  metrics writer had never actually run.
 - **GDPR data exports now include system logs, API metrics, and error logs** — the account data
   export (`Settings > Privacy > Download my data`) previously omitted these three monitoring
   tables even though they can carry your user ID until account deletion. They're now included in

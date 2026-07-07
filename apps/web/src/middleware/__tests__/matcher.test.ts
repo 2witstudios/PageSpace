@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // Mock all runtime dependencies so the static `config` export can be imported
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
+vi.mock('@/lib/logging/edge-logger', () => ({
   logSecurityEvent: vi.fn(),
-  logger: { child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() })) },
+  createEdgeLogger: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() })),
 }));
 vi.mock('@/middleware/monitoring', () => ({ monitoringMiddleware: vi.fn() }));
 vi.mock('@/middleware/security-headers', () => ({
@@ -13,12 +13,13 @@ vi.mock('@/middleware/security-headers', () => ({
   isPublishedSiteHost: vi.fn(),
   shouldDisableCOEP: vi.fn(),
 }));
-vi.mock('@/lib/auth', () => ({
+// middleware.ts imports origin validation from its leaf module (never the
+// Node-only '@/lib/auth' barrel), so that's what gets mocked. The bearer
+// prefixes load from the real '@/lib/auth/token-prefixes' leaf: it's pure and
+// edge-safe, and mocking it would just recreate the drift it exists to prevent.
+vi.mock('@/lib/auth/origin-validation', () => ({
   validateOriginForMiddleware: vi.fn(),
   isOriginValidationBlocking: vi.fn(),
-  MCP_TOKEN_PREFIX: 'mcp_',
-  SESSION_TOKEN_PREFIX: 'ps_sess_',
-  OAUTH_ACCESS_TOKEN_PREFIX: 'ps_at_',
 }));
 vi.mock('@/lib/auth/cookie-config', () => ({ getSessionFromCookies: vi.fn() }));
 

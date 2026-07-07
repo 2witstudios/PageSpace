@@ -19,21 +19,22 @@ vi.mock('@/middleware/security-headers', () => ({
   shouldDisableCOEP: () => false,
 }));
 
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
+vi.mock('@/lib/logging/edge-logger', () => ({
   logSecurityEvent: mockLogSecurityEvent,
+  createEdgeLogger: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() })),
 }));
 
-vi.mock('@/lib/auth', () => ({
+// middleware.ts imports origin validation from its leaf module (never the
+// Node-only '@/lib/auth' barrel), so that's what gets mocked. The bearer
+// prefixes are NOT mocked: middleware.ts builds its prefix checks from the
+// real '@/lib/auth/token-prefixes' leaf at module-load time (`Bearer
+// ${MCP_TOKEN_PREFIX}` etc.) — it's pure and edge-safe, and a mocked-away
+// value would silently break every prefix check this file's tests exercise
+// below, the same way a hand-duplicated copy already drifted out of sync once
+// (see middleware.ts's import site comment).
+vi.mock('@/lib/auth/origin-validation', () => ({
   validateOriginForMiddleware: mockValidateOriginForMiddleware,
   isOriginValidationBlocking: mockIsOriginValidationBlocking,
-  // Real string values, not mocks — middleware.ts builds its bearer-prefix
-  // checks from these at module-load time (`Bearer ${MCP_TOKEN_PREFIX}` etc.),
-  // so a mocked-away value here would silently break every prefix check this
-  // file's tests exercise below, the same way a hand-duplicated copy already
-  // drifted out of sync once (see middleware.ts's import site comment).
-  MCP_TOKEN_PREFIX: 'mcp_',
-  SESSION_TOKEN_PREFIX: 'ps_sess_',
-  OAUTH_ACCESS_TOKEN_PREFIX: 'ps_at_',
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({

@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { loggers } from '@pagespace/lib/logging/logger-config';
+import { createEdgeLogger } from '@/lib/logging/edge-logger';
+
+// This module runs in the Edge runtime (imported by middleware.ts), so it
+// must log through the edge-safe logger — @pagespace/lib's logger is Node-only.
+const authLogger = createEdgeLogger('auth');
 
 /**
  * Origin Header Validation for API Routes (Defense-in-Depth)
@@ -118,7 +122,7 @@ export function validateOrigin(request: Request): NextResponse | null {
   // Allow requests without Origin header
   // This handles same-origin requests, non-browser clients (curl, MCP), and older browsers
   if (!origin) {
-    loggers.auth.debug('Origin validation: no Origin header present (allowed)', {
+    authLogger.debug('Origin validation: no Origin header present (allowed)', {
       method: request.method,
       url: request.url,
     });
@@ -129,7 +133,7 @@ export function validateOrigin(request: Request): NextResponse | null {
 
   // If no allowed origins configured, log warning but allow request
   if (allowedOrigins.length === 0) {
-    loggers.auth.warn('Origin validation: WEB_APP_URL not configured, skipping validation', {
+    authLogger.warn('Origin validation: WEB_APP_URL not configured, skipping validation', {
       method: request.method,
       url: request.url,
       origin,
@@ -139,7 +143,7 @@ export function validateOrigin(request: Request): NextResponse | null {
 
   // Validate origin against allowed list
   if (isOriginAllowed(origin, allowedOrigins)) {
-    loggers.auth.debug('Origin validation successful', {
+    authLogger.debug('Origin validation successful', {
       method: request.method,
       url: request.url,
       origin,
@@ -148,7 +152,7 @@ export function validateOrigin(request: Request): NextResponse | null {
   }
 
   // Origin not in allowed list - reject with 403
-  loggers.auth.warn('Origin validation failed: unexpected origin', {
+  authLogger.warn('Origin validation failed: unexpected origin', {
     method: request.method,
     url: request.url,
     origin,
@@ -246,7 +250,7 @@ export function validateOriginForMiddleware(request: Request): MiddlewareOriginV
   // Skip validation if no Origin header
   // Non-browser clients (curl, MCP, mobile apps) may not send Origin
   if (!origin) {
-    loggers.auth.debug('Middleware origin validation: no Origin header (skipped)', {
+    authLogger.debug('Middleware origin validation: no Origin header (skipped)', {
       method,
       url,
     });
@@ -262,7 +266,7 @@ export function validateOriginForMiddleware(request: Request): MiddlewareOriginV
 
   // If no allowed origins configured, skip validation but log warning
   if (allowedOrigins.length === 0) {
-    loggers.auth.warn('Middleware origin validation: WEB_APP_URL not configured', {
+    authLogger.warn('Middleware origin validation: WEB_APP_URL not configured', {
       method,
       url,
       origin,
@@ -277,7 +281,7 @@ export function validateOriginForMiddleware(request: Request): MiddlewareOriginV
 
   // Check if origin is allowed
   if (isOriginAllowed(origin, allowedOrigins)) {
-    loggers.auth.debug('Middleware origin validation: valid origin', {
+    authLogger.debug('Middleware origin validation: valid origin', {
       method,
       url,
       origin,
@@ -301,7 +305,7 @@ export function validateOriginForMiddleware(request: Request): MiddlewareOriginV
   };
 
   if (mode === 'warn') {
-    loggers.auth.warn('Middleware origin validation: unexpected origin (warn mode)', logContext);
+    authLogger.warn('Middleware origin validation: unexpected origin (warn mode)', logContext);
     return {
       valid: false,
       origin,
@@ -309,7 +313,7 @@ export function validateOriginForMiddleware(request: Request): MiddlewareOriginV
       reason: 'Origin not in allowed list (warn mode - request allowed)',
     };
   } else {
-    loggers.auth.warn('Middleware origin validation: unexpected origin (block mode)', logContext);
+    authLogger.warn('Middleware origin validation: unexpected origin (block mode)', logContext);
     return {
       valid: false,
       origin,
