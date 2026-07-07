@@ -11,6 +11,11 @@ Because PR #1930's expand-contract fix only speeds up brand-new writes and only 
 
 ## Legacy-ciphertext re-encryption backfill
 
+**Status**: ✅ DONE (PR #1936 — live production run is a separate, explicit,
+human-supervised step; every reader of `users.email`/`users.name` must be on a
+#1930-aware image first, gated by `--apply` +
+`LEGACY_CIPHERTEXT_REENCRYPT_CONFIRMED=true`)
+
 Idempotent, resumable, dry-run-by-default script that reads every legacy-4-part-format `users.email`/`name` row, decrypts it via the existing dual-format `decrypt()`, and re-encrypts it via `encrypt()` (which always emits the fast 3-part format) — converging every row to the fast format so the legacy scrypt path is no longer on the hot read path for any existing user.
 
 **Requirements**:
@@ -78,3 +83,19 @@ After all four tasks land and deploy, confirm the fix actually closes the gap ra
 **Requirements**:
 - Given the full lib + web test suites and `bun run typecheck`, should be green with zero new failures across all four preceding tasks.
 - Given the fix is deployed to `pagespace-web`, should show HTTP Response Time Avg back down near the pre-regression ~0.3-0.5s baseline on the same Grafana panel used to diagnose this, not just an assumption that the code change helped.
+
+---
+
+## Follow-ups surfaced by PR #1936 review (not yet scheduled)
+
+- Other columns also hold pre-#1930 legacy 4-part ciphertext and pay
+  scrypt-per-decrypt on every read: integration connection credentials
+  (decrypted per tool execution), Google/Zoom OAuth tokens (token refresh only
+  rewrites the access token, so refresh tokens stay legacy indefinitely), and
+  `security_audit_log.ipAddress` rows written 2026-06-25 → 2026-07-06. Each
+  needs its own backfill reusing `reencryptLegacyValue` from
+  `packages/lib/src/encryption/legacy-ciphertext-reencrypt.ts`.
+- Systemic mitigation to consider: a small LRU keyed by salt in
+  `deriveLegacyKey` (mirroring the masterKeyCache pattern) would collapse
+  repeated decrypts of the same legacy value to one scrypt process-wide,
+  covering all legacy surfaces including the window before each backfill runs.
