@@ -217,6 +217,11 @@
       "import": "./dist/encryption/user-pii-backfill.js",
       "require": "./dist/encryption/user-pii-backfill.js"
     },
+    "./encryption/legacy-ciphertext-reencrypt": {
+      "types": "./dist/encryption/legacy-ciphertext-reencrypt.d.ts",
+      "import": "./dist/encryption/legacy-ciphertext-reencrypt.js",
+      "require": "./dist/encryption/legacy-ciphertext-reencrypt.js"
+    },
     "./auth/device-auth-utils": {
       "types": "./dist/auth/device-auth-utils.d.ts",
       "import": "./dist/auth/device-auth-utils.js",
@@ -1482,6 +1487,9 @@
       ],
       "encryption/user-pii-backfill": [
         "./dist/encryption/user-pii-backfill.d.ts"
+      ],
+      "encryption/legacy-ciphertext-reencrypt": [
+        "./dist/encryption/legacy-ciphertext-reencrypt.d.ts"
       ],
       "auth/device-auth-utils": [
         "./dist/auth/device-auth-utils.d.ts"

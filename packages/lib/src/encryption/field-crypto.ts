@@ -39,12 +39,21 @@ export function looksEncrypted(value: unknown): boolean {
     return isValidCiphertextHex(iv, tag, ct);
   }
 
-  if (parts.length === 4) {
-    const [salt, iv, tag, ct] = parts;
-    return salt.length === SALT_HEX_LEN && isHex(salt) && isValidCiphertextHex(iv, tag, ct);
-  }
+  return looksLegacyEncrypted(value);
+}
 
-  return false;
+/**
+ * True iff `value` matches ONLY the legacy 4-part `salt:iv:authTag:ciphertext`
+ * envelope — the shape whose decrypt still pays a per-record scrypt
+ * (`deriveLegacyKey`). Used by the legacy-ciphertext re-encryption backfill to
+ * pick out rows that need converting to the fast 3-part format.
+ */
+export function looksLegacyEncrypted(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const parts = value.split(':');
+  if (parts.length !== 4) return false;
+  const [salt, iv, tag, ct] = parts;
+  return salt.length === SALT_HEX_LEN && isHex(salt) && isValidCiphertextHex(iv, tag, ct);
 }
 
 /** Encrypt a field value, skipping empty/null and already-encrypted values. */
