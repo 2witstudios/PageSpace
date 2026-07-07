@@ -81,10 +81,14 @@ deploy/crash mid-session silently loses the whole session's billing.
   webhook makes a real subscriber look comped (double-grant window); a
   first-class comped/billing-mode flag on the account would key on declared
   intent. The in-tx re-check narrows but does not eliminate this.
-- **Gifted subscriptions**: a `gifted=true` subscription with status `active`
-  counts as renewal-capable; if gift flows don't deliver `invoice.paid` to the
-  recipient, those accounts still never refill. Verify the gift funding path
-  and exclude gifted rows if so.
+- **Gifted subscriptions**: RESOLVED by prod evidence (2026-07-07). No prod
+  subscription has `gifted=true` (the flag needs `metadata.type =
+  'gift_subscription'`, which nothing sets — the in-app gift flow is unused).
+  Actual gift accounts are dashboard-created Stripe subscriptions (3 of the 4
+  `active` subs; 1 real payer) and Stripe fires `invoice.paid` on their $0
+  renewal invoices — all 4 have invoice-keyed `monthly_grant` rows — so they
+  refill like paying accounts and are correctly renewal-capable. No exclusion
+  needed.
 - **Predicate drift**: window-expiry staleness is now computed in three places
   (credit-gate, credit-balance display, usage-breakdown) with intentionally
   different null semantics; converge on shared helpers in packages/lib/billing.
