@@ -106,7 +106,7 @@ export function createLoginHandler(deps: LoginHandlerDeps): CommandHandler {
             : `Logged in to ${host}.\n`,
         );
         ctx.stdout.write(
-          `Scope: ${result.scope} — key-management access only, with zero content access; run "pagespace tokens create" to mint a scoped key for actual content access.\n`,
+          `Scope: ${result.scope} — key-management access only, with zero content access; run "pagespace keys create" to mint a scoped key for actual content access.\n`,
         );
         return EXIT_SUCCESS;
       case 'timeout':

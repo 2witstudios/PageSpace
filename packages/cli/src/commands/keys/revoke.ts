@@ -1,5 +1,5 @@
 /**
- * `pagespace tokens revoke <tokenId>` (Phase 4 task 6) — destructive.
+ * `pagespace keys revoke <tokenId>` (Phase 4 task 6) — destructive.
  * Auth flows only through `ctx.sdk` — see create.ts for why this handler
  * has no auth wiring of its own; by the time this handler runs, `ctx.sdk`
  * is authenticated (or `run.ts`'s `enforceAuth` already exited 1 with a
@@ -11,9 +11,8 @@
  * (`pages trash`, `drives trash`, `tasks delete`, ...) uses, via the
  * `HandlerContext`'s own `isTTY`/`prompt`.
  *
- * `tokensRevoke` is exported separately from `tokensRevokeHandler` so
- * `commands/keys/aliases.ts` can wrap it in a distinct `CommandHandler`
- * reference (Phase 9 task 5) — see the identical note in `list.ts`.
+ * `tokensRevoke` is exported separately from `tokensRevokeHandler` purely so
+ * tests can call the plain function without going through the router.
  */
 import { revokeMcpToken } from '@pagespace/sdk';
 import { confirmationFailureMessage, confirmDestructive } from '../../confirm.js';

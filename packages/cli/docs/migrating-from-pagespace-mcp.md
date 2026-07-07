@@ -31,7 +31,7 @@ Old config (`claude_desktop_config.json`):
 
 New config — install `@pagespace/cli` once (`npm install -g @pagespace/cli` or use `npx -y -p
 @pagespace/cli pagespace`), then mint a drive-scoped key for the agent (`pagespace keys`, guided,
-or `pagespace tokens create --drive <id> --role member --save-as-profile agent`, flag-driven —
+or `pagespace keys create --drive <id> --role member --save-as-profile agent`, flag-driven —
 either way it opens a browser for a one-time consent screen and saves the result under a profile
 name), and point the MCP config at that profile:
 
@@ -92,7 +92,7 @@ New:
 ## Explicit-token variant (agents, CI, headless boxes)
 
 `pagespace login` needs a browser and isn't appropriate for CI or a service account.
-`pagespace tokens create` also opens a browser now — minting a token is always a deliberate,
+`pagespace keys create` also opens a browser now — minting a token is always a deliberate,
 human-approved consent step, on this CLI as much as on the web — so it isn't a source for a
 copy-pasteable secret either. For a headless box, mint a scoped token from **Settings → MCP** in
 the app instead, where a human is already in an authenticated browser tab:
@@ -136,10 +136,10 @@ behaves exactly like `pagespace mcp` and honors your existing `PAGESPACE_API_URL
 ```
 
 This `pagespace-mcp` bin is itself a first-class, supported entry point — not a deprecated shim —
-so there's no pressure to move off it. Whenever it's convenient, a `pagespace keys`/`tokens
-create` profile (for a person's own machine) or a Settings → MCP token (for CI) plus the plain
-`["mcp"]` args form is the same server with one fewer moving part, but staying on `pagespace-mcp`
-via `npx` is a perfectly fine destination too.
+so there's no pressure to move off it. Whenever it's convenient, a profile created via `pagespace
+keys` (guided) or `pagespace keys create` (flag-driven) (for a person's own machine) or a Settings
+→ MCP token (for CI) plus the plain `["mcp"]` args form is the same server with one fewer moving
+part, but staying on `pagespace-mcp` via `npx` is a perfectly fine destination too.
 
 ## What changed, mechanically
 

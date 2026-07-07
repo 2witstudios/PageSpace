@@ -255,7 +255,7 @@ describe('createTokensCreateHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create']));
+    const code = await handler(ctx, commandIntent(['keys', 'create']));
 
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(stderr.lines.join('')).toContain('--drive');
@@ -269,7 +269,7 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       ctx,
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--drive', 'drv2']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--drive', 'drv2']),
     );
 
     expect(code).toBe(EXIT_USAGE_ERROR);
@@ -291,7 +291,7 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       ctx,
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'default']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'default']),
     );
 
     expect(code).toBe(EXIT_USAGE_ERROR);
@@ -312,7 +312,7 @@ describe('createTokensCreateHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'default', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'default', '--role', 'member']));
 
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(stderr.lines.join('')).toContain('"default"');
@@ -334,7 +334,7 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       createFakeContext({ env: {} }),
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']),
     );
 
     expect(code).toBe(EXIT_SUCCESS);
@@ -357,7 +357,7 @@ describe('createTokensCreateHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stdout, stderr, env: {} });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'admin']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'admin']));
 
     expect(code).toBe(EXIT_SUCCESS);
     const allOutput = [...stdout.lines, ...stderr.lines].join('');
@@ -377,7 +377,7 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       createFakeContext({ env: {} }),
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'ci-bot']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'ci-bot']),
     );
 
     expect(code).toBe(EXIT_SUCCESS);
@@ -397,7 +397,7 @@ describe('createTokensCreateHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/--yes/);
@@ -420,7 +420,7 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       createFakeContext({ env: {} }),
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member', '--yes']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--yes']),
     );
 
     expect(code).toBe(EXIT_SUCCESS);
@@ -439,7 +439,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('offline');
@@ -461,7 +461,7 @@ describe('createTokensCreateHandler', () => {
     const stdout = createRecordingSink();
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stdout, stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/consent was denied/i);
@@ -483,7 +483,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/consent timed out/i);
@@ -504,7 +504,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/did not match this request/i);
@@ -526,7 +526,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/consent failed: server_error/i);
@@ -548,7 +548,7 @@ describe('createTokensCreateHandler', () => {
     const stdout = createRecordingSink();
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stdout, stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/exchanging the authorization code/i);
@@ -571,7 +571,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/could not bind a local loopback port/i);

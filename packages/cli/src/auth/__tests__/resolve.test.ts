@@ -305,10 +305,10 @@ describe('hasExplicitCredential — pagespace mcp fail-closed gate (Phase 8 task
 });
 
 describe('noExplicitCredentialMessage', () => {
-  it('points at tokens create, --save-as-profile, and how to pass the result, with no secret material', () => {
+  it('points at keys create, --save-as-profile, and how to pass the result, with no secret material', () => {
     const message = noExplicitCredentialMessage();
     expect(message).toMatch(/never falls back to your personal login/i);
-    expect(message).toContain('tokens create');
+    expect(message).toContain('keys create');
     expect(message).toContain('--save-as-profile');
     expect(message).toContain('PAGESPACE_TOKEN');
     expect(message).toContain('--profile');

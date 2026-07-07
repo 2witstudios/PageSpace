@@ -85,7 +85,7 @@ describe('createMcpHandler — fails closed with no explicit credential (Phase 8
     expect(createTransportCalls).toBe(0);
     expect(stdout.lines).toEqual([]);
     expect(stderr.lines.join('')).toMatch(/never falls back to your personal login/i);
-    expect(stderr.lines.join('')).toContain('tokens create');
+    expect(stderr.lines.join('')).toContain('keys create');
     expect(stderr.lines.join('')).not.toContain('serving');
   });
 

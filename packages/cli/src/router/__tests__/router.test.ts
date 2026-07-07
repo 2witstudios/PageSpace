@@ -14,16 +14,16 @@ describe('resolveRoute', () => {
   });
 
   it('matches a multi-segment route and returns trailing args as rest', () => {
-    const tokensCreate = route(['tokens', 'create']);
-    const result = resolveRoute([tokensCreate], ['tokens', 'create', '--extra']);
-    expect(result).toEqual({ kind: 'match', route: tokensCreate, rest: ['--extra'] });
+    const keysCreate = route(['keys', 'create']);
+    const result = resolveRoute([keysCreate], ['keys', 'create', '--extra']);
+    expect(result).toEqual({ kind: 'match', route: keysCreate, rest: ['--extra'] });
   });
 
   it('prefers the longest matching path when routes overlap', () => {
-    const tokens = route(['tokens']);
-    const tokensCreate = route(['tokens', 'create']);
-    const result = resolveRoute([tokens, tokensCreate], ['tokens', 'create']);
-    expect(result).toEqual({ kind: 'match', route: tokensCreate, rest: [] });
+    const keys = route(['keys']);
+    const keysCreate = route(['keys', 'create']);
+    const result = resolveRoute([keys, keysCreate], ['keys', 'create']);
+    expect(result).toEqual({ kind: 'match', route: keysCreate, rest: [] });
   });
 
   it('returns a usage error for an unknown command', () => {

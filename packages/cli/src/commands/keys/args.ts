@@ -1,5 +1,5 @@
 /**
- * Pure argv → request mapping for `tokens create`/`tokens revoke` (Phase 8
+ * Pure argv → request mapping for `keys create`/`keys revoke` (Phase 8
  * task 2). Operates on the leftover raw tokens the router hands a matched
  * route (`CommandIntent.args` after the path prefix is stripped) — global
  * flags (`--json`, `--yes`, `--host`, `--token`, `--profile`) are already
@@ -91,7 +91,7 @@ export type ParseTokensRevokeArgsResult =
 
 export function parseTokensRevokeArgs(rest: readonly string[]): ParseTokensRevokeArgsResult {
   const tokenId = rest[0];
-  if (!tokenId) return { ok: false, message: 'Usage: pagespace tokens revoke <tokenId>' };
+  if (!tokenId) return { ok: false, message: 'Usage: pagespace keys revoke <tokenId>' };
   if (rest.length > 1) return { ok: false, message: `Unexpected extra argument: ${rest[1]}` };
   return { ok: true, args: { tokenId } };
 }

@@ -4,7 +4,7 @@ The `pagespace` command-line client — a thin verb layer over `@pagespace/sdk`.
 authenticates you with a real OAuth 2.1 credential, scoped to key management only — it grants no
 content access by itself. `pagespace keys` is the guided way to mint, list, and revoke the
 drive-scoped credentials you actually read/write content with, through the same browser consent
-screen `pagespace tokens create` (its flag-driven, scriptable equivalent) uses — minting a
+screen its flag-driven, scriptable equivalent — `pagespace keys create` — uses — minting a
 credential, either way, is never a silent, agent-runnable call.
 
 ## Install
@@ -49,7 +49,7 @@ pagespace login --device
 
 This prints a short code and a verification URL — approve it from any browser, and the CLI polls
 until the login completes. Step 3's `pagespace keys` wizard still needs a browser of its own (on
-any machine) to approve the drive-scoped grant; for a fully headless mint, use `pagespace tokens
+any machine) to approve the drive-scoped grant; for a fully headless mint, use `pagespace keys
 create --drive <id> --role member --save-as-profile <name>` and approve that from any browser
 instead of running the interactive wizard.
 
@@ -60,9 +60,9 @@ logout && pagespace login`).
 
 ## Auth
 
-**`pagespace login` is for you, personally. `pagespace tokens create` is for an agent.** Setting
+**`pagespace login` is for you, personally. `pagespace keys create` is for an agent.** Setting
 up your own machine? Run `login`. Wiring `pagespace mcp` into an agent, CI job, or any other
-automated caller? Run `tokens create --save-as-profile agent` instead — never `login` — and see
+automated caller? Run `keys create --save-as-profile agent` instead — never `login` — and see
 [`docs/agent-access.md`](docs/agent-access.md) for what a scoped token does and doesn't protect
 against once that agent has real shell access.
 
@@ -76,20 +76,20 @@ against once that agent has real shell access.
   host, or every host with `--all`.
 - **`pagespace whoami [--json]`** — prints the identity and scope the current credential resolves
   to.
-- **`pagespace keys`** — the guided, interactive counterpart to `tokens create` below: a TUI
-  wizard to create, list, edit, and revoke drive-scoped keys without leaving the terminal.
-  `pagespace keys create`, `pagespace keys list [--json]`, and `pagespace keys revoke <tokenId>
-  [--yes]` are flag-driven, scriptable equivalents of the same wizard actions.
-- **`pagespace tokens create --drive <id> --role member|admin|<roleId> [--drive <id> --role ...] --save-as-profile <name> [--yes]`** —
-  mints a credential scoped to the given drive(s)/role(s) for an agent or automated process, not
-  you. Opens the same browser consent screen `pagespace login` uses, then stores the result under
-  a named profile (`--save-as-profile`, defaulting to the drive id when only one drive is given)
-  instead of the `pagespace login` default profile — pass that profile to the agent's invocation
-  with `--profile <name>` or by setting `PAGESPACE_PROFILE`. There is no non-interactive way to
-  mint a token from the CLI — for a portable credential to hand to a CI job or service account on a
-  *different* machine, mint one from **Settings → MCP** in the app instead.
-  `pagespace tokens list [--json]` and `pagespace tokens revoke <tokenId>` manage tokens minted
-  either way.
+- **`pagespace keys`** — the one surface for creating, listing, editing, and revoking drive-scoped
+  keys without leaving the terminal: a guided TUI wizard, plus flag-driven, scriptable equivalents
+  of the same actions.
+  - **`pagespace keys create --drive <id> --role member|admin|<roleId> [--drive <id> --role ...] --save-as-profile <name> [--yes]`**
+    — mints a credential scoped to the given drive(s)/role(s) for an agent or automated process,
+    not you. Opens the same browser consent screen `pagespace login` uses, then stores the result
+    under a named profile (`--save-as-profile`, defaulting to the drive id when only one drive is
+    given) instead of the `pagespace login` default profile — pass that profile to the agent's
+    invocation with `--profile <name>` or by setting `PAGESPACE_PROFILE`. There is no
+    non-interactive way to mint a key from the CLI — for a portable credential to hand to a CI job
+    or service account on a *different* machine, mint one from **Settings → MCP** in the app
+    instead.
+  - **`pagespace keys list [--json]`** and **`pagespace keys revoke <tokenId> [--yes]`** manage
+    keys minted either way (wizard or flags).
 
 ### Credential precedence
 
@@ -106,12 +106,12 @@ package) still works — it fills the `PAGESPACE_TOKEN` slot when that variable 
 one-line stderr deprecation notice. Prefer `PAGESPACE_TOKEN` going forward.
 
 **This precedence only ever runs at all if the command names a credential explicitly.** Every
-command except `login`, `logout`, `whoami`, `help`, `tokens create`, and the `keys` surface
+command except `login`, `logout`, `whoami`, `help`, and the `keys` surface
 refuses to run with none of `--token`, `PAGESPACE_TOKEN`, `--profile`, or `PAGESPACE_PROFILE`
 given — it will not silently fall through to the `"default"` profile `pagespace login` wrote. So
 a bare `pagespace login` alone is never enough to run `pagespace drives list` (or almost anything
 else): pass `--profile <name>` (or set `PAGESPACE_PROFILE`) naming a credential minted by
-`pagespace keys` or `pagespace tokens create`.
+`pagespace keys` or `pagespace keys create`.
 
 ## Command reference
 
@@ -130,10 +130,9 @@ Every command follows `pagespace <resource> <verb> [args] [flags]`.
 | `activity` | `<driveId>` |
 | `channels` | `send <channelId> <message>` |
 | `keys` | `(no args — guided TUI)`, `create --drive <id> --role member\|admin\|<roleId> [--drive <id> --role ...] --save-as-profile <name> [--yes]`, `list [--json]`, `revoke <tokenId> [--yes]` |
-| `tokens` | `create --drive <id> --role member\|admin\|<roleId> [--save-as-profile <name>] [--yes]`, `list`, `revoke <tokenId> [--yes]` |
 
 Every command supports `--json` (machine-readable output on stdout, nothing else) and `--host
-<url>` / `--token <token>` (override the resolved config for that one call) — except `tokens
+<url>` / `--token <token>` (override the resolved config for that one call) — except `keys
 create`, which always prints its human-readable consent-flow status; `--json` is silently ignored
 there, since minting now blocks on an interactive browser consent screen and never prints a
 portable token to parse in the first place.
@@ -162,10 +161,10 @@ path.
 }
 ```
 
-Mint the portable `mcp_...` token above from **Settings → MCP** in the app — `pagespace tokens
+Mint the portable `mcp_...` token above from **Settings → MCP** in the app — `pagespace keys
 create` (see [Auth](#auth)) stores its credential locally under a named profile instead of
 printing a copyable secret, so it isn't the right tool for populating another machine's `env`
-block. If the MCP client runs on *this* machine, skip the portable token: run `pagespace tokens
+block. If the MCP client runs on *this* machine, skip the portable token: run `pagespace keys
 create --drive <id> --role member --save-as-profile agent`, then set `"env": { "PAGESPACE_PROFILE":
 "agent" }` (or `--profile agent`) instead of `PAGESPACE_TOKEN` — that's a credential scoped to the
 agent, not your personal login. Do not point an agent's config at `pagespace login`'s stored

@@ -196,7 +196,7 @@ describe('createKeysHandler — unknown "keys" subcommand', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, isTTY: true });
 
-    // The bare `keys` route is only ONE path segment (unlike ['tokens','list']'s
+    // The bare `keys` route is only ONE path segment (unlike ['keys','list']'s
     // two), so only that one token is stripped before the handler sees `intent.args`.
     const parsed = parseArgv(['keys', 'lsit']);
     if (parsed.kind !== 'command') throw new Error('expected command');
