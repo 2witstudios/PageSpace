@@ -8,14 +8,16 @@
  * implementations (not mocked) so it fails if that carve-out regresses
  * either direction.
  *
- * POST is credential *minting*, which Phase 8's step-up gate requires for
- * every caller regardless of credential shape — a manage_keys OAuth bearer
- * token is itself an ambient secret, so it gets no exception. Minting via a
- * manage_keys credential goes through the same session + step-up
- * browser-consent flow (`pagespace keys create`) as everyone else, not a
- * direct bearer POST; AUTH_OPTIONS_WRITE only allows 'session' here, so an
- * oauth-shaped auth object (however it arrived) is stopped by the step-up
- * gate before any scope check runs.
+ * POST is session-only (AUTH_OPTIONS_WRITE = { allow: ['session'] }) — no
+ * OAuth bearer credential, manage_keys-scoped or otherwise, can reach this
+ * route at all, regardless of any request body. The CLI mints a scoped
+ * mcp_* credential exclusively through the separate OAuth authorize/consent
+ * flow (`pagespace keys create`), which has its own step-up gate — this
+ * REST route's step-up requirement was removed as web-UI-only and
+ * redundant with that (see #1927). That allow-list enforcement is asserted
+ * directly against the real `authenticateRequestWithOptions` in
+ * route.test.ts; this file only fully mocks that function to exercise the
+ * manage-keys carve-out on GET, so it has nothing further to test on POST.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -70,7 +72,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   validateDriveScopeAccess: vi.fn(),
 }));
 
-import { POST, GET } from '../route';
+import { GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 
@@ -84,42 +86,6 @@ describe('mcp-tokens routes — manage_keys-only vs drive-scoped OAuth (real isS
     } as never);
     vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([]);
     vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([]);
-  });
-
-  describe('POST /api/auth/mcp-tokens', () => {
-    it('does not exempt a manage_keys-only OAuth credential from the step-up gate — no stepUpToken means 401, never a mint', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(manageKeysScopedAuthResult());
-
-      const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'My Token' }),
-      });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(401);
-      expect(body.error).toBe('step_up_required');
-      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
-    });
-
-    it('still rejects a drive-scoped OAuth credential the same way — step-up gate fires before any scope check, never reaching the repository', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(driveScopedOAuthAuthResult());
-
-      const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'My Token' }),
-      });
-
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(401);
-      expect(body.error).toBe('step_up_required');
-      expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
-    });
   });
 
   describe('GET /api/auth/mcp-tokens', () => {
