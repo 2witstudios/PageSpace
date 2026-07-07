@@ -1,6 +1,8 @@
 /**
- * `pagespace tokens create` (Phase 8 task 2). Mints a scoped credential the
- * same way `pagespace login` mints an unscoped one: opens a browser to the
+ * `pagespace keys create` (Phase 8 task 2; the sole minting surface since the
+ * Phase 9 follow-up folded the old `tokens create` command into `keys`).
+ * Mints a scoped credential the same way `pagespace login` mints an unscoped
+ * one: opens a browser to the
  * OAuth authorize/consent screen and runs the loopback+PKCE state machine
  * (`runLoopbackLogin`) with a `drive:<id>:<role> offline_access` scope
  * instead of `login`'s `account offline_access`. There is no other minting
@@ -210,11 +212,11 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
         ctx.stdout.write(`Created profile "${profileName}" on ${host}, scoped to: ${scopeResult.scope}.\n`);
         return EXIT_SUCCESS;
       case 'timeout':
-        ctx.stderr.write('Consent timed out waiting for the browser redirect. Run "pagespace tokens create" again.\n');
+        ctx.stderr.write('Consent timed out waiting for the browser redirect. Run "pagespace keys create" again.\n');
         return EXIT_RUNTIME_ERROR;
       case 'state_mismatch':
         ctx.stderr.write(
-          'Consent failed: the authorization response did not match this request. Run "pagespace tokens create" again.\n',
+          'Consent failed: the authorization response did not match this request. Run "pagespace keys create" again.\n',
         );
         return EXIT_RUNTIME_ERROR;
       case 'access_denied':

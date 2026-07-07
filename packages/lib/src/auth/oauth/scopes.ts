@@ -214,6 +214,19 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
   return true;
 }
 
+/**
+ * True iff this grant is a pure content-access grant — one or more `drive:*`
+ * scopes and nothing else (no `account`, no `manage_keys`). Parse-time
+ * exclusion already guarantees `account`/`manageKeys`/`drives` are mutually
+ * exclusive (see `parseScopeList` above), so this is just the "has drives"
+ * case named for callers that need to branch on it (e.g. OAuth token
+ * issuance minting a real `mcp_tokens` row instead of an OAuth grant for
+ * this shape specifically).
+ */
+export function isPureDriveGrant(scopes: ScopeSet): boolean {
+  return !scopes.account && !scopes.manageKeys && scopes.drives.size > 0;
+}
+
 /** Bridge to the capability model: rows in mcp_token_drives shape (Decision 2). */
 export function scopeSetToDriveScopes(scopes: ScopeSet): DriveScopeRow[] {
   const sortedDriveIds = [...scopes.drives.keys()].sort();

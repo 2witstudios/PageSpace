@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createLoginDeviceHandler, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, parseArgv } from '@pagespace/cli';
+import { createLoginDeviceHandler, credentialSecret, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, parseArgv } from '@pagespace/cli';
 import type { DeviceAuthorization, DeviceTokenResult, HostCredential, CredentialStore } from '@pagespace/cli';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
 const FIXED_TOKENS = {
+  kind: 'oauth' as const,
   accessToken: 'ps_at_test',
   refreshToken: 'ps_rt_test',
   expiresIn: 900,
@@ -39,7 +40,7 @@ function fakeStore(initial: Map<string, HostCredential> = new Map()): Credential
     list: async () =>
       [...hosts.entries()]
         .filter(([, profiles]) => profiles.has('default'))
-        .map(([host, profiles]) => ({ host, tokenPrefix: profiles.get('default')!.refreshToken.slice(0, 12) })),
+        .map(([host, profiles]) => ({ host, tokenPrefix: credentialSecret(profiles.get('default')!).slice(0, 12) })),
   };
 }
 
@@ -132,7 +133,7 @@ describe('createLoginDeviceHandler', () => {
 
   it('refuses to overwrite an existing stored profile without --yes', async () => {
     const store = fakeStore(
-      new Map([['https://pagespace.ai', { refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
+      new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
     const handler = createLoginDeviceHandler(baseHandlerDeps(store));
 
@@ -148,7 +149,7 @@ describe('createLoginDeviceHandler', () => {
 
   it('overwrites an existing stored profile when --yes is passed', async () => {
     const store = fakeStore(
-      new Map([['https://pagespace.ai', { refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
+      new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
     const handler = createLoginDeviceHandler(baseHandlerDeps(store));
 
@@ -157,7 +158,7 @@ describe('createLoginDeviceHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     const stored = await store.get('https://pagespace.ai');
-    expect(stored?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
   });
 
   it('resolves the host from --host, falling back to PAGESPACE_API_URL, then the default', async () => {
@@ -213,7 +214,7 @@ describe('createLoginDeviceHandler', () => {
 describe('createLoginDeviceHandler — named profiles', () => {
   it('--profile stores the device-login credential under the named profile, leaving "default" for the same host untouched', async () => {
     const store = fakeStore(
-      new Map([['https://pagespace.ai', { refreshToken: 'ps_rt_existing_default', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
+      new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing_default', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
     const handler = createLoginDeviceHandler(baseHandlerDeps(store));
 
@@ -222,9 +223,9 @@ describe('createLoginDeviceHandler — named profiles', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     const workCredential = await store.get('https://pagespace.ai', 'work');
-    expect(workCredential?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    expect((workCredential && credentialSecret(workCredential))).toBe(FIXED_TOKENS.refreshToken);
     const defaultCredential = await store.get('https://pagespace.ai', 'default');
-    expect(defaultCredential?.refreshToken).toBe('ps_rt_existing_default');
+    expect((defaultCredential && credentialSecret(defaultCredential))).toBe('ps_rt_existing_default');
   });
 
   it('PAGESPACE_PROFILE env selects the profile when --profile is absent', async () => {
@@ -235,13 +236,13 @@ describe('createLoginDeviceHandler — named profiles', () => {
     const code = await handler(ctx, commandIntent(['login', '--device']));
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect((await store.get('https://pagespace.ai', 'work'))?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    expect(credentialSecret((await store.get('https://pagespace.ai', 'work'))!)).toBe(FIXED_TOKENS.refreshToken);
     expect(await store.get('https://pagespace.ai', 'default')).toBeNull();
   });
 
   it('the existing-credential check is scoped to the named profile, not just the host', async () => {
     const store = fakeStore(
-      new Map([['https://pagespace.ai', { refreshToken: 'ps_rt_existing_default', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
+      new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing_default', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
     const handler = createLoginDeviceHandler(baseHandlerDeps(store));
 
@@ -255,7 +256,7 @@ describe('createLoginDeviceHandler — named profiles', () => {
     const store = fakeStore();
     await store.set(
       'https://pagespace.ai',
-      { refreshToken: 'ps_rt_existing_work', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' },
+      { kind: 'oauth', refreshToken: 'ps_rt_existing_work', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' },
       'work',
     );
     const handler = createLoginDeviceHandler(baseHandlerDeps(store));

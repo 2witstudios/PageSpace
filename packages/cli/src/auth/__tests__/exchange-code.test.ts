@@ -43,11 +43,27 @@ describe('createExchangeCode', () => {
     expect(body.has('client_secret')).toBe(false);
 
     expect(tokens).toEqual({
+      kind: 'oauth',
       accessToken: 'ps_at_x',
       refreshToken: 'ps_rt_x',
       expiresIn: 900,
       scope: 'account offline_access',
     });
+  });
+
+  it('parses an mcp-kind response (pure drive:* grant) into a static token result, with no refresh_token/expires_in expected', async () => {
+    const fetchImpl = (async () => ({
+      ok: true,
+      json: async () => ({
+        access_token: 'mcp_abc123',
+        token_type: 'mcp',
+        scope: 'drive:d1:member offline_access',
+      }),
+    })) as unknown as typeof fetch;
+
+    const tokens = await createExchangeCode(fetchImpl)(PARAMS);
+
+    expect(tokens).toEqual({ kind: 'mcp', token: 'mcp_abc123', scope: 'drive:d1:member offline_access' });
   });
 
   it('throws a TokenExchangeError named after the server error code on a 400', async () => {

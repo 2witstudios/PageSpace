@@ -59,17 +59,12 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   validateDriveScopeAccess: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth/step-up-service', () => ({
-  consumeStepUpGrant: vi.fn(),
-}));
-
 import { DELETE, PATCH } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth, isManageKeysOnly } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
-import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 
 const createContext = (tokenId = 'token-123') => ({
   params: Promise.resolve({ tokenId }),
@@ -141,7 +136,7 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
     expect(response.status).toBe(401);
   });
 
-  it('allows OAuth bearer tokens (CLI `pagespace tokens revoke`), not just session cookies', async () => {
+  it('allows OAuth bearer tokens (CLI `pagespace keys revoke`), not just session cookies', async () => {
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
       method: 'DELETE',
       headers: { 'X-CSRF-Token': 'valid-csrf-token' },
@@ -267,7 +262,6 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
       invalidCustomRoles: [],
       unauthorizedCustomRoles: [],
     });
-    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
   });
 
   it('no longer accepts OAuth bearer tokens — widening scopes requires a session, not just a token', async () => {
@@ -286,74 +280,6 @@ describe('PATCH /api/auth/mcp-tokens/[tokenId]', () => {
       request,
       { allow: ['session'], requireCSRF: true },
     );
-  });
-
-  describe('step-up gate', () => {
-    it('returns 401 when stepUpToken is missing, never reaching the repository', async () => {
-      const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
-        method: 'PATCH',
-        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
-        body: JSON.stringify({ drives: [{ id: 'drive-1' }] }),
-      });
-
-      const response = await PATCH(request, createContext());
-
-      expect(response.status).toBe(401);
-      expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
-    });
-
-    it('returns 401 when the step-up grant fails to consume, never reaching the repository', async () => {
-      vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: false, error: { code: 'STEP_UP_REQUIRED' } } as never);
-
-      const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
-        method: 'PATCH',
-        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
-        body: JSON.stringify({ drives: [{ id: 'drive-1' }], stepUpToken: 'ps_stepup_bad' }),
-      });
-
-      const response = await PATCH(request, createContext());
-
-      expect(response.status).toBe(401);
-      expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
-    });
-
-    it('reports an empty-string stepUpToken with the exact same error shape as a missing one — no validation oracle', async () => {
-      const missingRequest = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
-        method: 'PATCH',
-        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
-        body: JSON.stringify({ drives: [{ id: 'drive-1' }] }),
-      });
-      const emptyRequest = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
-        method: 'PATCH',
-        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
-        body: JSON.stringify({ drives: [{ id: 'drive-1' }], stepUpToken: '' }),
-      });
-
-      const missingResponse = await PATCH(missingRequest, createContext());
-      const emptyResponse = await PATCH(emptyRequest, createContext());
-
-      expect(emptyResponse.status).toBe(missingResponse.status);
-      expect(emptyResponse.status).toBe(401);
-      expect(await emptyResponse.json()).toEqual(await missingResponse.json());
-      expect(consumeStepUpGrant).not.toHaveBeenCalled();
-      expect(sessionRepository.updateMcpTokenDriveScopes).not.toHaveBeenCalled();
-    });
-
-    it('consumes the step-up grant bound to this tokenId + target drive scopes', async () => {
-      const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
-        method: 'PATCH',
-        headers: { Cookie: 'ps_session=valid-token', 'X-CSRF-Token': 'valid-csrf-token' },
-        body: JSON.stringify({ drives: [{ id: 'drive-1', role: 'ADMIN' }], stepUpToken: 'ps_stepup_test' }),
-      });
-
-      await PATCH(request, createContext());
-
-      expect(consumeStepUpGrant).toHaveBeenCalledWith({
-        userId: 'test-user-id',
-        token: 'ps_stepup_test',
-        actionBinding: { op: 'update', name: 'token-123', driveScopes: '[["drive-1","ADMIN",""]]' },
-      });
-    });
   });
 
   it('returns 404 when token not found', async () => {

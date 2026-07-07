@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import {
   ChevronRight,
@@ -61,6 +61,7 @@ import { useGithubRepos, type GithubRepo } from '@/hooks/useGithubRepos';
 import { useProviders } from '@/hooks/useIntegrations';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import { useTerminalWorkspaceStore, type OpenTerminalScope } from '@/stores/terminal-workspace/useTerminalWorkspaceStore';
 import EmptyState from './EmptyState';
 
 const AGENT_TYPES = Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[];
@@ -71,21 +72,21 @@ export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url
   return { name: segments[segments.length - 1] || repo.full_name, repoUrl: repo.clone_url };
 }
 
-/** Identifies which terminal to open in the middle panel — neither `projectName` nor `branchName` set is machine scope, `projectName` alone is project scope, both is branch scope. */
-export interface OpenTerminalScope {
-  projectName?: string;
-  branchName?: string;
-  name: string;
-}
+export type { OpenTerminalScope };
 
 interface NavigatorProps {
   terminalId: string;
-  onOpenTerminal(scope: OpenTerminalScope): void;
 }
 
-export default function Navigator({ terminalId, onOpenTerminal }: NavigatorProps) {
+export default function Navigator({ terminalId }: NavigatorProps) {
+  const openTerminal = useTerminalWorkspaceStore((state) => state.openTerminal);
+  const onOpenTerminal = useCallback(
+    (scope: OpenTerminalScope) => openTerminal(terminalId, scope),
+    [openTerminal, terminalId],
+  );
+
   return (
-    <div className="flex h-full flex-col border-l">
+    <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Navigator</span>
       </div>

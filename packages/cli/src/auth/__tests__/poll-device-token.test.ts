@@ -39,7 +39,7 @@ describe('createPollDeviceToken', () => {
 
     expect(result).toEqual({
       kind: 'success',
-      tokens: { accessToken: 'ps_at_x', refreshToken: 'ps_rt_x', expiresIn: 900, scope: 'account offline_access' },
+      tokens: { kind: 'oauth', accessToken: 'ps_at_x', refreshToken: 'ps_rt_x', expiresIn: 900, scope: 'account offline_access' },
     });
   });
 

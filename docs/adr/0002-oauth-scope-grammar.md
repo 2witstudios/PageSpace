@@ -58,7 +58,7 @@ Scope strings are a space-delimited list per RFC 6749 §3.3. The grammar (ABNF):
 
 ```abnf
 scope-list   = scope *( SP scope )
-scope        = "account" / "offline_access" / drive-scope
+scope        = "account" / "offline_access" / "manage_keys" / drive-scope
 drive-scope  = "drive:" resource-id [ ":" drive-role ]
 drive-role   = "admin" / "member" / ( "role:" resource-id )
 resource-id  = 1*32( DIGIT / %x61-7A )   ; lowercase alphanum, cuid2-shaped
@@ -73,7 +73,8 @@ Scope tokens and their meaning:
 | `drive:<driveId>:admin` | Explicit ADMIN in this drive. | Drive row `role = 'ADMIN'`. |
 | `drive:<driveId>:member` | Explicit plain MEMBER in this drive. | Drive row `role = 'MEMBER'`, `customRoleId = NULL`. |
 | `drive:<driveId>:role:<roleId>` | Custom drive role. | Drive row `role = 'MEMBER'`, `customRoleId = <roleId>`. |
-| `offline_access` | Request a refresh token (OAuth 2.1 convention). Must accompany `account` or ≥1 `drive:*` scope — see rule 10. | Grant flag; orthogonal to access scopes. |
+| `offline_access` | Request a refresh token (OAuth 2.1 convention). Must accompany `account`, `manage_keys`, or ≥1 `drive:*` scope — see rule 10. | Grant flag; orthogonal to access scopes. |
+| `manage_keys` *(Phase 9 addition)* | Key-management-only grant: the principal can create/list/edit/revoke its own owner's access keys (the same keys `account`/`drive:*` grants mint), but has **zero content access** — no drive, page, task, or channel reads/writes. This is what `pagespace login` requests by default as of Phase 9 (`packages/cli/src/commands/login.ts` `DEFAULT_LOGIN_SCOPE`); content access requires a separate, explicit `account`/`drive:*` grant (`pagespace keys` or `pagespace keys create`). | No drive rows; grant marked `manageKeys = true` (`packages/lib/src/auth/oauth/scopes.ts` `ScopeSet.manageKeys`). Resolved by `isManageKeysOnly()` (`apps/web/src/lib/auth/index.ts:574`), which short-circuits every `*Principal*`/`allowedDriveIds` helper to a deny result before any drive-scope logic runs. |
 
 Grammar rules (each is a testable assertion; all fail closed):
 
@@ -105,15 +106,26 @@ Grammar rules (each is a testable assertion; all fail closed):
 8. **Scopes narrow, never widen.** Any flow that re-issues tokens (refresh rotation, future
    token exchange) MUST issue scope ⊆ the original grant; a broader request → `invalid_scope`.
    Comparison is by the canonical parsed set, not string equality.
-9. **Canonical serialization:** scopes are emitted sorted (`account`/`offline_access` first,
-   then `drive:*` by drive id), lowercase, single-space separated. `parse ∘ format` is the
-   identity on canonical sets (round-trip law for tests).
-10. **`offline_access` alone → reject.** Decision 2 defines a principal shape for `account` and
-    for any `drive:*` set, but none for a grant with neither. A refresh token issued for such a
+9. **Canonical serialization:** scopes are emitted sorted (`account`, then `manage_keys`, then
+   `offline_access`, then `drive:*` by drive id — `formatScopeSet` in `scopes.ts`; `manage_keys`
+   never co-occurs with `account`/`drive:*` per rule 11 below, so in practice this order only ever
+   surfaces `account …` or `manage_keys …` or `drive:… …`, never a mix), lowercase, single-space
+   separated. `parse ∘ format` is the identity on canonical sets (round-trip law for tests).
+10. **`offline_access` alone → reject.** Decision 2 defines a principal shape for `account`, for
+    `manage_keys` *(Phase 9 addition — its own principal shape, just like `account`)*, and for
+    any `drive:*` set, but none for a grant with none of those. A refresh token issued for such a
     grant could only ever mint access tokens with no access scope — meaningless, and a
     zero-trust liability (a token that exists but authorizes nothing invites callers to assume
-    it authorizes something). `offline_access` MUST be combined with `account` or at least one
-    `drive:*` scope in the same request. (Found by independent review, Codex P2 on PR #1754.)
+    it authorizes something). `offline_access` MUST be combined with `account`, `manage_keys`, or
+    at least one `drive:*` scope in the same request. (Found by independent review, Codex P2 on
+    PR #1754; extended to `manage_keys` in Phase 9 — `offline_access manage_keys` is a valid,
+    expected combination, e.g. a long-lived key-management session for `pagespace login`.)
+11. **`manage_keys` is mutually exclusive with `account` and with any `drive:*` scope → reject
+    the combination (`manage_keys_conflict`).** *(Phase 9 addition.)* `manage_keys` grants
+    key-management access with zero content access; mixing it with a content-access scope is
+    ambiguous for the same reason rule 3 rejects mixing `account` with `drive:*` — the underlying
+    principal shape is one or the other, never both (`packages/lib/src/auth/oauth/scopes.ts`
+    `parseScopeList`).
 
 ### Considered and rejected: resource-family scopes (`pages:read`, `tasks:write`, …)
 
@@ -135,6 +147,7 @@ semantics). The contract:
 |---|---|---|
 | `account` | User principal: `{ userId, allowedDriveIds: [] }` — same shape sessions and unscoped MCP tokens resolve to today (`index.ts:24-39`). | User path of every `*Principal*` helper — e.g. `getUserAccessLevel` (`principal-permissions.ts:55-58`, `packages/lib/src/permissions/permissions.ts:92`). |
 | Any `drive:*` set | Scoped principal: `{ userId, principalScopeId, allowedDriveIds: [driveIds…] }` — the OAuth analog of `MCPAuthResult` (`index.ts:24-32`), where `principalScopeId` keys the grant's drive rows exactly as `tokenId` keys `mcp_token_drives` today. | App path: `getAppAccessLevel`-family resolution (`app-permissions.ts:130-156`) with **identical** semantics per row: `NULL` → inherit via owner (`:138-141`), explicit → `resolveExplicitAppRoleAccess` (`:88-128`). |
+| `manage_keys` *(Phase 9 addition)* | Manage-keys-only principal: `scopes.manageKeys === true`, no drive rows. | Denied before either path runs: `isManageKeysOnly(auth)` (`index.ts:574`) short-circuits `getAllowedDriveIds`, `checkMCPDriveScope`, `checkMCPPageScope`, `filterDrivesByMCPScope`, and `checkMCPCreateScope` to a deny result, and `getAllowedDriveIds` returns a non-matching sentinel (never an empty array) so direct callers that reimplement the length-check themselves stay denied too. Key-management endpoints (mint/list/revoke a token) are the sole exception, reached through their own explicit `manage_keys` allow-check rather than the content-access `*Principal*` helpers. |
 
 Hard requirements on Phase 1's implementation:
 
@@ -239,6 +252,7 @@ to trust what the screen says. Requirements:
 | `drive:<id>:member` | "Member access to **{drive name}** — view non-private pages and post in channels. Cannot edit other pages, share, or delete." (`app-permissions.ts:126-127`.) |
 | `drive:<id>:role:<rid>` | "Access to **{drive name}** limited to the **{role name}** role" + the role's summarized capabilities from its stored permission set (`packages/db/src/schema/members.ts:11-23`), including whether it has drive-wide view. Never renders an unresolvable role — that request was already rejected (fail closed). |
 | `offline_access` | "Stay connected until you revoke access (issues a long-lived refresh credential)." |
+| `manage_keys` *(Phase 9 addition)* | "Create and manage access keys on your behalf — cannot read or write any of your content directly." (`describeScopeForConsent`, `packages/lib/src/auth/oauth/consent.ts:24-25`.) |
 
 4. **Client identity:** display the client's registered name, and a "Built by PageSpace"
    badge if and only if `firstParty` — dynamically registered clients can never claim it.
@@ -321,7 +335,9 @@ function describeScopeForConsent(
 | F10 | PKCE verifier missing/unstorable/mismatched on provider side | Flow fails; no PKCE-less fallback |
 | F11 | Unresolvable custom role at consent render | Already rejected pre-render (F4); screen never shows placeholders |
 | F12 | Scope needed but DB unreachable at any decision point | Deny (no cached/assumed authority) |
-| F13 | `offline_access` requested alone (no `account`, no `drive:*`) | Reject, `invalid_scope` (rule 10) |
+| F13 | `offline_access` requested alone (no `account`, no `manage_keys`, no `drive:*`) | Reject, `invalid_scope` (rule 10) |
+| F14 | `manage_keys` mixed with `account` or with any `drive:*` scope *(Phase 9 addition)* | Reject, `invalid_scope` (`manage_keys_conflict`, rule 11) |
+| F15 | `manage_keys` credential used against any content-access route *(Phase 9 addition)* | Deny — `isManageKeysOnly()` short-circuits every `*Principal*`/`allowedDriveIds` helper before drive-scope logic runs (`index.ts:574`) |
 
 ## Consequences
 
@@ -336,3 +352,8 @@ function describeScopeForConsent(
 - One epic-page pointer is corrected by this ADR's research: `principal-permissions.ts` lives
   at `apps/web/src/lib/auth/principal-permissions.ts` (re-exported via
   `apps/web/src/lib/auth/index.ts:584-598`), not under `packages/lib/src/permissions/`.
+- **Phase 9 amendment:** the grammar gained a fourth top-level scope, `manage_keys` — additive per
+  the "tokens are only ever added" rule above, not a reinterpretation of `account`/`drive:*`/
+  `offline_access`. `pagespace login`'s default request changed from `account offline_access` to
+  `manage_keys offline_access` (see ADR 0003 F1a); existing stored `account`-scoped credentials
+  from before that change are unaffected and keep working as issued.

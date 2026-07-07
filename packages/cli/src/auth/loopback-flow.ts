@@ -53,12 +53,16 @@ export type RandomBytes = (length: number) => Uint8Array;
 /** Resolves after `ms` — the hard-timeout side of the callback race. */
 export type WaitMs = (ms: number) => Promise<void>;
 
-export interface ExchangedTokens {
-  readonly accessToken: string;
-  readonly refreshToken: string;
-  readonly expiresIn: number;
-  readonly scope: string;
-}
+/**
+ * Discriminated on the token endpoint's `token_type` (`exchange-code.ts`):
+ * `'oauth'` is the classic refresh/access-token pair `pagespace login`
+ * always gets and `pagespace keys create` got before this fix. `'mcp'` is a
+ * pure drive:* grant — the server minted a real `mcp_*` token instead (see
+ * `oauth-repository.ts`'s `ok_mcp_token` outcome), with no refresh cycle.
+ */
+export type ExchangedTokens =
+  | { readonly kind: 'oauth'; readonly accessToken: string; readonly refreshToken: string; readonly expiresIn: number; readonly scope: string }
+  | { readonly kind: 'mcp'; readonly token: string; readonly scope: string };
 export interface ExchangeCodeParams {
   readonly tokenEndpoint: string;
   readonly clientId: string;
@@ -335,14 +339,14 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
       return { outcome: 'token_exchange_failed', message: error instanceof Error ? error.message : String(error) };
     }
 
+    const scopes = tokens.scope.split(' ').filter(Boolean);
+    const createdAt = new Date(deps.now()).toISOString();
+
     await deps.credentialStore.set(
       deps.host,
-      {
-        refreshToken: tokens.refreshToken,
-        clientId: deps.clientId,
-        scopes: tokens.scope.split(' ').filter(Boolean),
-        createdAt: new Date(deps.now()).toISOString(),
-      },
+      tokens.kind === 'oauth'
+        ? { kind: 'oauth', refreshToken: tokens.refreshToken, clientId: deps.clientId, scopes, createdAt }
+        : { kind: 'static', token: tokens.token, scopes, createdAt },
       deps.profile ?? DEFAULT_PROFILE_NAME,
     );
 
@@ -350,7 +354,7 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
 
     let identity: Identity | null;
     try {
-      identity = await deps.confirmIdentity({ host: deps.host, accessToken: tokens.accessToken });
+      identity = await deps.confirmIdentity({ host: deps.host, accessToken: tokens.kind === 'oauth' ? tokens.accessToken : tokens.token });
     } catch {
       identity = null;
     }

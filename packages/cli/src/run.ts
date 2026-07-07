@@ -14,8 +14,9 @@ import { hasExplicitCredential, noExplicitCredentialMessage, resolveAuth, resolv
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
-import { tokensCreateHandler } from './commands/tokens/create.js';
-import { keysListHandler, keysRevokeHandler } from './commands/keys/aliases.js';
+import { tokensCreateHandler } from './commands/keys/create.js';
+import { tokensListHandler } from './commands/keys/list.js';
+import { tokensRevokeHandler } from './commands/keys/revoke.js';
 import { keysHandler } from './commands/keys/wizard.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
@@ -44,10 +45,7 @@ export interface RunDependencies {
  * `login --device` establish a credential from scratch; `logout`/`whoami`
  * construct their own `CredentialStore` and do their own discovery/refresh
  * (matching `login.ts`'s sanctioned pattern) because "not logged in" is a
- * normal, graceful outcome for them, not a hard failure. `tokens create`
- * belongs here for the same reason `login` does: it mints its credential
- * through its own browser-consent OAuth flow (Phase 8 task 2) and never
- * touches `ctx.sdk` either.
+ * normal, graceful outcome for them, not a hard failure.
  *
  * This set gates BOTH checks below — the ambient-credential-fallback gate
  * (first) and `enforceAuth` (second) — for the handlers above, since neither
@@ -62,18 +60,17 @@ export interface RunDependencies {
  * credential into content access), and `enforceAuth` is what actually
  * materializes and validates whichever explicit source WAS given.
  *
- * Phase 9 task 5's `pagespace keys` TUI (`keysHandler`) belongs here for the
- * same reason: like `login`/`tokens create`, it's the whole point of a bare
- * `pagespace login`'s ambient `manage_keys`-scoped credential — it lists,
- * mints (via the same browser-consent flow `tokens create` uses), and
- * revokes keys through `ctx.sdk` itself, with zero extra setup. `keysListHandler`/
- * `keysRevokeHandler` (`commands/keys/aliases.ts`) are exempted alongside it
- * for the identical reason — but note they are DISTINCT handler references
- * from `tokensListHandler`/`tokensRevokeHandler`, specifically so exempting
- * the `keys` surface does not also exempt `tokens list`/`tokens revoke`,
- * which stay explicit-credential-only (see `router/routes.ts`'s `keys` vs
- * `tokens` design note). `keys create` needs no separate entry: it registers
- * the exact same `tokensCreateHandler` reference already listed below.
+ * The whole `pagespace keys` surface belongs here for the same reason
+ * `login` does: it's the whole point of a bare `pagespace login`'s ambient
+ * `manage_keys`-scoped credential. `keysHandler` (the guided wizard) lists,
+ * mints (via its own browser-consent OAuth flow, Phase 8 task 2), and
+ * revokes keys through `ctx.sdk` itself, with zero extra setup —
+ * `tokensCreateHandler`/`tokensListHandler`/`tokensRevokeHandler`
+ * (`commands/keys/create.ts`/`list.ts`/`revoke.ts`) back its flag-driven
+ * `keys create`/`keys list`/`keys revoke` equivalents and are exempted for
+ * the identical reason. (These handlers predate the `keys` surface — Phase 4
+ * task 6 first shipped them under a since-removed `tokens` command family,
+ * folded into `keys` by a later Phase 9 follow-up — hence the name.)
  */
 const AUTH_EXEMPT_HANDLERS = new Set([
   helpHandler,
@@ -81,9 +78,9 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   logoutHandler,
   whoamiHandler,
   tokensCreateHandler,
+  tokensListHandler,
+  tokensRevokeHandler,
   keysHandler,
-  keysListHandler,
-  keysRevokeHandler,
 ]);
 
 export async function run(deps: RunDependencies): Promise<ExitCode> {

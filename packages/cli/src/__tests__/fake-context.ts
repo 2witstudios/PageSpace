@@ -1,4 +1,5 @@
 import { PageSpaceClient, StaticTokenProvider } from '@pagespace/sdk';
+import { credentialSecret } from '@pagespace/cli';
 import type { HandlerContext, OutputSink } from '@pagespace/cli';
 import type { CredentialStore, HostCredential } from '@pagespace/cli';
 
@@ -26,7 +27,7 @@ export function createFakeCredentialStore(): CredentialStore {
       hosts.delete(host);
     },
     async list() {
-      return [...hosts.entries()].map(([host, credential]) => ({ host, tokenPrefix: credential.refreshToken.slice(0, 12) }));
+      return [...hosts.entries()].map(([host, credential]) => ({ host, tokenPrefix: credentialSecret(credential).slice(0, 12) }));
     },
   };
 }

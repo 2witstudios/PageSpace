@@ -63,11 +63,11 @@ describe('helpHandler', () => {
     await helpHandler(ctx, intent);
 
     const output = stdout.lines.join('');
-    for (const title of ['Auth:', 'Drives:', 'Pages:', 'Search:', 'Tasks:', 'Agents:', 'Tokens:', 'MCP:']) {
+    for (const title of ['Auth:', 'Drives:', 'Pages:', 'Search:', 'Tasks:', 'Agents:', 'Keys:', 'MCP:']) {
       expect(output).toContain(title);
     }
     expect(output).toContain('e.g. pagespace login');
-    expect(output).toContain('e.g. pagespace tokens create --drive <id> --role member --save-as-profile agent');
+    expect(output).toContain('e.g. pagespace keys');
   });
 
   it('aligns the summary column consistently across every group, not just within each group', async () => {
@@ -79,13 +79,13 @@ describe('helpHandler', () => {
     await helpHandler(ctx, intent);
 
     const lines = stdout.lines.join('').split('\n');
-    // Auth's longest command name ("whoami") is much shorter than Tokens'
-    // ("tokens create"), so a per-group column width would misalign them.
+    // Auth's longest command name ("whoami") is much shorter than Keys'
+    // ("keys revoke"), so a per-group column width would misalign them.
     const authLine = lines.find((line) => line.includes('Log in'))!;
-    const tokensLine = lines.find((line) => line.includes('Mint a new MCP access token'))!;
+    const keysLine = lines.find((line) => line.includes('Mint a new access key'))!;
     expect(authLine).toBeDefined();
-    expect(tokensLine).toBeDefined();
-    expect(authLine.indexOf('Log in')).toBe(tokensLine.indexOf('Mint a new MCP access token'));
+    expect(keysLine).toBeDefined();
+    expect(authLine.indexOf('Log in')).toBe(keysLine.indexOf('Mint a new access key'));
   });
 });
 
@@ -97,7 +97,7 @@ describe('groupHelpCommands', () => {
     { path: ['trash', 'list'], summary: 'List trashed pages/drives' },
     { path: ['pages', 'read'], summary: 'Read page content' },
     { path: ['sheets', 'edit-cells'], summary: 'Edit sheet cells' },
-    { path: ['tokens', 'create'], summary: 'Mint a new MCP access token' },
+    { path: ['keys', 'create'], summary: 'Mint a new access key' },
     { path: ['mcp'], summary: 'Serve the MCP stdio server' },
     { path: ['activity'], summary: 'Show recent activity' },
   ];
@@ -109,14 +109,14 @@ describe('groupHelpCommands', () => {
     expect(new Set(grouped.map((c) => c.path.join(' ')))).toEqual(new Set(DESCRIPTORS.map((c) => c.path.join(' '))));
   });
 
-  it('groups by resource: auth, drives (incl. trash), pages (incl. sheets), tokens, mcp, other', () => {
+  it('groups by resource: auth, drives (incl. trash), pages (incl. sheets), keys, mcp, other', () => {
     const groups = groupHelpCommands(DESCRIPTORS);
     const byTitle = new Map(groups.map((g) => [g.title, g.commands.map((c) => c.path.join(' '))]));
 
     expect(byTitle.get('Auth')).toEqual(['login', 'whoami']);
     expect(byTitle.get('Drives')).toEqual(['drives list', 'trash list']);
     expect(byTitle.get('Pages')).toEqual(['pages read', 'sheets edit-cells']);
-    expect(byTitle.get('Tokens')).toEqual(['tokens create']);
+    expect(byTitle.get('Keys')).toEqual(['keys create']);
     expect(byTitle.get('MCP')).toEqual(['mcp']);
     expect(byTitle.get('Other')).toEqual(['activity']);
   });

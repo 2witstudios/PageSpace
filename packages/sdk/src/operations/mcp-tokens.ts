@@ -1,6 +1,6 @@
 /**
  * MCP token management operations (Phase 4 task 6) — net-new registry
- * entries backing `pagespace tokens create/list/revoke`.
+ * entries backing `pagespace keys create/list/revoke`.
  *
  * Route-verified against `apps/web/src/app/auth/mcp-tokens/route.ts`
  * (POST/GET) and `.../mcp-tokens/[tokenId]/route.ts` (DELETE). The server

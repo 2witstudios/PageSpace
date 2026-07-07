@@ -72,6 +72,17 @@ async function logoutHost(
     return { host, kind: 'not_logged_in' };
   }
 
+  // A static (mcp) credential has no OAuth refresh-token family for
+  // /api/oauth/revoke to revoke — it's a real mcp_* token, the same entity
+  // `pagespace keys revoke <id>` (or Settings > MCP) manages. Logging out of
+  // it just forgets the local credential; the key itself stays valid until
+  // explicitly revoked through one of those surfaces — the same relationship
+  // a personal login session has to a portable Settings > MCP token today.
+  if (credential.kind === 'static') {
+    await store.delete(host, profile);
+    return { host, kind: 'revoked' };
+  }
+
   const result = await revokeToken({ host, refreshToken: credential.refreshToken, clientId: credential.clientId });
 
   if (result.outcome === 'revoked') {

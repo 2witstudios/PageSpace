@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createLogoutHandler, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, formatLogoutLine, parseArgv, summarizeLogout } from '@pagespace/cli';
-import type { HostCredential, CredentialStore, RevokeResult, RevokeToken } from '@pagespace/cli';
+import { createLogoutHandler, credentialSecret, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, formatLogoutLine, parseArgv, summarizeLogout } from '@pagespace/cli';
+import type { HostCredential, CredentialStore, OAuthHostCredential, RevokeResult, RevokeToken } from '@pagespace/cli';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
-const CREDENTIAL: HostCredential = {
+const CREDENTIAL: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_test-refresh-token',
   clientId: 'pagespace-cli',
   scopes: ['account', 'offline_access'],
@@ -21,7 +22,7 @@ function fakeStore(initial: Map<string, HostCredential> = new Map()): Credential
     },
     list: async () =>
       [...initial.entries()]
-        .map(([host, credential]) => ({ host, tokenPrefix: credential.refreshToken.slice(0, 12) }))
+        .map(([host, credential]) => ({ host, tokenPrefix: credentialSecret(credential).slice(0, 12) }))
         .sort((a, b) => a.host.localeCompare(b.host)),
   };
 }
@@ -155,6 +156,24 @@ describe('createLogoutHandler', () => {
     const allOutput = [...stdout.lines, ...stderr.lines].join('');
     expect(allOutput).not.toContain(CREDENTIAL.refreshToken);
   });
+
+  it('a static (mcp) credential is forgotten locally without calling revokeToken — the mcp_* key itself stays valid until "pagespace keys revoke" or Settings > MCP explicitly revokes it', async () => {
+    const staticCredential: HostCredential = { kind: 'static', token: 'mcp_abc123', scopes: ['drive:d1:member'], createdAt: '2026-01-01T00:00:00.000Z' };
+    const store = fakeStore(new Map([['https://pagespace.ai', staticCredential]]));
+    let revokeCalls = 0;
+    const revokeToken: RevokeToken = async () => {
+      revokeCalls += 1;
+      return { outcome: 'revoked' };
+    };
+    const handler = createLogoutHandler({ createCredentialStore: () => store, revokeToken });
+
+    const ctx = createFakeContext({ env: {} });
+    const code = await handler(ctx, commandIntent(['logout']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(revokeCalls).toBe(0);
+    expect(await store.get('https://pagespace.ai')).toBeNull();
+  });
 });
 
 describe('createLogoutHandler — named profiles', () => {
@@ -179,7 +198,7 @@ describe('createLogoutHandler — named profiles', () => {
       list: async (profile = 'default') =>
         [...hosts.entries()]
           .filter(([, profiles]) => profiles.has(profile))
-          .map(([host, profiles]) => ({ host, tokenPrefix: profiles.get(profile)!.refreshToken.slice(0, 12) })),
+          .map(([host, profiles]) => ({ host, tokenPrefix: credentialSecret(profiles.get(profile)!).slice(0, 12) })),
     };
   }
 

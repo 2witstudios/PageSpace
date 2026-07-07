@@ -4,6 +4,7 @@ import type { CredentialStore, HostCredential, LoopbackCallback, LoopbackServer 
 import { parseArgv } from '../../../argv/parse.js';
 import type { CommandIntent } from '../../../argv/parse.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../../exit-codes.js';
+import { credentialSecret } from '../../../credentials/serialize.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
 import type { DriveScopeArg } from '../args.js';
 import { buildTokenScope, createTokensCreateHandler, resolveTokenProfileName } from '../create.js';
@@ -165,6 +166,7 @@ describe('resolveTokenProfileName', () => {
 });
 
 const FIXED_TOKENS = {
+  kind: 'oauth' as const,
   accessToken: 'ps_at_test',
   refreshToken: 'ps_rt_test',
   expiresIn: 900,
@@ -186,7 +188,7 @@ function fakeStore(): CredentialStore {
     list: async (profile = 'default') =>
       [...hosts.entries()]
         .filter(([, profiles]) => profiles.has(profile))
-        .map(([host, profiles]) => ({ host, tokenPrefix: profiles.get(profile)!.refreshToken.slice(0, 12) })),
+        .map(([host, profiles]) => ({ host, tokenPrefix: credentialSecret(profiles.get(profile)!).slice(0, 12) })),
   };
 }
 
@@ -255,7 +257,7 @@ describe('createTokensCreateHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create']));
+    const code = await handler(ctx, commandIntent(['keys', 'create']));
 
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(stderr.lines.join('')).toContain('--drive');
@@ -269,7 +271,7 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       ctx,
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--drive', 'drv2']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--drive', 'drv2']),
     );
 
     expect(code).toBe(EXIT_USAGE_ERROR);
@@ -291,7 +293,7 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       ctx,
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'default']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'default']),
     );
 
     expect(code).toBe(EXIT_USAGE_ERROR);
@@ -312,7 +314,7 @@ describe('createTokensCreateHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'default', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'default', '--role', 'member']));
 
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(stderr.lines.join('')).toContain('"default"');
@@ -334,13 +336,13 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       createFakeContext({ env: {} }),
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']),
     );
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(requestedScope).toBe('drive:drv1:member offline_access');
     const stored = await store.get('https://pagespace.ai', 'drv1');
-    expect(stored?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
     expect(await store.get('https://pagespace.ai', 'default')).toBeNull();
   });
 
@@ -357,7 +359,7 @@ describe('createTokensCreateHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stdout, stderr, env: {} });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'admin']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'admin']));
 
     expect(code).toBe(EXIT_SUCCESS);
     const allOutput = [...stdout.lines, ...stderr.lines].join('');
@@ -377,19 +379,19 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       createFakeContext({ env: {} }),
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'ci-bot']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'ci-bot']),
     );
 
     expect(code).toBe(EXIT_SUCCESS);
     const stored = await store.get('https://pagespace.ai', 'ci-bot');
-    expect(stored?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
   });
 
   it('refuses to overwrite an existing stored profile without --yes', async () => {
     const store = fakeStore();
     await store.set(
       'https://pagespace.ai',
-      { refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['drive:drv1:member'], createdAt: '2026-01-01T00:00:00.000Z' },
+      { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['drive:drv1:member'], createdAt: '2026-01-01T00:00:00.000Z' },
       'drv1',
     );
     const handler = createTokensCreateHandler(baseHandlerDeps(store));
@@ -397,7 +399,7 @@ describe('createTokensCreateHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
 
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/--yes/);
@@ -408,7 +410,7 @@ describe('createTokensCreateHandler', () => {
     const store = fakeStore();
     await store.set(
       'https://pagespace.ai',
-      { refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['drive:drv1:member'], createdAt: '2026-01-01T00:00:00.000Z' },
+      { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['drive:drv1:member'], createdAt: '2026-01-01T00:00:00.000Z' },
       'drv1',
     );
     const fake = fakeServer();
@@ -420,12 +422,12 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       createFakeContext({ env: {} }),
-      commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member', '--yes']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--yes']),
     );
 
     expect(code).toBe(EXIT_SUCCESS);
     const stored = await store.get('https://pagespace.ai', 'drv1');
-    expect(stored?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
   });
 
   it('maps a discovery failure to exit 1 with a distinct message', async () => {
@@ -439,7 +441,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('offline');
@@ -461,7 +463,7 @@ describe('createTokensCreateHandler', () => {
     const stdout = createRecordingSink();
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stdout, stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/consent was denied/i);
@@ -483,7 +485,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/consent timed out/i);
@@ -504,7 +506,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/did not match this request/i);
@@ -526,7 +528,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/consent failed: server_error/i);
@@ -548,7 +550,7 @@ describe('createTokensCreateHandler', () => {
     const stdout = createRecordingSink();
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stdout, stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/exchanging the authorization code/i);
@@ -571,7 +573,7 @@ describe('createTokensCreateHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['tokens', 'create', '--drive', 'drv1', '--role', 'member']));
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/could not bind a local loopback port/i);

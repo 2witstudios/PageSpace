@@ -45,10 +45,12 @@ function noStoreJson(body: Record<string, unknown>, status: number): NextRespons
 }
 
 /**
- * RFC 6749 §5.1 success body for all three grants. `refresh_token` is
- * `undefined` whenever F1 (ADR 0003, offline_access gating) minted an
- * access-only pair — `JSON.stringify` drops `undefined`-valued keys, so the
- * field is absent from the wire response entirely, not merely null.
+ * RFC 6749 §5.1 success body for the two refresh-token-family grants
+ * (authorization_code minting a NON-drive-scoped family, refresh_token,
+ * device_code). `refresh_token` is `undefined` whenever F1 (ADR 0003,
+ * offline_access gating) minted an access-only pair — `JSON.stringify` drops
+ * `undefined`-valued keys, so the field is absent from the wire response
+ * entirely, not merely null.
  */
 function tokenSuccessBody(tokens: IssuedTokenPair, scopes: string[]): Record<string, unknown> {
   return {
@@ -56,6 +58,23 @@ function tokenSuccessBody(tokens: IssuedTokenPair, scopes: string[]): Record<str
     token_type: 'Bearer',
     expires_in: ACCESS_TOKEN_TTL_SECONDS,
     refresh_token: tokens.refreshToken,
+    scope: scopes.join(' '),
+  };
+}
+
+/**
+ * Success body for a pure drive:* authorization_code grant — deliberately
+ * NOT an OAuth token pair. `exchangeAuthorizationCode`'s `ok_mcp_token`
+ * outcome minted a real `mcp_tokens` row instead of a refresh-token family
+ * (see `oauth-repository.ts`), so there is no `refresh_token`/`expires_in` to
+ * report: an `mcp_*` token doesn't expire and has no separate refresh cycle.
+ * `token_type: 'mcp'` is the CLI's signal (`exchange-code.ts`) to store this
+ * as a static bearer credential, not an OAuth-refreshable one.
+ */
+function mcpTokenSuccessBody(mcpToken: string, scopes: string[]): Record<string, unknown> {
+  return {
+    access_token: mcpToken,
+    token_type: 'mcp',
     scope: scopes.join(' '),
   };
 }
@@ -167,6 +186,15 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
     clientDbId,
     now: new Date(),
   });
+
+  if (result.outcome === 'ok_mcp_token') {
+    auditRequest(req, {
+      eventType: 'auth.token.created',
+      userId: result.userId,
+      details: { clientId: client.clientId, oauthEvent: 'code_exchange_mcp_token' },
+    });
+    return noStoreJson(mcpTokenSuccessBody(result.mcpToken, result.scopes), 200);
+  }
 
   if (result.outcome !== 'ok') {
     auditRequest(req, {

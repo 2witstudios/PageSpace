@@ -19,7 +19,7 @@ AI tool (MCP client)  →  pagespace mcp (MCP server)  →  PageSpace API
                                                     Your workspace
 \`\`\`
 
-Every operation runs with the permissions of whoever (or whatever) authenticated — a human via \`pagespace login\`, or a scoped token for an agent or CI job.
+Every operation runs with the permissions of whoever (or whatever) authenticated — always a scoped credential naming specific drives, never your full personal account: \`pagespace mcp\` refuses to start on nothing but a bare \`pagespace login\`, by design (see below).
 
 ## Step 1: Install the CLI and authenticate
 
@@ -28,32 +28,41 @@ npm install -g @pagespace/cli
 pagespace login
 \`\`\`
 
-\`pagespace login\` opens a browser, completes an OAuth login, and stores the credential locally — \`pagespace mcp\` picks it up automatically, no token to copy or paste.
+\`pagespace login\` opens a browser, completes an OAuth login, and stores a credential locally — but that credential is scoped to key management only, with **zero content access of its own**. It's for you, personally, to create/list/edit/revoke your own scoped keys; \`pagespace mcp\` won't run on it alone.
 
-**Agents, CI, and service accounts** don't have a browser to log in with. Mint a scoped token instead, either from the CLI or from **Settings > MCP**:
+Mint the drive-scoped key \`pagespace mcp\` actually needs with the guided wizard:
 
 \`\`\`bash
-pagespace tokens create --name "Claude Desktop" --drive <driveId>
+pagespace keys
 \`\`\`
 
-This prints a token starting with \`mcp_\`, shown **once** — only a SHA3-256 hash is stored server-side. Scope it to specific drives and it joins those drives as an **app** on the member list, governed by the role you give it there; scoped tokens cannot create new drives.
+Or, flag-driven (same thing, no interactive wizard prompts — for scripting the *setup* step itself, run once by a human):
+
+\`\`\`bash
+pagespace keys create --name "Claude Desktop" --drive <driveId> --role member --save-as-profile agent
+\`\`\`
+
+Either way opens a browser for a one-time consent screen (minting is always a deliberate, human-approved step, never a silent agent-runnable call) and stores the result locally under a named profile — there's no raw token to copy-paste from the CLI, so this only works for an agent running on *this same machine*. **Agents, CI, and service accounts without a browser-driven human at the keyboard** — or anywhere you need a portable token to hand to a *different* machine — can't use \`pagespace keys create\` at all; mint a token from **Settings > MCP** instead: it prints an \`mcp_...\` token **once** — only a SHA3-256 hash is stored server-side. Either way, scoping to specific drives joins those drives as an **app** on the member list, governed by the role you give it there; scoped credentials cannot create new drives.
 
 ## Step 2: Configure your AI tool
 
-Logged in with \`pagespace login\`? No token needed in the config — \`pagespace mcp\` reads your stored login:
+Minted a key with the CLI on *this* machine? Point the config at its profile with \`PAGESPACE_PROFILE\`, not a token:
 
 \`\`\`json
 {
   "mcpServers": {
     "pagespace": {
       "command": "pagespace",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "PAGESPACE_PROFILE": "agent"
+      }
     }
   }
 }
 \`\`\`
 
-Using a scoped token instead (agents, CI, headless):
+Using a portable token instead (minted from **Settings > MCP**, for a different machine, CI, headless):
 
 \`\`\`json
 {
@@ -130,21 +139,21 @@ The agent replies with its own system prompt and tools, and runs those tools ser
 
 ## Token security
 
-- **Scoped access** — restrict a token to specific drives at creation, from the CLI (\`pagespace tokens create --drive <id>\`) or **Settings > MCP**.
-- **Instant revocation** — \`pagespace tokens revoke <tokenId>\`, or revoke from **Settings > MCP**, cuts a token off immediately.
+- **Scoped access** — restrict a key to specific drives at creation, from the CLI (\`pagespace keys\` or \`pagespace keys create --drive <id>\`) or **Settings > MCP**.
+- **Instant revocation** — \`pagespace keys revoke <tokenId>\`, or revoke from **Settings > MCP**, cuts a key off immediately.
 - **Audit logging** — token create/revoke/use events land in the audit log with the token identifier.
 - **Hash-only storage** — the database stores a SHA3-256 hash, never the raw token. Losing a token means creating a new one.
 - **No automatic expiry** — tokens live until revoked. Rotate on whatever cadence fits your risk model.
 
 ## Troubleshooting
 
-**Token rejected**: confirm it hasn't been revoked (\`pagespace tokens list\` or **Settings > MCP**) and that it starts with \`mcp_\`.
+**Token rejected**: confirm it hasn't been revoked (\`pagespace keys list\` or **Settings > MCP**) and that it starts with \`mcp_\`.
 
 **Connection refused**: check \`PAGESPACE_API_URL\` (or \`--host\`) is correct and reachable from the machine running \`pagespace mcp\`.
 
-**Permission denied**: MCP inherits the caller's permissions. If you lost access to a drive, the token or login stops seeing it too.
+**Permission denied**: MCP inherits the caller's permissions. If you lost access to a drive, the key or token stops seeing it too.
 
-**Server fails to start**: run \`pagespace whoami\` to confirm you're authenticated, and \`pagespace --version\` to confirm the CLI installed correctly.
+**Server fails to start**: \`pagespace mcp\` refuses to start unless the invocation names an explicit credential — \`PAGESPACE_PROFILE\`/\`--profile\` (a key minted by \`pagespace keys\`) or \`PAGESPACE_TOKEN\`/\`--token\` (a portable token from **Settings > MCP**). A bare \`pagespace login\` is never enough. Run \`pagespace whoami\` to confirm you're authenticated, and \`pagespace --version\` to confirm the CLI installed correctly.
 
 ## Using the older \`pagespace-mcp\` package?
 

@@ -10,7 +10,7 @@ import { eq, and, isNull } from '@pagespace/db/operators';
 import { oauthClients, oauthAuthorizationCodes, oauthRefreshTokens, oauthAccessTokens, oauthDeviceCodes } from '@pagespace/db/schema/oauth';
 import { users } from '@pagespace/db/schema/auth';
 import type { RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { hashToken } from '@pagespace/lib/auth/token-utils';
+import { hashToken, generateToken } from '@pagespace/lib/auth/token-utils';
 import { decideCodeExchange, type CodeExchangeDecision } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import {
   decideDevicePoll,
@@ -21,7 +21,8 @@ import {
 } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
-import { parseScopeList, isScopeSubset, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, isScopeSubset, formatScopeSet, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
+import { sessionRepository } from './session-repository';
 
 /**
  * First-party clients are defined in code (the static registry), not the DB —
@@ -98,7 +99,8 @@ export type ExchangeAuthorizationCodeResult =
   | { outcome: 'not_found' }
   | { outcome: 'rejected'; decision: Exclude<CodeExchangeDecision, { status: 'ok' }> }
   | { outcome: 'user_suspended' }
-  | { outcome: 'ok'; userId: string; scopes: string[]; tokens: IssuedTokenPair };
+  | { outcome: 'ok'; userId: string; scopes: string[]; tokens: IssuedTokenPair }
+  | { outcome: 'ok_mcp_token'; userId: string; scopes: string[]; mcpToken: string };
 
 async function revokeTokenFamily(
   tx: Pick<typeof db, 'update'>,
@@ -195,6 +197,41 @@ export async function exchangeAuthorizationCode(
         .set({ consumedAt: input.now })
         .where(eq(oauthAuthorizationCodes.id, row.id));
       return { outcome: 'user_suspended' };
+    }
+
+    // A pure drive:* grant (no `account`, no `manage_keys`) is content
+    // access, not a login session — mint a real `mcp_tokens` row (the same
+    // entity `keys list`/`keys revoke`/Settings > MCP already manage)
+    // instead of an OAuth refresh/access-token pair. The browser consent
+    // screen that already gated this authorization code (step-up ceremony,
+    // `/api/oauth/authorize`) is the human-approval property this preserves;
+    // only what gets PERSISTED on success changes. `manage_keys`/`account`
+    // grants (`pagespace login`) are untouched — see `isPureDriveGrant`.
+    const parsedGrantedScope = parseScopeList(row.scopes.join(' '));
+    if (parsedGrantedScope.ok && isPureDriveGrant(parsedGrantedScope.scopes)) {
+      await tx
+        .update(oauthAuthorizationCodes)
+        .set({ consumedAt: input.now })
+        .where(eq(oauthAuthorizationCodes.id, row.id));
+
+      const { token: mcpToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
+      await sessionRepository.createMcpTokenWithDriveScopes(
+        {
+          userId: row.userId,
+          tokenHash,
+          tokenPrefix,
+          name: 'pagespace CLI',
+          isScoped: true,
+          drives: scopeSetToDriveScopes(parsedGrantedScope.scopes).map(({ driveId, role, customRoleId }) => ({
+            id: driveId,
+            role,
+            customRoleId: customRoleId ?? undefined,
+          })),
+        },
+        tx,
+      );
+
+      return { outcome: 'ok_mcp_token', userId: row.userId, scopes: row.scopes, mcpToken };
     }
 
     // F1 (ADR 0003, OIDC-standard): a refresh token is only minted when the

@@ -124,7 +124,7 @@ export function hasExplicitCredential(
 export function noExplicitCredentialMessage(): string {
   return (
     'No explicit credential found — pagespace never falls back to your personal login for this ' +
-    'command. Run "pagespace tokens create --drive <driveId> --role member --save-as-profile agent" ' +
+    'command. Run "pagespace keys create --drive <driveId> --role member --save-as-profile agent" ' +
     'and pass the result via the PAGESPACE_TOKEN environment variable or --profile agent.'
   );
 }

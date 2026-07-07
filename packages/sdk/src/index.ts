@@ -125,7 +125,7 @@ export type { ConfirmMismatch, Result } from './operations/drives.js';
 // Members (Phase 3 task 1).
 export { listDriveMembers } from './operations/members.js';
 
-// MCP tokens (Phase 4 task 6) — CLI `pagespace tokens create/list/revoke`.
+// MCP tokens (Phase 4 task 6) — CLI `pagespace keys create/list/revoke`.
 export { createMcpToken, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
 
 // Pages (Phase 3 task 2) — full pagespace-mcp page.js parity.

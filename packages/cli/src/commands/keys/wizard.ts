@@ -17,9 +17,9 @@
  * `select` itself, where it ends the wizard.
  *
  * Minting (Create, and Edit's replacement mint) reuses `buildTokenScope`/
- * `resolveTokenProfileName` and `runLoopbackLogin` exactly as `tokens
- * create` does — same deps shape (`TokensCreateHandlerDeps`), same effect
- * adapters wired at the bottom of this file. There is no other minting path:
+ * `resolveTokenProfileName` and `runLoopbackLogin` exactly as `keys
+ * create` (`./create.js`) does — same deps shape (`TokensCreateHandlerDeps`),
+ * same effect adapters wired at the bottom of this file. There is no other minting path:
  * every grant of drive access still requires the real browser-consent
  * step-up, same as every other CLI entry point.
  */
@@ -40,8 +40,8 @@ import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR, type ExitCode } fro
 import type { HandlerContext } from '../../handler-context.js';
 import type { CommandHandler } from '../../router/router.js';
 import { DEFAULT_LOGIN_TIMEOUT_MS, DEFAULT_MAX_PORT_ATTEMPTS } from '../login.js';
-import type { DriveScopeArg } from '../tokens/args.js';
-import { resolveTokenProfileName, type TokensCreateHandlerDeps } from '../tokens/create.js';
+import type { DriveScopeArg } from './args.js';
+import { resolveTokenProfileName, type TokensCreateHandlerDeps } from './create.js';
 import {
   availableMenuChoices,
   buildWizardScope,
@@ -95,7 +95,7 @@ async function fetchKeys(ctx: HandlerContext): Promise<readonly KeySummary[] | n
   }
 }
 
-/** Mirrors `tokens create`'s outcome-to-message mapping (`commands/tokens/create.ts`) as plain strings for a spinner. */
+/** Mirrors `keys create`'s outcome-to-message mapping (`commands/keys/create.ts`) as plain strings for a spinner. */
 function describeMintFailure(result: Exclude<LoopbackLoginResult, { outcome: 'success' }>): string {
   switch (result.outcome) {
     case 'timeout':
@@ -231,7 +231,7 @@ interface ScopeAndMintMessages {
  * threads that single instance through both the overwrite check and the mint
  * itself, so `CompositeCredentialStore`'s one-way keychain-degradation notice
  * (`credentials/store.ts`) can only ever print once per flow, matching how
- * `tokens create` (`commands/tokens/create.ts`) does it — two independently
+ * `keys create` (`commands/keys/create.ts`) does it — two independently
  * constructed stores would each probe and degrade independently, printing the
  * "OS keychain unavailable" notice twice for what is logically one operation.
  */
