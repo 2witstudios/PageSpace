@@ -5,12 +5,22 @@
  * equality lookups and uniqueness for columns we still need to query
  * (email, security-audit IP) while the stored value itself is random AES-GCM.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const scryptSyncSpy = vi.hoisted(() => vi.fn());
+
+vi.mock('crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('crypto')>();
+  scryptSyncSpy.mockImplementation(actual.scryptSync);
+  return { ...actual, scryptSync: scryptSyncSpy };
+});
+
 import {
   deriveIndexKey,
   computeBlindIndex,
   normalizeEmail,
   emailBlindIndex,
+  __resetIndexKeyCacheForTests,
 } from './blind-index';
 
 const MASTER = 'test-master-key-at-least-32-characters-long!!';
@@ -34,6 +44,40 @@ describe('deriveIndexKey', () => {
 
   it('given an empty master key, should throw', () => {
     expect(() => deriveIndexKey('')).toThrow();
+  });
+
+  describe('memoization', () => {
+    beforeEach(() => {
+      scryptSyncSpy.mockClear();
+      __resetIndexKeyCacheForTests();
+    });
+
+    it('given repeated calls with the same master key, should only run scrypt once', () => {
+      const key = 'memo-test-master-key-at-least-32-chars!!';
+
+      const a = deriveIndexKey(key);
+      const b = deriveIndexKey(key);
+      const c = deriveIndexKey(key);
+
+      expect(scryptSyncSpy).toHaveBeenCalledTimes(1);
+      expect(a.equals(b)).toBe(true);
+      expect(b.equals(c)).toBe(true);
+    });
+
+    it('given calls with different master keys, should compute a distinct, correct key for each (not serve the wrong cache entry)', () => {
+      const keyA = 'memo-test-master-key-a-at-least-32-chars!!';
+      const keyB = 'memo-test-master-key-b-at-least-32-chars!!';
+
+      const derivedA = deriveIndexKey(keyA);
+      const derivedB = deriveIndexKey(keyB);
+      const derivedAAgain = deriveIndexKey(keyA);
+
+      expect(scryptSyncSpy).toHaveBeenCalledTimes(2);
+      expect(derivedA.equals(derivedB)).toBe(false);
+      expect(derivedA.equals(derivedAAgain)).toBe(true);
+      expect(derivedA.equals(scryptSyncSpy(keyA, 'pii-blind-index-v1', 32))).toBe(true);
+      expect(derivedB.equals(scryptSyncSpy(keyB, 'pii-blind-index-v1', 32))).toBe(true);
+    });
   });
 });
 
