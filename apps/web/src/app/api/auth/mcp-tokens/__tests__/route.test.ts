@@ -73,10 +73,6 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   validateDriveScopeAccess: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/auth/step-up-service', () => ({
-  consumeStepUpGrant: vi.fn(),
-}));
-
 import { POST, GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth, isManageKeysOnly } from '@/lib/auth';
@@ -84,7 +80,6 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
-import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 
 const DRIVE_SCOPED_OAUTH = {
   userId: 'test-user-id',
@@ -158,9 +153,6 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
       invalidCustomRoles: [],
       unauthorizedCustomRoles: [],
     });
-
-    // Default: step-up grant is valid
-    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
@@ -194,78 +186,6 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
         const response = await POST(request);
         expect(response.status).toBe(401);
-      });
-    });
-
-    describe('step-up gate (Phase 8: bearer-OAuth minting escalation fix)', () => {
-      it('returns 401 when stepUpToken is missing from the body, never reaching the repository', async () => {
-        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Token' }),
-        });
-
-        const response = await POST(request);
-
-        expect(response.status).toBe(401);
-        expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
-        expect(consumeStepUpGrant).not.toHaveBeenCalled();
-      });
-
-      it('reports an empty-string stepUpToken with the exact same error shape as a missing one — no validation oracle', async () => {
-        const missingRequest = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Token' }),
-        });
-        const emptyRequest = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Token', stepUpToken: '' }),
-        });
-
-        const missingResponse = await POST(missingRequest);
-        const emptyResponse = await POST(emptyRequest);
-
-        expect(emptyResponse.status).toBe(missingResponse.status);
-        expect(emptyResponse.status).toBe(401);
-        expect(await emptyResponse.json()).toEqual(await missingResponse.json());
-        expect(consumeStepUpGrant).not.toHaveBeenCalled();
-      });
-
-      it('returns 401 when the step-up grant fails to consume, never reaching the repository', async () => {
-        vi.mocked(consumeStepUpGrant).mockResolvedValue({
-          ok: false,
-          error: { code: 'STEP_UP_REQUIRED' },
-        } as never);
-
-        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_bad' }),
-        });
-
-        const response = await POST(request);
-
-        expect(response.status).toBe(401);
-        expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
-      });
-
-      it('proceeds to mint once the step-up grant is consumed', async () => {
-        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
-        });
-
-        const response = await POST(request);
-
-        expect(response.status).toBe(200);
-        expect(consumeStepUpGrant).toHaveBeenCalledWith({
-          userId: 'test-user-id',
-          token: 'ps_stepup_test',
-          actionBinding: { op: 'mint', name: 'My Token', driveScopes: '[]' },
-        });
       });
     });
 

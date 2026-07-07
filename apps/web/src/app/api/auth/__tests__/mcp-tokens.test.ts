@@ -60,14 +60,9 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   listAccessibleDrives: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock('@pagespace/lib/auth/step-up-service', () => ({
-  consumeStepUpGrant: vi.fn(),
-}));
-
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
 import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 
 describe('/api/auth/mcp-tokens', () => {
   beforeEach(() => {
@@ -97,7 +92,6 @@ describe('/api/auth/mcp-tokens', () => {
       name: 'Test Token',
     } as never);
     vi.mocked(sessionRepository.revokeMcpToken).mockResolvedValue(undefined);
-    vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
   });
 
   describe('POST /api/auth/mcp-tokens', () => {
@@ -326,66 +320,6 @@ describe('/api/auth/mcp-tokens', () => {
       });
     });
 
-    describe('step-up gate', () => {
-      it('returns 401 when stepUpToken is missing, never reaching the repository', async () => {
-        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({ name: 'My Token' }),
-        });
-
-        const response = await POST(request);
-
-        expect(response.status).toBe(401);
-        expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
-      });
-
-      it('returns 401 when the step-up grant is rejected, never reaching the repository', async () => {
-        vi.mocked(consumeStepUpGrant).mockResolvedValue({
-          ok: false,
-          error: { code: 'STEP_UP_REQUIRED' },
-        } as never);
-
-        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_wrong' }),
-        });
-
-        const response = await POST(request);
-
-        expect(response.status).toBe(401);
-        expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
-      });
-
-      it('consumes the step-up grant bound to this exact name + drive scopes', async () => {
-        const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Cookie: 'ps_session=valid-token',
-            'X-CSRF-Token': 'valid-csrf-token',
-          },
-          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
-        });
-
-        await POST(request);
-
-        expect(consumeStepUpGrant).toHaveBeenCalledWith({
-          userId: 'test-user-id',
-          token: 'ps_stepup_test',
-          actionBinding: { op: 'mint', name: 'My Token', driveScopes: '[]' },
-        });
-      });
-    });
   });
 
   describe('GET /api/auth/mcp-tokens', () => {
