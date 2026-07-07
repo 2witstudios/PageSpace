@@ -1,64 +1,73 @@
-# PII Decrypt Perf Remediation — Round 2
+# PII Decrypt Perf Remediation — Round 2 Epic
 
-## Context
+**Status**: 📋 PLANNED
+**Goal**: Finish closing the PII-decrypt latency regression that PR #1930/#1931 only partially fixed — every existing user's PII is still on the slow path, and several hot routes were never wired into the dedup fix.
 
-The GDPR PII encryption-at-rest rollout completed 2026-07-06 and `pagespace-web`
-(single 1-vCPU Fly machine) has run elevated HTTP response times since
-(0.3-0.5s baseline → sustained 1-15s, one 37s spike). PR #1930 (c6e60f97f)
-memoized the AES master-key scrypt derivation and PR #1931 (da3514c7f) did the
-same for the blind-index HMAC key, but response times stayed elevated because:
+## Overview
 
-- The one-time backfill (`scripts/backfill-user-pii-encryption.ts`) ran on
-  2026-07-06 — a full day BEFORE #1930 introduced the fast 3-part
-  `iv:authTag:ciphertext` envelope. All 224 existing users' `email`/`name`
-  ciphertext is stuck on the legacy 4-part `salt:iv:authTag:ciphertext` format.
-- `decrypt()` still runs a full unmemoized `scryptSync` per record for the
-  legacy format (`deriveLegacyKey`,
-  `packages/lib/src/encryption/encryption-utils.ts`), so 100% of real user PII
-  reads pay the slow-scrypt cost on every request until the rows are
-  re-encrypted into the fast format.
+Because PR #1930's expand-contract fix only speeds up brand-new writes and only deduped 3 of the routes that decrypt PII in a per-row loop, production response times are still elevated hours after both perf PRs deployed: the one-time backfill (`scripts/backfill-user-pii-encryption.ts`) that encrypted all 224 existing users ran on 2026-07-06, a full day before #1930 introduced the fast ciphertext format, so every existing user's `email`/`name` is permanently stuck on the slow unmemoized-scrypt-per-record legacy decrypt path (`deriveLegacyKey`) until re-encrypted — and grep found `inbox`, `messages/conversations`, `messages/conversations/[conversationId]`, `messages/threads`, `connections`, and `connections/search` routes still doing undeduped per-row `decryptField` calls that PR #1930 never touched. This epic closes both gaps with zero behavior change, full backwards compatibility with mixed-format data mid-migration, and pure-function-core/imperative-shell TDD throughout, following the exact patterns already established in `encryption-utils.ts` (`parseEnvelope`/`buildEnvelope`/`encryptWithKey`/`decryptWithKey`) and `blind-index.ts` (`memoizeSyncByKey`).
 
-## Legacy-ciphertext re-encryption backfill — Done (this PR)
+---
 
-Convert every legacy-4-part-format `users.email`/`users.name` ciphertext row to
-the fast 3-part format so no existing user's PII reads hit the slow legacy
-scrypt path.
+## Legacy-ciphertext re-encryption backfill
 
-Deliverables:
+**Status**: ✅ DONE (PR #1936 — live production run is a separate, explicit,
+human-supervised step; every reader of `users.email`/`users.name` must be on a
+#1930-aware image first, gated by `--apply` +
+`LEGACY_CIPHERTEXT_REENCRYPT_CONFIRMED=true`)
 
-- [x] Pure planner (`packages/lib/src/encryption/legacy-ciphertext-reencrypt.ts`)
-      mirroring `planUserPiiBackfill`: per row, decide legacy (convert) vs
-      fast/plaintext (skip); compute new ciphertext for legacy rows. No DB
-      access or I/O — unit-testable without a database.
-- [x] Runner script (`scripts/backfill-legacy-ciphertext-reencrypt.ts`)
-      mirroring `backfill-user-pii-encryption.ts`: cursor-on-id-ascending
-      batches, dry-run by default, live write requires `--apply` AND
-      `LEGACY_CIPHERTEXT_REENCRYPT_CONFIRMED=true`, reports legacy found /
-      converted / skipped / errors, resumable.
+Idempotent, resumable, dry-run-by-default script that reads every legacy-4-part-format `users.email`/`name` row, decrypts it via the existing dual-format `decrypt()`, and re-encrypts it via `encrypt()` (which always emits the fast 3-part format) — converging every row to the fast format so the legacy scrypt path is no longer on the hot read path for any existing user.
 
-Acceptance criteria:
+**Requirements**:
+- Given a row already in fast-format ciphertext, should skip it (idempotent re-runs converge to zero work, mirroring `scripts/backfill-user-pii-encryption.ts`'s existing-row skip).
+- Given a row in legacy-format ciphertext, should decrypt then re-encrypt it to fast format in a single pass, byte-identical plaintext round-trip proven by test.
+- Given the migration is interrupted mid-run, should be resumable (cursor-based batching, same pattern as the existing backfill) without re-processing already-converted rows or losing progress.
+- Given a dry-run flag (default), should report counts (legacy found / would-convert) without writing, requiring the same explicit `--apply` + confirmed-cutover-deployed gate pattern as the existing backfill before any live write.
+- Given the planner logic (which rows need conversion, what the new value should be), should be a pure function separate from the DB I/O shell, unit-tested without a real database — same split as `planUserPiiBackfill`.
 
-- [x] Fast-format row → skipped (idempotent re-runs converge to zero work).
-- [x] Legacy-format row → decrypt + re-encrypt to fast format in one pass;
-      byte-identical plaintext round-trip proven by test (decrypt(new) ===
-      decrypt(old) === original plaintext; new envelope has 3 colon-separated
-      parts, not 4).
-- [x] Interrupted mid-run → resumable without re-processing converted rows.
-- [x] Dry-run by default; live write gated on `--apply` + confirmation env var.
-- [x] Planner is a pure function separate from the DB I/O shell, unit-tested
-      without a real database.
+---
 
-Rollout note: the live run must only happen AFTER the fast-format-aware app
-(#1930/#1931) is deployed to every reader (web, realtime, processor) — a
-pre-#1930 image cannot parse the 3-part envelope. Running the backfill against
-production is a separate, explicit, human-supervised step.
+## Dedup PII decrypts in inbox route
 
-## Dedup decrypts in routes missed by #1930 — In Progress (parallel workstream)
+Wire the existing `decryptUsersByIdOnce` helper (`packages/lib/src/auth/user-repository.ts`, added by PR #1930) into `apps/web/src/app/api/inbox/route.ts`'s three per-row `decryptField` call sites so a repeated sender/participant within one request's result set decrypts once, not once per row.
 
-A second agent is wiring the request-scoped decrypt dedup into the routes PR
-#1930 missed. Independent files; no coordination with the backfill workstream.
+**Requirements**:
+- Given an inbox response listing multiple conversations from the same sender, should decrypt that sender's name exactly once for the whole request (call-count assertion via the same test pattern PR #1930 used against `decryptUsersByIdOnce`, not a dist-boundary mock on the inner `decryptField`).
+- Given the route's existing response shape and decrypted values, should be byte-identical to before the change (behavior-preserving refactor, not a new feature).
 
-## Follow-ups surfaced by review (not yet scheduled)
+---
+
+## Dedup PII decrypts in messages routes
+
+Apply the same `decryptUsersByIdOnce` wiring to `apps/web/src/app/api/messages/conversations/route.ts`, `apps/web/src/app/api/messages/conversations/[conversationId]/route.ts`, and `apps/web/src/app/api/messages/threads/route.ts`.
+
+**Requirements**:
+- Given a conversations/threads list with repeated other-party users across rows, should decrypt each unique user once per request.
+- Given the single-conversation detail route, should still correctly decrypt when only one distinct user is present (no regression for the common case).
+
+---
+
+## Dedup PII decrypts in connections routes
+
+Apply the same `decryptUsersByIdOnce` wiring to `apps/web/src/app/api/connections/route.ts` and `apps/web/src/app/api/connections/search/route.ts`.
+
+**Requirements**:
+- Given a connections list or search result with repeated users, should decrypt each unique user once per request.
+- Given the search route's existing filtering/ranking behavior, should be unaffected by the decrypt-path change.
+
+---
+
+## Verify recovery
+
+After all four tasks land and deploy, confirm the fix actually closes the gap rather than just asserting it should.
+
+**Requirements**:
+- Given the full lib + web test suites and `bun run typecheck`, should be green with zero new failures across all four preceding tasks.
+- Given the fix is deployed to `pagespace-web`, should show HTTP Response Time Avg back down near the pre-regression ~0.3-0.5s baseline on the same Grafana panel used to diagnose this, not just an assumption that the code change helped.
+
+---
+
+## Follow-ups surfaced by PR #1936 review (not yet scheduled)
 
 - Other columns also hold pre-#1930 legacy 4-part ciphertext and pay
   scrypt-per-decrypt on every read: integration connection credentials
