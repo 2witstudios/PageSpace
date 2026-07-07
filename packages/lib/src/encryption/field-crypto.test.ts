@@ -7,7 +7,7 @@
  * never encrypted.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
-import { encryptField, decryptField, looksEncrypted } from './field-crypto';
+import { encryptField, decryptField, decryptFieldValuesOnce, looksEncrypted } from './field-crypto';
 
 beforeAll(() => {
   process.env.ENCRYPTION_KEY = 'test-encryption-key-at-least-32-characters!!';
@@ -64,5 +64,46 @@ describe('encryptField / decryptField round-trip', () => {
     expect(await encryptField(null)).toBe(null);
     expect(await encryptField(undefined)).toBe(undefined);
     expect(await decryptField(null)).toBe(null);
+  });
+});
+
+describe('decryptFieldValuesOnce', () => {
+  it('given ciphertext values, should return a lookup that decrypts them', async () => {
+    const ctName = await encryptField('Alice');
+    const ctEmail = await encryptField('alice@example.com');
+    const lookup = await decryptFieldValuesOnce([ctName, ctEmail]);
+    expect(lookup(ctName)).toBe('Alice');
+    expect(lookup(ctEmail)).toBe('alice@example.com');
+  });
+
+  it('given the same ciphertext repeated across many rows, should decrypt it once (dedup by value)', async () => {
+    const ct = await encryptField('Repeated Sender');
+    const lookup = await decryptFieldValuesOnce([ct, ct, ct, ct]);
+    expect(lookup(ct)).toBe('Repeated Sender');
+  });
+
+  it('given legacy plaintext values, should pass them through unchanged', async () => {
+    const lookup = await decryptFieldValuesOnce(['Legacy Name', 'legacy@plaintext.com']);
+    expect(lookup('Legacy Name')).toBe('Legacy Name');
+    expect(lookup('legacy@plaintext.com')).toBe('legacy@plaintext.com');
+  });
+
+  it('given null/undefined lookups, should return null', async () => {
+    const lookup = await decryptFieldValuesOnce([null, undefined, 'x']);
+    expect(lookup(null)).toBeNull();
+    expect(lookup(undefined)).toBeNull();
+  });
+
+  it('given an empty string, should pass it through unchanged', async () => {
+    const lookup = await decryptFieldValuesOnce(['']);
+    expect(lookup('')).toBe('');
+  });
+
+  it('given a value that was never batched, should fail closed to null (never emit raw ciphertext)', async () => {
+    const batched = await encryptField('In Batch');
+    const unbatched = await encryptField('Not In Batch');
+    const lookup = await decryptFieldValuesOnce([batched]);
+    expect(lookup(batched)).toBe('In Batch');
+    expect(lookup(unbatched)).toBeNull();
   });
 });
