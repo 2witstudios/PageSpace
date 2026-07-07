@@ -15,6 +15,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the per-page publish dialog now offer a "browse uploaded files" picker as an alternative to
   pasting a URL. Picking a file resolves it to a durable public link, fixing links to your own
   uploaded files that previously required sign-in and silently failed to load for site visitors.
+- **Pick a GitHub repo when adding a Terminal project** — the Terminal Navigator's "Add project"
+  dialog now defaults to a searchable picker over your connected GitHub repos instead of requiring
+  a pasted clone URL, with a "Connect GitHub" prompt if you haven't connected yet and a manual URL
+  entry still available as a fallback.
 
 - **21 new sandbox git/GitHub tools** — agents with code execution can now edit PR titles and
   descriptions (`gh_pr_edit`), leave top-level PR and issue comments, edit/close/reopen issues,

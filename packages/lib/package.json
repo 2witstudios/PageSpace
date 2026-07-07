@@ -977,6 +977,11 @@
       "import": "./dist/integrations/saga/execute-tool.js",
       "require": "./dist/integrations/saga/execute-tool.js"
     },
+    "./integrations/saga/create-configured-executor": {
+      "types": "./dist/integrations/saga/create-configured-executor.d.ts",
+      "import": "./dist/integrations/saga/create-configured-executor.js",
+      "require": "./dist/integrations/saga/create-configured-executor.js"
+    },
     "./integrations/repositories/provider-repository": {
       "types": "./dist/integrations/repositories/provider-repository.d.ts",
       "import": "./dist/integrations/repositories/provider-repository.js",
@@ -1873,6 +1878,9 @@
       ],
       "integrations/saga/execute-tool": [
         "./dist/integrations/saga/execute-tool.d.ts"
+      ],
+      "integrations/saga/create-configured-executor": [
+        "./dist/integrations/saga/create-configured-executor.d.ts"
       ],
       "integrations/repositories/provider-repository": [
         "./dist/integrations/repositories/provider-repository.d.ts"

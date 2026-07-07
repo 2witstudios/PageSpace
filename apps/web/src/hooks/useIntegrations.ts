@@ -14,9 +14,9 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
-export function useProviders() {
+export function useProviders(enabled: boolean = true) {
   const { data, error, isLoading, mutate } = useSWR<{ providers: SafeProvider[] }>(
-    '/api/integrations/providers',
+    enabled ? '/api/integrations/providers' : null,
     fetcher,
     { revalidateOnFocus: false }
   );

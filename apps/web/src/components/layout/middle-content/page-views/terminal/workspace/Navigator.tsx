@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import {
   ChevronRight,
   ChevronDown,
   Cpu,
   FolderGit2,
+  Github,
   GitBranch,
   TerminalSquare,
   Plus,
@@ -41,14 +44,35 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
 import { useMachineProjects } from '@/hooks/useMachineProjects';
 import { useMachineBranches } from '@/hooks/useMachineBranches';
 import { useAgentTerminals, type AgentTerminal } from '@/hooks/useAgentTerminals';
+import { useGithubRepos, type GithubRepo } from '@/hooks/useGithubRepos';
+import { useProviders } from '@/hooks/useIntegrations';
+import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import { useTerminalWorkspaceStore, type OpenTerminalScope } from '@/stores/terminal-workspace/useTerminalWorkspaceStore';
 import EmptyState from './EmptyState';
 
 const AGENT_TYPES = Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[];
+
+/** Short project name from a GitHub `full_name` (e.g. "org/my-repo" -> "my-repo"), and the ready-to-clone URL. */
+export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url: string }): { name: string; repoUrl: string } {
+  const segments = repo.full_name.split('/');
+  return { name: segments[segments.length - 1] || repo.full_name, repoUrl: repo.clone_url };
+}
 
 export type { OpenTerminalScope };
 
@@ -406,19 +430,85 @@ function ConfirmRemoveDialog({
   );
 }
 
+function GithubRepoPicker({
+  repos,
+  isLoading,
+  error,
+  selectedLabel,
+  onSelect,
+}: {
+  repos: GithubRepo[];
+  isLoading: boolean;
+  error?: Error;
+  selectedLabel?: string;
+  onSelect(repo: GithubRepo): void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  return (
+    <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" role="combobox" aria-expanded={pickerOpen} className="w-full justify-between font-normal">
+          <span className="flex min-w-0 items-center gap-2">
+            <Github className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className={cn('truncate', !selectedLabel && 'text-muted-foreground')}>
+              {selectedLabel || 'Select a repo…'}
+            </span>
+          </span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search your repos…" />
+          <CommandList onWheel={(e) => e.stopPropagation()}>
+            <CommandEmpty>
+              {error ? `Failed to load repos: ${error.message}` : isLoading ? 'Loading repos…' : 'No repos found.'}
+            </CommandEmpty>
+            {repos.map((repo) => (
+              <CommandItem key={repo.full_name} value={repo.full_name} onSelect={() => { onSelect(repo); setPickerOpen(false); }}>
+                <FolderGit2 className="mr-2 size-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate text-sm">{repo.full_name}</span>
+                {repo.private && (
+                  <span className="ml-auto shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">private</span>
+                )}
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl: string): Promise<unknown>; triggerLabel?: string }) {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [manualMode, setManualMode] = useState(false);
+  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+
+  const { repos, connected, isLoading: reposLoading, error: reposError, mutate: refetchRepos } = useGithubRepos(open && !manualMode);
+  // Only needed to resolve the github provider for the "Connect GitHub" fallback CTA, so it's gated the same as useGithubRepos rather than fetched on every Navigator mount.
+  const { providers } = useProviders(open);
+  const githubProvider = providers.find((p) => p.slug === 'github') ?? null;
+
+  const mode: 'manual' | 'connect' | 'picker' = manualMode ? 'manual' : connected === false ? 'connect' : 'picker';
+
+  const resetAndClose = () => {
+    setOpen(false);
+    setName('');
+    setRepoUrl('');
+    setManualMode(false);
+  };
 
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
       await onAdd(name.trim(), repoUrl.trim());
-      setOpen(false);
-      setName('');
-      setRepoUrl('');
+      resetAndClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to add project');
     } finally {
@@ -426,8 +516,14 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
     }
   };
 
+  const handleSelectRepo = (repo: GithubRepo) => {
+    const fields = deriveProjectFieldsFromRepo(repo);
+    setName(fields.name);
+    setRepoUrl(fields.repoUrl);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) resetAndClose(); }}>
       <DialogTrigger asChild>
         {triggerLabel ? (
           <Button variant="outline" size="sm" className="h-7 text-xs">
@@ -446,7 +542,29 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
         </DialogHeader>
         <div className="flex flex-col gap-3">
           <Input placeholder="Project name" value={name} onChange={(e) => setName(e.target.value)} />
-          <Input placeholder="Repo URL (https://github.com/org/repo.git)" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
+
+          {mode === 'manual' && (
+            <Input placeholder="Repo URL (https://github.com/org/repo.git)" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
+          )}
+          {mode === 'connect' && (
+            <Button type="button" variant="outline" onClick={() => setConnectDialogOpen(true)} className="justify-start gap-2 font-normal text-muted-foreground">
+              <Github className="size-3.5 shrink-0" />
+              Connect GitHub to browse your repos
+            </Button>
+          )}
+          {mode === 'picker' && (
+            <GithubRepoPicker repos={repos} isLoading={reposLoading} error={reposError} selectedLabel={name} onSelect={handleSelectRepo} />
+          )}
+
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="h-auto justify-start p-0 text-xs text-muted-foreground"
+            onClick={() => setManualMode((m) => !m)}
+          >
+            {manualMode ? 'Pick from your GitHub repos instead' : 'Enter a repo URL manually'}
+          </Button>
         </div>
         <DialogFooter>
           <Button onClick={handleSubmit} disabled={submitting || !name.trim() || !repoUrl.trim()}>
@@ -454,6 +572,16 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
           </Button>
         </DialogFooter>
       </DialogContent>
+      <ConnectIntegrationDialog
+        provider={githubProvider}
+        open={connectDialogOpen}
+        onOpenChange={setConnectDialogOpen}
+        onConnected={() => {
+          setConnectDialogOpen(false);
+          refetchRepos();
+        }}
+        returnUrl={pathname}
+      />
     </Dialog>
   );
 }

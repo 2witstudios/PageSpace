@@ -23,16 +23,12 @@ vi.mock('@pagespace/lib/integrations/converter/ai-sdk', async (importOriginal) =
     convertIntegrationToolsToAISDK: vi.fn(),
   };
 });
-vi.mock('@pagespace/lib/integrations/saga/execute-tool', () => ({
-  createToolExecutor: vi.fn(),
+vi.mock('@pagespace/lib/integrations/saga/create-configured-executor', () => ({
+  createConfiguredToolExecutor: vi.fn(),
 }));
 vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
-  getConnectionWithProvider: vi.fn(),
   listUserConnections: vi.fn(),
   listDriveConnections: vi.fn(),
-}));
-vi.mock('@pagespace/lib/integrations/repositories/audit-repository', () => ({
-  logAuditEntry: vi.fn(),
 }));
 vi.mock('@pagespace/lib/integrations/repositories/grant-repository', () => ({
   listGrantsByAgent: vi.fn(),
@@ -49,13 +45,13 @@ import {
   convertIntegrationToolsToAISDK,
   type GrantWithConnectionAndProvider,
 } from '@pagespace/lib/integrations/converter/ai-sdk';
-import { createToolExecutor } from '@pagespace/lib/integrations/saga/execute-tool';
+import { createConfiguredToolExecutor } from '@pagespace/lib/integrations/saga/create-configured-executor';
 import { resolvePageAgentIntegrationTools, resolveGlobalAssistantIntegrationTools } from '../integration-tool-resolver';
 
 const mockResolveAgentIntegrations = vi.mocked(resolveAgentIntegrations);
 const mockResolveGlobalIntegrations = vi.mocked(resolveGlobalAssistantIntegrations);
 const mockConvert = vi.mocked(convertIntegrationToolsToAISDK);
-const mockCreateExecutor = vi.mocked(createToolExecutor);
+const mockCreateExecutor = vi.mocked(createConfiguredToolExecutor);
 
 describe('resolvePageAgentIntegrationTools', () => {
   beforeEach(() => {

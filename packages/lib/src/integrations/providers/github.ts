@@ -100,8 +100,10 @@ export const githubProvider: IntegrationProviderConfig = {
       },
       outputTransform: {
         mapping: {
+          name: 'name',
           full_name: 'full_name',
           html_url: 'html_url',
+          clone_url: 'clone_url',
           description: 'description',
           language: 'language',
           stargazers_count: 'stargazers_count',
