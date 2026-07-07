@@ -189,6 +189,7 @@ export { createDiscoverMetadata, DiscoveryError } from './auth/discover.js';
 export { createExchangeCode, TokenExchangeError } from './auth/exchange-code.js';
 export { CONFIRM_IDENTITY_TIMEOUT_MS, confirmIdentity, whoamiOperation } from './auth/confirm-identity.js';
 export { openBrowser } from './auth/open-browser.js';
+export { unrefWaitMs, waitMs } from './auth/wait.js';
 
 // Token revocation (RFC 7009) — Phase 4 task 5, reused by `pagespace logout`.
 // The refresh_token grant itself is `silent-refresh.ts`'s
@@ -245,6 +246,7 @@ export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } fr
 export { parseTokensCreateArgs, parseTokensRevokeArgs } from './commands/keys/args.js';
 export type { CreateTokenArgs, DriveScopeArg, RevokeTokenArgs } from './commands/keys/args.js';
 export {
+  buildKeyUpdateScope,
   buildTokenScope,
   createTokensCreateHandler,
   resolveTokenProfileName,
@@ -268,7 +270,6 @@ export {
   preselectedDriveIds,
   renderKeysTable,
   roleSelectOptions,
-  shouldOfferRevokeOldKey,
 } from './commands/keys/logic.js';
 export type {
   CustomRoleOption,
@@ -280,6 +281,8 @@ export type {
   SelectOption,
   WizardMenuChoice,
 } from './commands/keys/logic.js';
+export { renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from './commands/keys/guidance.js';
+export type { AgentWiringGuidanceParams } from './commands/keys/guidance.js';
 export { createKeysHandler, keysHandler } from './commands/keys/wizard.js';
 
 // Legacy `PAGESPACE_AUTH_TOKEN` env var support (Phase 6 task 1) — folded
@@ -302,5 +305,5 @@ export type { McpHandlerDeps } from './commands/mcp.js';
 export { buildPagespaceMcpArgv, runPagespaceMcpBin } from './pagespace-mcp-bin.js';
 
 // Composition root.
-export { run } from './run.js';
+export { isLongRunningCommand, run } from './run.js';
 export type { RunDependencies } from './run.js';

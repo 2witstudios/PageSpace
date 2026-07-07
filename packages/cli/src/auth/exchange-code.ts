@@ -9,15 +9,20 @@
  * pre-authentication step no `AuthProvider` can exist for yet. The response
  * shape is still validated with zod rather than trusted blind.
  *
- * The response is one of two shapes, discriminated by `token_type`
+ * The response is one of three shapes, discriminated by `token_type`
  * (`oauth-repository.ts`'s `exchangeAuthorizationCode`): `'Bearer'` is the
  * classic OAuth refresh/access-token pair `pagespace login` uses, feeding
  * `PageSpaceClient`/`OAuthTokenProvider`. `'mcp'` is a pure drive:* grant
  * (`pagespace keys create`) — the server minted a real `mcp_*` token instead
  * of an OAuth grant (see that file's `ok_mcp_token` outcome), so there is no
  * `refresh_token`/`expires_in` to report: an `mcp_*` token doesn't expire
- * and has no refresh cycle. `loopback-flow.ts` persists each shape
- * differently (an `OAuthHostCredential` vs a `StaticHostCredential`).
+ * and has no refresh cycle. `'mcp_update'` is an `update_key:<id>` grant
+ * (the wizard's Edit) — the server re-scoped an EXISTING `mcp_*` token in
+ * place (`ok_mcp_update`) and deliberately returns no secret at all, only
+ * the PKCE-verified success signal + granted scope + which token changed.
+ * `loopback-flow.ts` persists the first two shapes differently (an
+ * `OAuthHostCredential` vs a `StaticHostCredential`) and persists NOTHING
+ * for the third (the stored credential's secret is unchanged).
  */
 import { z } from 'zod';
 import type { ExchangeCode, ExchangeCodeParams, ExchangedTokens } from './loopback-flow.js';
@@ -40,6 +45,12 @@ const oauthTokenResponseSchema = z.object({
 const mcpTokenResponseSchema = z.object({
   token_type: z.literal('mcp'),
   access_token: z.string(),
+  scope: z.string(),
+});
+
+const mcpUpdateResponseSchema = z.object({
+  token_type: z.literal('mcp_update'),
+  token_id: z.string(),
   scope: z.string(),
 });
 
@@ -80,6 +91,11 @@ export function createExchangeCode(fetchImpl: typeof fetch = fetch): ExchangeCod
     const mcpParsed = mcpTokenResponseSchema.safeParse(json);
     if (mcpParsed.success) {
       return { kind: 'mcp', token: mcpParsed.data.access_token, scope: mcpParsed.data.scope };
+    }
+
+    const mcpUpdateParsed = mcpUpdateResponseSchema.safeParse(json);
+    if (mcpUpdateParsed.success) {
+      return { kind: 'mcp_update', tokenId: mcpUpdateParsed.data.token_id, scope: mcpUpdateParsed.data.scope };
     }
 
     const oauthParsed = oauthTokenResponseSchema.safeParse(json);

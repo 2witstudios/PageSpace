@@ -10,7 +10,6 @@ import {
   preselectedDriveIds,
   renderKeysTable,
   roleSelectOptions,
-  shouldOfferRevokeOldKey,
 } from '../logic.js';
 import type { KeySummary } from '../logic.js';
 
@@ -185,17 +184,6 @@ describe('preselectedDriveIds', () => {
 
   it('is empty for an unscoped key', () => {
     expect(preselectedDriveIds(SAMPLE_KEYS[1])).toEqual([]);
-  });
-});
-
-describe('shouldOfferRevokeOldKey', () => {
-  it('offers the revoke-old-key step only when the replacement mint succeeded', () => {
-    expect(shouldOfferRevokeOldKey({ outcome: 'success' })).toBe(true);
-  });
-
-  it('never offers it when the mint failed for any reason', () => {
-    expect(shouldOfferRevokeOldKey({ outcome: 'timeout' })).toBe(false);
-    expect(shouldOfferRevokeOldKey({ outcome: 'access_denied' })).toBe(false);
   });
 });
 

@@ -73,6 +73,25 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     redirect(url.toString());
   }
 
+  // An update_key grant re-scopes one of the CONSENTING user's existing keys
+  // in place. Ownership (and un-revoked) is checked here so the consent
+  // screen can only ever narrate the user's own key — a foreign, revoked, or
+  // nonexistent token id all collapse to the same invalid_scope redirect (no
+  // oracle), killing the "point a victim's consent at the attacker's token"
+  // direction. The approval POST re-checks this server-side; this render is
+  // the human-facing half.
+  let updateKeyName: string | null = null;
+  if (result.scopes.updateKeyId !== null) {
+    const target = await sessionRepository.findActiveMcpTokenByIdAndUser(result.scopes.updateKeyId, session.userId);
+    if (!target) {
+      const url = new URL(result.redirectUri);
+      url.searchParams.set('error', 'invalid_scope');
+      if (result.state) url.searchParams.set('state', result.state);
+      redirect(url.toString());
+    }
+    updateKeyName = target.name;
+  }
+
   const driveIds = [...result.scopes.drives.keys()];
   const drives = driveIds.length > 0 ? await sessionRepository.findDrivesByIds(driveIds) : [];
   const driveNamesById = new Map(drives.map((d) => [d.id, d.name]));
@@ -87,6 +106,14 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   const roleById = new Map(roleRows.filter((r): r is NonNullable<typeof r> => !!r).map((r) => [r.id, r]));
 
   const scopeDescriptions: string[] = [];
+  if (result.scopes.updateKeyId !== null) {
+    scopeDescriptions.push(
+      describeScopeForConsent(
+        { kind: 'update_key', tokenId: result.scopes.updateKeyId },
+        { keyName: updateKeyName ?? undefined },
+      ),
+    );
+  }
   if (result.scopes.account) {
     scopeDescriptions.push(describeScopeForConsent({ kind: 'account' }, {}));
   }
@@ -111,7 +138,9 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   return (
     <div className="mx-auto max-w-md py-16">
       <h1 className="text-xl font-semibold">
-        {result.client.name} is requesting access
+        {updateKeyName !== null
+          ? `${result.client.name} wants to update the key "${updateKeyName}"`
+          : `${result.client.name} is requesting access`}
         {result.client.firstParty && (
           <span className="ml-2 rounded bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
             Built by PageSpace

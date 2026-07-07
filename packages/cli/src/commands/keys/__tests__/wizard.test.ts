@@ -189,6 +189,187 @@ describe('createKeysHandler — Create flow', () => {
   });
 });
 
+describe('createKeysHandler — Create flow, mcp-kind mint (the production shape for drive-scoped keys)', () => {
+  const MCP_TOKENS = { kind: 'mcp' as const, token: 'mcp_wizard_tok', scope: 'drive:drv1:member offline_access' };
+  const DRIVE_ROW = { id: 'drv1', name: 'Engineering', slug: 'eng', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: true, role: 'OWNER', lastAccessedAt: null, homePageId: null };
+
+  function mcpCreateHandlerSetup() {
+    const store = fakeStore();
+    const fake = fakeLoopbackServer();
+    const deps = {
+      ...baseMintDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => MCP_TOKENS,
+    };
+    const sdk = fakeSdk({ drivesList: vi.fn(async () => [DRIVE_ROW]), tokensList: vi.fn(async () => []) });
+    return { deps, sdk, store };
+  }
+
+  it('offers the show-once token note when accepted, then always prints the agent-wiring guidance', async () => {
+    selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce({ kind: 'member' }).mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    textMock.mockReset().mockResolvedValueOnce('my-profile');
+    // 1st confirm: proceed with the mint; 2nd confirm: show the token.
+    confirmMock.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+    noteMock.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const { deps, sdk } = mcpCreateHandlerSetup();
+    const handler = createKeysHandler(deps);
+    const ctx = createFakeContext({ sdk, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const notes = noteMock.mock.calls.map((call) => `${String(call[0])}\n${String(call[1] ?? '')}`);
+    expect(notes.some((note) => note.includes('PAGESPACE_TOKEN=mcp_wizard_tok'))).toBe(true);
+    expect(notes.some((note) => note.includes('PAGESPACE_PROFILE') && note.includes('"pagespace"'))).toBe(true);
+  });
+
+  it('never surfaces the raw token anywhere when the show-once confirm is declined, but still prints guidance', async () => {
+    selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce({ kind: 'member' }).mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    textMock.mockReset().mockResolvedValueOnce('my-profile');
+    confirmMock.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    noteMock.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const { deps, sdk } = mcpCreateHandlerSetup();
+    const handler = createKeysHandler(deps);
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ sdk, stdout, stderr, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const everything = [
+      ...stdout.lines,
+      ...stderr.lines,
+      ...noteMock.mock.calls.flat().map(String),
+      ...spinnerHandle.stop.mock.calls.flat().map(String),
+    ].join('\n');
+    expect(everything).not.toContain('mcp_wizard_tok');
+    const notes = noteMock.mock.calls.map((call) => `${String(call[0])}`);
+    expect(notes.some((note) => note.includes('PAGESPACE_PROFILE'))).toBe(true);
+  });
+});
+
+describe('createKeysHandler — Edit flow re-scopes the key IN PLACE (update_key grant, same secret)', () => {
+  it('key select -> pre-selected drive multiselect -> role -> confirm -> update_key consent; no profile prompt, no revoke, nothing stored locally', async () => {
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('edit')
+      .mockResolvedValueOnce('tok1')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    textMock.mockReset();
+    confirmMock.mockReset().mockResolvedValueOnce(true);
+    spinnerHandle.stop.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const store = fakeStore();
+    const fake = fakeLoopbackServer();
+    let requestedScope: string | undefined;
+    const deps = {
+      ...baseMintDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: async (url: string) => {
+        requestedScope = new URL(url).searchParams.get('scope') ?? undefined;
+        return autoApprove(fake)(url);
+      },
+      exchangeCode: async () => ({ kind: 'mcp_update' as const, tokenId: 'tok1', scope: 'update_key:tok1 drive:drv1:member' }),
+    };
+    const handler = createKeysHandler(deps);
+
+    const tokensRevoke = vi.fn(async () => ({ message: 'Token revoked successfully' }));
+    const tokensList = vi.fn(async () => [
+      {
+        id: 'tok1',
+        name: 'CI bot',
+        tokenPrefix: 'mcp_abcdefghijk',
+        lastUsed: null,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        isScoped: true,
+        driveScopes: [{ id: 'drv1', name: 'Engineering', role: 'MEMBER', customRoleId: null, customRoleName: null }],
+      },
+    ]);
+    const drivesList = vi.fn(async () => [
+      { id: 'drv1', name: 'Engineering', slug: 'eng', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: true, role: 'OWNER', lastAccessedAt: null, homePageId: null },
+    ]);
+    const sdk = fakeSdk({ drivesList, tokensList, tokensRevoke });
+    const ctx = createFakeContext({ sdk, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    // The consent request carries the update_key grant, never offline_access.
+    expect(requestedScope).toBe('update_key:tok1 drive:drv1:member');
+    // The drive multiselect starts pre-selected on the key's current scopes.
+    expect(multiselectMock).toHaveBeenCalledWith(expect.objectContaining({ initialValues: ['drv1'] }));
+    // In-place semantics: no replacement profile is named, nothing is stored
+    // locally, and the old key is never revoked.
+    expect(textMock).not.toHaveBeenCalled();
+    expect(tokensRevoke).not.toHaveBeenCalled();
+    expect(await store.list()).toEqual([]);
+    const stopMessages = spinnerHandle.stop.mock.calls.flat().map(String).join('\n');
+    expect(stopMessages).toMatch(/secret is unchanged/i);
+    expect(stopMessages).toContain('CI bot');
+  });
+
+  it('a failed update consent surfaces the failure and revokes nothing', async () => {
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('edit')
+      .mockResolvedValueOnce('tok1')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    confirmMock.mockReset().mockResolvedValueOnce(true);
+    spinnerHandle.error.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const store = fakeStore();
+    const fake = fakeLoopbackServer();
+    const deps = {
+      ...baseMintDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: async (url: string) => {
+        const state = new URL(url).searchParams.get('state')!;
+        queueMicrotask(() => fake.deliver({ error: 'access_denied', state }));
+        return true;
+      },
+    };
+    const handler = createKeysHandler(deps);
+
+    const tokensRevoke = vi.fn(async () => ({ message: 'Token revoked successfully' }));
+    const tokensList = vi.fn(async () => [
+      {
+        id: 'tok1',
+        name: 'CI bot',
+        tokenPrefix: 'mcp_abcdefghijk',
+        lastUsed: null,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        isScoped: true,
+        driveScopes: [{ id: 'drv1', name: 'Engineering', role: 'MEMBER', customRoleId: null, customRoleName: null }],
+      },
+    ]);
+    const drivesList = vi.fn(async () => [
+      { id: 'drv1', name: 'Engineering', slug: 'eng', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: true, role: 'OWNER', lastAccessedAt: null, homePageId: null },
+    ]);
+    const sdk = fakeSdk({ drivesList, tokensList, tokensRevoke });
+    const ctx = createFakeContext({ sdk, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(spinnerHandle.error).toHaveBeenCalledWith(expect.stringMatching(/denied/i));
+    expect(tokensRevoke).not.toHaveBeenCalled();
+  });
+});
+
 describe('createKeysHandler — unknown "keys" subcommand', () => {
   it('reports a usage error instead of silently falling through to the bare wizard on a typo', async () => {
     const { createKeysHandler } = await import('../wizard.js');

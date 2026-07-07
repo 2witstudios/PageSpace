@@ -24,6 +24,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'user@example.com' }),
+  logTokenActivity: vi.fn(),
+}));
+
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('203.0.113.11'),
 }));
@@ -264,6 +269,53 @@ describe('POST /api/oauth/token — pure drive:* grant returns a real mcp_* toke
     const res = await POST(tokenRequest(validFields()) as never);
 
     expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+});
+
+describe('POST /api/oauth/token — update_key grant returns a secretless success signal', () => {
+  const okUpdate = {
+    outcome: 'ok_mcp_update',
+    userId: 'user-1',
+    scopes: ['update_key:tok123', 'drive:drv1:member'],
+    tokenId: 'tok123',
+  };
+
+  it('returns { token_type: "mcp_update", token_id, scope } with NO access_token of any kind', async () => {
+    exchangeAuthorizationCode.mockResolvedValue(okUpdate);
+
+    const res = await POST(tokenRequest(validFields()) as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      token_type: 'mcp_update',
+      token_id: 'tok123',
+      scope: 'update_key:tok123 drive:drv1:member',
+    });
+    expect(body).not.toHaveProperty('access_token');
+    expect(body).not.toHaveProperty('refresh_token');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('audits the update as auth.token.updated', async () => {
+    exchangeAuthorizationCode.mockResolvedValue(okUpdate);
+
+    await POST(tokenRequest(validFields()) as never);
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'auth.token.updated', userId: 'user-1' }),
+    );
+  });
+
+  it('collapses update_target_gone (target revoked between consent and exchange) to the constant-shape invalid_grant', async () => {
+    exchangeAuthorizationCode.mockResolvedValue({ outcome: 'update_target_gone' });
+
+    const res = await POST(tokenRequest(validFields()) as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body).toEqual({ error: 'invalid_grant' });
   });
 });
 

@@ -15,6 +15,7 @@ export type ParsedScope =
   | { kind: 'account' }
   | { kind: 'offline_access' }
   | { kind: 'manage_keys' }
+  | { kind: 'update_key'; tokenId: string }
   | {
       kind: 'drive';
       driveId: string;
@@ -30,6 +31,17 @@ export type ScopeSet = {
   // check below); downstream fail-closed checks live in
   // apps/web/src/lib/auth/index.ts.
   manageKeys: boolean;
+  // `update_key:<tokenId>` — this authorization request grants nothing new;
+  // it re-scopes the caller's EXISTING mcp_* token (same secret) to exactly
+  // the drive:* set alongside it. Riding inside the scope string (rather
+  // than a separate authorize param) deliberately puts the target token id
+  // under everything that already binds `scope`: the consent step-up
+  // grant's action binding, the stored authorization-code row, and PKCE.
+  // Mutually exclusive with `account`/`manage_keys` (nothing but drives can
+  // be granted to an mcp token) and with `offline_access` (no refreshable
+  // credential is minted by this grant); requires ≥1 drive:* scope (an
+  // empty re-scope is what revocation is for).
+  updateKeyId: string | null;
 };
 
 export type ScopeError =
@@ -39,7 +51,10 @@ export type ScopeError =
   | { code: 'account_drive_conflict' }
   | { code: 'manage_keys_conflict' }
   | { code: 'duplicate_drive'; driveId: string }
-  | { code: 'offline_access_alone' };
+  | { code: 'offline_access_alone' }
+  | { code: 'duplicate_update_key' }
+  | { code: 'update_key_conflict' }
+  | { code: 'update_key_without_drive' };
 
 export type DriveScopeRow = { driveId: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null };
 
@@ -94,6 +109,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   let account = false;
   let offlineAccess = false;
   let manageKeys = false;
+  let updateKeyId: string | null = null;
   const drives = new Map<string, ParsedScope & { kind: 'drive' }>();
 
   for (const token of tokens) {
@@ -107,6 +123,17 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     }
     if (token === 'manage_keys') {
       manageKeys = true;
+      continue;
+    }
+    if (token.startsWith('update_key:')) {
+      const tokenId = token.slice('update_key:'.length);
+      if (!RESOURCE_ID_RE.test(tokenId)) {
+        return { ok: false, error: { code: 'malformed_scope', scope: token } };
+      }
+      if (updateKeyId !== null) {
+        return { ok: false, error: { code: 'duplicate_update_key' } };
+      }
+      updateKeyId = tokenId;
       continue;
     }
     if (token.startsWith('drive:')) {
@@ -140,11 +167,26 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   // useless (fail closed, Codex #1754). manage_keys is its own principal
   // shape, so offline_access + manage_keys is a valid, expected combination
   // (a long-lived key-management session).
-  if (offlineAccess && !account && !manageKeys && drives.size === 0) {
+  if (offlineAccess && !account && !manageKeys && drives.size === 0 && updateKeyId === null) {
     return { ok: false, error: { code: 'offline_access_alone' } };
   }
 
-  return { ok: true, scopes: { account, offlineAccess, drives, manageKeys } };
+  if (updateKeyId !== null) {
+    // Nothing but drives can be attached to an mcp token, and this grant
+    // mints nothing refreshable — offline_access alongside it would promise
+    // a refresh credential that structurally cannot exist.
+    if (account || manageKeys || offlineAccess) {
+      return { ok: false, error: { code: 'update_key_conflict' } };
+    }
+    // Re-scoping to zero drives is "disable the key" — that's revocation's
+    // job, and silently granting it here would let a consent screen that
+    // narrates "update access" strip a key instead.
+    if (drives.size === 0) {
+      return { ok: false, error: { code: 'update_key_without_drive' } };
+    }
+  }
+
+  return { ok: true, scopes: { account, offlineAccess, drives, manageKeys, updateKeyId } };
 }
 
 function formatDriveScope(scope: ParsedScope & { kind: 'drive' }): string {
@@ -163,6 +205,7 @@ function formatDriveScope(scope: ParsedScope & { kind: 'drive' }): string {
 /** Canonical serialization; parse(format(s)) deep-equals s (rule 9). */
 export function formatScopeSet(scopes: ScopeSet): string {
   const tokens: string[] = [];
+  if (scopes.updateKeyId !== null) tokens.push(`update_key:${scopes.updateKeyId}`);
   if (scopes.account) tokens.push('account');
   if (scopes.manageKeys) tokens.push('manage_keys');
   if (scopes.offlineAccess) tokens.push('offline_access');
@@ -199,6 +242,12 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
   // granted-bit check is the whole story.
   if (requested.manageKeys && !granted.manageKeys) return false;
 
+  // update_key never survives narrowing: it exists only inside a single
+  // consent-bound authorization code, so any request carrying one against a
+  // grant that doesn't carry the identical one (e.g. a refresh-token grant
+  // trying to smuggle a key re-scope in) is escalation, rejected outright.
+  if (requested.updateKeyId !== null && requested.updateKeyId !== granted.updateKeyId) return false;
+
   if (requested.account) {
     return granted.account;
   }
@@ -224,7 +273,18 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
  * this shape specifically).
  */
 export function isPureDriveGrant(scopes: ScopeSet): boolean {
-  return !scopes.account && !scopes.manageKeys && scopes.drives.size > 0;
+  return !scopes.account && !scopes.manageKeys && scopes.drives.size > 0 && scopes.updateKeyId === null;
+}
+
+/**
+ * True iff this grant re-scopes an existing mcp token in place
+ * (`update_key:<id>` + ≥1 `drive:*`, the only shape parse admits for
+ * `updateKeyId`). The token-issuance sibling of `isPureDriveGrant`: that
+ * shape mints a NEW `mcp_tokens` row, this one replaces the drive-scope rows
+ * of an existing row and never touches its secret.
+ */
+export function isKeyUpdateGrant(scopes: ScopeSet): boolean {
+  return scopes.updateKeyId !== null;
 }
 
 /** Bridge to the capability model: rows in mcp_token_drives shape (Decision 2). */

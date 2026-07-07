@@ -27,6 +27,16 @@ export interface ResolveAuthEnv {
   readonly PAGESPACE_TOKEN?: string;
 }
 
+/**
+ * The token env var's NAME, for display copy (post-mint agent-wiring
+ * guidance, `--show-token` output). Command modules must interpolate this
+ * constant instead of writing the literal — the `single-auth-path.test.ts`
+ * tripwire greps command sources for the raw string precisely so that no
+ * command grows its own env read, and display copy must not blunt that
+ * tripwire by making the literal commonplace there.
+ */
+export const TOKEN_ENV_VAR_NAME = 'PAGESPACE_TOKEN';
+
 export type AuthSource =
   | { readonly kind: 'flag'; readonly token: string }
   | { readonly kind: 'env'; readonly token: string }

@@ -149,10 +149,5 @@ export function preselectedDriveIds(key: KeySummary): readonly string[] {
   return key.driveScopes.map((drive) => drive.id);
 }
 
-/** The Edit flow only offers to revoke the replaced key once its replacement has actually been minted. */
-export function shouldOfferRevokeOldKey(mintOutcome: { readonly outcome: string }): boolean {
-  return mintOutcome.outcome === 'success';
-}
-
 export const NON_INTERACTIVE_KEYS_MESSAGE =
   'pagespace keys requires an interactive terminal. Use "pagespace keys create", "pagespace keys list", or "pagespace keys revoke" instead.';

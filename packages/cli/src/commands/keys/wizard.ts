@@ -16,21 +16,24 @@
  * top-level menu rather than mid-flow (`abortSubflow`), except at the menu
  * `select` itself, where it ends the wizard.
  *
- * Minting (Create, and Edit's replacement mint) reuses `buildTokenScope`/
- * `resolveTokenProfileName` and `runLoopbackLogin` exactly as `keys
- * create` (`./create.js`) does — same deps shape (`TokensCreateHandlerDeps`),
- * same effect adapters wired at the bottom of this file. There is no other minting path:
- * every grant of drive access still requires the real browser-consent
- * step-up, same as every other CLI entry point.
+ * Minting (Create) reuses `buildTokenScope`/`resolveTokenProfileName` and
+ * `runLoopbackLogin` exactly as `keys create` (`./create.js`) does — same
+ * deps shape (`TokensCreateHandlerDeps`), same effect adapters wired at the
+ * bottom of this file. Edit no longer mints at all: it re-scopes the
+ * selected key IN PLACE via the `update_key:<id>` grant (same secret, see
+ * `runEdit`). Both still require the real browser-consent step-up — there
+ * is no path to drive access, new or updated, without it.
  */
 import { randomBytes } from 'node:crypto';
 import * as clack from '@clack/prompts';
 import { PAGESPACE_CLI_CLIENT_ID } from '../../auth/client.js';
+import { TOKEN_ENV_VAR_NAME } from '../../auth/resolve.js';
 import { confirmIdentity } from '../../auth/confirm-identity.js';
 import { createDiscoverMetadata } from '../../auth/discover.js';
 import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
 import { openBrowser } from '../../auth/open-browser.js';
+import { unrefWaitMs } from '../../auth/wait.js';
 import { runLoopbackLogin } from '../../auth/loopback-flow.js';
 import type { LoopbackLoginResult } from '../../auth/loopback-flow.js';
 import { resolveConfig } from '../../config/resolve.js';
@@ -41,7 +44,8 @@ import type { HandlerContext } from '../../handler-context.js';
 import type { CommandHandler } from '../../router/router.js';
 import { DEFAULT_LOGIN_TIMEOUT_MS, DEFAULT_MAX_PORT_ATTEMPTS } from '../login.js';
 import type { DriveScopeArg } from './args.js';
-import { resolveTokenProfileName, type TokensCreateHandlerDeps } from './create.js';
+import { buildKeyUpdateScope, resolveTokenProfileName, type TokensCreateHandlerDeps } from './create.js';
+import { renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from './guidance.js';
 import {
   availableMenuChoices,
   buildWizardScope,
@@ -53,7 +57,6 @@ import {
   preselectedDriveIds,
   renderKeysTable,
   roleSelectOptions,
-  shouldOfferRevokeOldKey,
 } from './logic.js';
 import type { DriveOption, DriveRoleChoice, DriveRoleSelection, KeySummary } from './logic.js';
 
@@ -189,6 +192,10 @@ async function mintScopedKey(
   const s = clack.spinner();
   s.start(`Opening your browser to approve access for profile "${params.profileName}" on ${params.host}...`);
 
+  // Captured, never printed while the spinner is live — only surfaced behind
+  // the explicit show-once confirm below, then dropped.
+  let mintedToken: string | null = null;
+
   const result = await runLoopbackLogin({
     host: params.host,
     clientId: PAGESPACE_CLI_CLIENT_ID,
@@ -208,10 +215,21 @@ async function mintScopedKey(
     credentialStore: store,
     now: deps.now,
     profile: params.profileName,
+    onMintedStaticToken: (token) => {
+      mintedToken = token;
+    },
   });
 
   if (result.outcome === 'success') {
     s.stop(`Created profile "${params.profileName}" on ${params.host}, scoped to: ${params.scope}.`);
+    if (mintedToken !== null) {
+      const show = await clack.confirm({ message: SHOW_TOKEN_PROMPT, initialValue: false });
+      if (!clack.isCancel(show) && show) {
+        clack.note(`${TOKEN_ENV_VAR_NAME}=${mintedToken}`, 'Copy it now — shown once');
+      }
+      mintedToken = null;
+    }
+    clack.note(renderAgentWiringGuidance({ profileName: params.profileName, host: params.host }).join('\n'), 'Wire up an agent');
   } else {
     s.error(describeMintFailure(result));
   }
@@ -225,9 +243,9 @@ interface ScopeAndMintMessages {
 }
 
 /**
- * Shared by Create and Edit: both are "pick drives/roles, name a profile,
- * confirm, mint" — the only difference is prompt wording and (for Edit) which
- * drives start pre-selected. Constructs the credential store exactly ONCE and
+ * Create's "pick drives/roles, name a profile, confirm, mint" flow (Edit
+ * used to share it back when editing meant minting a replacement — it now
+ * re-scopes in place, see `runEdit`). Constructs the credential store exactly ONCE and
  * threads that single instance through both the overwrite check and the mint
  * itself, so `CompositeCredentialStore`'s one-way keychain-degradation notice
  * (`credentials/store.ts`) can only ever print once per flow, matching how
@@ -293,6 +311,17 @@ async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, hos
   return null;
 }
 
+/**
+ * Edit re-scopes the selected key IN PLACE: same `mcp_tokens` row, same
+ * secret — the `update_key:<id>` grant (`buildKeyUpdateScope`) rides the
+ * same browser-consent step-up as a mint, but the server updates the
+ * existing token's drive scopes (`ok_mcp_update`) and returns no secret, so
+ * nothing is persisted locally and there is no replacement profile to name
+ * or old key to revoke. The `profile` passed to `runLoopbackLogin` is a
+ * non-"default" sentinel that is only ever written if a hostile or
+ * pre-`update_key` server unexpectedly answers with a real mint — it can
+ * never clobber the personal login credential or a real named profile.
+ */
 async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: string, keys: readonly KeySummary[]): Promise<FlowOutcome> {
   const keyId = await clack.select({ message: 'Which key would you like to edit?', options: [...keySelectOptions(keys)] });
   if (clack.isCancel(keyId)) return abortSubflow();
@@ -306,21 +335,58 @@ async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host:
     return null;
   }
 
-  const mintResult = await selectScopeAndMint(ctx, deps, host, drives, preselectedDriveIds(key), {
-    selectDrives: `Select drives for "${key.name}"`,
-    profileName: 'Name the replacement credential (used as its local profile name)',
-    confirmMint: (scope) => `Mint a replacement key scoped to: ${scope}?`,
+  const selections = await selectDriveRoleScopes(ctx, drives, `Select drives for "${key.name}"`, preselectedDriveIds(key));
+  if (selections === null) return abortSubflow();
+
+  const scopeResult = buildWizardScope(selections);
+  if (!scopeResult.ok) {
+    clack.log.error(scopeResult.message);
+    return null;
+  }
+  const driveScopeArgs = selections.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice));
+  const updateScope = buildKeyUpdateScope(key.id, driveScopeArgs);
+  if (!updateScope.ok) {
+    clack.log.error(updateScope.message);
+    return null;
+  }
+  const displayScope = updateScope.scope
+    .split(' ')
+    .filter((token) => !token.startsWith('update_key:'))
+    .join(' ');
+
+  const proceed = await clack.confirm({
+    message: `Update "${key.name}" to: ${displayScope}? The key keeps its existing secret.`,
   });
-  if (mintResult === null || !shouldOfferRevokeOldKey(mintResult)) return null;
+  if (clack.isCancel(proceed) || !proceed) return abortSubflow();
 
-  const revokeOld = await clack.confirm({ message: `Revoke the old key "${key.name}" now?`, initialValue: true });
-  if (clack.isCancel(revokeOld) || !revokeOld) return null;
+  const s = clack.spinner();
+  s.start(`Opening your browser to approve the new scopes for "${key.name}" on ${host}...`);
 
-  try {
-    await ctx.sdk.tokens.revoke({ tokenId: key.id });
-    clack.log.success(`Revoked old key "${key.name}".`);
-  } catch (error) {
-    clack.log.error(`Failed to revoke old key: ${error instanceof Error ? error.message : String(error)}`);
+  const result = await runLoopbackLogin({
+    host,
+    clientId: PAGESPACE_CLI_CLIENT_ID,
+    scope: updateScope.scope,
+    randomBytes: deps.randomBytes,
+    discoverMetadata: deps.discoverMetadata,
+    startServer: deps.startServer,
+    maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
+    openBrowser: deps.openBrowser,
+    onBrowserOpenFailed: (url) => {
+      s.message(`Could not open a browser automatically. Open this URL to continue: ${url}`);
+    },
+    waitMs: deps.waitMs,
+    timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
+    exchangeCode: deps.exchangeCode,
+    confirmIdentity: deps.confirmIdentity,
+    credentialStore: deps.createCredentialStore(),
+    now: deps.now,
+    profile: `edit-${key.id}`,
+  });
+
+  if (result.outcome === 'success') {
+    s.stop(`Updated "${key.name}". Its secret is unchanged — existing configurations keep working.`);
+  } else {
+    s.error(describeMintFailure(result));
   }
   return null;
 }
@@ -374,6 +440,7 @@ export function createKeysHandler(deps: TokensCreateHandlerDeps): CommandHandler
     });
 
     clack.intro('pagespace keys');
+    clack.log.message(WIZARD_INTRO_HINT);
 
     for (;;) {
       const keys = await fetchKeys(ctx);
@@ -416,7 +483,7 @@ export const keysHandler: CommandHandler = createKeysHandler({
   discoverMetadata: createDiscoverMetadata(),
   startServer: createLoopbackServer,
   openBrowser,
-  waitMs: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
   now: Date.now,

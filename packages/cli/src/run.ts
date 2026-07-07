@@ -83,6 +83,21 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   keysHandler,
 ]);
 
+/**
+ * True when this argv will dispatch to the long-running MCP stdio server
+ * (route `['mcp']`): its handler resolves as soon as the transport connects
+ * (`commands/mcp.ts`), and the process must then stay alive on the stdin
+ * handle serving the MCP client — so `bin.ts` must NOT force-exit after
+ * `run()` settles for it, unlike every other (one-shot) command.
+ * Conservative by design: a false positive only skips a belt-and-suspenders
+ * exit (the natural event-loop drain still exits); a false negative would
+ * kill a live server mid-session.
+ */
+export function isLongRunningCommand(argv: readonly string[]): boolean {
+  const parsed = parseArgv(argv);
+  return parsed.kind === 'command' && !parsed.flags.version && parsed.args[0] === 'mcp';
+}
+
 export async function run(deps: RunDependencies): Promise<ExitCode> {
   const parsed = parseArgv(deps.argv);
   if (parsed.kind === 'usage-error') {

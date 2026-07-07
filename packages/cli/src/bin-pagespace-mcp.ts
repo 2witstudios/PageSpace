@@ -24,6 +24,10 @@ runPagespaceMcpBin({
   prompt: async () => '',
 })
   .then((code) => {
+    // Deliberately no explicit process.exit() (unlike bin.ts's flushAndExit):
+    // runPagespaceMcpBin resolves as soon as the stdio transport connects, and
+    // the server must keep running on the stdin handle until the MCP client
+    // disconnects.
     process.exitCode = code;
   })
   .catch((error: unknown) => {

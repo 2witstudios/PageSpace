@@ -137,6 +137,15 @@ describe('POST /api/oauth/device_authorization — scope validation', () => {
       expect.objectContaining({ scopes: ['account', 'offline_access'] }),
     );
   });
+
+  it('rejects an update_key scope outright — key re-scoping is loopback-consent-only, the device grant has no path for it', async () => {
+    const res = await POST(
+      deviceAuthRequest({ client_id: CLIENT_ID, scope: 'update_key:tok123 drive:drv1:member' }) as never,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_scope' });
+    expect(createDeviceAuthorization).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/oauth/device_authorization — happy path', () => {

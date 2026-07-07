@@ -21,6 +21,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { PAGESPACE_CLI_CLIENT_ID } from '../../auth/client.js';
+import { TOKEN_ENV_VAR_NAME } from '../../auth/resolve.js';
 import { resolveConfig } from '../../config/resolve.js';
 import { DEFAULT_PROFILE_NAME } from '../../credentials/serialize.js';
 import { createCredentialStore } from '../../credentials/store.js';
@@ -32,6 +33,7 @@ import { createDiscoverMetadata } from '../../auth/discover.js';
 import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
 import { openBrowser } from '../../auth/open-browser.js';
+import { unrefWaitMs } from '../../auth/wait.js';
 import { runLoopbackLogin } from '../../auth/loopback-flow.js';
 import { DEFAULT_LOGIN_TIMEOUT_MS, DEFAULT_MAX_PORT_ATTEMPTS } from '../login.js';
 import type {
@@ -44,6 +46,7 @@ import type {
   WaitMs,
 } from '../../auth/loopback-flow.js';
 import { parseTokensCreateArgs, type CreateTokenArgs, type DriveScopeArg } from './args.js';
+import { renderAgentWiringGuidance } from './guidance.js';
 
 const RESOURCE_ID_PATTERN = /^[a-z0-9]{1,32}$/;
 
@@ -102,6 +105,24 @@ export function buildTokenScope(drives: readonly DriveScopeArg[]): BuildTokenSco
 
   const driveScopeTokens = [...drives].sort((a, b) => a.id.localeCompare(b.id)).map(formatDriveScope);
   return { ok: true, scope: [...driveScopeTokens, 'offline_access'].join(' ') };
+}
+
+/**
+ * The in-place re-scope variant of `buildTokenScope` (the wizard's Edit
+ * flow): `update_key:<tokenId>` + the same sorted drive tokens, WITHOUT
+ * `offline_access` — this grant mints nothing refreshable (the server
+ * rejects the combination outright, `scopes.ts`'s `update_key_conflict`).
+ * Same reimplemented-grammar reasoning as `buildTokenScope` above; the test
+ * file drift-guards both against `parseScopeList`.
+ */
+export function buildKeyUpdateScope(tokenId: string, drives: readonly DriveScopeArg[]): BuildTokenScopeResult {
+  if (!isResourceId(tokenId)) {
+    return { ok: false, message: `Invalid key id "${tokenId}": key ids are 1-32 lowercase letters/digits.` };
+  }
+  const base = buildTokenScope(drives);
+  if (!base.ok) return base;
+  const driveTokens = base.scope.split(' ').filter((token) => token !== 'offline_access');
+  return { ok: true, scope: [`update_key:${tokenId}`, ...driveTokens].join(' ') };
 }
 
 export type ResolveTokenProfileNameResult = { readonly ok: true; readonly name: string } | { readonly ok: false; readonly message: string };
@@ -186,6 +207,10 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
 
     ctx.stdout.write(`Opening your browser to approve access for profile "${profileName}" on ${host}...\n`);
 
+    // Captured, never printed inline: the callback fires mid-flow, and the
+    // token must only ever surface behind the explicit --show-token opt-in.
+    let mintedToken: string | null = null;
+
     const result = await runLoopbackLogin({
       host,
       clientId: PAGESPACE_CLI_CLIENT_ID,
@@ -205,11 +230,26 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
       credentialStore: store,
       now: deps.now,
       profile: profileName,
+      onMintedStaticToken: (token) => {
+        mintedToken = token;
+      },
     });
 
     switch (result.outcome) {
       case 'success':
         ctx.stdout.write(`Created profile "${profileName}" on ${host}, scoped to: ${scopeResult.scope}.\n`);
+        if (parsedArgs.args.showToken) {
+          if (mintedToken !== null) {
+            // Token on stdout (pipeable: `... --show-token | pbcopy`), the
+            // warning on stderr so it never contaminates the piped value.
+            ctx.stdout.write(`${TOKEN_ENV_VAR_NAME}=${mintedToken}\n`);
+            ctx.stderr.write("This token is shown once and never again. Anyone holding it gets this key's access.\n");
+          } else {
+            ctx.stderr.write('--show-token: no raw token to show — the server returned a refresh credential instead of a static token.\n');
+          }
+        }
+        mintedToken = null;
+        ctx.stdout.write(`${renderAgentWiringGuidance({ profileName, host }).join('\n')}\n`);
         return EXIT_SUCCESS;
       case 'timeout':
         ctx.stderr.write('Consent timed out waiting for the browser redirect. Run "pagespace keys create" again.\n');
@@ -252,7 +292,7 @@ export const tokensCreateHandler: CommandHandler = createTokensCreateHandler({
   discoverMetadata: createDiscoverMetadata(),
   startServer: createLoopbackServer,
   openBrowser,
-  waitMs: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
   now: Date.now,

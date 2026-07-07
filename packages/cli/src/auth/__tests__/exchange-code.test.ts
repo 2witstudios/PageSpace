@@ -66,6 +66,30 @@ describe('createExchangeCode', () => {
     expect(tokens).toEqual({ kind: 'mcp', token: 'mcp_abc123', scope: 'drive:d1:member offline_access' });
   });
 
+  it('parses an mcp_update-kind response (update_key grant) into a secretless result naming the re-scoped token', async () => {
+    const fetchImpl = (async () => ({
+      ok: true,
+      json: async () => ({
+        token_type: 'mcp_update',
+        token_id: 'tok123',
+        scope: 'update_key:tok123 drive:d1:member',
+      }),
+    })) as unknown as typeof fetch;
+
+    const tokens = await createExchangeCode(fetchImpl)(PARAMS);
+
+    expect(tokens).toEqual({ kind: 'mcp_update', tokenId: 'tok123', scope: 'update_key:tok123 drive:d1:member' });
+  });
+
+  it('fails closed on an mcp_update response missing token_id', async () => {
+    const fetchImpl = (async () => ({
+      ok: true,
+      json: async () => ({ token_type: 'mcp_update', scope: 'update_key:tok123 drive:d1:member' }),
+    })) as unknown as typeof fetch;
+
+    await expect(createExchangeCode(fetchImpl)(PARAMS)).rejects.toThrow(TokenExchangeError);
+  });
+
   it('throws a TokenExchangeError named after the server error code on a 400', async () => {
     const fetchImpl = (async () => ({
       ok: false,

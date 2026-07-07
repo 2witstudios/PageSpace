@@ -22,7 +22,7 @@ import {
 } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
-import { parseScopeList, isScopeSubset, formatScopeSet, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, isScopeSubset, formatScopeSet, isKeyUpdateGrant, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
 import { sessionRepository } from './session-repository';
 
 /**
@@ -101,7 +101,11 @@ export type ExchangeAuthorizationCodeResult =
   | { outcome: 'rejected'; decision: Exclude<CodeExchangeDecision, { status: 'ok' }> }
   | { outcome: 'user_suspended' }
   | { outcome: 'ok'; userId: string; scopes: string[]; tokens: IssuedTokenPair }
-  | { outcome: 'ok_mcp_token'; userId: string; scopes: string[]; mcpToken: string };
+  | { outcome: 'ok_mcp_token'; userId: string; scopes: string[]; mcpToken: string }
+  /** An `update_key` grant applied in place — no credential was minted, the target token's secret is unchanged. */
+  | { outcome: 'ok_mcp_update'; userId: string; scopes: string[]; tokenId: string }
+  /** The `update_key` target was revoked/deleted between consent and exchange — the route collapses this to the constant-shape invalid_grant. */
+  | { outcome: 'update_target_gone' };
 
 async function revokeTokenFamily(
   tx: Pick<typeof db, 'update'>,
@@ -209,6 +213,47 @@ export async function exchangeAuthorizationCode(
     // only what gets PERSISTED on success changes. `manage_keys`/`account`
     // grants (`pagespace login`) are untouched — see `isPureDriveGrant`.
     const parsedGrantedScope = parseScopeList(row.scopes.join(' '));
+
+    // An `update_key:<tokenId>` grant re-scopes the consenting user's
+    // EXISTING mcp token in place — nothing is minted and `tokenHash` is
+    // never read or written, so there is no secret to return. The target
+    // token id was bound into the consent (it rides inside `scope`, which
+    // the step-up grant's action binding covers) and the code row binds
+    // `userId`; nothing the client presents at exchange can retarget either.
+    // Ownership + un-revoked is re-verified inside this same FOR UPDATE
+    // transaction — a token revoked between consent and exchange fails
+    // closed as `update_target_gone` (route: constant-shape invalid_grant).
+    // Deliberately no `issuedFamilyId`: replaying the consumed code hits
+    // `already_consumed` above with nothing to revoke, which is correct —
+    // no credential family was ever issued for it.
+    if (parsedGrantedScope.ok && isKeyUpdateGrant(parsedGrantedScope.scopes) && parsedGrantedScope.scopes.updateKeyId !== null) {
+      await tx
+        .update(oauthAuthorizationCodes)
+        .set({ consumedAt: input.now })
+        .where(eq(oauthAuthorizationCodes.id, row.id));
+
+      const updated = await sessionRepository.updateMcpTokenDriveScopes(
+        parsedGrantedScope.scopes.updateKeyId,
+        row.userId,
+        scopeSetToDriveScopes(parsedGrantedScope.scopes).map(({ driveId, role, customRoleId }) => ({
+          id: driveId,
+          role,
+          customRoleId: customRoleId ?? undefined,
+        })),
+        tx,
+      );
+      if (updated === null) {
+        return { outcome: 'update_target_gone' };
+      }
+
+      return {
+        outcome: 'ok_mcp_update',
+        userId: row.userId,
+        scopes: row.scopes,
+        tokenId: parsedGrantedScope.scopes.updateKeyId,
+      };
+    }
+
     if (parsedGrantedScope.ok && isPureDriveGrant(parsedGrantedScope.scopes)) {
       await tx
         .update(oauthAuthorizationCodes)

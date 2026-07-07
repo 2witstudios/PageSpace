@@ -22,6 +22,7 @@ import { createDiscoverMetadata } from '../auth/discover.js';
 import { createPollDeviceToken } from '../auth/poll-device-token.js';
 import { createRequestDeviceAuthorization } from '../auth/request-device-authorization.js';
 import { resolveProfileName } from '../auth/resolve.js';
+import { waitMs } from '../auth/wait.js';
 import { runDeviceLogin } from '../auth/device-flow.js';
 import type { DeviceAuthorization, PollDeviceToken, RequestDeviceAuthorization } from '../auth/device-flow.js';
 import type { ConfirmIdentity, DiscoverMetadata, WaitMs } from '../auth/loopback-flow.js';
@@ -122,10 +123,6 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
   };
 }
 
-function nodeWaitMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function createSigintFlag(): () => boolean {
   let interrupted = false;
   process.once('SIGINT', () => {
@@ -139,7 +136,10 @@ export const loginDeviceHandler: CommandHandler = createLoginDeviceHandler({
   discoverMetadata: createDiscoverMetadata(),
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
-  waitMs: nodeWaitMs,
+  // The REF'D variant, deliberately: between polls this timer is often the
+  // only live handle, so `unrefWaitMs` would let the process exit mid-poll
+  // before the user ever approves the device (see auth/wait.ts).
+  waitMs,
   confirmIdentity,
   now: Date.now,
   isInterrupted: createSigintFlag(),

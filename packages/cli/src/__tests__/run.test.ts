@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CLI_VERSION, credentialSecret, EXIT_SUCCESS, EXIT_USAGE_ERROR, run } from '@pagespace/cli';
+import { CLI_VERSION, credentialSecret, EXIT_SUCCESS, EXIT_USAGE_ERROR, isLongRunningCommand, run } from '@pagespace/cli';
 import type { HostCredential, RunDependencies } from '@pagespace/cli';
 import { createFakeCredentialStore, createRecordingSink } from './fake-context.js';
 
@@ -343,5 +343,26 @@ describe('run', () => {
     expect(stderrText).toMatch(/PAGESPACE_AUTH_TOKEN/);
     expect(stderrText).toMatch(/PAGESPACE_TOKEN/);
     expect(stderrText).not.toContain('ps_legacy_secret_value');
+  });
+});
+
+describe('isLongRunningCommand', () => {
+  it('is true for the mcp stdio server route, whatever flags accompany it', () => {
+    expect(isLongRunningCommand(['mcp'])).toBe(true);
+    expect(isLongRunningCommand(['mcp', '--token', 'x'])).toBe(true);
+    expect(isLongRunningCommand(['mcp', '--profile', 'agent'])).toBe(true);
+  });
+
+  it('is false for every one-shot invocation — bin.ts force-exits those after run() settles', () => {
+    expect(isLongRunningCommand([])).toBe(false);
+    expect(isLongRunningCommand(['--version'])).toBe(false);
+    expect(isLongRunningCommand(['mcp', '--version'])).toBe(false);
+    expect(isLongRunningCommand(['drives', 'list'])).toBe(false);
+    expect(isLongRunningCommand(['login'])).toBe(false);
+    expect(isLongRunningCommand(['keys'])).toBe(false);
+  });
+
+  it('is false when argv does not even parse — the usage-error path is one-shot', () => {
+    expect(isLongRunningCommand(['mcp', '--token'])).toBe(false);
   });
 });
