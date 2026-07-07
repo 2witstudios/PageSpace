@@ -68,7 +68,10 @@ export function __resetIndexKeyCacheForTests(): void {
  * deterministic function of its input (fixed salt `INDEX_KEY_INFO`): scrypt
  * only needs to run once per distinct masterKey rather than once per call.
  * In production there is exactly one real `ENCRYPTION_KEY` per process, so
- * the cache never grows unbounded.
+ * the cache never grows unbounded. Returns a fresh copy of the cached buffer
+ * on every call — the cache entry is never handed out directly — so a caller
+ * mutating its result (e.g. zeroing a key after use) can't corrupt the shared
+ * cache and silently break every subsequent call for that masterKey.
  */
 export function deriveIndexKey(masterKey: string): Buffer {
   if (!masterKey || typeof masterKey !== 'string') {
@@ -80,7 +83,7 @@ export function deriveIndexKey(masterKey: string): Buffer {
     );
   }
 
-  return indexKeyCache.get(masterKey);
+  return Buffer.from(indexKeyCache.get(masterKey));
 }
 
 /**

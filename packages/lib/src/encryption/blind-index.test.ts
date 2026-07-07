@@ -46,6 +46,20 @@ describe('deriveIndexKey', () => {
     expect(() => deriveIndexKey('')).toThrow();
   });
 
+  it('given repeated calls with the same master key, should return equal but distinct buffer instances, so mutating one result cannot corrupt the shared cache or later calls', () => {
+    const a = deriveIndexKey(MASTER);
+    const b = deriveIndexKey(MASTER);
+
+    expect(a).not.toBe(b);
+    expect(a.equals(b)).toBe(true);
+
+    a.fill(0);
+
+    const c = deriveIndexKey(MASTER);
+    expect(c.equals(a)).toBe(false);
+    expect(c.equals(b)).toBe(true);
+  });
+
   describe('memoization', () => {
     beforeEach(() => {
       scryptSyncSpy.mockClear();
