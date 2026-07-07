@@ -113,16 +113,26 @@ export interface KeySummary {
   readonly lastUsed: string | null;
 }
 
-function formatDriveScopeNames(driveScopes: readonly KeyDriveScope[]): string {
-  return driveScopes.length > 0 ? driveScopes.map((drive) => drive.name).join(', ') : '(unscoped)';
+function formatDateOnly(value: string | null): string {
+  return value?.slice(0, 10) ?? 'never';
 }
 
-/** One readable line per key for the List step's plain terminal output — no table primitive in `@clack/prompts` fits tabular data. */
+function formatDriveScopeNames(driveScopes: readonly KeyDriveScope[]): string {
+  if (driveScopes.length === 0) return '(unscoped)';
+  const visibleNames = driveScopes.slice(0, 3).map((drive) => drive.name);
+  const remaining = driveScopes.length - visibleNames.length;
+  return remaining > 0 ? `${visibleNames.join(', ')} +${remaining} more` : visibleNames.join(', ');
+}
+
+/** Compact vertical blocks fit inside clack.note's bordered width better than one long row per key. */
 export function renderKeysTable(keys: readonly KeySummary[]): readonly string[] {
   if (keys.length === 0) return ['No keys found.'];
-  return keys.map(
-    (key) => `${key.name}  ${key.tokenPrefix}  ${formatDriveScopeNames(key.driveScopes)}  created ${key.createdAt}  last used ${key.lastUsed ?? 'never'}`,
-  );
+  return keys.flatMap((key, index) => [
+    ...(index === 0 ? [] : ['']),
+    `${key.name}  ${key.tokenPrefix}`,
+    `  scopes: ${formatDriveScopeNames(key.driveScopes)}`,
+    `  created ${formatDateOnly(key.createdAt)} · last used ${formatDateOnly(key.lastUsed)}`,
+  ]);
 }
 
 /** Key select options for the Edit/Revoke flows, hinting each key's current drive scopes. */

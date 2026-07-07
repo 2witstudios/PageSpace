@@ -274,6 +274,15 @@ const latestMcpConversationId = (): string | null => {
   return last ? last[0].conversationId : null;
 };
 
+// "The init fetch was called" is NOT enough before firing onStreamComplete:
+// identity only becomes the page-scoped placeholder after the resolve chain
+// flushes (fetch → json → dispatch RESOLVED → re-render). If the callback
+// fires inside that window, isPlaceholderConversationId() is false, the
+// late-joiner branch is skipped, and the sync fetch never starts — under CI
+// load this window is wide enough to hit. Wait for the resolved identity.
+const waitForPlaceholderIdentity = (pageId: string) =>
+  waitFor(() => expect(latestMcpConversationId()).toBe(`${pageId}-default`));
+
 const PAGE_ID = 'page-123';
 const CONV_ID = 'conv-existing-abc';
 const CONVERSATIONS_URL = `/api/ai/page-agents/${PAGE_ID}/conversations`;
@@ -854,6 +863,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
+    await waitForPlaceholderIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -896,6 +906,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
+    await waitForPlaceholderIdentity(PAGE_ID);
 
     // The page-scoped placeholder id must not trigger a refresh (nothing persisted yet).
     assert({
@@ -946,6 +957,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
+    await waitForPlaceholderIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -989,6 +1001,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
+    await waitForPlaceholderIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -1030,6 +1043,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
+    await waitForPlaceholderIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -1072,6 +1086,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
+    await waitForPlaceholderIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -1144,6 +1159,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
+    await waitForPlaceholderIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI from page A' }], conversationId: REAL_CONV_ID }]]),
@@ -1193,6 +1209,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
+    await waitForPlaceholderIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),

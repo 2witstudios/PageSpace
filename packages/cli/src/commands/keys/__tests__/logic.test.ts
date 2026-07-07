@@ -130,14 +130,38 @@ const SAMPLE_KEYS: readonly KeySummary[] = [
 ];
 
 describe('renderKeysTable', () => {
-  it('renders one readable line per key, including drive names and last-used', () => {
-    const lines = renderKeysTable(SAMPLE_KEYS);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain('CI bot');
-    expect(lines[0]).toContain('mcp_abcdefghijk');
-    expect(lines[0]).toContain('Engineering');
-    expect(lines[1]).toContain('(unscoped)');
-    expect(lines[1]).toContain('last used 2026-06-15T00:00:00.000Z');
+  it('renders each key as a short vertical block with date-only timestamps, blank-line separated', () => {
+    expect(renderKeysTable(SAMPLE_KEYS)).toEqual([
+      'CI bot  mcp_abcdefghijk',
+      '  scopes: Engineering',
+      '  created 2026-07-01 · last used never',
+      '',
+      'Unscoped key  mcp_zzzzzzzzzzz',
+      '  scopes: (unscoped)',
+      '  created 2026-06-01 · last used 2026-06-15',
+    ]);
+  });
+
+  it('summarizes long drive-scope lists instead of letting them wrap across lines', () => {
+    const manyScopes: KeySummary = {
+      id: 'tok3',
+      name: 'Everything key',
+      tokenPrefix: 'mcp_qqqqqqqqqqq',
+      driveScopes: [
+        { id: 'drv1', name: 'AIDD Agents' },
+        { id: 'drv2', name: 'PageSpace' },
+        { id: 'drv3', name: 'AI Agent Hub' },
+        { id: 'drv4', name: 'Marketing' },
+        { id: 'drv5', name: 'Engineering' },
+      ],
+      createdAt: '2026-04-30T16:15:07.553Z',
+      lastUsed: '2026-07-06T09:00:00.000Z',
+    };
+    expect(renderKeysTable([manyScopes])).toEqual([
+      'Everything key  mcp_qqqqqqqqqqq',
+      '  scopes: AIDD Agents, PageSpace, AI Agent Hub +2 more',
+      '  created 2026-04-30 · last used 2026-07-06',
+    ]);
   });
 
   it('renders a friendly single line when there are no keys', () => {
