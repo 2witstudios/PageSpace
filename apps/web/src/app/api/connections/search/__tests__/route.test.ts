@@ -46,11 +46,24 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+// Wrap (not replace) the real decryptUsersByIdOnce so call counts can be
+// asserted at the route's call boundary — proves the route batches decryption
+// once per request. A bare `vi.spyOn` doesn't work here because
+// `@pagespace/lib` resolves to its built CJS dist output, and the
+// per-row-dedup internals (decryptUserRow -> decryptField) are a *nested*
+// require inside that compiled module, invisible to any mock at this level.
+vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/auth/user-repository')>();
+  return { ...actual, decryptUsersByIdOnce: vi.fn(actual.decryptUsersByIdOnce) };
+});
+
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { db } from '@pagespace/db/db';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { encryptField } from '@pagespace/lib/encryption/field-crypto';
 
 const mockUserId = 'user_123';
 const currentEmail = 'current@test.com';
@@ -89,7 +102,7 @@ describe('GET /api/connections/search', () => {
       { id: mockUserId, email: currentEmail } as unknown as Awaited<ReturnType<typeof verifyAuth>>,
     );
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
-    setupSelect([[{ email: currentEmail }]]);
+    setupSelect([[{ id: mockUserId, email: currentEmail }]]);
   });
 
   it('returns 401 when unauthenticated', async () => {
@@ -121,7 +134,7 @@ describe('GET /api/connections/search', () => {
   });
 
   it('returns the actionable user when one can be invited (exists, not self, no connection)', async () => {
-    setupSelect([[{ email: currentEmail }], [targetRow], []]);
+    setupSelect([[{ id: mockUserId, email: currentEmail }], [targetRow], []]);
     const response = await GET(new Request('http://localhost/api/connections/search?email=other@test.com'));
     const body = await response.json();
     expect(response.status).toBe(200);
@@ -139,7 +152,7 @@ describe('GET /api/connections/search', () => {
 
   it('collapses self-search into a generic { user: null } with no error', async () => {
     // email === current user's email
-    setupSelect([[{ email: currentEmail }], [{ ...targetRow, email: currentEmail }], []]);
+    setupSelect([[{ id: mockUserId, email: currentEmail }], [{ ...targetRow, email: currentEmail }], []]);
     const response = await GET(new Request(`http://localhost/api/connections/search?email=${currentEmail}`));
     const body = await response.json();
     expect(body).toEqual({ user: null });
@@ -147,7 +160,7 @@ describe('GET /api/connections/search', () => {
   });
 
   it('collapses "no account" into a generic { user: null } with no error', async () => {
-    setupSelect([[{ email: currentEmail }], [], []]);
+    setupSelect([[{ id: mockUserId, email: currentEmail }], [], []]);
     const response = await GET(new Request('http://localhost/api/connections/search?email=ghost@test.com'));
     const body = await response.json();
     expect(body).toEqual({ user: null });
@@ -156,11 +169,57 @@ describe('GET /api/connections/search', () => {
 
   it('collapses every existing-relationship state into the SAME generic response', async () => {
     for (const status of ['PENDING', 'ACCEPTED', 'BLOCKED'] as const) {
-      setupSelect([[{ email: currentEmail }], [targetRow], [{ status }]]);
+      setupSelect([[{ id: mockUserId, email: currentEmail }], [targetRow], [{ status }]]);
       const response = await GET(new Request('http://localhost/api/connections/search?email=other@test.com'));
       const body = await response.json();
       expect(body, `status=${status}`).toEqual({ user: null });
       expect(body).not.toHaveProperty('error');
     }
+  });
+
+  it('decrypts the caller and the target in one batched call per request (dedup)', async () => {
+    const encryptedCurrentEmail = await encryptField(currentEmail);
+    const encryptedTargetName = await encryptField('Target');
+    const encryptedTargetEmail = await encryptField('other@test.com');
+    setupSelect([
+      [{ id: mockUserId, email: encryptedCurrentEmail }],
+      [{ ...targetRow, name: encryptedTargetName, email: encryptedTargetEmail, displayName: null }],
+      [],
+    ]);
+
+    const response = await GET(new Request('http://localhost/api/connections/search?email=other@test.com'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    // Name/email decrypted at the edge; displayName falls back to the
+    // decrypted name exactly as before the dedup change.
+    expect(body).toEqual({
+      user: {
+        id: 'user_target',
+        name: 'Target',
+        email: 'other@test.com',
+        displayName: 'Target',
+        bio: 'bio',
+        avatarUrl: 'https://cdn/a.png',
+      },
+    });
+    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+  });
+
+  it('self-search decrypts the shared user once and still collapses to { user: null }', async () => {
+    const encryptedCurrentEmail = await encryptField(currentEmail);
+    setupSelect([
+      [{ id: mockUserId, email: encryptedCurrentEmail }],
+      [{ ...targetRow, id: mockUserId, email: encryptedCurrentEmail }],
+      [],
+    ]);
+
+    const response = await GET(new Request(`http://localhost/api/connections/search?email=${currentEmail}`));
+    const body = await response.json();
+
+    // The caller row and the target row are the same user: one dedup'd batch,
+    // and the enumeration-safe self-collapse is unaffected.
+    expect(body).toEqual({ user: null });
+    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
   });
 });

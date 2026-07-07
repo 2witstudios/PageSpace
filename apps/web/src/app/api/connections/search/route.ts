@@ -7,8 +7,7 @@ import { connections } from '@pagespace/db/schema/social';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
-import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { userEmailMatch, decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -50,14 +49,10 @@ export async function GET(request: Request) {
 
     // Get current user's email to check for self-connection
     const [currentUser] = await db
-      .select({ email: users.email })
+      .select({ id: users.id, email: users.email })
       .from(users)
       .where(eq(users.id, user.id))
       .limit(1);
-
-    // Decrypt the stored email before the self-connection comparison.
-    const currentUserEmail = currentUser ? await decryptField(currentUser.email) : null;
-    const isSelf = !!currentUserEmail && email === currentUserEmail;
 
     // Find user by exact email match (dual blind-index/raw-email lookup)
     const [targetRow] = await db
@@ -74,8 +69,31 @@ export async function GET(request: Request) {
       .where(userEmailMatch(email))
       .limit(1);
 
-    // Decrypt PII at the edge so the search result shows plaintext name/email.
-    const targetUser = targetRow ? await decryptUserRow(targetRow) : undefined;
+    // Decrypt PII at the edge so the search result shows plaintext name/email —
+    // one batched decrypt for the caller + target, once per unique user. The
+    // target row goes FIRST: on a self-search both rows share an id and
+    // decryptUsersByIdOnce keeps the first row per id, so the full profile row
+    // must win over the email-only caller row.
+    type SearchUserRow = {
+      id: string;
+      name: string | null;
+      email: string;
+      displayName?: string | null;
+      bio?: string | null;
+      avatarUrl?: string | null;
+    };
+    const decryptedUsersById = await decryptUsersByIdOnce<SearchUserRow>([
+      targetRow ?? null,
+      currentUser ? { id: currentUser.id, name: null, email: currentUser.email } : null,
+    ]);
+
+    // Decrypted stored email for the self-connection comparison.
+    const currentUserEmail = currentUser
+      ? decryptedUsersById.get(currentUser.id)?.email ?? null
+      : null;
+    const isSelf = !!currentUserEmail && email === currentUserEmail;
+
+    const targetUser = targetRow ? decryptedUsersById.get(targetRow.id) : undefined;
 
     let existingStatus: ConnectionStatus | null = null;
     let target: ConnectionSearchProfile | null = null;
@@ -86,8 +104,8 @@ export async function GET(request: Request) {
         name: targetUser.name,
         email: targetUser.email,
         displayName: targetUser.displayName || targetUser.name,
-        bio: targetUser.bio,
-        avatarUrl: targetUser.avatarUrl,
+        bio: targetUser.bio ?? null,
+        avatarUrl: targetUser.avatarUrl ?? null,
       };
 
       // Check if a connection already exists - select ALL fields (status enum)

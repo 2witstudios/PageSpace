@@ -36,10 +36,24 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getBatchPagePermissions: vi.fn(),
 }));
 
+// Wrap (not replace) the real decryptUsersByIdOnce so call counts can be
+// asserted at the route's call boundary — proves the route batches decryption
+// once per request instead of once per row (the actual regression this test
+// guards). A bare `vi.spyOn` doesn't work here because `@pagespace/lib`
+// resolves to its built CJS dist output, and the per-row-dedup internals
+// (decryptUserRow -> decryptField) are a *nested* require inside that
+// compiled module, invisible to any mock declared at this level.
+vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/auth/user-repository')>();
+  return { ...actual, decryptUsersByIdOnce: vi.fn(actual.decryptUsersByIdOnce) };
+});
+
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { encryptField } from '@pagespace/lib/encryption/field-crypto';
 
 const mockUserId = 'user_123';
 
@@ -155,5 +169,121 @@ describe('GET /api/inbox ?type filter', () => {
     const body = await res.json();
     const types = body.items.map((i: { type: string }) => i.type).sort();
     expect(types).toEqual(['channel', 'dm']);
+  });
+});
+
+describe('GET /api/inbox PII decryption dedup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  const allowChannels = (ids: string[]) => {
+    (getBatchPagePermissions as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Map(ids.map((id) => [id, { canView: true, canEdit: false, canShare: false, canDelete: false }]))
+    );
+  };
+
+  const mockExecute = (dmRows: unknown[], channelRows: unknown[]) => {
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (arg: unknown) => {
+      if (isDmQuery(arg)) return { rows: dmRows };
+      if (isChannelQuery(arg)) return { rows: channelRows };
+      return { rows: [] };
+    });
+  };
+
+  it('decrypts one encrypted sender shared across many channel rows only once (dedup)', async () => {
+    const encryptedSender = await encryptField('Real Sender');
+    const channelRows = Array.from({ length: 5 }, (_, i) => ({
+      ...channelRow,
+      id: `ch_${i}`,
+      sender_name: encryptedSender,
+    }));
+    mockExecute([], channelRows);
+    allowChannels(channelRows.map((row) => row.id as string));
+
+    const res = await GET(new Request('http://localhost/api/inbox?type=channel&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(5);
+    for (const item of body.items) {
+      expect(item.lastMessageSender).toBe('Real Sender');
+    }
+    // Decryption is batched once per request (dedup happens inside), not
+    // once per of the 5 channel rows.
+    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+  });
+
+  it('decrypts DM sender names and channel sender names in ONE batch for a type=all request', async () => {
+    const encryptedDmName = await encryptField('Dm Counterpart');
+    const encryptedSender = await encryptField('Channel Sender');
+    mockExecute(
+      [{ ...dmRow, other_user_display_name: null, other_user_name: encryptedDmName }],
+      [{ ...channelRow, sender_name: encryptedSender }]
+    );
+    allowChannels(['ch_1']);
+
+    const res = await GET(new Request('http://localhost/api/inbox?limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const dm = body.items.find((i: { type: string }) => i.type === 'dm');
+    const channel = body.items.find((i: { type: string }) => i.type === 'channel');
+    expect(dm.name).toBe('Dm Counterpart');
+    expect(channel.lastMessageSender).toBe('Channel Sender');
+    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+  });
+
+  it('decrypts a repeated encrypted sender once in the drive-scoped inbox', async () => {
+    const encryptedSender = await encryptField('Drive Sender');
+    const channelRows = Array.from({ length: 3 }, (_, i) => ({
+      ...channelRow,
+      id: `ch_${i}`,
+      sender_name: encryptedSender,
+    }));
+    mockExecute([], channelRows);
+    allowChannels(channelRows.map((row) => row.id as string));
+
+    const res = await GET(new Request('http://localhost/api/inbox?driveId=drv_1&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(3);
+    for (const item of body.items) {
+      expect(item.lastMessageSender).toBe('Drive Sender');
+    }
+    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes through plaintext AI sender names and profile display names unchanged', async () => {
+    const encryptedDmName = await encryptField('Hidden Name');
+    mockExecute(
+      // displayName present: users.name must not be needed (nor surfaced).
+      [{ ...dmRow, other_user_display_name: 'Profile Display', other_user_name: encryptedDmName }],
+      // COALESCE'd AI senderName is plaintext and must pass through unchanged.
+      [{ ...channelRow, sender_name: 'AI Agent' }]
+    );
+    allowChannels(['ch_1']);
+
+    const res = await GET(new Request('http://localhost/api/inbox?limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const dm = body.items.find((i: { type: string }) => i.type === 'dm');
+    const channel = body.items.find((i: { type: string }) => i.type === 'channel');
+    expect(dm.name).toBe('Profile Display');
+    expect(channel.lastMessageSender).toBe('AI Agent');
+  });
+
+  it('keeps a null last-message sender null (channel with no messages)', async () => {
+    mockExecute([], [{ ...channelRow, sender_name: null, last_message: null, last_message_at: null }]);
+    allowChannels(['ch_1']);
+
+    const res = await GET(new Request('http://localhost/api/inbox?type=channel&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items[0].lastMessageSender).toBeNull();
   });
 });

@@ -4,7 +4,7 @@ import { eq, and, or, desc, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { userProfiles } from '@pagespace/db/schema/members'
 import { connections } from '@pagespace/db/schema/social';
-import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -57,7 +57,7 @@ export async function GET(request: Request) {
       .map(conn => conn.user1Id === userId ? conn.user2Id : conn.user1Id);
 
     const otherUsers = otherUserIds.length > 0
-      ? await decryptUserRows(await db
+      ? await db
           .select({
             id: users.id,
             name: users.name,
@@ -70,10 +70,12 @@ export async function GET(request: Request) {
           })
           .from(users)
           .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
-          .where(inArray(users.id, otherUserIds)))
+          .where(inArray(users.id, otherUserIds))
       : [];
 
-    const userMap = new Map(otherUsers.map(u => [u.id, u]));
+    // Decrypt each unique connected user's PII once for the whole request —
+    // the returned id-keyed map is exactly the lookup the rows re-attach by.
+    const userMap = await decryptUsersByIdOnce(otherUsers);
 
     const validConnections = userConnections
       .filter(conn => conn.user1Id && conn.user2Id)

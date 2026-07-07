@@ -5,13 +5,32 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
 import type { ChannelRow, DMRow } from '@/types/messaging';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+
+/**
+ * Dedup-decrypt this request's PII display values in one batch via
+ * decryptUsersByIdOnce, instead of one decryptField call per row.
+ *
+ * The inbox SQL rows don't expose user ids — and a value may not even belong
+ * to a user (`sender_name` COALESCEs a plaintext AI senderName with the
+ * ciphertext users.name) — so dedup is keyed by the stored value itself: the
+ * same user repeated across rows repeats the same stored ciphertext, which is
+ * exactly one decrypt. Returns a decryptField-equivalent lookup (null/empty
+ * and legacy plaintext pass through unchanged).
+ */
+async function decryptValuesOnce(values: ReadonlyArray<string | null | undefined>) {
+  const decryptedByValue = await decryptUsersByIdOnce(
+    values.map((value) => (typeof value === 'string' ? { id: value, name: value } : null))
+  );
+  return <T extends string | null | undefined>(value: T): T =>
+    typeof value === 'string' ? ((decryptedByValue.get(value)?.name ?? value) as T) : value;
+}
 
 // GET /api/inbox - Get unified inbox (DMs + channels)
 export async function GET(request: Request) {
@@ -115,6 +134,13 @@ export async function GET(request: Request) {
         channelResults.rows.map((row) => row.id)
       );
 
+      // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
+      // (plaintext) with users.name (ciphertext); the lookup handles both. One
+      // batched decrypt per request, not one per row.
+      const decryptSenderName = await decryptValuesOnce(
+        channelResults.rows.map((row) => row.sender_name)
+      );
+
       for (const row of channelResults.rows) {
         const permissions = channelPermissions.get(row.id);
         if (!permissions?.canView) continue;
@@ -126,9 +152,7 @@ export async function GET(request: Request) {
           avatarUrl: null,
           lastMessageAt: toISOTimestamp(row.last_message_at),
           lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
-          // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
-          // (plaintext) with users.name (ciphertext); decryptField handles both.
-          lastMessageSender: await decryptField(row.sender_name),
+          lastMessageSender: decryptSenderName(row.sender_name),
           unreadCount: parseInt(row.unread_count) || 0,
           driveId: row.drive_id,
           driveName: row.drive_name,
@@ -161,6 +185,7 @@ export async function GET(request: Request) {
       const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
 
       // Fetch DM conversations with cursor filtering (skipped when filter excludes DMs)
+      let dmRows: DMRow[] = [];
       if (type !== 'channel') {
         const dmResults = await db.execute<DMRow>(sql`
           WITH dm_data AS (
@@ -207,24 +232,12 @@ export async function GET(request: Request) {
           ORDER BY dd."lastMessageAt" DESC NULLS LAST
           LIMIT ${fetchLimit}
         `);
-
-        for (const row of dmResults.rows) {
-          items.push({
-            id: row.id,
-            type: 'dm',
-            // Decrypt PII at the edge (GDPR #965): profile displayName stays
-            // plaintext; users.name fallback is ciphertext (decryptField handles both).
-            name: row.other_user_display_name || (await decryptField(row.other_user_name)),
-            avatarUrl: row.other_user_image || row.other_user_avatar_url,
-            lastMessageAt: toISOTimestamp(row.last_message_at),
-            lastMessagePreview: row.last_message,
-            lastMessageSender: null,
-            unreadCount: parseInt(row.unread_count) || 0,
-          });
-        }
+        dmRows = dmResults.rows;
       }
 
       // Fetch channels from all drives user is member of or owns (skipped when filter excludes channels)
+      let channelRows: ChannelRow[] = [];
+      let channelPermissions: Awaited<ReturnType<typeof getBatchPagePermissions>> = new Map();
       if (type !== 'dm') {
         const channelResults = await db.execute<ChannelRow>(sql`
           WITH user_channels AS (
@@ -283,31 +296,53 @@ export async function GET(request: Request) {
           ORDER BY clm.last_message_at DESC NULLS LAST
           LIMIT ${fetchLimit}
         `);
+        channelRows = channelResults.rows;
 
-        const channelPermissions = await getBatchPagePermissions(
+        channelPermissions = await getBatchPagePermissions(
           userId,
-          channelResults.rows.map((row) => row.id)
+          channelRows.map((row) => row.id)
         );
+      }
 
-        for (const row of channelResults.rows) {
-          const permissions = channelPermissions.get(row.id);
-          if (!permissions?.canView) continue;
+      // Decrypt PII at the edge (GDPR #965): profile displayName and AI
+      // senderName stay plaintext; users.name is ciphertext (the lookup handles
+      // both). One batched decrypt for the whole request — DM names whose
+      // profile displayName already wins are excluded, matching the previous
+      // short-circuit.
+      const decryptName = await decryptValuesOnce([
+        ...dmRows.map((row) => (row.other_user_display_name ? null : row.other_user_name)),
+        ...channelRows.map((row) => row.sender_name),
+      ]);
 
-          items.push({
-            id: row.id,
-            type: 'channel',
-            name: row.name,
-            avatarUrl: null,
-            lastMessageAt: toISOTimestamp(row.last_message_at),
-            lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
-            // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
-            // (plaintext) with users.name (ciphertext); decryptField handles both.
-            lastMessageSender: await decryptField(row.sender_name),
-            unreadCount: parseInt(row.unread_count) || 0,
-            driveId: row.drive_id,
-            driveName: row.drive_name,
-          });
-        }
+      for (const row of dmRows) {
+        items.push({
+          id: row.id,
+          type: 'dm',
+          name: row.other_user_display_name || decryptName(row.other_user_name),
+          avatarUrl: row.other_user_image || row.other_user_avatar_url,
+          lastMessageAt: toISOTimestamp(row.last_message_at),
+          lastMessagePreview: row.last_message,
+          lastMessageSender: null,
+          unreadCount: parseInt(row.unread_count) || 0,
+        });
+      }
+
+      for (const row of channelRows) {
+        const permissions = channelPermissions.get(row.id);
+        if (!permissions?.canView) continue;
+
+        items.push({
+          id: row.id,
+          type: 'channel',
+          name: row.name,
+          avatarUrl: null,
+          lastMessageAt: toISOTimestamp(row.last_message_at),
+          lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
+          lastMessageSender: decryptName(row.sender_name),
+          unreadCount: parseInt(row.unread_count) || 0,
+          driveId: row.drive_id,
+          driveName: row.drive_name,
+        });
       }
 
       // Sort combined results by lastMessageAt
