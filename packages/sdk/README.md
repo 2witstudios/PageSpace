@@ -33,7 +33,7 @@ console.log(drives.map((d) => d.name));
 ```
 
 Get a token by minting one in **Settings > MCP** in the app. (The [`pagespace` CLI](../cli/README.md)'s
-own `pagespace tokens create` stores its credential locally under a named profile instead of
+own `pagespace keys create` stores its credential locally under a named profile instead of
 printing one, so it isn't a source for a `StaticTokenProvider` string on another machine.)
 
 ## Auth providers

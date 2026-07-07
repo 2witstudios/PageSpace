@@ -12,7 +12,7 @@ import { rejectScopedOAuth } from './scope-guard';
 import { requireStepUpGrant } from './step-up-gate';
 
 // 'oauth' lets the pagespace CLI (which never holds a session cookie —
-// `pagespace tokens list` authenticates with an OAuth access token from
+// `pagespace keys list` authenticates with an OAuth access token from
 // `pagespace login`) call GET directly. CSRF is already skipped for
 // Bearer-token auth (`authenticateRequestWithOptions`), so this is not a
 // CSRF-relevant change. Minting (POST) is session-only + step-up gated

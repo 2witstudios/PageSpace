@@ -12,7 +12,7 @@
  * every caller regardless of credential shape — a manage_keys OAuth bearer
  * token is itself an ambient secret, so it gets no exception. Minting via a
  * manage_keys credential goes through the same session + step-up
- * browser-consent flow (`pagespace tokens create`) as everyone else, not a
+ * browser-consent flow (`pagespace keys create`) as everyone else, not a
  * direct bearer POST; AUTH_OPTIONS_WRITE only allows 'session' here, so an
  * oauth-shaped auth object (however it arrived) is stopped by the step-up
  * gate before any scope check runs.
