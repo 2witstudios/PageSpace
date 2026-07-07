@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Cpu,
   FolderGit2,
+  Github,
   GitBranch,
   TerminalSquare,
   Plus,
@@ -41,13 +42,34 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
 import { useMachineProjects } from '@/hooks/useMachineProjects';
 import { useMachineBranches } from '@/hooks/useMachineBranches';
 import { useAgentTerminals, type AgentTerminal } from '@/hooks/useAgentTerminals';
+import { useGithubRepos, type GithubRepo } from '@/hooks/useGithubRepos';
+import { useProviders } from '@/hooks/useIntegrations';
+import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import EmptyState from './EmptyState';
 
 const AGENT_TYPES = Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[];
+
+/** Short project name from a GitHub `full_name` (e.g. "org/my-repo" -> "my-repo"), and the ready-to-clone URL. */
+export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url: string }): { name: string; repoUrl: string } {
+  const segments = repo.full_name.split('/');
+  return { name: segments[segments.length - 1] || repo.full_name, repoUrl: repo.clone_url };
+}
 
 /** Identifies which terminal to open in the middle panel — neither `projectName` nor `branchName` set is machine scope, `projectName` alone is project scope, both is branch scope. */
 export interface OpenTerminalScope {
@@ -405,19 +427,65 @@ function ConfirmRemoveDialog({
   );
 }
 
+function GithubRepoPicker({ repos, isLoading, onSelect }: { repos: GithubRepo[]; isLoading: boolean; onSelect(repo: GithubRepo): void }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  return (
+    <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" role="combobox" aria-expanded={pickerOpen} className="w-full justify-between font-normal">
+          <span className="flex items-center gap-2 text-muted-foreground">
+            <Github className="size-3.5 shrink-0" />
+            Select a repo…
+          </span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search your repos…" />
+          <CommandList onWheel={(e) => e.stopPropagation()}>
+            <CommandEmpty>{isLoading ? 'Loading repos…' : 'No repos found.'}</CommandEmpty>
+            {repos.map((repo) => (
+              <CommandItem key={repo.full_name} value={repo.full_name} onSelect={() => { onSelect(repo); setPickerOpen(false); }}>
+                <FolderGit2 className="mr-2 size-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate text-sm">{repo.full_name}</span>
+                {repo.private && (
+                  <span className="ml-auto shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">private</span>
+                )}
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl: string): Promise<unknown>; triggerLabel?: string }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [manualMode, setManualMode] = useState(false);
+  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+
+  const { repos, connected, isLoading: reposLoading } = useGithubRepos(open && !manualMode);
+  const { providers } = useProviders();
+  const githubProvider = providers.find((p) => p.slug === 'github') ?? null;
+
+  const resetAndClose = () => {
+    setOpen(false);
+    setName('');
+    setRepoUrl('');
+    setManualMode(false);
+  };
 
   const handleSubmit = async () => {
     setSubmitting(true);
     try {
       await onAdd(name.trim(), repoUrl.trim());
-      setOpen(false);
-      setName('');
-      setRepoUrl('');
+      resetAndClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to add project');
     } finally {
@@ -425,8 +493,14 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
     }
   };
 
+  const handleSelectRepo = (repo: GithubRepo) => {
+    const fields = deriveProjectFieldsFromRepo(repo);
+    setName(fields.name);
+    setRepoUrl(fields.repoUrl);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) resetAndClose(); }}>
       <DialogTrigger asChild>
         {triggerLabel ? (
           <Button variant="outline" size="sm" className="h-7 text-xs">
@@ -445,7 +519,27 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
         </DialogHeader>
         <div className="flex flex-col gap-3">
           <Input placeholder="Project name" value={name} onChange={(e) => setName(e.target.value)} />
-          <Input placeholder="Repo URL (https://github.com/org/repo.git)" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
+
+          {manualMode ? (
+            <Input placeholder="Repo URL (https://github.com/org/repo.git)" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
+          ) : connected === false ? (
+            <Button type="button" variant="outline" onClick={() => setConnectDialogOpen(true)} className="justify-start gap-2 font-normal text-muted-foreground">
+              <Github className="size-3.5 shrink-0" />
+              Connect GitHub to browse your repos
+            </Button>
+          ) : (
+            <GithubRepoPicker repos={repos} isLoading={reposLoading} onSelect={handleSelectRepo} />
+          )}
+
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="h-auto justify-start p-0 text-xs text-muted-foreground"
+            onClick={() => setManualMode((m) => !m)}
+          >
+            {manualMode ? 'Pick from your GitHub repos instead' : 'Enter a repo URL manually'}
+          </Button>
         </div>
         <DialogFooter>
           <Button onClick={handleSubmit} disabled={submitting || !name.trim() || !repoUrl.trim()}>
@@ -453,6 +547,12 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
           </Button>
         </DialogFooter>
       </DialogContent>
+      <ConnectIntegrationDialog
+        provider={githubProvider}
+        open={connectDialogOpen}
+        onOpenChange={setConnectDialogOpen}
+        onConnected={() => setConnectDialogOpen(false)}
+      />
     </Dialog>
   );
 }

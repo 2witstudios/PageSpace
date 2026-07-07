@@ -192,6 +192,11 @@ describe('githubProvider', () => {
       expect(tool.outputTransform!.mapping).toHaveProperty('html_url');
       expect(tool.outputTransform!.maxLength).toBe(500);
     });
+
+    it('given the tool, should include name and clone_url in output mapping (for a repo picker to clone directly)', () => {
+      expect(tool.outputTransform!.mapping).toHaveProperty('name');
+      expect(tool.outputTransform!.mapping).toHaveProperty('clone_url');
+    });
   });
 
   describe('list_issues tool', () => {
