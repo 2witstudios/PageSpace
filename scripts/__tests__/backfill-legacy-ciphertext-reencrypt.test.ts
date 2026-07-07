@@ -14,7 +14,7 @@ vi.mock('@pagespace/db/db', () => ({ db: { select: vi.fn(), update: vi.fn() } })
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', email: 'email', name: 'name' },
 }));
-vi.mock('@pagespace/db/operators', () => ({ eq: () => ({}), gt: () => ({}), asc: () => ({}) }));
+vi.mock('@pagespace/db/operators', () => ({ eq: () => ({}), gt: () => ({}), asc: () => ({}), and: () => ({}) }));
 
 import { backfill, resolveReencryptMode } from '../backfill-legacy-ciphertext-reencrypt';
 import { decrypt } from '@pagespace/lib/encryption/encryption-utils';
@@ -48,12 +48,12 @@ function selectReturning(batches: unknown[][]) {
   });
 }
 
-function captureUpdate() {
+function captureUpdate({ rowCount = 1 }: { rowCount?: number } = {}) {
   const sets: Array<Record<string, unknown>> = [];
   const update = vi.fn(() => ({
     set: (v: Record<string, unknown>) => {
       sets.push(v);
-      return { where: () => Promise.resolve() };
+      return { where: () => Promise.resolve({ rowCount }) };
     },
   }));
   return { update, sets };
@@ -123,6 +123,17 @@ describe('backfill-legacy-ciphertext-reencrypt', () => {
 
     expect(result).toEqual({ legacyFound: 0, converted: 0, skipped: 1, errors: 0 });
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('a row modified concurrently between select and write is skipped, not clobbered', async () => {
+    // The compare-and-swap WHERE clause matches 0 rows when the app changed
+    // email/name after the batch select; the runner must not count it as
+    // converted — a re-run picks it up in its then-current state.
+    const select = selectReturning([[{ id: 'u1', email: legacyEncrypt('a@b.com'), name: legacyEncrypt('A') }], []]);
+    const { update } = captureUpdate({ rowCount: 0 });
+    const result = await backfill(false, { select, update } as never);
+
+    expect(result).toEqual({ legacyFound: 0, converted: 0, skipped: 1, errors: 0 });
   });
 
   it('a row that fails to decrypt is counted as an error without aborting the run', async () => {

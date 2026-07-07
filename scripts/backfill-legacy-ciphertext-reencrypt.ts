@@ -45,7 +45,7 @@
 
 import { db as defaultDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
-import { eq, gt, asc } from '@pagespace/db/operators';
+import { eq, gt, asc, and } from '@pagespace/db/operators';
 import { planLegacyCiphertextReencrypt } from '@pagespace/lib/encryption/legacy-ciphertext-reencrypt';
 
 const BATCH_SIZE = 500;
@@ -123,10 +123,21 @@ export async function backfill(
           converted += 1;
           continue;
         }
-        await (dbInstance as typeof defaultDb)
+        // Compare-and-swap: the app can rewrite email/name (and emailBidx)
+        // between the batch select and this write. Guarding on the exact
+        // ciphertext read means a concurrently-modified row matches 0 rows
+        // instead of being clobbered back to stale values — which would
+        // desync users.email from the app-written emailBidx and break
+        // blind-index login lookups. A re-run picks the row up as-is.
+        const written = await (dbInstance as typeof defaultDb)
           .update(users)
           .set({ email: update.email, name: update.name })
-          .where(eq(users.id, update.id));
+          .where(and(eq(users.id, update.id), eq(users.email, row.email), eq(users.name, row.name)));
+        if (written.rowCount === 0) {
+          skipped += 1;
+          console.warn(`  ⏭ row ${row.id}: modified concurrently, skipped — a re-run will convert it`);
+          continue;
+        }
         converted += 1;
       } catch (err) {
         // The planner only runs crypto (and the runner only writes) for

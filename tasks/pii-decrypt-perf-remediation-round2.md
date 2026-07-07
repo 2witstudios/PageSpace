@@ -57,3 +57,17 @@ production is a separate, explicit, human-supervised step.
 
 A second agent is wiring the request-scoped decrypt dedup into the routes PR
 #1930 missed. Independent files; no coordination with the backfill workstream.
+
+## Follow-ups surfaced by review (not yet scheduled)
+
+- Other columns also hold pre-#1930 legacy 4-part ciphertext and pay
+  scrypt-per-decrypt on every read: integration connection credentials
+  (decrypted per tool execution), Google/Zoom OAuth tokens (token refresh only
+  rewrites the access token, so refresh tokens stay legacy indefinitely), and
+  `security_audit_log.ipAddress` rows written 2026-06-25 → 2026-07-06. Each
+  needs its own backfill reusing `reencryptLegacyValue` from
+  `packages/lib/src/encryption/legacy-ciphertext-reencrypt.ts`.
+- Systemic mitigation to consider: a small LRU keyed by salt in
+  `deriveLegacyKey` (mirroring the masterKeyCache pattern) would collapse
+  repeated decrypts of the same legacy value to one scrypt process-wide,
+  covering all legacy surfaces including the window before each backfill runs.

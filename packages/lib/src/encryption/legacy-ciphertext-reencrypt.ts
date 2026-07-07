@@ -49,13 +49,20 @@ export async function planLegacyCiphertextReencrypt(
   if (!emailLegacy && !nameLegacy) return null;
 
   const [email, name] = await Promise.all([
-    emailLegacy ? reencrypt(row.email) : row.email,
-    nameLegacy ? reencrypt(row.name) : row.name,
+    emailLegacy ? reencryptLegacyValue(row.email) : row.email,
+    nameLegacy ? reencryptLegacyValue(row.name) : row.name,
   ]);
   return { id: row.id, email, name };
 }
 
-/** Decrypt a legacy envelope and re-encrypt to the fast 3-part format. */
-async function reencrypt(legacyCiphertext: string): Promise<string> {
+/**
+ * Decrypt a legacy envelope and re-encrypt to the fast 3-part format.
+ *
+ * Exported as the column-agnostic core for follow-up backfills — other tables
+ * also hold pre-#1930 legacy ciphertext (integration connection credentials,
+ * OAuth refresh tokens, audit-log IPs) and should convert through this same
+ * tested value-level path rather than reimplementing it.
+ */
+export async function reencryptLegacyValue(legacyCiphertext: string): Promise<string> {
   return encrypt(await decrypt(legacyCiphertext));
 }
