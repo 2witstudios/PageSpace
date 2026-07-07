@@ -26,6 +26,14 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/auth', () => ({
   validateOriginForMiddleware: mockValidateOriginForMiddleware,
   isOriginValidationBlocking: mockIsOriginValidationBlocking,
+  // Real string values, not mocks — middleware.ts builds its bearer-prefix
+  // checks from these at module-load time (`Bearer ${MCP_TOKEN_PREFIX}` etc.),
+  // so a mocked-away value here would silently break every prefix check this
+  // file's tests exercise below, the same way a hand-duplicated copy already
+  // drifted out of sync once (see middleware.ts's import site comment).
+  MCP_TOKEN_PREFIX: 'mcp_',
+  SESSION_TOKEN_PREFIX: 'ps_sess_',
+  OAUTH_ACCESS_TOKEN_PREFIX: 'ps_at_',
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -36,7 +44,7 @@ vi.mock('@/lib/well-known/rewrites', () => ({
   WELL_KNOWN_REWRITES: [],
 }));
 
-import { middleware } from '../../middleware';
+import { middleware } from '../middleware';
 
 const buildRequest = (pathname: string, headers: Record<string, string> = {}) =>
   new NextRequest(new URL(`http://localhost${pathname}`), { headers });
@@ -79,5 +87,45 @@ describe('middleware — /api/public/forms carve-outs', () => {
     // Origin validation must never even run for this route — it's inapplicable
     // by design (valid callers have unbounded custom-domain origins).
     expect(mockValidateOriginForMiddleware).not.toHaveBeenCalled();
+  });
+});
+
+// Regression coverage for a real bug: middleware.ts used to hand-duplicate two
+// of the three bearer prefixes `@/lib/auth` actually authenticates (mcp_,
+// ps_sess_), silently missing ps_at_ (OAuth access tokens, `pagespace login`).
+// Any ps_at_-authenticated request to a non-allowlisted API route would fall
+// through to the session-cookie check and get a false 401 — undetected until
+// now because this middleware was never actually registered/executed in any
+// deployed build (wrong Next.js discovery path). All three prefixes must
+// bypass the session-cookie gate identically.
+describe('middleware — bearer-token prefix carve-out (all three token types)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+  });
+
+  it.each([
+    ['mcp', 'Bearer mcp_abc123'],
+    ['session', 'Bearer ps_sess_abc123'],
+    ['oauth', 'Bearer ps_at_abc123'],
+  ])('bypasses the session-cookie check for a %s bearer token on a non-allowlisted API route', async (_kind, authorization) => {
+    // /api/pages, unlike /api/drives, is NOT in the public allowlist — this
+    // isolates the bearer-prefix check itself rather than accidentally passing
+    // via that separate carve-out regardless of the auth header.
+    const request = buildRequest('/api/pages/xyz', { authorization });
+    const response = await middleware(request);
+
+    expect(response.status).not.toBe(401);
+    expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
+  });
+
+  it('still falls through to the session-cookie check (and 401s with none) for an unrecognized bearer prefix', async () => {
+    const request = buildRequest('/api/pages/xyz', { authorization: 'Bearer not_a_real_prefix_xyz' });
+    const response = await middleware(request);
+
+    expect(mockGetSessionFromCookies).toHaveBeenCalled();
+    expect(response.status).toBe(401);
   });
 });

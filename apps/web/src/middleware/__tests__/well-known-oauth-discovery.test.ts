@@ -29,12 +29,15 @@ vi.mock('@/middleware/security-headers', () => ({
 vi.mock('@/lib/auth', () => ({
   validateOriginForMiddleware: vi.fn(() => ({ valid: true, skipped: true })),
   isOriginValidationBlocking: vi.fn(() => false),
+  MCP_TOKEN_PREFIX: 'mcp_',
+  SESSION_TOKEN_PREFIX: 'ps_sess_',
+  OAUTH_ACCESS_TOKEN_PREFIX: 'ps_at_',
 }));
 // No session cookie: this is the exact scenario the CLI login flow hits —
 // discovery is always the first, unauthenticated request.
 vi.mock('@/lib/auth/cookie-config', () => ({ getSessionFromCookies: vi.fn(() => null) }));
 
-const { middleware } = await import('../../../middleware');
+const { middleware } = await import('../../middleware');
 
 describe('middleware — RFC 8414 discovery URL', () => {
   it('rewrites /.well-known/oauth-authorization-server to the routable API handler with no session cookie', async () => {

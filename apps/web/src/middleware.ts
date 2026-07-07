@@ -12,15 +12,22 @@ import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import {
   validateOriginForMiddleware,
   isOriginValidationBlocking,
+  MCP_TOKEN_PREFIX,
+  SESSION_TOKEN_PREFIX,
+  OAUTH_ACCESS_TOKEN_PREFIX,
 } from '@/lib/auth';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { WELL_KNOWN_REWRITES } from '@/lib/well-known/rewrites';
 
 // Edge-safe middleware: only checks presence of auth tokens, not validity.
 // Full validation happens in route handlers via verifyAuth()/validateMCPToken().
+// Bearer prefixes are imported from the real auth layer, not hand-duplicated —
+// see the export site for why (a duplicated ps_at_-less copy previously drifted
+// out of sync here, undetected because middleware never ran in production).
 
-const MCP_BEARER_PREFIX = 'Bearer mcp_';
-const SESSION_BEARER_PREFIX = 'Bearer ps_sess_';
+const MCP_BEARER_PREFIX = `Bearer ${MCP_TOKEN_PREFIX}`;
+const SESSION_BEARER_PREFIX = `Bearer ${SESSION_TOKEN_PREFIX}`;
+const OAUTH_BEARER_PREFIX = `Bearer ${OAUTH_ACCESS_TOKEN_PREFIX}`;
 
 const IS_ONPREM = process.env.DEPLOYMENT_MODE === 'onprem';
 const IS_TENANT = process.env.DEPLOYMENT_MODE === 'tenant';
@@ -108,9 +115,13 @@ export async function middleware(req: NextRequest) {
     }
 
     // Bearer token format check (Edge-safe - no database access)
-    // Full validation happens in route handlers via validateMCPToken()/validateSessionToken()
+    // Full validation happens in route handlers via validateMCPToken()/validateSessionToken()/validateOAuthAccessToken()
     const authHeader = req.headers.get('authorization');
-    if (authHeader?.startsWith(MCP_BEARER_PREFIX) || authHeader?.startsWith(SESSION_BEARER_PREFIX)) {
+    if (
+      authHeader?.startsWith(MCP_BEARER_PREFIX) ||
+      authHeader?.startsWith(SESSION_BEARER_PREFIX) ||
+      authHeader?.startsWith(OAUTH_BEARER_PREFIX)
+    ) {
       // API routes get restrictive CSP (no nonce needed)
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
       return response;
@@ -141,15 +152,50 @@ export async function middleware(req: NextRequest) {
     // (authorize's POST still requires a session; token/revoke/device_authorization never do).
     // Exact matches only — device_authorization's /verify and /decision sub-routes are the
     // browser-side /activate screen and DO require a session, so must not be swept in here.
+    // Third-party webhooks authenticate via their own signature/HMAC check inside route.ts,
+    // never a session cookie or a recognized bearer prefix — each must be listed here or this
+    // middleware (now that it actually runs) blocks them with a 401 before route.ts ever sees
+    // the request.
+    // Signup/verification endpoints run before any session exists by definition (that's what
+    // they're creating), authenticating instead via login-CSRF token, WebAuthn challenge, a
+    // one-time handoff token, or an emailed verification token. `/passkey/register` (and its
+    // `/options` step) support an authenticated-session mode too — that's enforced inside the
+    // route itself, not here; `/passkey/register/handoff` (which mints the handoff token) is
+    // deliberately NOT in this list since it always requires a session.
+    // `/api/auth/apple/` mirrors the existing `/api/auth/google` carve-out above: OAuth
+    // initiation (signin) and the provider callback both run with no session yet.
+    // `/api/auth/step-up/magic-link/verify` is the click-through target of a step-up
+    // confirmation email — like `/api/auth/verify-email`, it authenticates via the emailed
+    // token alone and (per its own doc comment) never creates a session.
+    // `/api/auth/logout` must stay reachable with NO session cookie: per its own comment, it
+    // still needs to revoke a device token by value when the cookie is already missing or
+    // expired — exactly the moment that token is the only credential left to invalidate.
+    // `/api/internal/*` (contact, monitoring/ingest) authenticate via a shared secret in a
+    // custom header or a non-prefixed Bearer value — never a session or a recognized MCP/
+    // session/OAuth bearer prefix — same rationale as the webhooks above.
+    // `/api/notifications/unsubscribe/[token]` is an opaque-token email unsubscribe link,
+    // clicked by (often logged-out) recipients.
+    // `/api/ai/models`, `/api/compiled-css`, `/api/avatar/[userId]/[filename]`, and
+    // `/api/provisioning-status/[slug]` are public-by-design per this codebase's own
+    // apps/web/src/app/api/__tests__/security-audit-coverage.test.ts allowlist (model
+    // catalog, static CSS, public avatar images, tenant-onboarding status polling) and call
+    // no auth function at all — confirmed by reading each route.ts directly.
+    // `/api/contact` is the public marketing contact form (ContactForm.tsx), unauthenticated
+    // by design.
     if (
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/login-csrf') ||
       pathname.startsWith('/api/auth/magic-link/') ||
       pathname.startsWith('/api/auth/google') ||
+      pathname.startsWith('/api/auth/apple/') ||
       pathname.startsWith('/api/auth/passkey/authenticate') ||
       pathname.startsWith('/api/auth/device/') ||
       pathname.startsWith('/api/auth/mobile/') ||
       pathname.startsWith('/api/auth/desktop/') ||
+      pathname.startsWith('/api/internal/') ||
+      pathname.startsWith('/api/notifications/unsubscribe/') ||
+      pathname.startsWith('/api/avatar/') ||
+      pathname.startsWith('/api/provisioning-status/') ||
       pathname.startsWith('/api/mcp/') ||
       pathname.startsWith('/api/drives') ||
       pathname.startsWith('/api/cron/') ||
@@ -160,6 +206,18 @@ export async function middleware(req: NextRequest) {
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron' ||
       pathname === '/api/integrations/zoom/webhook' ||
+      pathname === '/api/stripe/webhook' ||
+      pathname === '/api/integrations/google-calendar/webhook' ||
+      pathname === '/api/auth/signup-passkey' ||
+      pathname === '/api/auth/signup-passkey/options' ||
+      pathname === '/api/auth/passkey/register' ||
+      pathname === '/api/auth/passkey/register/options' ||
+      pathname === '/api/auth/verify-email' ||
+      pathname === '/api/auth/step-up/magic-link/verify' ||
+      pathname === '/api/auth/logout' ||
+      pathname === '/api/ai/models' ||
+      pathname === '/api/compiled-css' ||
+      pathname === '/api/contact' ||
       pathname === '/api/health' ||
       pathname === '/api/version'
     ) {

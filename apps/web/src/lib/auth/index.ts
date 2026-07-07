@@ -12,9 +12,14 @@ import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { getSessionFromCookies } from './cookie-config';
 
 const BEARER_PREFIX = 'Bearer ';
-const MCP_TOKEN_PREFIX = 'mcp_';
-const SESSION_TOKEN_PREFIX = 'ps_sess_';
-const OAUTH_ACCESS_TOKEN_PREFIX = 'ps_at_';
+// Exported so middleware.ts's edge-safe bearer-prefix check (which can only test
+// presence, not validity) stays byte-for-byte in sync with the prefixes this
+// module actually authenticates — a second, hand-duplicated copy is exactly how
+// a prefix (ps_at_, added for OAuth CLI login) silently fell out of sync here
+// before, undetected because middleware never executed in production at all.
+export const MCP_TOKEN_PREFIX = 'mcp_';
+export const SESSION_TOKEN_PREFIX = 'ps_sess_';
+export const OAUTH_ACCESS_TOKEN_PREFIX = 'ps_at_';
 
 export type TokenType = 'mcp' | 'session' | 'oauth';
 

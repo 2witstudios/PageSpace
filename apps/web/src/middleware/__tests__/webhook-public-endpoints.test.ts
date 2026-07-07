@@ -25,18 +25,28 @@ vi.mock('@/lib/auth', () => ({
   SESSION_TOKEN_PREFIX: 'ps_sess_',
   OAUTH_ACCESS_TOKEN_PREFIX: 'ps_at_',
 }));
-// No session cookie: exactly the CLI's position — it is a background process
-// with no browser session, calling these endpoints directly over HTTP.
+// No session cookie: exactly a third-party webhook caller's position — Stripe,
+// Google, and Zoom are background services with no browser session, calling
+// these endpoints directly over HTTP and authenticating via their own
+// signature/HMAC check inside each route's own handler instead.
 vi.mock('@/lib/auth/cookie-config', () => ({ getSessionFromCookies: vi.fn(() => null) }));
 
 const { middleware } = await import('../../middleware');
 
-describe('middleware — OAuth grant endpoints are public by protocol design', () => {
+// Regression coverage for a real bug: middleware.ts was relocated so it
+// finally executes in production for the first time (previously it lived
+// outside the src/ directory Next.js actually scans, so it silently never
+// ran). That means every webhook route's own signature/HMAC verification —
+// previously reached unobstructed — now has to first clear this middleware's
+// session-cookie gate. Only /api/integrations/zoom/webhook was allowlisted;
+// /api/stripe/webhook and /api/integrations/google-calendar/webhook were
+// missing, which would have 401'd Stripe billing events and Google Calendar
+// sync notifications before their own signature checks ever ran.
+describe('middleware — third-party webhooks are public (own signature/HMAC auth, no session)', () => {
   it.each([
-    '/api/oauth/authorize',
-    '/api/oauth/token',
-    '/api/oauth/revoke',
-    '/api/oauth/device_authorization',
+    '/api/stripe/webhook',
+    '/api/integrations/google-calendar/webhook',
+    '/api/integrations/zoom/webhook',
   ])('lets POST %s through with no session cookie instead of 401ing before the route runs', async (path) => {
     createSecureResponse.mockClear();
     const req = new NextRequest(`https://pagespace.ai${path}`, { method: 'POST' });
@@ -47,12 +57,9 @@ describe('middleware — OAuth grant endpoints are public by protocol design', (
     expect(response.status).not.toBe(401);
   });
 
-  it.each([
-    '/api/oauth/device_authorization/verify',
-    '/api/oauth/device_authorization/decision',
-  ])('control: %s is the browser /activate screen and still requires a session (401 with none)', async (path) => {
+  it('control: a similar but non-allowlisted integrations path still requires a session (401 with none)', async () => {
     createSecureResponse.mockClear();
-    const req = new NextRequest(`https://pagespace.ai${path}`, { method: 'POST' });
+    const req = new NextRequest('https://pagespace.ai/api/integrations/zoom/settings', { method: 'POST' });
 
     const response = await middleware(req);
 
