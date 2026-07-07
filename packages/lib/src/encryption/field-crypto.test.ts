@@ -14,9 +14,15 @@ beforeAll(() => {
 });
 
 describe('looksEncrypted', () => {
-  it('given an AES-GCM ciphertext (salt:iv:tag:ct), should return true', async () => {
+  it('given a current-format ciphertext (iv:authTag:ciphertext, 3 parts), should return true', async () => {
     const ct = await encryptField('secret');
+    expect((ct as string).split(':').length).toBe(3);
     expect(looksEncrypted(ct as string)).toBe(true);
+  });
+
+  it('given a legacy-shaped ciphertext (salt:iv:authTag:ciphertext, 4 parts), should return true', () => {
+    const legacyShaped = `${'a'.repeat(64)}:${'b'.repeat(32)}:${'c'.repeat(32)}:${'d'.repeat(10)}`;
+    expect(looksEncrypted(legacyShaped)).toBe(true);
   });
 
   it('given legacy plaintext email, should return false', () => {
@@ -25,6 +31,10 @@ describe('looksEncrypted', () => {
 
   it('given an IPv6 address with 4 colon groups, should NOT be mistaken for ciphertext', () => {
     expect(looksEncrypted('fe80:abcd:1234:5678')).toBe(false);
+  });
+
+  it('given a 3-colon string with wrong-length segments, should NOT be mistaken for ciphertext', () => {
+    expect(looksEncrypted('ab:cd:ef')).toBe(false);
   });
 });
 
