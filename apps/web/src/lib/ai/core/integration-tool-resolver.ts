@@ -16,24 +16,15 @@ import {
   type CoreTool,
   type GrantWithConnectionAndProvider,
 } from '@pagespace/lib/integrations/converter/ai-sdk';
+import { createConfiguredToolExecutor } from '@pagespace/lib/integrations/saga/create-configured-executor';
 import {
-  createToolExecutor,
-  type ExecuteToolDependencies,
-} from '@pagespace/lib/integrations/saga/execute-tool';
-import {
-  getConnectionWithProvider,
   listUserConnections,
   listDriveConnections,
 } from '@pagespace/lib/integrations/repositories/connection-repository';
-import { logAuditEntry } from '@pagespace/lib/integrations/repositories/audit-repository';
 import { listGrantsByAgent } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConfig } from '@pagespace/lib/integrations/repositories/config-repository';
 import { type DriveRole, type GlobalAssistantConfigData } from '@pagespace/lib/integrations/types';
 import { suppressGithubIntegrationTools } from './tool-filtering';
-
-/** The connection type expected by the tool executor's loadConnection dependency. */
-type LoadConnectionResult = ExecuteToolDependencies['loadConnection'] extends
-  (id: string) => Promise<infer R> ? R : never;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SHARED DEPENDENCIES
@@ -54,24 +45,7 @@ function createResolutionDeps(): ResolutionDependencies {
  * Create a configured tool executor wired to database dependencies.
  */
 function createConfiguredExecutor(userId: string, agentId: string | null, driveId: string | null) {
-  return createToolExecutor({
-    loadConnection: (connectionId) =>
-      getConnectionWithProvider(db, connectionId) as Promise<LoadConnectionResult>,
-    logAudit: async (entry) => {
-      await logAuditEntry(db, {
-        driveId: entry.driveId ?? driveId,
-        agentId,
-        userId,
-        connectionId: entry.connectionId,
-        toolName: entry.toolName,
-        success: entry.success,
-        errorType: entry.errorType,
-        errorMessage: entry.errorMessage,
-        responseCode: entry.responseCode,
-        durationMs: entry.durationMs,
-      });
-    },
-  });
+  return createConfiguredToolExecutor({ db, userId, agentId, driveId });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

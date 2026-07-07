@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import {
   ChevronRight,
   ChevronDown,
@@ -428,16 +430,30 @@ function ConfirmRemoveDialog({
   );
 }
 
-function GithubRepoPicker({ repos, isLoading, onSelect }: { repos: GithubRepo[]; isLoading: boolean; onSelect(repo: GithubRepo): void }) {
+function GithubRepoPicker({
+  repos,
+  isLoading,
+  error,
+  selectedLabel,
+  onSelect,
+}: {
+  repos: GithubRepo[];
+  isLoading: boolean;
+  error?: Error;
+  selectedLabel?: string;
+  onSelect(repo: GithubRepo): void;
+}) {
   const [pickerOpen, setPickerOpen] = useState(false);
 
   return (
     <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
       <PopoverTrigger asChild>
         <Button type="button" variant="outline" role="combobox" aria-expanded={pickerOpen} className="w-full justify-between font-normal">
-          <span className="flex items-center gap-2 text-muted-foreground">
-            <Github className="size-3.5 shrink-0" />
-            Select a repo…
+          <span className="flex min-w-0 items-center gap-2">
+            <Github className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className={cn('truncate', !selectedLabel && 'text-muted-foreground')}>
+              {selectedLabel || 'Select a repo…'}
+            </span>
           </span>
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
         </Button>
@@ -446,7 +462,9 @@ function GithubRepoPicker({ repos, isLoading, onSelect }: { repos: GithubRepo[];
         <Command>
           <CommandInput placeholder="Search your repos…" />
           <CommandList onWheel={(e) => e.stopPropagation()}>
-            <CommandEmpty>{isLoading ? 'Loading repos…' : 'No repos found.'}</CommandEmpty>
+            <CommandEmpty>
+              {error ? `Failed to load repos: ${error.message}` : isLoading ? 'Loading repos…' : 'No repos found.'}
+            </CommandEmpty>
             {repos.map((repo) => (
               <CommandItem key={repo.full_name} value={repo.full_name} onSelect={() => { onSelect(repo); setPickerOpen(false); }}>
                 <FolderGit2 className="mr-2 size-3.5 shrink-0 text-muted-foreground" />
@@ -464,6 +482,7 @@ function GithubRepoPicker({ repos, isLoading, onSelect }: { repos: GithubRepo[];
 }
 
 function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl: string): Promise<unknown>; triggerLabel?: string }) {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
@@ -471,9 +490,12 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
   const [manualMode, setManualMode] = useState(false);
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
 
-  const { repos, connected, isLoading: reposLoading, refetch: refetchRepos } = useGithubRepos(open && !manualMode);
-  const { providers } = useProviders();
+  const { repos, connected, isLoading: reposLoading, error: reposError, mutate: refetchRepos } = useGithubRepos(open && !manualMode);
+  // Only needed to resolve the github provider for the "Connect GitHub" fallback CTA, so it's gated the same as useGithubRepos rather than fetched on every Navigator mount.
+  const { providers } = useProviders(open);
   const githubProvider = providers.find((p) => p.slug === 'github') ?? null;
+
+  const mode: 'manual' | 'connect' | 'picker' = manualMode ? 'manual' : connected === false ? 'connect' : 'picker';
 
   const resetAndClose = () => {
     setOpen(false);
@@ -521,15 +543,17 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
         <div className="flex flex-col gap-3">
           <Input placeholder="Project name" value={name} onChange={(e) => setName(e.target.value)} />
 
-          {manualMode ? (
+          {mode === 'manual' && (
             <Input placeholder="Repo URL (https://github.com/org/repo.git)" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
-          ) : connected === false ? (
+          )}
+          {mode === 'connect' && (
             <Button type="button" variant="outline" onClick={() => setConnectDialogOpen(true)} className="justify-start gap-2 font-normal text-muted-foreground">
               <Github className="size-3.5 shrink-0" />
               Connect GitHub to browse your repos
             </Button>
-          ) : (
-            <GithubRepoPicker repos={repos} isLoading={reposLoading} onSelect={handleSelectRepo} />
+          )}
+          {mode === 'picker' && (
+            <GithubRepoPicker repos={repos} isLoading={reposLoading} error={reposError} selectedLabel={name} onSelect={handleSelectRepo} />
           )}
 
           <Button
@@ -556,6 +580,7 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
           setConnectDialogOpen(false);
           refetchRepos();
         }}
+        returnUrl={pathname}
       />
     </Dialog>
   );

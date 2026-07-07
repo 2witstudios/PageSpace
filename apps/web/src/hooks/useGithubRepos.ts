@@ -47,6 +47,6 @@ export function useGithubRepos(enabled: boolean) {
     // Callers (e.g. the "Connect GitHub" success handler) can force a refetch
     // — the SWR key doesn't change across a connect/disconnect cycle, so
     // without this the cached `connected: false` would never refresh.
-    refetch: mutate,
+    mutate,
   };
 }

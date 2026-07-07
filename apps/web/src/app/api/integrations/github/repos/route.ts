@@ -15,15 +15,10 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { getProviderBySlug } from '@pagespace/lib/integrations/repositories/provider-repository';
-import { findUserConnection, getConnectionWithProvider } from '@pagespace/lib/integrations/repositories/connection-repository';
-import { logAuditEntry } from '@pagespace/lib/integrations/repositories/audit-repository';
-import { createToolExecutor, type ExecuteToolDependencies } from '@pagespace/lib/integrations/saga/execute-tool';
+import { findUserConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
+import { createConfiguredToolExecutor } from '@pagespace/lib/integrations/saga/create-configured-executor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-
-/** The connection type expected by the tool executor's loadConnection dependency (see integration-tool-resolver.ts). */
-type LoadConnectionResult = ExecuteToolDependencies['loadConnection'] extends
-  (id: string) => Promise<infer R> ? R : never;
 
 function parsePage(raw: string | null): number {
   const parsed = raw ? Number.parseInt(raw, 10) : 1;
@@ -44,24 +39,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ connected: false });
   }
 
-  const executor = createToolExecutor({
-    loadConnection: (connectionId) =>
-      getConnectionWithProvider(db, connectionId) as Promise<LoadConnectionResult>,
-    logAudit: async (entry) => {
-      await logAuditEntry(db, {
-        driveId: entry.driveId,
-        agentId: null,
-        userId: auth.userId,
-        connectionId: entry.connectionId,
-        toolName: entry.toolName,
-        success: entry.success,
-        errorType: entry.errorType,
-        errorMessage: entry.errorMessage,
-        responseCode: entry.responseCode,
-        durationMs: entry.durationMs,
-      });
-    },
-  });
+  const executor = createConfiguredToolExecutor({ db, userId: auth.userId, agentId: null, driveId: null });
 
   const result = await executor({
     userId: auth.userId,

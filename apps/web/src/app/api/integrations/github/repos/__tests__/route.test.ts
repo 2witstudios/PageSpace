@@ -8,18 +8,14 @@ const {
   mockIsAuthError,
   mockGetProviderBySlug,
   mockFindUserConnection,
-  mockGetConnectionWithProvider,
-  mockLogAuditEntry,
-  mockCreateToolExecutor,
+  mockCreateConfiguredToolExecutor,
   mockExecutor,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
   mockGetProviderBySlug: vi.fn(),
   mockFindUserConnection: vi.fn(),
-  mockGetConnectionWithProvider: vi.fn(),
-  mockLogAuditEntry: vi.fn(),
-  mockCreateToolExecutor: vi.fn(),
+  mockCreateConfiguredToolExecutor: vi.fn(),
   mockExecutor: vi.fn(),
 }));
 
@@ -36,15 +32,10 @@ vi.mock('@pagespace/lib/integrations/repositories/provider-repository', () => ({
 
 vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => ({
   findUserConnection: (...args: unknown[]) => mockFindUserConnection(...args),
-  getConnectionWithProvider: (...args: unknown[]) => mockGetConnectionWithProvider(...args),
 }));
 
-vi.mock('@pagespace/lib/integrations/repositories/audit-repository', () => ({
-  logAuditEntry: (...args: unknown[]) => mockLogAuditEntry(...args),
-}));
-
-vi.mock('@pagespace/lib/integrations/saga/execute-tool', () => ({
-  createToolExecutor: (...args: unknown[]) => mockCreateToolExecutor(...args),
+vi.mock('@pagespace/lib/integrations/saga/create-configured-executor', () => ({
+  createConfiguredToolExecutor: (...args: unknown[]) => mockCreateConfiguredToolExecutor(...args),
 }));
 
 import { GET } from '../route';
@@ -59,7 +50,7 @@ function req(query = '') {
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_OK);
-  mockCreateToolExecutor.mockReturnValue(mockExecutor);
+  mockCreateConfiguredToolExecutor.mockReturnValue(mockExecutor);
 });
 
 describe('GET /api/integrations/github/repos', () => {
@@ -75,7 +66,7 @@ describe('GET /api/integrations/github/repos', () => {
     const res = await GET(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ connected: false });
-    expect(mockCreateToolExecutor).not.toHaveBeenCalled();
+    expect(mockCreateConfiguredToolExecutor).not.toHaveBeenCalled();
   });
 
   it('given no user connection, responds connected: false', async () => {
@@ -84,7 +75,7 @@ describe('GET /api/integrations/github/repos', () => {
     const res = await GET(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ connected: false });
-    expect(mockCreateToolExecutor).not.toHaveBeenCalled();
+    expect(mockCreateConfiguredToolExecutor).not.toHaveBeenCalled();
   });
 
   it('given an inactive connection, responds connected: false without calling the tool', async () => {
@@ -93,7 +84,7 @@ describe('GET /api/integrations/github/repos', () => {
     const res = await GET(req());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ connected: false });
-    expect(mockCreateToolExecutor).not.toHaveBeenCalled();
+    expect(mockCreateConfiguredToolExecutor).not.toHaveBeenCalled();
   });
 
   it('given an active connection, calls list_repos with type=all and returns the repos', async () => {

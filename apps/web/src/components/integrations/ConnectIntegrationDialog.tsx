@@ -31,6 +31,14 @@ interface ConnectIntegrationDialogProps {
   onConnected: () => void;
   scope?: 'user' | 'drive';
   driveId?: string;
+  /**
+   * Where to send the user after a successful OAuth connect (defaults to the
+   * relevant Settings > Integrations page). For OAuth providers this is a
+   * full-page redirect — `onConnected` never fires — so callers embedded in a
+   * page the user doesn't want to leave (e.g. a picker inside another dialog)
+   * should pass the current path here instead of losing the user to Settings.
+   */
+  returnUrl?: string;
 }
 
 export function ConnectIntegrationDialog({
@@ -40,6 +48,7 @@ export function ConnectIntegrationDialog({
   onConnected,
   scope = 'user',
   driveId,
+  returnUrl,
 }: ConnectIntegrationDialogProps) {
   const [name, setName] = useState('');
   const [visibility, setVisibility] = useState<string>('owned_drives');
@@ -63,9 +72,9 @@ export function ConnectIntegrationDialog({
       const body: Record<string, unknown> = {
         providerId: provider.id,
         name: connectionName,
-        returnUrl: scope === 'drive' && driveId
+        returnUrl: returnUrl ?? (scope === 'drive' && driveId
           ? `/dashboard/${driveId}/settings/integrations`
-          : '/settings/integrations',
+          : '/settings/integrations'),
       };
 
       if (scope === 'user') {
