@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // ── A column reference the fake operators/select can resolve against a row ────────
 type Col = { __col: true; table: TableKey; name: string };
-type TableKey = 'creditBalances' | 'creditLedger' | 'creditHolds' | 'users' | 'aiUsageLogs';
+type TableKey = 'creditBalances' | 'creditLedger' | 'creditHolds' | 'users' | 'aiUsageLogs' | 'subscriptions';
 
 interface Row { [k: string]: unknown }
 type Store = Record<TableKey, Row[]>;
@@ -39,7 +39,7 @@ type Pred =
 
 // ── Hoisted shared state: one store + one fake db, shared by all four real shells ─
 const H = vi.hoisted(() => {
-  const store: Store = { creditBalances: [], creditLedger: [], creditHolds: [], users: [], aiUsageLogs: [] };
+  const store: Store = { creditBalances: [], creditLedger: [], creditHolds: [], users: [], aiUsageLogs: [], subscriptions: [] };
 
   const col = (table: TableKey, name: string): Col => ({ __col: true, table, name });
   const cols = (table: TableKey, names: string[]): Record<string, Col> & { __table: TableKey } => {
@@ -59,6 +59,7 @@ const H = vi.hoisted(() => {
   ]);
   const creditHolds = cols('creditHolds', ['id', 'userId', 'estCents', 'aiUsageLogId', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
+  const subscriptions = cols('subscriptions', ['id', 'userId', 'status']);
   const aiUsageLogs = cols('aiUsageLogs', [
     'id', 'userId', 'cost', 'timestamp', 'success', 'provider',
     'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
@@ -392,7 +393,7 @@ const H = vi.hoisted(() => {
 
   return {
     store, db, isBillingEnabled, logger,
-    schema: { creditBalances, creditLedger, creditHolds, users, aiUsageLogs },
+    schema: { creditBalances, creditLedger, creditHolds, users, aiUsageLogs, subscriptions },
     ops: { eq, lt, gt, gte, inArray, notInArray, isNull, and, or, sql: sqlTag },
   };
 });
@@ -400,6 +401,7 @@ const H = vi.hoisted(() => {
 vi.mock('@pagespace/db/db', () => ({ db: H.db }));
 vi.mock('@pagespace/db/schema/credits', () => ({ creditBalances: H.schema.creditBalances, creditLedger: H.schema.creditLedger, creditHolds: H.schema.creditHolds }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: H.schema.users }));
+vi.mock('@pagespace/db/schema/subscriptions', () => ({ subscriptions: H.schema.subscriptions }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({ aiUsageLogs: H.schema.aiUsageLogs }));
 vi.mock('@pagespace/db/operators', () => H.ops);
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: H.isBillingEnabled }));
@@ -429,10 +431,16 @@ function reset() {
   store.creditHolds.length = 0;
   store.users.length = 0;
   store.aiUsageLogs.length = 0;
+  store.subscriptions.length = 0;
 }
 
 function seedUser(id: string, customer: string, tier: string) {
   store.users.push({ id, stripeCustomerId: customer, subscriptionTier: tier });
+}
+
+/** A Stripe-backed subscription in a renewal-capable status — makes invoice.paid (not the gate) authoritative for this user's period roll. */
+function seedLiveSubscription(userId: string, status = 'active') {
+  store.subscriptions.push({ id: `sub_${userId}`, userId, status });
 }
 
 function balanceOf(userId: string) {
@@ -736,7 +744,7 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
 
 describe('credits flow — monthly reset', () => {
   it('gate resets an expired period to the tier allowance for a FREE user and rolls the window forward', async () => {
-    seedUser('u1', 'cus_1', 'free'); // gate-driven reset is free-only; paid users refill via invoice.paid
+    seedUser('u1', 'cus_1', 'free'); // free users always refill via the gate; subscription-backed paid users via invoice.paid
     // Drained balance whose period already ended yesterday.
     store.creditBalances.push({
       userId: 'u1', monthlyRemainingCents: 0, monthlyAllowanceCents: 500,
@@ -752,8 +760,9 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u1')!.monthlyPeriodEnd!.getTime()).toBeGreaterThan(Date.now()); // window advanced
   });
 
-  it('paid user with expired window and ZERO carry is blocked (no credits, not because of expiry)', async () => {
+  it('paid user with expired window, a live subscription, and ZERO carry is blocked (no credits — invoice.paid owns the refill)', async () => {
     seedUser('u3', 'cus_3', 'pro');
+    seedLiveSubscription('u3');
     store.creditBalances.push({
       userId: 'u3', monthlyRemainingCents: 0, monthlyAllowanceCents: 1500,
       topupRemainingCents: 0, pendingMillicents: 0,
@@ -767,8 +776,29 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u3')!.monthlyRemainingCents).toBe(0); // gate does NOT refill; invoice.paid does
   });
 
-  it('paid user with expired window and carry credits CAN spend (rollover — carry is always spendable)', async () => {
+  it('paid user with expired window and NO live subscription (comped account) gets the gate-driven roll — no invoice will ever arrive', async () => {
+    seedUser('u5', 'cus_5', 'business');
+    // A dead subscription must not block the roll — it can never deliver an invoice.
+    store.subscriptions.push({ id: 'sub_u5_old', userId: 'u5', status: 'incomplete_expired' });
+    store.creditBalances.push({
+      userId: 'u5', monthlyRemainingCents: 0, monthlyAllowanceCents: 10000,
+      topupRemainingCents: 0, pendingMillicents: 0,
+      monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+      monthlyPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      updatedAt: new Date(),
+    });
+
+    const gate = await canConsumeAI('u5', 'business');
+    expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
+    expect(balanceOf('u5')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.business); // refilled at the paid tier's allowance
+    expect(balanceOf('u5')!.monthlyPeriodEnd!.getTime()).toBeGreaterThan(Date.now()); // window advanced
+    // The grant is ledgered under the gate-reset ref, distinguishable from free resets.
+    expect(ledgerOf('u5').some((r) => r.entryType === 'monthly_grant' && String(r.stripeRef).startsWith('gate-reset-'))).toBe(true);
+  });
+
+  it('paid user with expired window, a live subscription, and carry credits CAN spend (rollover — carry is always spendable)', async () => {
     seedUser('u4', 'cus_4', 'pro');
+    seedLiveSubscription('u4');
     store.creditBalances.push({
       userId: 'u4', monthlyRemainingCents: 400, monthlyAllowanceCents: 1500,
       topupRemainingCents: 0, pendingMillicents: 0,
