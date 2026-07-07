@@ -6,7 +6,7 @@ import { BACKGROUND_LIGHT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, lt, gte, ne, desc, inArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { decryptField } from '@pagespace/lib/encryption/field-crypto'
+import { decryptField, decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto'
 import { sessions } from '@pagespace/db/schema/sessions'
 import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
@@ -267,12 +267,17 @@ async function buildAndPersistPulse(
       ne(driveMembers.userId, userId),
       isNotNull(driveMembers.acceptedAt)
     )) : [];
-  // Decrypt PII at the edge so the team roster in the prompt is plaintext.
-  const teamMembers = await Promise.all(teamMembersRaw.map(async (m) => ({
+  // Decrypt PII at the edge so the team roster in the prompt is plaintext —
+  // batched once per unique stored value (the same user repeats across
+  // drives with the same ciphertext), not once per row.
+  const lookupTeamPii = await decryptFieldValuesOnce(
+    teamMembersRaw.flatMap((m) => [m.userName, m.userEmail])
+  );
+  const teamMembers = teamMembersRaw.map((m) => ({
     ...m,
-    userName: await decryptField(m.userName),
-    userEmail: await decryptField(m.userEmail),
-  })));
+    userName: lookupTeamPii(m.userName),
+    userEmail: lookupTeamPii(m.userEmail),
+  }));
 
   const teamByDrive = teamMembers.reduce((acc, m) => {
     if (!acc[m.driveId]) acc[m.driveId] = [];
@@ -537,12 +542,18 @@ async function buildAndPersistPulse(
       .orderBy(desc(directMessages.createdAt))
       .limit(10);
 
-    // Decrypt PII at the edge so DM sender names in the prompt are plaintext.
-    unreadDMs = await Promise.all(unreadMessagesList.map(async m => ({
-      from: (await decryptField(m.senderName)) || (await decryptField(m.senderEmail))?.split('@')[0] || 'Someone',
+    // Decrypt PII at the edge so DM sender names in the prompt are plaintext
+    // — batched once per unique stored value. Emails only enter the batch
+    // for rows with no sender name, mirroring the old `||` short-circuit
+    // (no stored value decrypts to '', so raw-falsy ⇔ decrypted-falsy).
+    const lookupDmPii = await decryptFieldValuesOnce(
+      unreadMessagesList.flatMap((m) => [m.senderName, m.senderName ? null : m.senderEmail])
+    );
+    unreadDMs = unreadMessagesList.map((m) => ({
+      from: lookupDmPii(m.senderName) || lookupDmPii(m.senderEmail)?.split('@')[0] || 'Someone',
       content: m.content || '',
       sentAt: m.createdAt,
-    })));
+    }));
   }
 
   // ========================================
@@ -572,12 +583,16 @@ async function buildAndPersistPulse(
     )
     .orderBy(desc(chatMessages.createdAt))
     .limit(15) : [];
-  // Decrypt PII at the edge so page-chat sender names in the prompt are plaintext.
-  const recentPageChats = await Promise.all(recentPageChatsRaw.map(async (c) => ({
+  // Decrypt PII at the edge so page-chat sender names in the prompt are
+  // plaintext — batched once per unique stored value, not once per row.
+  const lookupChatPii = await decryptFieldValuesOnce(
+    recentPageChatsRaw.flatMap((c) => [c.senderName, c.senderEmail])
+  );
+  const recentPageChats = recentPageChatsRaw.map((c) => ({
     ...c,
-    senderName: await decryptField(c.senderName),
-    senderEmail: await decryptField(c.senderEmail),
-  })));
+    senderName: lookupChatPii(c.senderName),
+    senderEmail: lookupChatPii(c.senderEmail),
+  }));
 
   const chatsByPage = recentPageChats
     .filter(chat => chat.pageId && accessiblePages.has(chat.pageId))
@@ -617,11 +632,15 @@ async function buildAndPersistPulse(
     )
     .orderBy(desc(userMentions.createdAt))
     .limit(5);
-  // Decrypt PII at the edge so mention author names in the prompt are plaintext.
-  const recentMentions = await Promise.all(recentMentionsRaw.map(async (m) => ({
+  // Decrypt PII at the edge so mention author names in the prompt are
+  // plaintext — batched once per unique stored value, not once per row.
+  const lookupMentionPii = await decryptFieldValuesOnce(
+    recentMentionsRaw.map((m) => m.mentionedByName)
+  );
+  const recentMentions = recentMentionsRaw.map((m) => ({
     ...m,
-    mentionedByName: await decryptField(m.mentionedByName),
-  })));
+    mentionedByName: lookupMentionPii(m.mentionedByName),
+  }));
 
   const recentSharesRaw = await db
     .select({
@@ -641,11 +660,15 @@ async function buildAndPersistPulse(
     )
     .orderBy(desc(pagePermissions.grantedAt))
     .limit(5);
-  // Decrypt PII at the edge so share author names in the prompt are plaintext.
-  const recentShares = await Promise.all(recentSharesRaw.map(async (s) => ({
+  // Decrypt PII at the edge so share author names in the prompt are
+  // plaintext — batched once per unique stored value, not once per row.
+  const lookupSharePii = await decryptFieldValuesOnce(
+    recentSharesRaw.map((s) => s.sharedByName)
+  );
+  const recentShares = recentSharesRaw.map((s) => ({
     ...s,
-    sharedByName: await decryptField(s.sharedByName),
-  })));
+    sharedByName: lookupSharePii(s.sharedByName),
+  }));
 
   // ========================================
   // 8. PREVIOUS PULSES (for deduplication)

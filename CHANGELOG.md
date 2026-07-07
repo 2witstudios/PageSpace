@@ -5,6 +5,27 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Subscription renewals now set the correct billing period** — a renewal used to stamp your
+  account with the billing cycle that had just *ended* (Stripe reports the old cycle on the invoice
+  itself; the new one is on its line items), so every subscriber's period looked expired the moment
+  they renewed. Renewals and plan changes now record the service period actually paid for.
+- **Usage page no longer freezes on a stale billing period** — if your monthly period lapsed
+  without a renewal landing (comped accounts, or a delayed invoice), the usage breakdown silently
+  clamped to the old window and showed nothing you'd spent since. It now falls back to the trailing
+  30 days so current usage — including Terminal machine time — always shows.
+- **Comped paid accounts get their monthly credit allowance again** — accounts on a paid tier with
+  no live Stripe subscription (founder/comped) never received an `invoice.paid` refill, so their
+  allowance and billing window froze permanently. The credit gate now rolls their window and grants
+  the tier allowance, the same way free-tier accounts refill. Subscription-backed accounts are
+  unchanged (Stripe stays authoritative).
+- **Terminal sessions now bill in 10-minute heartbeats** — interactive machine sessions previously
+  settled their runtime cost only when the session ended, so a server restart mid-session (every
+  deploy) silently dropped the whole session's usage. Heartbeat settling bounds any loss to at most
+  one interval, and a payer who runs out of credits mid-session is disconnected instead of running
+  free.
+
 ### Added
 
 - **Custom 404 pages for published Canvas sites** — pick any Canvas page in a drive's Domains &
@@ -139,6 +160,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Request middleware is now edge-safe and actually deployable** — registering the previously
+  dormant middleware took production down because its import graph reached Node-only code (the
+  database client and server logger) that the Edge runtime cannot execute. Middleware now uses
+  pure leaf modules (token prefixes, an edge-safe structured logger) and forwards API metrics to
+  the internal ingest route instead of writing to the database in-process; the build now fails
+  fast if a Node-only import ever reaches the middleware bundle again. Admin monitoring
+  dashboards begin receiving API request metrics once this deploys — the previous in-middleware
+  metrics writer had never actually run.
 - **GDPR data exports now include system logs, API metrics, and error logs** — the account data
   export (`Settings > Privacy > Download my data`) previously omitted these three monitoring
   tables even though they can carry your user ID until account deletion. They're now included in

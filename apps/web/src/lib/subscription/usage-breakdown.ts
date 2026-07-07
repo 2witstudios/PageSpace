@@ -35,6 +35,41 @@ export interface UsageBreakdownPeriod {
   periodEnd: string | null;
 }
 
+/** Fallback lookback when the user has no usable billing-period window. */
+export const USAGE_FALLBACK_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Resolve the time window the usage breakdown queries over. The stored billing
+ * period is only trusted while it is CURRENT: paid-tier periods roll on Stripe
+ * `invoice.paid`, so an account whose renewal never landed (comped/founder, or a
+ * webhook gap) keeps a stale `monthlyPeriodEnd` forever — and a window clamped to
+ * it would hide ALL usage after that date (the 2026-07-07 audit found a month of
+ * real spend invisible this way). A stale or missing window therefore falls back
+ * to the trailing lookback ending now: honest "recent usage", never a frozen one.
+ *
+ * Deliberate trade-offs:
+ * - A null `periodEnd` WITH a start is kept as an open-ended current window
+ *   (display semantics), even though the credit gate treats that state as
+ *   expired and will stamp a window on the user's next AI call.
+ * - During a brief renewal lag (invoice retrying for a day or two) the fallback
+ *   fires too, so the page briefly shows trailing-30d instead of the lapsed
+ *   period. Showing current spend during the lag beats freezing the page on the
+ *   old period — which is exactly the audit bug this fixes.
+ */
+export function resolveUsageWindow({
+  periodStart,
+  periodEnd,
+  now,
+}: {
+  periodStart: Date | null;
+  periodEnd: Date | null;
+  now: Date;
+}): { periodStart: Date; periodEnd: Date | null } {
+  const stale = periodStart === null || (periodEnd !== null && periodEnd < now);
+  if (stale) return { periodStart: new Date(now.getTime() - USAGE_FALLBACK_LOOKBACK_MS), periodEnd: null };
+  return { periodStart, periodEnd };
+}
+
 export interface UsageFeatureRow {
   source: AIUsageSource;
   label: string;

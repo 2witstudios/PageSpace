@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import path from "path";
 import fs from "fs";
+import { builtinModules } from "module";
 import CopyPlugin from "copy-webpack-plugin";
 import { withSentryConfig } from "@sentry/nextjs";
 import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
@@ -14,6 +15,64 @@ const dbDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/db/di
 const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/dist"));
 const workspaceDistReady =
   process.env.NODE_ENV === "production" && dbDistExists && libDistExists;
+
+type ExternalsFn = (
+  data: { context: string; request: string; contextInfo?: { issuer?: string } },
+  callback: (err?: Error | null, result?: string) => void
+) => void;
+
+// webpack's `externals` can be an array, a single entry, or unset; normalize
+// to an array and append. Shared by the nodejs externalization and the edge
+// guard below so a fix to the merge logic can't apply to one runtime only.
+type WebpackConfig = { externals?: unknown };
+function pushExternal(config: WebpackConfig, external: ExternalsFn): void {
+  if (Array.isArray(config.externals)) {
+    config.externals.push(external);
+  } else if (config.externals) {
+    config.externals = [config.externals, external];
+  } else {
+    config.externals = [external];
+  }
+}
+
+// Node built-ins the Edge runtime actually provides (per Next.js edge-runtime
+// docs). Everything else in `module`'s builtinModules is Node-only.
+const EDGE_SUPPORTED_BUILTINS = new Set(["buffer", "events", "util", "assert", "async_hooks"]);
+const nodeOnlyBuiltins = new Set(
+  builtinModules.filter((m) => !m.startsWith("_") && !EDGE_SUPPORTED_BUILTINS.has(m))
+);
+// Node-only npm packages that don't necessarily import a built-in at their
+// entry point (native bindings, lazy requires) — deny them by name.
+const NODE_ONLY_PACKAGES = new Set([
+  "pg", "pg-pool", "pg-protocol", "pg-native", "pg-connection-string", "dotenv",
+]);
+
+// Fail the BUILD when an edge bundle (middleware) reaches a Node-only module.
+// Next.js itself only WARNS ("A Node.js API is used (…) which is not supported
+// in the Edge Runtime") and defers the crash to request time — verified
+// empirically: a probe import of the Node-only logger built green and then
+// 500'd every request, which is exactly how prod went down the day middleware
+// first registered. Built-ins are an allowlist inversion (everything Node
+// ships minus what edge provides) so new Node-only imports — crypto, vm,
+// worker_threads, whatever ships next — are denied by default rather than
+// waiting for someone to extend a hand-maintained list.
+const edgeNodeOnlyGuard: ExternalsFn = ({ request, contextInfo }, callback) => {
+  const bare = request.startsWith("node:") ? request.slice("node:".length) : request;
+  if (
+    nodeOnlyBuiltins.has(bare) ||
+    NODE_ONLY_PACKAGES.has(bare) ||
+    request.startsWith("@pagespace/db")
+  ) {
+    return callback(new Error(
+      `Edge bundle imports Node-only module '${request}'` +
+      (contextInfo?.issuer ? ` (via ${contextInfo.issuer})` : "") +
+      `. The Edge runtime cannot execute it at request time — middleware and ` +
+      `everything it imports must stay on edge-safe leaf modules ` +
+      `(see apps/web/src/middleware.ts header comment).`
+    ));
+  }
+  callback();
+};
 
 // Named export so tests can assert on rewrites()/redirects() without going
 // through withSentryConfig's wrapping.
@@ -32,8 +91,14 @@ export const nextConfig: NextConfig = {
   // Next.js emit require() at runtime, which fails for ESM-only packages. Instead
   // it is a direct dependency of apps/web so webpack bundles it as a server chunk.
   serverExternalPackages: ["pg"],
-  webpack: (config, { isServer }) => {
-    if (isServer) {
+  webpack: (config, { isServer, nextRuntime }) => {
+    // Externalization emits `require()` calls, which only the Node.js runtime
+    // can execute. The edge compile (middleware) has no require(): it must
+    // bundle everything from source so Next's edge static analysis fails the
+    // BUILD on Node-only imports instead of 500ing every request at runtime —
+    // exactly what took prod down when middleware first registered (PR #1932:
+    // "Native module not found: @pagespace/lib/logging/logger-config").
+    if (isServer && nextRuntime === 'nodejs') {
       // Externalize pg unconditionally (bun cache path bypasses Next's heuristic).
       // When workspaceDistReady, also externalize @pagespace/db and @pagespace/lib
       // so Next emits require('@pagespace/...') calls resolved to their dist/.
@@ -54,13 +119,11 @@ export const nextConfig: NextConfig = {
         callback();
       };
 
-      if (Array.isArray(config.externals)) {
-        config.externals.push(bunWorkspaceExternals);
-      } else if (config.externals) {
-        config.externals = [config.externals as NonNullable<typeof config.externals>, bunWorkspaceExternals];
-      } else {
-        config.externals = [bunWorkspaceExternals];
-      }
+      pushExternal(config, bunWorkspaceExternals);
+    }
+
+    if (isServer && nextRuntime === 'edge') {
+      pushExternal(config, edgeNodeOnlyGuard);
     }
     if (!isServer) {
       config.resolve.fallback = {

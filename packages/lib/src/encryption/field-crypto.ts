@@ -69,3 +69,25 @@ export async function decryptField<T extends string | null | undefined>(value: T
   if (!looksEncrypted(value)) return value;
   return (await decrypt(value)) as T;
 }
+
+/**
+ * Batch-decrypt a request's field values exactly once per distinct value.
+ *
+ * For rows that carry no user id (raw-SQL projections, COALESCEd columns), the
+ * stored value itself is the dedup key: the same user repeated across rows
+ * repeats the same stored ciphertext, so each unique value decrypts once
+ * instead of once per row. Plaintext values pass through via `decryptField`.
+ *
+ * Returns a lookup with fail-closed semantics: `null`/`undefined` map to
+ * `null`, and a value that was never batched returns `null` rather than the
+ * raw (potentially ciphertext) input — a drift between batch construction and
+ * lookup sites must never leak ciphertext to a client.
+ */
+export async function decryptFieldValuesOnce(
+  values: ReadonlyArray<string | null | undefined>,
+): Promise<(value: string | null | undefined) => string | null> {
+  const unique = [...new Set(values.filter((value): value is string => typeof value === 'string'))];
+  const decrypted = await Promise.all(unique.map(async (value) => [value, await decryptField(value)] as const));
+  const byValue = new Map<string, string>(decrypted);
+  return (value) => (typeof value === 'string' ? byValue.get(value) ?? null : null);
+}

@@ -7,8 +7,7 @@ import { connections } from '@pagespace/db/schema/social';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
-import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { userEmailMatch, decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -48,17 +47,6 @@ export async function GET(request: Request) {
       return NextResponse.json({ user: null });
     }
 
-    // Get current user's email to check for self-connection
-    const [currentUser] = await db
-      .select({ email: users.email })
-      .from(users)
-      .where(eq(users.id, user.id))
-      .limit(1);
-
-    // Decrypt the stored email before the self-connection comparison.
-    const currentUserEmail = currentUser ? await decryptField(currentUser.email) : null;
-    const isSelf = !!currentUserEmail && email === currentUserEmail;
-
     // Find user by exact email match (dual blind-index/raw-email lookup)
     const [targetRow] = await db
       .select({
@@ -74,8 +62,18 @@ export async function GET(request: Request) {
       .where(userEmailMatch(email))
       .limit(1);
 
-    // Decrypt PII at the edge so the search result shows plaintext name/email.
-    const targetUser = targetRow ? await decryptUserRow(targetRow) : undefined;
+    // Self-search detection by id: the dual lookup above already resolves the
+    // caller's own email — in any letter case, via the normalized blind index —
+    // to the caller's row, so no separate fetch-and-decrypt of the caller's
+    // stored email is needed. (The old plaintext string compare also missed
+    // case-variant self-searches, leaking the caller's own profile as
+    // actionable; the id compare closes that.)
+    const isSelf = targetRow?.id === user.id;
+
+    // Decrypt PII at the edge so the search result shows plaintext name/email
+    // (at most one user here; the batch helper is the shared decrypt path).
+    const decryptedUsersById = await decryptUsersByIdOnce([targetRow ?? null]);
+    const targetUser = targetRow ? decryptedUsersById.get(targetRow.id) : undefined;
 
     let existingStatus: ConnectionStatus | null = null;
     let target: ConnectionSearchProfile | null = null;
