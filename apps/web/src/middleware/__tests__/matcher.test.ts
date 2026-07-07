@@ -16,11 +16,14 @@ vi.mock('@/middleware/security-headers', () => ({
 vi.mock('@/lib/auth', () => ({
   validateOriginForMiddleware: vi.fn(),
   isOriginValidationBlocking: vi.fn(),
+  MCP_TOKEN_PREFIX: 'mcp_',
+  SESSION_TOKEN_PREFIX: 'ps_sess_',
+  OAUTH_ACCESS_TOKEN_PREFIX: 'ps_at_',
 }));
 vi.mock('@/lib/auth/cookie-config', () => ({ getSessionFromCookies: vi.fn() }));
 
 // Import the live config so this test fails (RED) until middleware.ts is updated
-const { config } = await import('../../../middleware');
+const { config } = await import('../../middleware');
 const PATTERN = config.matcher[0].source;
 
 describe('middleware matcher', () => {

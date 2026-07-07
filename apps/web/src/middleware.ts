@@ -12,15 +12,22 @@ import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import {
   validateOriginForMiddleware,
   isOriginValidationBlocking,
+  MCP_TOKEN_PREFIX,
+  SESSION_TOKEN_PREFIX,
+  OAUTH_ACCESS_TOKEN_PREFIX,
 } from '@/lib/auth';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { WELL_KNOWN_REWRITES } from '@/lib/well-known/rewrites';
 
 // Edge-safe middleware: only checks presence of auth tokens, not validity.
 // Full validation happens in route handlers via verifyAuth()/validateMCPToken().
+// Bearer prefixes are imported from the real auth layer, not hand-duplicated —
+// see the export site for why (a duplicated ps_at_-less copy previously drifted
+// out of sync here, undetected because middleware never ran in production).
 
-const MCP_BEARER_PREFIX = 'Bearer mcp_';
-const SESSION_BEARER_PREFIX = 'Bearer ps_sess_';
+const MCP_BEARER_PREFIX = `Bearer ${MCP_TOKEN_PREFIX}`;
+const SESSION_BEARER_PREFIX = `Bearer ${SESSION_TOKEN_PREFIX}`;
+const OAUTH_BEARER_PREFIX = `Bearer ${OAUTH_ACCESS_TOKEN_PREFIX}`;
 
 const IS_ONPREM = process.env.DEPLOYMENT_MODE === 'onprem';
 const IS_TENANT = process.env.DEPLOYMENT_MODE === 'tenant';
@@ -108,9 +115,13 @@ export async function middleware(req: NextRequest) {
     }
 
     // Bearer token format check (Edge-safe - no database access)
-    // Full validation happens in route handlers via validateMCPToken()/validateSessionToken()
+    // Full validation happens in route handlers via validateMCPToken()/validateSessionToken()/validateOAuthAccessToken()
     const authHeader = req.headers.get('authorization');
-    if (authHeader?.startsWith(MCP_BEARER_PREFIX) || authHeader?.startsWith(SESSION_BEARER_PREFIX)) {
+    if (
+      authHeader?.startsWith(MCP_BEARER_PREFIX) ||
+      authHeader?.startsWith(SESSION_BEARER_PREFIX) ||
+      authHeader?.startsWith(OAUTH_BEARER_PREFIX)
+    ) {
       // API routes get restrictive CSP (no nonce needed)
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
       return response;

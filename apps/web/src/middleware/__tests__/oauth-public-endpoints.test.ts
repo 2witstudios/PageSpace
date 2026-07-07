@@ -21,12 +21,15 @@ vi.mock('@/middleware/security-headers', () => ({
 vi.mock('@/lib/auth', () => ({
   validateOriginForMiddleware: vi.fn(() => ({ valid: true, skipped: true })),
   isOriginValidationBlocking: vi.fn(() => false),
+  MCP_TOKEN_PREFIX: 'mcp_',
+  SESSION_TOKEN_PREFIX: 'ps_sess_',
+  OAUTH_ACCESS_TOKEN_PREFIX: 'ps_at_',
 }));
 // No session cookie: exactly the CLI's position — it is a background process
 // with no browser session, calling these endpoints directly over HTTP.
 vi.mock('@/lib/auth/cookie-config', () => ({ getSessionFromCookies: vi.fn(() => null) }));
 
-const { middleware } = await import('../../../middleware');
+const { middleware } = await import('../../middleware');
 
 describe('middleware — OAuth grant endpoints are public by protocol design', () => {
   it.each([
