@@ -14,6 +14,7 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn(),
     insert: vi.fn(),
+    execute: vi.fn(),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -51,7 +52,20 @@ vi.mock('@/lib/utils/timestamp', () => ({
   toISOTimestamp: vi.fn((v: unknown) => (v instanceof Date ? v.toISOString() : v)),
 }));
 
-import { POST } from '../route';
+// Wrap (not replace) the real decryptUsersByIdOnce so call counts can be
+// asserted at the route's call boundary — proves the route batches decryption
+// once per request instead of once per row. A bare `vi.spyOn` doesn't work
+// here because `@pagespace/lib` resolves to its built CJS dist output, and the
+// per-row-dedup internals (decryptUserRow -> decryptField) are a *nested*
+// require inside that compiled module, invisible to any mock at this level.
+vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/auth/user-repository')>();
+  return { ...actual, decryptUsersByIdOnce: vi.fn(actual.decryptUsersByIdOnce) };
+});
+
+import { GET, POST } from '../route';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { encryptField } from '@pagespace/lib/encryption/field-crypto';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { usersShareDrive } from '@pagespace/lib/permissions/permissions';
@@ -171,5 +185,81 @@ describe('POST /api/messages/conversations DM eligibility', () => {
     const body = await response.json();
     expect(body.conversation.id).toBe('existing_conv');
     expect(db.insert).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/messages/conversations PII decryption dedup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  const conversationRow = (overrides: Record<string, unknown>) => ({
+    id: 'conv_1',
+    participant1Id: userId,
+    participant2Id: recipientId,
+    lastMessageAt: '2026-05-03T00:00:00.000Z',
+    lastMessagePreview: 'hi',
+    participant1LastRead: null,
+    participant2LastRead: null,
+    createdAt: '2026-05-01T00:00:00.000Z',
+    last_read: null,
+    other_user_id: recipientId,
+    other_user_name: 'Other',
+    other_user_email: 'other@example.com',
+    other_user_image: null,
+    other_user_username: 'other',
+    other_user_display_name: null,
+    other_user_avatar_url: null,
+    unread_count: '0',
+    ...overrides,
+  });
+
+  it('decrypts one counterpart repeated across conversation rows only once (dedup)', async () => {
+    const encryptedName = await encryptField('Real Name');
+    const encryptedEmail = await encryptField('real@example.com');
+    const rows = Array.from({ length: 4 }, (_, i) =>
+      conversationRow({ id: `conv_${i}`, other_user_name: encryptedName, other_user_email: encryptedEmail })
+    );
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ rows });
+
+    const response = await GET(new Request('http://localhost/api/messages/conversations'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.conversations).toHaveLength(4);
+    for (const conversation of body.conversations) {
+      expect(conversation.otherUser.name).toBe('Real Name');
+      expect(conversation.otherUser.email).toBe('real@example.com');
+    }
+    // Decryption is batched once per request (dedup happens inside), not
+    // once per of the 4 conversation rows.
+    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(decryptUsersByIdOnce).mock.calls[0][0]).toHaveLength(4);
+  });
+
+  it('passes through legacy plaintext name/email unchanged', async () => {
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      rows: [conversationRow({})],
+    });
+
+    const response = await GET(new Request('http://localhost/api/messages/conversations'));
+    const body = await response.json();
+
+    expect(body.conversations[0].otherUser.name).toBe('Other');
+    expect(body.conversations[0].otherUser.email).toBe('other@example.com');
+  });
+
+  it('does not crash when the counterpart user row is gone (deleted user)', async () => {
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      rows: [conversationRow({ other_user_id: null, other_user_name: null, other_user_email: null })],
+    });
+
+    const response = await GET(new Request('http://localhost/api/messages/conversations'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.conversations[0].otherUser.name).toBeNull();
+    expect(body.conversations[0].otherUser.email).toBeNull();
   });
 });

@@ -4,7 +4,7 @@ import { sql } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import type { ConversationDetailRow } from '@/types/messaging';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -61,6 +61,14 @@ export async function GET(
 
     const row = result.rows[0];
 
+    // Decrypt PII at the edge so the conversation header shows plaintext
+    // name/email. At most one distinct user here, but batching through the
+    // same request-scoped dedup as the list routes keeps one decrypt path.
+    const decryptedUsersById = await decryptUsersByIdOnce(
+      row.user_id ? [{ id: row.user_id, name: row.user_name, email: row.user_email }] : []
+    );
+    const decryptedUser = row.user_id ? decryptedUsersById.get(row.user_id) : undefined;
+
     const conversation = {
       id: row.id,
       participant1Id: row.participant1Id,
@@ -70,9 +78,10 @@ export async function GET(
       createdAt: row.createdAt,
       otherUser: {
         id: row.user_id,
-        // Decrypt PII at the edge so the conversation header shows plaintext name/email.
-        name: await decryptField(row.user_name),
-        email: await decryptField(row.user_email),
+        // Fail closed: on a missing join row emit null, never the raw
+        // (potentially ciphertext) column value.
+        name: decryptedUser?.name ?? null,
+        email: decryptedUser?.email ?? null,
         image: row.user_image,
         username: row.user_username,
         displayName: row.user_display_name,

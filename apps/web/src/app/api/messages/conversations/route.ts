@@ -6,7 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
-import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import { usersShareDrive } from '@pagespace/lib/permissions/permissions';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
@@ -96,7 +96,20 @@ export async function GET(request: Request) {
       ORDER BY cd."lastMessageAt" DESC NULLS LAST
     `);
 
-    const conversations = await Promise.all(conversationDetails.rows.map(async (row) => {
+    // Decrypt PII at the edge so the DM list shows plaintext name/email —
+    // batched once per request per unique counterpart, not once per row.
+    const decryptedOtherUsersById = await decryptUsersByIdOnce(
+      conversationDetails.rows.map((row) =>
+        row.other_user_id
+          ? { id: row.other_user_id, name: row.other_user_name, email: row.other_user_email }
+          : null
+      )
+    );
+
+    const conversations = conversationDetails.rows.map((row) => {
+      const decryptedOtherUser = row.other_user_id
+        ? decryptedOtherUsersById.get(row.other_user_id)
+        : undefined;
       return {
         id: row.id,
         participant1Id: row.participant1Id,
@@ -109,9 +122,10 @@ export async function GET(request: Request) {
         lastRead: toISOTimestamp(row.last_read),
         otherUser: {
           id: row.other_user_id,
-          // Decrypt PII at the edge so the DM list shows plaintext name/email.
-          name: await decryptField(row.other_user_name),
-          email: await decryptField(row.other_user_email),
+          // Fail closed: on a missing join row emit null, never the raw
+          // (potentially ciphertext) column value.
+          name: decryptedOtherUser?.name ?? null,
+          email: decryptedOtherUser?.email ?? null,
           image: row.other_user_image,
           username: row.other_user_username,
           displayName: row.other_user_display_name,
@@ -119,7 +133,7 @@ export async function GET(request: Request) {
         },
         unreadCount: parseInt(row.unread_count) || 0,
       };
-    }));
+    });
 
     // Determine if there are more conversations (for pagination)
     const hasMore = conversations.length === limit;

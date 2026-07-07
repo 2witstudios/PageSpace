@@ -5,7 +5,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
@@ -114,11 +114,27 @@ export async function GET(request: Request) {
         userId,
         channelResults.rows.map((row) => row.id)
       );
+      // Permission-filter BEFORE decrypting: a non-viewable channel's sender
+      // PII must never enter the decrypt batch (an undecryptable value there
+      // would otherwise fail the whole request, where it used to be skipped).
+      const visibleChannelRows = channelResults.rows.filter(
+        (row) => channelPermissions.get(row.id)?.canView
+      );
 
-      for (const row of channelResults.rows) {
-        const permissions = channelPermissions.get(row.id);
-        if (!permissions?.canView) continue;
+      // Paginate BEFORE decrypting so rows the page limit discards never
+      // enter the decrypt batch (the fetch reads limit + 1 rows).
+      const hasMore = visibleChannelRows.length > limit;
+      const pageRows = visibleChannelRows.slice(0, limit);
 
+      // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
+      // (plaintext) with users.name (ciphertext). The rows carry no user ids, so
+      // dedup is keyed by the stored value itself — the same user repeated across
+      // rows repeats the same stored ciphertext, which is exactly one decrypt.
+      const lookupSenderName = await decryptFieldValuesOnce(
+        pageRows.map((row) => row.sender_name)
+      );
+
+      for (const row of pageRows) {
         items.push({
           id: row.id,
           type: 'channel',
@@ -126,19 +142,14 @@ export async function GET(request: Request) {
           avatarUrl: null,
           lastMessageAt: toISOTimestamp(row.last_message_at),
           lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
-          // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
-          // (plaintext) with users.name (ciphertext); decryptField handles both.
-          lastMessageSender: await decryptField(row.sender_name),
+          lastMessageSender: lookupSenderName(row.sender_name),
           unreadCount: parseInt(row.unread_count) || 0,
           driveId: row.drive_id,
           driveName: row.drive_name,
         });
       }
 
-      // Determine pagination for drive-specific query
-      const hasMore = items.length > limit;
-      const paginatedItems = items.slice(0, limit);
-      const lastItem = paginatedItems[paginatedItems.length - 1];
+      const lastItem = items[items.length - 1];
       const nextCursor = lastItem
         ? lastItem.lastMessageAt || `id:${lastItem.id}`
         : null;
@@ -146,7 +157,7 @@ export async function GET(request: Request) {
       auditRequest(request, { eventType: 'data.read', userId, resourceType: 'inbox', resourceId: 'self' });
 
       return NextResponse.json({
-        items: paginatedItems,
+        items,
         pagination: {
           hasMore,
           nextCursor,
@@ -161,6 +172,7 @@ export async function GET(request: Request) {
       const cursorTimestamp = !isIdCursor && cursor ? cursor : null;
 
       // Fetch DM conversations with cursor filtering (skipped when filter excludes DMs)
+      let dmRows: DMRow[] = [];
       if (type !== 'channel') {
         const dmResults = await db.execute<DMRow>(sql`
           WITH dm_data AS (
@@ -207,24 +219,11 @@ export async function GET(request: Request) {
           ORDER BY dd."lastMessageAt" DESC NULLS LAST
           LIMIT ${fetchLimit}
         `);
-
-        for (const row of dmResults.rows) {
-          items.push({
-            id: row.id,
-            type: 'dm',
-            // Decrypt PII at the edge (GDPR #965): profile displayName stays
-            // plaintext; users.name fallback is ciphertext (decryptField handles both).
-            name: row.other_user_display_name || (await decryptField(row.other_user_name)),
-            avatarUrl: row.other_user_image || row.other_user_avatar_url,
-            lastMessageAt: toISOTimestamp(row.last_message_at),
-            lastMessagePreview: row.last_message,
-            lastMessageSender: null,
-            unreadCount: parseInt(row.unread_count) || 0,
-          });
-        }
+        dmRows = dmResults.rows;
       }
 
       // Fetch channels from all drives user is member of or owns (skipped when filter excludes channels)
+      let visibleChannelRows: ChannelRow[] = [];
       if (type !== 'dm') {
         const channelResults = await db.execute<ChannelRow>(sql`
           WITH user_channels AS (
@@ -283,26 +282,85 @@ export async function GET(request: Request) {
           ORDER BY clm.last_message_at DESC NULLS LAST
           LIMIT ${fetchLimit}
         `);
-
         const channelPermissions = await getBatchPagePermissions(
           userId,
           channelResults.rows.map((row) => row.id)
         );
+        // Permission-filter BEFORE decrypting: a non-viewable channel's sender
+        // PII must never enter the decrypt batch (an undecryptable value there
+        // would otherwise fail the whole request, where it used to be skipped).
+        visibleChannelRows = channelResults.rows.filter(
+          (row) => channelPermissions.get(row.id)?.canView
+        );
+      }
 
-        for (const row of channelResults.rows) {
-          const permissions = channelPermissions.get(row.id);
-          if (!permissions?.canView) continue;
+      // Combine both feeds and sort/paginate BEFORE decrypting, so rows the
+      // page limit discards never enter the decrypt batch. DMs are appended
+      // first so equal/null-timestamp ordering (stable sort) matches the
+      // previous item insertion order byte for byte.
+      type PendingInboxRow =
+        | { kind: 'dm'; row: DMRow; lastMessageAt: string | null }
+        | { kind: 'channel'; row: ChannelRow; lastMessageAt: string | null };
+      const pendingRows: PendingInboxRow[] = [
+        ...dmRows.map((row) => ({
+          kind: 'dm' as const,
+          row,
+          lastMessageAt: toISOTimestamp(row.last_message_at),
+        })),
+        ...visibleChannelRows.map((row) => ({
+          kind: 'channel' as const,
+          row,
+          lastMessageAt: toISOTimestamp(row.last_message_at),
+        })),
+      ];
 
+      // Sort combined results by lastMessageAt
+      pendingRows.sort((a, b) => {
+        if (!a.lastMessageAt && !b.lastMessageAt) return 0;
+        if (!a.lastMessageAt) return 1;
+        if (!b.lastMessageAt) return -1;
+        return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
+      });
+
+      const hasMore = pendingRows.length > limit;
+      const pageRows = pendingRows.slice(0, limit);
+
+      // Decrypt PII at the edge (GDPR #965): one batched decrypt for the rows
+      // that survive pagination. Profile displayName and AI senderName stay
+      // plaintext; users.name is ciphertext (the value-keyed lookup handles
+      // both). DM names whose profile displayName already wins are excluded,
+      // matching the previous short-circuit.
+      const lookupName = await decryptFieldValuesOnce(
+        pageRows.map((pending) =>
+          pending.kind === 'dm'
+            ? (pending.row.other_user_display_name ? null : pending.row.other_user_name)
+            : pending.row.sender_name
+        )
+      );
+
+      for (const pending of pageRows) {
+        if (pending.kind === 'dm') {
+          const { row } = pending;
+          items.push({
+            id: row.id,
+            type: 'dm',
+            name: (row.other_user_display_name || lookupName(row.other_user_name)) ?? '',
+            avatarUrl: row.other_user_image || row.other_user_avatar_url,
+            lastMessageAt: pending.lastMessageAt,
+            lastMessagePreview: row.last_message,
+            lastMessageSender: null,
+            unreadCount: parseInt(row.unread_count) || 0,
+          });
+        } else {
+          const { row } = pending;
           items.push({
             id: row.id,
             type: 'channel',
             name: row.name,
             avatarUrl: null,
-            lastMessageAt: toISOTimestamp(row.last_message_at),
+            lastMessageAt: pending.lastMessageAt,
             lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
-            // Decrypt PII at the edge (GDPR #965): sender_name COALESCEs an AI senderName
-            // (plaintext) with users.name (ciphertext); decryptField handles both.
-            lastMessageSender: await decryptField(row.sender_name),
+            lastMessageSender: lookupName(row.sender_name),
             unreadCount: parseInt(row.unread_count) || 0,
             driveId: row.drive_id,
             driveName: row.drive_name,
@@ -310,34 +368,21 @@ export async function GET(request: Request) {
         }
       }
 
-      // Sort combined results by lastMessageAt
-      items.sort((a, b) => {
-        if (!a.lastMessageAt && !b.lastMessageAt) return 0;
-        if (!a.lastMessageAt) return 1;
-        if (!b.lastMessageAt) return -1;
-        return new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
-      });
+      const lastItem = items[items.length - 1];
+      const nextCursor = lastItem
+        ? lastItem.lastMessageAt || `id:${lastItem.id}`
+        : null;
+
+      auditRequest(request, { eventType: 'data.read', userId, resourceType: 'inbox', resourceId: 'self' });
+
+      return NextResponse.json({
+        items,
+        pagination: {
+          hasMore,
+          nextCursor,
+        },
+      } satisfies InboxResponse);
     }
-
-    // Apply limit - cursor filtering is already done in SQL queries
-    const paginatedItems = items.slice(0, limit);
-
-    // Determine pagination info
-    const hasMore = items.length > limit;
-    const lastItem = paginatedItems[paginatedItems.length - 1];
-    const nextCursor = lastItem
-      ? lastItem.lastMessageAt || `id:${lastItem.id}`
-      : null;
-
-    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'inbox', resourceId: 'self' });
-
-    return NextResponse.json({
-      items: paginatedItems,
-      pagination: {
-        hasMore,
-        nextCursor,
-      },
-    } satisfies InboxResponse);
   } catch (error) {
     loggers.api.error('Error fetching inbox:', error as Error);
     return NextResponse.json(

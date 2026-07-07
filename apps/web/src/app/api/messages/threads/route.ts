@@ -4,7 +4,7 @@ import { sql } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import type { ConversationRow, ChannelThreadRow } from '@/types/messaging';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -104,7 +104,20 @@ async function fetchDMConversations(userId: string) {
     ORDER BY cd."lastMessageAt" DESC NULLS LAST
   `);
 
-  return Promise.all(conversationDetails.rows.map(async (row) => {
+  // Decrypt PII at the edge so the DM list shows plaintext name/email —
+  // batched once per request per unique counterpart, not once per row.
+  const decryptedOtherUsersById = await decryptUsersByIdOnce(
+    conversationDetails.rows.map((row) =>
+      row.other_user_id
+        ? { id: row.other_user_id, name: row.other_user_name, email: row.other_user_email }
+        : null
+    )
+  );
+
+  return conversationDetails.rows.map((row) => {
+    const decryptedOtherUser = row.other_user_id
+      ? decryptedOtherUsersById.get(row.other_user_id)
+      : undefined;
     return {
       id: row.id,
       participant1Id: row.participant1Id,
@@ -118,9 +131,10 @@ async function fetchDMConversations(userId: string) {
       lastRead: row.last_read ? new Date(row.last_read).toISOString() : null,
       otherUser: {
         id: row.other_user_id,
-        // Decrypt PII at the edge so the DM list shows plaintext name/email.
-        name: await decryptField(row.other_user_name),
-        email: await decryptField(row.other_user_email),
+        // Fail closed: on a missing join row emit null, never the raw
+        // (potentially ciphertext) column value.
+        name: decryptedOtherUser?.name ?? null,
+        email: decryptedOtherUser?.email ?? null,
         image: row.other_user_image,
         username: row.other_user_username,
         displayName: row.other_user_display_name,
@@ -128,7 +142,7 @@ async function fetchDMConversations(userId: string) {
       },
       unreadCount: parseInt(row.unread_count) || 0,
     };
-  }));
+  });
 }
 
 // Fetch channels user has access to with their last message
