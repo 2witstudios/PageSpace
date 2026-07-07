@@ -471,7 +471,7 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
   const [manualMode, setManualMode] = useState(false);
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
 
-  const { repos, connected, isLoading: reposLoading } = useGithubRepos(open && !manualMode);
+  const { repos, connected, isLoading: reposLoading, refetch: refetchRepos } = useGithubRepos(open && !manualMode);
   const { providers } = useProviders();
   const githubProvider = providers.find((p) => p.slug === 'github') ?? null;
 
@@ -552,7 +552,10 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
         provider={githubProvider}
         open={connectDialogOpen}
         onOpenChange={setConnectDialogOpen}
-        onConnected={() => setConnectDialogOpen(false)}
+        onConnected={() => {
+          setConnectDialogOpen(false);
+          refetchRepos();
+        }}
       />
     </Dialog>
   );

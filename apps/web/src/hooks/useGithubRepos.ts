@@ -30,7 +30,7 @@ const fetcher = (url: string) =>
  * is open (pass `enabled: false` otherwise).
  */
 export function useGithubRepos(enabled: boolean) {
-  const { data, error, isLoading } = useSWR(
+  const { data, error, isLoading, mutate } = useSWR(
     enabled ? '/api/integrations/github/repos' : null,
     fetcher,
     { revalidateOnFocus: false }
@@ -44,5 +44,9 @@ export function useGithubRepos(enabled: boolean) {
     connected: data?.connected ?? null,
     isLoading,
     error: error as Error | undefined,
+    // Callers (e.g. the "Connect GitHub" success handler) can force a refetch
+    // — the SWR key doesn't change across a connect/disconnect cycle, so
+    // without this the cached `connected: false` would never refresh.
+    refetch: mutate,
   };
 }
