@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, resolveAgentTerminalCommand } from '../agent-terminal-handler';
+import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveAgentTerminalCommand } from '../agent-terminal-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { AgentTerminalCheckAuthFn, OpenShellFn, SocketLike } from '../agent-terminal-handler';
 import type { PtyShell } from '../sprites-shell';
@@ -394,6 +394,27 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
 
+    it('given re-auth resolves AFTER the session was already torn down, should not double-teardown (no second kill/releaseSlot)', async () => {
+      const auth = makeAuthSuccess();
+      let resolveReauth: (v: unknown) => void = () => {};
+      checkAuth
+        .mockResolvedValueOnce(auth) // connect
+        .mockImplementationOnce(() => new Promise((res) => { resolveReauth = res; })); // re-auth tick hangs
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing: makeBilling() });
+      await onConnect(validPayload);
+
+      await vi.advanceTimersByTimeAsync(60_000); // re-auth fires and is left pending
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+      onExitArg(0); // session ends naturally while the re-auth check is still in flight
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
+
+      resolveReauth({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(shell.kill).not.toHaveBeenCalled(); // natural exit — the stale re-auth must not kill
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1); // slot not double-released
+    });
+
     it('given re-auth fires and checkAuth now fails, should kill shell, remove session, and emit agent-terminal:closed with exitCode -2', async () => {
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
@@ -659,7 +680,7 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
     });
 
-    it('on idle-timeout reap after disconnect, settles the hold to the real active-window seconds', async () => {
+    it('on idle-timeout reap after disconnect, settles the FULL active window across heartbeat slices (revenue conservation)', async () => {
       const billing = makeBilling();
       const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
       await onConnect(validPayload);
@@ -667,13 +688,124 @@ describe('buildAgentTerminalHandlers', () => {
       onDisconnect();
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
 
-      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
-      const call = billing.trackUsage.mock.calls[0][0];
-      expect(call.payerId).toBe('owner-1');
-      expect(call.holdId).toBe('hold-1');
-      expect(call.pageId).toBe('t1');
-      expect(call.activeSeconds).toBeCloseTo(DETACHED_IDLE_MS / 1000, 0);
+      // The 30-min detached window spans heartbeat settles plus the reap's tail —
+      // however it is sliced, the settled seconds must sum to the whole window and
+      // every slice must carry the payer/page attribution.
+      const calls = billing.trackUsage.mock.calls.map((c) => c[0]);
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo(DETACHED_IDLE_MS / 1000, 0);
+      for (const call of calls) {
+        expect(call.payerId).toBe('owner-1');
+        expect(call.pageId).toBe('t1');
+      }
+      expect(calls[0].holdId).toBe('hold-1');
       expect(billing.releaseHold).not.toHaveBeenCalled();
+    });
+
+    describe('heartbeat settle (bounds deploy-time loss to one interval)', () => {
+      it('settles the accrued window at each heartbeat and re-holds, so session end only settles the tail', async () => {
+        let holdN = 0;
+        const billing = makeBilling({
+          gate: vi.fn().mockImplementation(async () => ({ allowed: true, holdId: `hold-${++holdN}` })),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+        const first = billing.trackUsage.mock.calls[0][0];
+        expect(first).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1', pageId: 't1' });
+        expect(first.activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
+        // The session survives the heartbeat with a fresh hold in place.
+        expect(shell.kill).not.toHaveBeenCalled();
+        expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ holdId: 'hold-2' });
+
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        await vi.advanceTimersByTimeAsync(30_000);
+        onExitArg(0);
+
+        expect(billing.trackUsage).toHaveBeenCalledTimes(2);
+        const tail = billing.trackUsage.mock.calls[1][0];
+        expect(tail.holdId).toBe('hold-2');
+        expect(tail.activeSeconds).toBeCloseTo(30, 0);
+        expect(billing.releaseHold).not.toHaveBeenCalled();
+      });
+
+      it('given the gate denies at a heartbeat, settles the accrued window then tears the session down like a failed re-auth', async () => {
+        const billing = makeBilling({
+          gate: vi.fn()
+            .mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' })
+            .mockResolvedValue({ allowed: false, reason: 'insufficient_balance' }),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        // The accrued window settles against the original hold; the uniform
+        // teardown then settles the (near-zero) tail — total billed stays the window.
+        const calls = billing.trackUsage.mock.calls.map((c) => c[0]);
+        expect(calls[0].holdId).toBe('hold-1');
+        expect(calls[0].activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
+        expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
+        expect(shell.kill).toHaveBeenCalled();
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+        expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', expect.objectContaining({ exitCode: -2 }));
+      });
+
+      it('given the settle fails at a heartbeat, restores the window and hold so the next heartbeat retries the FULL window (no slice lost, no hold stacked)', async () => {
+        const billing = makeBilling({
+          trackUsage: vi.fn()
+            .mockRejectedValueOnce(new Error('db blip'))
+            .mockResolvedValue(undefined),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // settle fails
+        expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+        expect(billing.gate).toHaveBeenCalledTimes(1); // connect only — no fresh hold stacked on the failure
+        expect(shell.kill).not.toHaveBeenCalled(); // fail-open: session stays alive
+        expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ holdId: 'hold-1' }); // hold restored
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // next heartbeat retries the whole window
+        expect(billing.trackUsage).toHaveBeenCalledTimes(2);
+        const retry = billing.trackUsage.mock.calls[1][0];
+        expect(retry.holdId).toBe('hold-1');
+        expect(retry.activeSeconds).toBeCloseTo((2 * SETTLE_HEARTBEAT_MS) / 1000, 0);
+      });
+
+      it('given a gate infra error at a heartbeat, keeps the session alive (fail-open) rather than killing a live PTY', async () => {
+        const billing = makeBilling({
+          gate: vi.fn()
+            .mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' })
+            .mockRejectedValue(new Error('db unreachable')),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+        expect(shell.kill).not.toHaveBeenCalled();
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      });
+
+      it('records usage at session end even when the gate placed no hold (settle keys on payer, hold optional)', async () => {
+        const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: true }) });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        await vi.advanceTimersByTimeAsync(5_000);
+        onExitArg(0);
+
+        expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+        const call = billing.trackUsage.mock.calls[0][0];
+        expect(call.holdId).toBeUndefined();
+        expect(call.activeSeconds).toBeCloseTo(5, 0);
+      });
     });
 
     it('given the shell exits naturally WHILE disconnected (idle reap still pending), should cancel the pending reap so it never double-settles', async () => {

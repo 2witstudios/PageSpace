@@ -102,6 +102,15 @@ function readConnectionId(payload: unknown): string | undefined {
 
 export const MAX_INPUT_BYTES = 4096;
 
+/**
+ * How often a live metered session settles its accrued active window mid-flight.
+ * Sessions live in an in-memory map, so a realtime restart (every deploy) used to
+ * silently lose the WHOLE session's billing; heartbeat settling bounds that loss
+ * to one interval. Kept under the credit hold's TTL (15 min) so the window's
+ * reservation never expires while its session is still accruing.
+ */
+export const SETTLE_HEARTBEAT_MS = 10 * 60 * 1000;
+
 /** Discover the NEWLY created session's id by diffing the Sprite's session list against a snapshot taken before it was launched. Best-effort — an ambiguous or failed lookup just means the next reconnect falls back to a fresh session, exactly like a vanished session already does. */
 async function discoverNewSessionId(sprite: SpriteInstanceLike, before: { id: string }[]): Promise<string | undefined> {
   try {
@@ -137,12 +146,13 @@ export function resolveAgentTerminalCommand({
 }
 
 /**
- * Ends a metered session: settles its hold to the real active-window cost
- * (wall-clock from `connectedAt` to now) BEFORE removing it from the map, so a
- * near-simultaneous reconnect can never observe a stale, already-billed
- * session. Best-effort and fire-and-forget — a billing failure must never
- * block session cleanup. No-op billing fields (unset `billing`, or no
- * `holdId` because the session was never gated) mean nothing to settle.
+ * Ends a metered session: settles the tail of its active window (wall-clock from
+ * `connectedAt` — the connect time, or the last heartbeat rebase — to now)
+ * BEFORE removing it from the map, so a near-simultaneous reconnect can never
+ * observe a stale, already-billed session. Settle keys on the payer + window
+ * start; `holdId` is optional (mirrors tool-runners — a gate that placed no
+ * hold still had a real, billable window). Best-effort and fire-and-forget — a
+ * billing failure must never block session cleanup.
  */
 function endAgentTerminalSession(
   billing: SandboxBillingDeps | undefined,
@@ -151,7 +161,22 @@ function endAgentTerminalSession(
   sessionKey: string,
 ): void {
   sessionMap.deleteByKey(sessionKey);
-  if (billing && session.holdId && session.payerId && session.connectedAt !== undefined) {
+  // This is the one funnel every teardown path goes through, so it owns clearing
+  // ALL of the session's timers — a caller that forgets one can't leak a firing
+  // interval against a dead session.
+  if (session.reAuthInterval !== undefined) {
+    clearInterval(session.reAuthInterval);
+    session.reAuthInterval = undefined;
+  }
+  if (session.settleInterval !== undefined) {
+    clearInterval(session.settleInterval);
+    session.settleInterval = undefined;
+  }
+  if (session.idleTimer !== undefined) {
+    clearTimeout(session.idleTimer);
+    session.idleTimer = undefined;
+  }
+  if (billing && session.payerId && session.connectedAt !== undefined) {
     const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
     void billing
       .trackUsage({ payerId: session.payerId, holdId: session.holdId, activeSeconds, pageId: session.pageId })
@@ -161,6 +186,120 @@ function endAgentTerminalSession(
         });
       });
   }
+}
+
+/**
+ * Forced teardown of a live session (failed re-auth, payer insolvent at a
+ * heartbeat): release the concurrency slot, kill the PTY, settle + remove the
+ * session (endAgentTerminalSession clears all timers), and notify the viewer.
+ */
+function teardownAgentTerminalSession(
+  billing: SandboxBillingDeps | undefined,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  sessionKey: string,
+  exitCode: number,
+): void {
+  session.releaseSlot();
+  session.command.kill();
+  endAgentTerminalSession(billing, sessionMap, session, sessionKey);
+  session.closedFn(exitCode);
+}
+
+/**
+ * Heartbeat settle for a live metered session: settles the window accrued since
+ * `connectedAt` against the current hold, rebases the window start to now, and
+ * places a fresh hold for the next interval. The rebase happens SYNCHRONOUSLY
+ * before any await so a teardown racing this settle only ever bills the
+ * (near-zero) tail, never the same window twice. If the settle FAILS, the
+ * rebase is rolled back and the hold kept, so the next heartbeat (or the
+ * end-of-session settle) retries the whole window instead of silently losing
+ * it — and no fresh hold is stacked on top of the still-live one. No fresh
+ * hold is placed if the session ended while the settle was in flight — there
+ * would be nobody left to settle or release it.
+ *
+ * Returns false ONLY on an explicit gate denial after a successful settle
+ * (the payer genuinely can't cover the next window) — the caller tears the
+ * session down. Infra errors keep the session alive (fail-open): killing a
+ * live PTY over a transient billing outage is worse than a delayed settle.
+ */
+async function settleAccruedWindow(
+  billing: SandboxBillingDeps,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  sessionKey: string,
+): Promise<boolean> {
+  if (!session.payerId || session.connectedAt === undefined) return true;
+  const payerId = session.payerId;
+  const holdId = session.holdId;
+  const windowStart = session.connectedAt;
+  session.connectedAt = Date.now();
+  session.holdId = undefined;
+  const activeSeconds = Math.max(0, (session.connectedAt - windowStart) / 1000);
+  try {
+    await billing.trackUsage({ payerId, holdId, activeSeconds, pageId: session.pageId });
+  } catch (error) {
+    loggers.realtime.error('Agent terminal heartbeat settle failed', error instanceof Error ? error : new Error(String(error)), {
+      sessionKey,
+    });
+    // Roll the rebase back (if no teardown settled the tail meanwhile) so the
+    // unbilled window is retried later against its original, still-live hold.
+    if (sessionMap.getByKey(sessionKey) === session) {
+      session.connectedAt = windowStart;
+      session.holdId = holdId;
+    }
+    return true;
+  }
+  if (sessionMap.getByKey(sessionKey) !== session) return true;
+  try {
+    const gate = await billing.gate({ payerId });
+    if (!gate.allowed) return false;
+    // Re-check liveness: the session may have ended while the gate ran, and a
+    // hold assigned to a dead session would leak until its TTL expiry.
+    if (sessionMap.getByKey(sessionKey) !== session) {
+      if (gate.holdId) void billing.releaseHold(gate.holdId).catch(() => {});
+      return true;
+    }
+    session.holdId = gate.holdId;
+  } catch (error) {
+    loggers.realtime.error('Agent terminal heartbeat re-hold failed', error instanceof Error ? error : new Error(String(error)), {
+      sessionKey,
+    });
+  }
+  return true;
+}
+
+/**
+ * Arms the heartbeat for a metered session (see SETTLE_HEARTBEAT_MS). A
+ * module-level factory rather than a closure inside onConnect so the
+ * long-lived interval callback captures only what it needs — not the whole
+ * connect scope (auth result, Sprite handle, session-list snapshots).
+ */
+function startSettleHeartbeat(
+  billing: SandboxBillingDeps,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  sessionKey: string,
+): ReturnType<typeof setInterval> {
+  let settling = false;
+  const interval = setInterval(async () => {
+    if (sessionMap.getByKey(sessionKey) !== session) { clearInterval(interval); return; }
+    if (settling) return;
+    settling = true;
+    try {
+      const solvent = await settleAccruedWindow(billing, sessionMap, session, sessionKey);
+      if (!solvent && sessionMap.getByKey(sessionKey) === session) {
+        loggers.realtime.info('Agent terminal session ended (payer out of credits at heartbeat)', {
+          sessionKey,
+          sandboxId: session.sandboxId,
+        });
+        teardownAgentTerminalSession(billing, sessionMap, session, sessionKey, -2);
+      }
+    } finally {
+      settling = false;
+    }
+  }, SETTLE_HEARTBEAT_MS);
+  return interval;
 }
 
 export function buildAgentTerminalHandlers({
@@ -190,9 +329,9 @@ export function buildAgentTerminalHandlers({
     session.closedFn = () => {};
     sessionMap.detach(connectionId);
     session.idleTimer = setTimeout(() => {
-      if (session.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
       session.releaseSlot();
       session.command.kill();
+      // Clears all of the session's timers (re-auth, settle heartbeat, idle).
       endAgentTerminalSession(billing, sessionMap, session, sessionKey);
       loggers.realtime.info('Agent terminal session reaped (idle)', { sessionKey, sandboxId: session.sandboxId });
     }, DETACHED_IDLE_MS);
@@ -301,11 +440,10 @@ export function buildAgentTerminalHandlers({
             session.outputFn(data);
           },
           onExit: (exitCode) => {
-            if (session.reAuthInterval !== undefined) clearInterval(session.reAuthInterval);
-            if (session.idleTimer !== undefined) clearTimeout(session.idleTimer);
             session.releaseSlot();
             loggers.realtime.info('Agent terminal session closed', { exitCode, sandboxId, sessionKey });
             session.closedFn(exitCode);
+            // Clears all of the session's timers (re-auth, settle heartbeat, idle).
             endAgentTerminalSession(billing, sessionMap, session, sessionKey);
           },
         });
@@ -332,19 +470,30 @@ export function buildAgentTerminalHandlers({
         });
       }
 
+      // Heartbeat settle (see SETTLE_HEARTBEAT_MS): bill the accrued window and
+      // re-hold on an interval so a realtime restart loses at most one interval
+      // of runtime, not the whole session. A gate DENIAL (payer out of credits)
+      // tears the session down exactly like a failed re-auth below.
+      if (billing) {
+        session.settleInterval = startSettleHeartbeat(billing, sessionMap, session, sessionKey);
+      }
+
       // Periodically re-check authorization while the session is alive.
       // Routes closed notification through closedFn so it reaches the current socket.
       const reAuthInterval = setInterval(async () => {
         const liveSession = sessionMap.getByKey(sessionKey);
         if (!liveSession) { clearInterval(reAuthInterval); return; }
         const result = await checkAuth({ userId, terminalId, projectName, branchName, name });
-        if (!result.ok) {
+        // Re-check liveness after the await: another actor (heartbeat insolvency,
+        // PTY exit, idle reap) may have torn the session down while checkAuth ran —
+        // acting on the stale reference would double releaseSlot/kill/closedFn.
+        if (sessionMap.getByKey(sessionKey) !== liveSession) {
+          if (result.ok) result.releaseSlot();
           clearInterval(reAuthInterval);
-          if (liveSession.idleTimer !== undefined) clearTimeout(liveSession.idleTimer);
-          liveSession.releaseSlot();
-          liveSession.command.kill();
-          endAgentTerminalSession(billing, sessionMap, liveSession, sessionKey);
-          liveSession.closedFn(-2);
+          return;
+        }
+        if (!result.ok) {
+          teardownAgentTerminalSession(billing, sessionMap, liveSession, sessionKey, -2);
         } else {
           result.releaseSlot();
         }

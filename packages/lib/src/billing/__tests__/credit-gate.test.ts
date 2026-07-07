@@ -125,11 +125,20 @@ function mockLazyInitTransaction(
 function mockResetTransaction(
   sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {},
   lockedRow: Record<string, unknown> | null = null,
+  // Rows the IN-TRANSACTION subscription re-check resolves to (paid tiers only;
+  // `.limit()` chain). Non-empty models a subscription that appeared between the
+  // unlocked pre-check and the grant — the reset must abort.
+  txSubscriptionRows: Record<string, unknown>[] = [],
 ) {
   mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
     const tx = {
       select: vi.fn(() => ({
-        from: () => ({ where: () => ({ for: () => Promise.resolve(lockedRow ? [lockedRow] : []) }) }),
+        from: () => ({
+          where: () => ({
+            for: () => Promise.resolve(lockedRow ? [lockedRow] : []),
+            limit: () => Promise.resolve(txSubscriptionRows),
+          }),
+        }),
       })),
       update: vi.fn(() => {
         sink.updateCalled = true;
@@ -441,13 +450,94 @@ describe('canConsumeAI', () => {
     expect(r.allowed).toBe(true);
   });
 
-  it('does NOT gate-reset a paid user with an expired window — invoice.paid is authoritative', async () => {
-    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+  it('does NOT gate-reset a paid user with an expired window while a renewal-capable subscription exists — invoice.paid is authoritative', async () => {
+    mockDb.select
+      // 1st: balance pre-read (expired window)
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      // 2nd: subscription lookup — a live (renewal-capable) subscription row
+      .mockReturnValueOnce(selectReturning([{ id: 'sub_1' }]));
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'pro');
     expect(mockDb.update).not.toHaveBeenCalled();
     expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('gate-resets a paid user with an expired window and NO renewal-capable subscription (comped account — no invoice will ever roll it)', async () => {
+    mockDb.select
+      // 1st: balance pre-read (expired window)
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      // 2nd: subscription lookup — no live subscription rows
+      .mockReturnValueOnce(selectReturning([]))
+      // 3rd: balance re-read after the reset
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST });
+    mockTransaction({ monthlyRemainingCents: 10000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'business');
+
+    // Business tier allowance (10000¢) granted, window rolled.
+    expect(sink.set).toMatchObject({ monthlyRemainingCents: 10000, monthlyAllowanceCents: 10000 });
+    expect(sink.ledgerValues).toMatchObject({ entryType: 'monthly_grant', amountCents: 10000 });
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toBe('ok');
+  });
+
+  it('treats an "unpaid" subscription as renewal-capable — its open invoices are still collectible, so no gate roll', async () => {
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ id: 'sub_unpaid' }])); // status filter matched an 'unpaid' row
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'pro');
+    expect(mockDb.update).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('does NOT gate-reset a tier with no defined allowance (legacy "normal") — the roll would rewrite the account to free-tier values', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'normal' as unknown as Parameters<typeof canConsumeAI>[1]);
+    // Neither the reset transaction nor the subscription lookup ran — one select (pre-read) only.
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('aborts the paid gate-reset when a renewal-capable subscription appears between the pre-check and the grant (in-tx re-check)', async () => {
+    mockDb.select
+      // 1st: balance pre-read (expired window)
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      // 2nd: unlocked subscription lookup — nothing yet (checkout still in flight)
+      .mockReturnValueOnce(selectReturning([]))
+      // 3rd: balance re-read after the (aborted) reset — unchanged
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    const sink: { updateCalled?: boolean; ledgerValues?: Record<string, unknown> } = {};
+    // In-tx re-check now sees the freshly committed subscription row → abort.
+    mockResetTransaction(sink, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST }, [{ id: 'sub_new' }]);
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'business');
+
+    expect(sink.updateCalled).toBeUndefined(); // no grant written
+    expect(sink.ledgerValues).toBeUndefined();
+    expect(r).toMatchObject({ allowed: false, reason: 'out_of_credits' }); // invoice.paid owns the refill now
+  });
+
+  it('does NOT look up subscriptions for a free user with an expired window (free reset path unchanged)', async () => {
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockResetTransaction({}, { monthlyRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: PAST });
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free');
+
+    // Exactly two unlocked selects: the pre-read and the post-reset re-read — no
+    // subscription lookup in between.
+    expect(mockDb.select).toHaveBeenCalledTimes(2);
+    expect(r.allowed).toBe(true);
   });
 
   it('counts a paid user\'s carried monthly balance as spendable even after the window expires (rollover)', async () => {

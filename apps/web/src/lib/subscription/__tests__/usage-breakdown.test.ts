@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { aggregateUsageBreakdown, type UsageLedgerRow } from '../usage-breakdown';
+import {
+  aggregateUsageBreakdown,
+  resolveUsageWindow,
+  USAGE_FALLBACK_LOOKBACK_MS,
+  type UsageLedgerRow,
+} from '../usage-breakdown';
 
 const PERIOD = { periodStart: '2026-06-01T00:00:00.000Z', periodEnd: '2026-07-01T00:00:00.000Z' };
 
@@ -13,6 +18,42 @@ const row = (over: Partial<UsageLedgerRow>): UsageLedgerRow => ({
   pageTitle: null,
   durationMs: null,
   ...over,
+});
+
+describe('resolveUsageWindow', () => {
+  const NOW = new Date('2026-07-07T12:00:00.000Z');
+
+  it('given a current period (periodEnd in the future), should use the stored window unchanged', () => {
+    const periodStart = new Date('2026-06-13T00:00:00.000Z');
+    const periodEnd = new Date('2026-07-13T00:00:00.000Z');
+    expect(resolveUsageWindow({ periodStart, periodEnd, now: NOW })).toEqual({ periodStart, periodEnd });
+  });
+
+  it('given a stale period (periodEnd in the past), should fall back to the trailing lookback ending now', () => {
+    const r = resolveUsageWindow({
+      periodStart: new Date('2026-05-13T00:00:00.000Z'),
+      periodEnd: new Date('2026-06-13T00:00:00.000Z'),
+      now: NOW,
+    });
+    expect(r.periodEnd).toBeNull();
+    expect(r.periodStart.getTime()).toBe(NOW.getTime() - USAGE_FALLBACK_LOOKBACK_MS);
+  });
+
+  it('given a balance row with a start but no periodEnd, should keep the open-ended stored window', () => {
+    const periodStart = new Date('2026-06-13T00:00:00.000Z');
+    expect(resolveUsageWindow({ periodStart, periodEnd: null, now: NOW })).toEqual({ periodStart, periodEnd: null });
+  });
+
+  it('given no balance row at all, should fall back to the trailing lookback ending now', () => {
+    const r = resolveUsageWindow({ periodStart: null, periodEnd: null, now: NOW });
+    expect(r.periodEnd).toBeNull();
+    expect(r.periodStart.getTime()).toBe(NOW.getTime() - USAGE_FALLBACK_LOOKBACK_MS);
+  });
+
+  it('given a periodEnd exactly at now, should treat the window as still current (boundary is inclusive)', () => {
+    const periodStart = new Date('2026-06-07T12:00:00.000Z');
+    expect(resolveUsageWindow({ periodStart, periodEnd: NOW, now: NOW })).toEqual({ periodStart, periodEnd: NOW });
+  });
 });
 
 describe('aggregateUsageBreakdown', () => {

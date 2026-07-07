@@ -10,10 +10,7 @@ import { and, eq, gte, lte } from '@pagespace/db/operators';
 import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { pages } from '@pagespace/db/schema/core';
-import { aggregateUsageBreakdown, type UsageBreakdown } from './usage-breakdown';
-
-/** Fallback lookback when the user has no billing-period window yet. */
-const DEFAULT_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+import { aggregateUsageBreakdown, resolveUsageWindow, type UsageBreakdown } from './usage-breakdown';
 
 /**
  * Spend-by-feature, spend-by-model, and (for source:'terminal') spend-by-machine for
@@ -38,8 +35,13 @@ export async function getUserUsageBreakdown(userId: string): Promise<UsageBreakd
     .where(eq(creditBalances.userId, userId))
     .limit(1);
 
-  const periodStart = balance?.periodStart ?? new Date(Date.now() - DEFAULT_LOOKBACK_MS);
-  const periodEnd = balance?.periodEnd ?? null;
+  // A stale window (periodEnd in the past — renewal never landed) falls back to
+  // the trailing lookback so current spend is never hidden; see resolveUsageWindow.
+  const { periodStart, periodEnd } = resolveUsageWindow({
+    periodStart: balance?.periodStart ?? null,
+    periodEnd: balance?.periodEnd ?? null,
+    now: new Date(),
+  });
 
   const rows = await db
     .select({
@@ -65,9 +67,9 @@ export async function getUserUsageBreakdown(userId: string): Promise<UsageBreakd
         eq(creditLedger.userId, userId),
         eq(creditLedger.entryType, 'usage'),
         gte(creditLedger.createdAt, periodStart),
-        // Bound the window to the period end so a stale balance (period rolled but not
-        // yet reset) can't leak the next period's spend into "this period". When
-        // periodEnd is in the future (the normal current period) this excludes nothing.
+        // Upper bound only for a CURRENT period (resolveUsageWindow nulls periodEnd
+        // for stale/missing windows), where it excludes nothing today but keeps the
+        // window honest if the clock/period ever race.
         ...(periodEnd ? [lte(creditLedger.createdAt, periodEnd)] : []),
       ),
     );

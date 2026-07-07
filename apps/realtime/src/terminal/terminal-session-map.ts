@@ -10,6 +10,8 @@ export type TerminalSession = {
   /** Detachable exec session id on the Sprite, used to reattach after a WS drop. */
   sessionId?: string;
   reAuthInterval?: ReturnType<typeof setInterval>;
+  /** Heartbeat that settles the accrued active window mid-session (see agent-terminal-handler), bounding what a realtime restart can lose to one interval. */
+  settleInterval?: ReturnType<typeof setInterval>;
   idleTimer?: ReturnType<typeof setTimeout>;
   releaseSlot(): void;
   outputFn: (data: string) => void;
@@ -18,8 +20,10 @@ export type TerminalSession = {
   scrollbackBytes: number;
   /**
    * Terminal Epic 3 metering (optional — set only when a `billing` seam is
-   * wired). `payerId` + `connectedAt` are always set together with `holdId` so
-   * the session's end hook can settle the active-runtime hold to its real cost.
+   * wired). `payerId` + `connectedAt` identify who pays for the window that
+   * started at `connectedAt` (rebased by each heartbeat settle); `holdId` is the
+   * window's reservation when the gate placed one — settle records usage either
+   * way, the hold is just the pre-authorization.
    */
   payerId?: string;
   holdId?: string;
