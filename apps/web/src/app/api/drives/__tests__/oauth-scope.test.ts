@@ -10,7 +10,8 @@
  * access default (the Phase 9 Task 1 bug class).
  *
  * Uses the REAL isScopedMCPAuth/isScopedOAuthAuth/getScopedDriveMembership
- * implementations (not mocked) so these fail if the scope dispatch regresses.
+ * implementations so these fail if scope dispatch regresses. Only the active
+ * inherited-drive membership check is stubbed at the route boundary.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../route';
@@ -43,6 +44,14 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@pagespace/db/db', () => ({
   db: { query: { drives: { findMany: vi.fn() } } },
 }));
+vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/permissions/app-permissions')>();
+  return {
+    ...actual,
+    hasAppDriveMembership: vi.fn(),
+    hasScopedDriveMembership: vi.fn(),
+  };
+});
 
 // Only stub authentication — isScopedMCPAuth/isScopedOAuthAuth and
 // getScopedDriveMembership run for real.
@@ -57,6 +66,7 @@ vi.mock('@/lib/auth', async (importOriginal) => {
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { db } from '@pagespace/db/db';
+import { hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import type { DriveWithAccess } from '@pagespace/lib/services/drive-service';
 
 const driveFixture = (overrides: { id: string; name: string; ownerId?: string }) => ({
@@ -80,6 +90,7 @@ const driveFixture = (overrides: { id: string; name: string; ownerId?: string })
 describe('GET /api/drives — OAuth credentials', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(hasScopedDriveMembership).mockResolvedValue(true);
   });
 
   it('permits OAuth in the read auth options', async () => {
@@ -150,6 +161,47 @@ describe('GET /api/drives — OAuth credentials', () => {
     expect(body.map((drive: { id: string }) => drive.id)).toEqual(['drive-1']);
     // Inherit-role scope row owned by the requesting user resolves as OWNER.
     expect(body[0]).toMatchObject({ id: 'drive-1', role: 'OWNER', isOwned: true });
+  });
+
+  it('returns no drives for an empty drive-scoped OAuth credential instead of falling back to the full list', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
+      driveScopedOAuthAuthResult({
+        scopes: { account: false, offlineAccess: false, manageKeys: false, drives: new Map() },
+        driveScopes: [],
+        allowedDriveIds: [],
+      }),
+    );
+    vi.mocked(listAccessibleDrives).mockResolvedValue([
+      { ...driveFixture({ id: 'drive-leak', name: 'Should Not Leak' }), isOwned: true, role: 'OWNER' as const, lastAccessedAt: null },
+    ]);
+
+    const request = new Request('https://example.com/api/drives');
+    const response = await GET(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual([]);
+    expect(listAccessibleDrives).not.toHaveBeenCalled();
+    expect(db.query.drives.findMany).not.toHaveBeenCalled();
+  });
+
+  it('filters inherited OAuth drive scopes when the granting user no longer belongs to the drive', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(driveScopedOAuthAuthResult());
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([driveFixture({ id: 'drive-1', name: 'Former Drive', ownerId: 'someone-else' })]);
+    vi.mocked(hasScopedDriveMembership).mockResolvedValue(false);
+
+    const request = new Request('https://example.com/api/drives');
+    const response = await GET(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual([]);
+    expect(listAccessibleDrives).not.toHaveBeenCalled();
+    expect(hasScopedDriveMembership).toHaveBeenCalledWith(
+      [{ driveId: 'drive-1', role: null, customRoleId: null }],
+      'test-user-id',
+      'drive-1',
+    );
   });
 
   it('presents the scope row explicit role, not the owner relationship, when the grant is downgraded', async () => {
