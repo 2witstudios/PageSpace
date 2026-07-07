@@ -152,6 +152,16 @@ export async function middleware(req: NextRequest) {
     // (authorize's POST still requires a session; token/revoke/device_authorization never do).
     // Exact matches only — device_authorization's /verify and /decision sub-routes are the
     // browser-side /activate screen and DO require a session, so must not be swept in here.
+    // Third-party webhooks authenticate via their own signature/HMAC check inside route.ts,
+    // never a session cookie or a recognized bearer prefix — each must be listed here or this
+    // middleware (now that it actually runs) blocks them with a 401 before route.ts ever sees
+    // the request.
+    // Signup/verification endpoints run before any session exists by definition (that's what
+    // they're creating), authenticating instead via login-CSRF token, WebAuthn challenge, a
+    // one-time handoff token, or an emailed verification token. `/passkey/register` (and its
+    // `/options` step) support an authenticated-session mode too — that's enforced inside the
+    // route itself, not here; `/passkey/register/handoff` (which mints the handoff token) is
+    // deliberately NOT in this list since it always requires a session.
     if (
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/login-csrf') ||
@@ -171,6 +181,13 @@ export async function middleware(req: NextRequest) {
       pathname === '/api/memory/cron' ||
       pathname === '/api/pulse/cron' ||
       pathname === '/api/integrations/zoom/webhook' ||
+      pathname === '/api/stripe/webhook' ||
+      pathname === '/api/integrations/google-calendar/webhook' ||
+      pathname === '/api/auth/signup-passkey' ||
+      pathname === '/api/auth/signup-passkey/options' ||
+      pathname === '/api/auth/passkey/register' ||
+      pathname === '/api/auth/passkey/register/options' ||
+      pathname === '/api/auth/verify-email' ||
       pathname === '/api/health' ||
       pathname === '/api/version'
     ) {
