@@ -58,6 +58,19 @@ Apply the same `decryptUsersByIdOnce` wiring to `apps/web/src/app/api/connection
 
 ---
 
+## Review follow-ups (round 2)
+
+**Status**: ✅ DONE
+
+The dedup PR's multi-agent self-review surfaced four verified follow-ups; all landed on the same branch:
+
+- `decryptFieldValuesOnce` promoted to `packages/lib/src/encryption/field-crypto.ts` as the first-class value-keyed batch-decrypt helper (fail-closed lookup: a value missing from the batch returns `null`, never raw ciphertext). Inbox rewired onto it; the pulse `generate` + `cron` routes (same id-less per-row decrypt shape, 5 sections each) wired too.
+- `/api/connections/search` derives `isSelf` from `targetRow?.id === user.id` — drops one query + one decrypt per search and **closes a case-variant self-search enumeration corner** (was: keyed case-variant self-search returned the caller's own profile as actionable; now `{user:null}`). The one intentional behavior change in the PR.
+- Inbox decrypts only pagination survivors: permission-filter → sort → slice → one batched decrypt (rows the page limit discards are never decrypted).
+- Type honesty + fail-closed: LEFT-JOINed user columns in `apps/web/src/types/messaging.ts` are `| null`; the messages routes' `?? raw` fallbacks are now `?? null` so no future drift can emit ciphertext.
+
+---
+
 ## Verify recovery
 
 After all four tasks land and deploy, confirm the fix actually closes the gap rather than just asserting it should.
