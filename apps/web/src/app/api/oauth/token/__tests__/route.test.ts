@@ -231,6 +231,42 @@ describe('POST /api/oauth/token — happy path', () => {
   });
 });
 
+describe('POST /api/oauth/token — pure drive:* grant returns a real mcp_* token, not an OAuth pair', () => {
+  it('returns { access_token, token_type: "mcp", scope } with no refresh_token/expires_in', async () => {
+    exchangeAuthorizationCode.mockResolvedValue({
+      outcome: 'ok_mcp_token',
+      userId: 'user-1',
+      scopes: ['drive:drv1:member', 'offline_access'],
+      mcpToken: 'mcp_' + 'a'.repeat(32),
+    });
+
+    const res = await POST(tokenRequest(validFields()) as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({
+      access_token: 'mcp_' + 'a'.repeat(32),
+      token_type: 'mcp',
+      scope: 'drive:drv1:member offline_access',
+    });
+    expect(body).not.toHaveProperty('refresh_token');
+    expect(body).not.toHaveProperty('expires_in');
+  });
+
+  it('sets Cache-Control: no-store on the mcp-token response too', async () => {
+    exchangeAuthorizationCode.mockResolvedValue({
+      outcome: 'ok_mcp_token',
+      userId: 'user-1',
+      scopes: ['drive:drv1:member'],
+      mcpToken: 'mcp_' + 'a'.repeat(32),
+    });
+
+    const res = await POST(tokenRequest(validFields()) as never);
+
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+});
+
 describe('POST /api/oauth/token — F1: refresh_token omitted from the response when offline_access was not granted', () => {
   it('authorization_code grant: no refresh_token key at all in an access-only response', async () => {
     exchangeAuthorizationCode.mockResolvedValue({

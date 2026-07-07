@@ -37,8 +37,6 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **CLI login** — `pagespace login` opens a browser for an OAuth login with PKCE; `pagespace login
   --device` covers machines with no browser (CI, remote boxes). Both replace copying a token out of
   Settings by hand as the primary way for a person to authenticate.
-- **`pagespace tokens create` / `list` / `revoke`** — mint and manage scoped agent/CI tokens from
-  the terminal, the same tokens Settings > MCP already creates.
 - **`@pagespace/sdk`** — a typed TypeScript client (`PageSpaceClient`) for the PageSpace API,
   covering drives, pages, roles, tasks, agents, conversations, exports, tokens, search, activity,
   and channels.
@@ -50,7 +48,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   agents as visual context (capped at 5 images per consultation, matching the per-message chat
   limit). Agents without a vision-capable model get a text note instead, so they know an
   attachment existed but couldn't be viewed.
-- **`packages/cli/docs/agent-access.md`** — states plainly what a scoped `pagespace tokens create`
+- **`pagespace keys`** — a guided terminal wizard to create, list, edit, and revoke your scoped
+  access keys — the same keys Settings > MCP already creates — without opening the web
+  Settings > MCP page. It's the fast path for minting content access now that `pagespace login` no
+  longer grants any on its own. `pagespace keys create`, `pagespace keys list [--json]`, and
+  `pagespace keys revoke <tokenId>` are flag-driven, scriptable equivalents of the same wizard
+  actions.
+- **`packages/cli/docs/agent-access.md`** — states plainly what a scoped `pagespace keys create`
   credential does and doesn't protect against: it limits what a leaked/misused credential can do,
   not who else on the same machine can use it. A process with real shell access reads whatever its
   OS user can read, credential store included — no CLI feature changes that. The actual isolation
@@ -59,15 +63,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
-- **`pagespace login` is for you, personally; `pagespace tokens create` is for an agent** — the
-  README, `docs/agent-access.md`, and the Settings > MCP page now say this explicitly and point
-  agent/MCP setups at `pagespace tokens create --drive <id> --save-as-profile agent` (paired with
-  `--profile agent` / `PAGESPACE_PROFILE`) instead of `pagespace login`, which grants full personal
-  account access.
+- **`pagespace login` is for you, personally; `pagespace keys create` (or the guided `pagespace
+  keys`) is for an agent** — the README, `docs/agent-access.md`, and the Settings > MCP page now
+  say this explicitly and point agent/MCP setups at `pagespace keys create --drive <id>
+  --save-as-profile agent` (paired with `--profile agent` / `PAGESPACE_PROFILE`) instead of
+  `pagespace login`, which now grants only a key-management credential with no content access of
+  its own (see "key-management-only login" below).
 - **`pagespace login` (and `--device`) now print the scope granted on success**, e.g. `Scope:
-  account offline_access — this is your full personal account access.`, bringing it to parity with
-  `whoami`, which already reported scope.
-- **`pagespace help` is grouped by resource** (Auth, Drives, Pages, Search, Tasks, Agents, Tokens,
+  manage_keys offline_access — key-management access only, with zero content access; run
+  "pagespace keys create" to mint a scoped key for actual content access.`, bringing it to
+  parity with `whoami`, which already reported scope.
+- **`pagespace help` is grouped by resource** (Auth, Drives, Pages, Search, Tasks, Agents, Keys,
   MCP, Other) with one runnable example per group, replacing the previous flat ~46-line list.
 
 ### Deprecated
@@ -87,26 +93,45 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   access from the web. Revoking a grant here immediately invalidates its refresh token and
   requires a fresh step-up confirmation (passkey tap, or a confirmation email if you have no
   passkey), the same as minting one.
-- **`pagespace tokens create` now requires browser consent** — minting a scoped credential from
+- **`pagespace keys create` now requires browser consent** — minting a scoped credential from
   the CLI opens the same OAuth consent screen `pagespace login` uses, scoped to the requested
   drive(s), instead of POSTing directly to the token-minting API with whatever ambient credential
   was on hand. That direct-POST path let a script or agent with shell access mint itself a new
   token unattended; it's gone. The resulting credential is stored locally under a named profile
   (`--save-as-profile`, defaulting to the drive id) rather than printed, so it isn't a source for a
-  portable secret — mint one of those from **Settings → MCP** instead. As a consequence, `tokens
+  portable secret — mint one of those from **Settings → MCP** instead. As a consequence, `keys
   create` no longer supports `--json` output — there's no portable token left to emit, and the
-  command now blocks on an interactive browser consent screen either way — while `tokens list
-  --json` and `tokens revoke` are unaffected.
+  command now blocks on an interactive browser consent screen either way — while `keys list
+  --json` and `keys revoke` are unaffected.
 - **BREAKING: `pagespace mcp` no longer falls back to your personal login.** Previously, running
   `pagespace mcp` with no `--token`/`PAGESPACE_TOKEN`/`--profile` silently authenticated as
   whichever profile `pagespace login` had stored — so an MCP client config missing its intended
   scoped token would unknowingly hand an automated agent your full personal account access instead
   of failing loudly. `mcp` now refuses to start the stdio server at all unless the invocation
   names a credential itself (`--token`, `PAGESPACE_TOKEN`, `--profile`, or `PAGESPACE_PROFILE`),
-  and exits with a message pointing at `pagespace tokens create ... --save-as-profile <name>`. The
+  and exits with a message pointing at `pagespace keys create ... --save-as-profile <name>`. The
   legacy `PAGESPACE_AUTH_TOKEN` env var (`npx pagespace-mcp`) still counts as explicit and is
-  unaffected. Every other command's ambient-fallback convenience is unchanged — this is specific
-  to `mcp`, whose whole purpose is being invoked unattended.
+  unaffected. This no-ambient-fallback gate has since been generalized to every command — see
+  below.
+- **BREAKING: every `pagespace` command now requires an explicit credential, not just `mcp`.**
+  The fail-closed gate above was `pagespace mcp`-only at first; it now applies CLI-wide. Any
+  command that reads or writes your data — `drives list`, `pages read`, `search text`, and so on
+  — now fails with an actionable error instead of silently running as your personal
+  `pagespace login` if invoked with no `--token`, `PAGESPACE_TOKEN`, `--profile`, or
+  `PAGESPACE_PROFILE`. `login`, `logout`, `whoami`, `help`, and the whole `keys`
+  surface are exempt, since each of those either mints its own credential or only ever acts on
+  your own account/keys.
+- **BREAKING: `pagespace login` now grants a key-management-only credential (`manage_keys
+  offline_access`) by default, not full account access.** Combined with the change above, a fresh
+  `pagespace login` no longer gives you (or anything reading its stored credential) any content
+  access at all — it only lets you manage your own access keys, including through the new
+  `pagespace keys` wizard. Run `pagespace keys` (or `pagespace keys create --drive <id>
+  --save-as-profile <name>`) afterward to mint a credential that can actually read or write
+  content, and pass it with `--profile <name>` / `PAGESPACE_PROFILE`. **Nothing is revoked and no
+  one is logged out by this change**: a credential from an older `pagespace login` (scoped to
+  `account offline_access`) keeps working exactly as before, with its original full-account
+  access, until you explicitly run `pagespace logout && pagespace login` (or simply `pagespace
+  login --yes` to overwrite it) to pick up the new default.
 
 ### Fixed
 

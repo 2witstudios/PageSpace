@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CLI_VERSION, EXIT_SUCCESS, EXIT_USAGE_ERROR, run } from '@pagespace/cli';
+import { CLI_VERSION, credentialSecret, EXIT_SUCCESS, EXIT_USAGE_ERROR, run } from '@pagespace/cli';
 import type { HostCredential, RunDependencies } from '@pagespace/cli';
 import { createFakeCredentialStore, createRecordingSink } from './fake-context.js';
 
@@ -115,6 +115,7 @@ describe('run', () => {
 
       const store = createFakeCredentialStore();
       const personalCredential: HostCredential = {
+        kind: 'oauth',
         refreshToken: 'ps_rt_personal_secret',
         clientId: 'cli',
         scopes: ['full'],
@@ -126,11 +127,11 @@ describe('run', () => {
       const code = await run(deps);
 
       expect(code).not.toBe(EXIT_SUCCESS);
-      expect(deps.stderr.lines.join('')).toContain('tokens create');
+      expect(deps.stderr.lines.join('')).toContain('keys create');
       expect(networkCalls).toBe(0);
 
       const stillStored = await store.get('https://pagespace.ai', 'default');
-      expect(stillStored?.refreshToken).toBe('ps_rt_personal_secret');
+      expect(credentialSecret(stillStored!)).toBe('ps_rt_personal_secret');
     });
   });
 
@@ -158,6 +159,7 @@ describe('run', () => {
 
       const store = createFakeCredentialStore();
       const personalCredential: HostCredential = {
+        kind: 'oauth',
         refreshToken: 'ps_rt_personal_secret',
         clientId: 'cli',
         scopes: ['manage_keys', 'offline_access'],
@@ -169,11 +171,11 @@ describe('run', () => {
       const code = await run(deps);
 
       expect(code).not.toBe(EXIT_SUCCESS);
-      expect(deps.stderr.lines.join('')).toContain('tokens create');
+      expect(deps.stderr.lines.join('')).toContain('keys create');
       expect(networkCalls).toBe(0);
 
       const stillStored = await store.get('https://pagespace.ai', 'default');
-      expect(stillStored?.refreshToken).toBe('ps_rt_personal_secret');
+      expect(credentialSecret(stillStored!)).toBe('ps_rt_personal_secret');
     });
   });
 
@@ -191,15 +193,15 @@ describe('run', () => {
     });
   });
 
-  describe('"tokens create" is auth-exempt: it mints via its own browser-consent flow, never the ambient credential (Phase 8)', () => {
+  describe('"keys create" is auth-exempt: it mints via its own browser-consent flow, never the ambient credential (Phase 8)', () => {
     // The real handler's consent flow is covered by its own unit tests
-    // (commands/tokens/__tests__/create.test.ts); driving it through run()
+    // (commands/keys/__tests__/create.test.ts); driving it through run()
     // here would touch the real OS keychain. What only run() can prove is
     // dispatch: with zero stored credentials the handler's own argument
     // validation must be reached, instead of enforceAuth failing first on
     // the missing ambient credential and rotating/refreshing anything.
     it('reaches the handler with zero stored credentials instead of failing ambient-auth enforcement', async () => {
-      const deps = makeDeps(['tokens', 'create']);
+      const deps = makeDeps(['keys', 'create']);
       const code = await run(deps);
       expect(code).toBe(EXIT_USAGE_ERROR);
       expect(deps.stderr.lines.join('')).toContain('--drive');
@@ -212,31 +214,32 @@ describe('run', () => {
         'fetch',
         (async () => {
           networkCalls += 1;
-          throw new Error('tokens create must never touch the ambient credential');
+          throw new Error('keys create must never touch the ambient credential');
         }) as unknown as typeof fetch,
       );
       try {
         const store = createFakeCredentialStore();
         await store.set('https://pagespace.ai', {
+          kind: 'oauth',
           refreshToken: 'ps_rt_personal_secret',
           clientId: 'cli',
           scopes: ['full'],
           createdAt: new Date(0).toISOString(),
         }, 'default');
 
-        const deps = { ...makeDeps(['tokens', 'create']), credentialStore: store };
+        const deps = { ...makeDeps(['keys', 'create']), credentialStore: store };
         const code = await run(deps);
 
         expect(code).toBe(EXIT_USAGE_ERROR);
         expect(networkCalls).toBe(0);
-        expect((await store.get('https://pagespace.ai', 'default'))?.refreshToken).toBe('ps_rt_personal_secret');
+        expect(credentialSecret((await store.get('https://pagespace.ai', 'default'))!)).toBe('ps_rt_personal_secret');
       } finally {
         vi.unstubAllGlobals();
       }
     });
   });
 
-  describe('"pagespace keys" (Phase 9 task 5) is auth-exempt, coexisting with (not superseding) "tokens *"', () => {
+  describe('"pagespace keys" (Phase 9 task 5) is auth-exempt — the sole surface for minting/listing/revoking keys', () => {
     it('bare "keys" reaches keysHandler with zero stored credentials — fails closed on non-TTY, never on the ambient-credential gate', async () => {
       const deps = makeDeps(['keys']); // makeDeps never sets isTTY, so it defaults to false (fail-closed)
       const code = await run(deps);
@@ -257,6 +260,7 @@ describe('run', () => {
       try {
         const store = createFakeCredentialStore();
         await store.set('https://pagespace.ai', {
+          kind: 'oauth',
           refreshToken: 'ps_rt_personal_secret',
           clientId: 'cli',
           scopes: ['manage_keys', 'offline_access'],
@@ -272,7 +276,7 @@ describe('run', () => {
       }
     });
 
-    it('"keys list" and "keys revoke" never receive the ambient-credential-gate error, unlike "tokens list"/"tokens revoke"', async () => {
+    it('"keys list" and "keys revoke" never receive the ambient-credential-gate error', async () => {
       const keysListDeps = makeDeps(['keys', 'list']);
       await run(keysListDeps);
       expect(keysListDeps.stderr.lines.join('')).not.toContain('No explicit credential found');
@@ -281,18 +285,13 @@ describe('run', () => {
       await run(keysRevokeDeps);
       expect(keysRevokeDeps.stderr.lines.join('')).not.toContain('No explicit credential found');
     });
+  });
 
-    it('"tokens list" and "tokens revoke" remain explicit-credential-only — the coexist design decision, not a regression', async () => {
-      const tokensListDeps = makeDeps(['tokens', 'list']);
-      const listCode = await run(tokensListDeps);
-      expect(listCode).not.toBe(EXIT_SUCCESS);
-      expect(tokensListDeps.stderr.lines.join('')).toContain('No explicit credential found');
-
-      const tokensRevokeDeps = makeDeps(['tokens', 'revoke', 'tok_1', '--yes']);
-      const revokeCode = await run(tokensRevokeDeps);
-      expect(revokeCode).not.toBe(EXIT_SUCCESS);
-      expect(tokensRevokeDeps.stderr.lines.join('')).toContain('No explicit credential found');
-    });
+  it('"pagespace tokens create" (and any other "tokens *" invocation) is an unrecognized command, not a working alias — the old tokens command family was folded into keys', async () => {
+    const deps = makeDeps(['tokens', 'create', '--drive', 'drv1']);
+    const code = await run(deps);
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(deps.stderr.lines.join('')).toContain('Unknown command: tokens create');
   });
 
   it('resolves the profile from --profile and looks up the credential store under that profile name', async () => {

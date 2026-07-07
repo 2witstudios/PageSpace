@@ -375,7 +375,7 @@ describe('/api/auth/mcp-tokens (additional coverage)', () => {
 
   describe('GET /api/auth/mcp-tokens', () => {
     describe('authentication', () => {
-      it('allows OAuth bearer tokens (CLI `pagespace tokens list`), not just session cookies', async () => {
+      it('allows OAuth bearer tokens (CLI `pagespace keys list`), not just session cookies', async () => {
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'GET',
           headers: { Cookie: 'ps_session=valid-token' },

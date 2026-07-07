@@ -27,6 +27,7 @@ export type { FileCredentialStoreOptions } from './credentials/file-store.js';
 export { createNativeKeychainAdapter, keychainAccountKey, parseKeychainAccountKey } from './credentials/keychain.js';
 export type { KeychainAccount, KeychainAdapter, KeychainCredential } from './credentials/keychain.js';
 export {
+  credentialSecret,
   CredentialsFileFormatError,
   DEFAULT_PROFILE_NAME,
   emptyCredentialsFile,
@@ -42,7 +43,7 @@ export {
   tokenPrefix,
   upsertHost,
 } from './credentials/serialize.js';
-export type { CredentialSummary, CredentialsFile, HostCredential, HostProfiles } from './credentials/serialize.js';
+export type { CredentialSummary, CredentialsFile, HostCredential, HostProfiles, OAuthHostCredential, StaticHostCredential } from './credentials/serialize.js';
 
 // Fixed exit code contract.
 export { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from './exit-codes.js';
@@ -236,24 +237,24 @@ export { createRefreshAccessToken } from './auth/silent-refresh.js';
 export { buildAuthProvider, enforceAuth, FailingAuthProvider } from './auth/auth-context.js';
 export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } from './auth/auth-context.js';
 
-// `tokens create/list/revoke` (Phase 4 task 6). Auth flows only through
-// ctx.sdk (task 7's resolver, enforced by run.ts before dispatch) — these
-// commands have no auth wiring of their own.
-export { parseTokensCreateArgs, parseTokensRevokeArgs } from './commands/tokens/args.js';
-export type { CreateTokenArgs, DriveScopeArg, RevokeTokenArgs } from './commands/tokens/args.js';
+// `pagespace keys create/list/revoke` (Phase 4 task 6, consolidated under
+// `keys` by a later Phase 9 follow-up), plus the guided `pagespace keys` TUI
+// wizard (Phase 9 task 5). Auth flows only through ctx.sdk (task 7's
+// resolver, enforced by run.ts before dispatch) — these commands have no
+// auth wiring of their own beyond `create`'s own browser-consent mint.
+export { parseTokensCreateArgs, parseTokensRevokeArgs } from './commands/keys/args.js';
+export type { CreateTokenArgs, DriveScopeArg, RevokeTokenArgs } from './commands/keys/args.js';
 export {
   buildTokenScope,
   createTokensCreateHandler,
   resolveTokenProfileName,
   tokensCreateHandler,
-} from './commands/tokens/create.js';
-export type { BuildTokenScopeResult, ResolveTokenProfileNameResult, TokensCreateHandlerDeps } from './commands/tokens/create.js';
-export { tokensList, tokensListHandler } from './commands/tokens/list.js';
-export { tokensRevoke, tokensRevokeHandler } from './commands/tokens/revoke.js';
+} from './commands/keys/create.js';
+export type { BuildTokenScopeResult, ResolveTokenProfileNameResult, TokensCreateHandlerDeps } from './commands/keys/create.js';
+export { tokensList, tokensListHandler } from './commands/keys/list.js';
+export { tokensRevoke, tokensRevokeHandler } from './commands/keys/revoke.js';
 
-// `pagespace keys` (Phase 9 task 5) — the guided TUI wizard plus its
-// flag-based `create`/`list`/`revoke` aliases (`router/routes.ts` documents
-// the coexist-with-`tokens` design decision). `logic.ts` is the pure
+// `pagespace keys`'s guided TUI wizard. `logic.ts` is the pure
 // decision-logic layer the wizard's `@clack/prompts` effects shell calls
 // into; `wizard.ts` is that effects shell.
 export {
@@ -279,7 +280,6 @@ export type {
   SelectOption,
   WizardMenuChoice,
 } from './commands/keys/logic.js';
-export { keysListHandler, keysRevokeHandler } from './commands/keys/aliases.js';
 export { createKeysHandler, keysHandler } from './commands/keys/wizard.js';
 
 // Legacy `PAGESPACE_AUTH_TOKEN` env var support (Phase 6 task 1) — folded

@@ -1,12 +1,12 @@
 /**
  * Local `--drive <id>` extraction for `pages`/`trash` verbs. `--drive` is
- * NOT a global flag (`tokens create`'s pre-existing, merged `--drive`/`--role`
+ * NOT a global flag (`keys create`'s pre-existing, merged `--drive`/`--role`
  * pairs are repeatable and command-specific, parsed the same way from
- * `CommandIntent.args` — see `tokens/args.ts`) — `parseArgv` only extracts
+ * `CommandIntent.args` — see `keys/args.ts`) — `parseArgv` only extracts
  * `--json`/`--yes`/`--host`/`--token`/etc. and passes everything else
  * through into `args` verbatim once a command path has started. Each
  * resource command owning a `--drive` flag interprets it itself, the same
- * way `tokens create` interprets its own `--drive`/`--role` pairs.
+ * way `keys create` interprets its own `--drive`/`--role` pairs.
  */
 export type ExtractDriveFlagResult =
   | { readonly ok: true; readonly driveId: string | undefined; readonly rest: readonly string[] }

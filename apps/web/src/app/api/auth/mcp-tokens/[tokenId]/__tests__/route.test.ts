@@ -136,7 +136,7 @@ describe('DELETE /api/auth/mcp-tokens/[tokenId]', () => {
     expect(response.status).toBe(401);
   });
 
-  it('allows OAuth bearer tokens (CLI `pagespace tokens revoke`), not just session cookies', async () => {
+  it('allows OAuth bearer tokens (CLI `pagespace keys revoke`), not just session cookies', async () => {
     const request = new NextRequest('http://localhost/api/auth/mcp-tokens/token-123', {
       method: 'DELETE',
       headers: { 'X-CSRF-Token': 'valid-csrf-token' },

@@ -59,10 +59,9 @@ import {
 } from '../commands/tasks.js';
 import { trashListHandler } from '../commands/trash.js';
 import { whoamiHandler } from '../commands/whoami.js';
-import { tokensCreateHandler } from '../commands/tokens/create.js';
-import { tokensListHandler } from '../commands/tokens/list.js';
-import { tokensRevokeHandler } from '../commands/tokens/revoke.js';
-import { keysListHandler, keysRevokeHandler } from '../commands/keys/aliases.js';
+import { tokensCreateHandler } from '../commands/keys/create.js';
+import { tokensListHandler } from '../commands/keys/list.js';
+import { tokensRevokeHandler } from '../commands/keys/revoke.js';
 import { keysHandler } from '../commands/keys/wizard.js';
 import type { Route } from './router.js';
 
@@ -74,25 +73,18 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['login'], handler: loginHandler, summary: 'Log in via the browser (loopback + PKCE)' },
   { path: ['logout'], handler: logoutHandler, summary: 'Revoke and remove a stored credential' },
   { path: ['whoami'], handler: whoamiHandler, summary: 'Show the currently authenticated identity' },
-  { path: ['tokens', 'create'], handler: tokensCreateHandler, summary: 'Mint a new MCP access token' },
-  { path: ['tokens', 'list'], handler: tokensListHandler, summary: 'List MCP access tokens' },
-  { path: ['tokens', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an MCP access token' },
-  // `keys` (Phase 9 task 5) COEXISTS with `tokens` above rather than superseding
-  // it — a deliberate choice, not an oversight. `keys` is the ambient-credential-
-  // eligible surface a bare `pagespace login` (manage_keys-scoped, zero extra
-  // setup) can drive end-to-end; `tokens *` remains the explicit-credential-only
-  // scripting surface it always was. `keys create` registers the exact same
-  // `tokensCreateHandler` reference as `tokens create` (both already auth-exempt,
-  // both mint via the identical browser-consent flow — no divergence needed).
-  // `keys list`/`keys revoke` register DISTINCT wrapper handlers
-  // (`commands/keys/aliases.ts`) purely so `AUTH_EXEMPT_HANDLERS` below can grant
-  // them the ambient ride without also exempting `tokens list`/`tokens revoke`,
-  // which must stay explicit-credential-only. There is no `keys edit`/`update`
-  // flag subcommand — per this phase's plan, scope-editing is wizard-only.
+  // `keys` (Phase 9 task 5, consolidated Phase 9 follow-up) is the sole
+  // surface for minting/listing/revoking scoped access keys — the earlier
+  // `tokens create/list/revoke` command family was folded into it. All three
+  // routes below are ambient-credential-eligible (see `run.ts`'s
+  // `AUTH_EXEMPT_HANDLERS`): a bare `pagespace login` (manage_keys-scoped,
+  // zero extra setup) can drive every one of them end-to-end. There is no
+  // `keys edit`/`update` flag subcommand — per this phase's plan,
+  // scope-editing is wizard-only.
   { path: ['keys'], handler: keysHandler, summary: 'Guided wizard to create/list/edit/revoke access keys' },
   { path: ['keys', 'create'], handler: tokensCreateHandler, summary: 'Mint a new access key' },
-  { path: ['keys', 'list'], handler: keysListHandler, summary: 'List access keys' },
-  { path: ['keys', 'revoke'], handler: keysRevokeHandler, summary: 'Revoke an access key' },
+  { path: ['keys', 'list'], handler: tokensListHandler, summary: 'List access keys' },
+  { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
   { path: ['mcp'], handler: mcpHandler, summary: 'Serve the full operation registry as an MCP stdio server' },
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },

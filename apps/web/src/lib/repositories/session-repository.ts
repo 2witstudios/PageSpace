@@ -33,17 +33,27 @@ export const sessionRepository = {
   /**
    * Create an MCP token with optional drive scopes in a transaction.
    * If drive scope insertion fails, the token is not created.
+   *
+   * `txClient`, when given, runs both inserts against that caller-owned
+   * transaction instead of opening a new one — needed so a caller minting an
+   * `mcp_tokens` row as a side effect of a LARGER atomic operation (e.g. the
+   * OAuth authorization-code exchange, see `oauth-repository.ts`) gets a
+   * single all-or-nothing commit, not two independent transactions where the
+   * outer one could roll back after this one already committed.
    */
-  async createMcpTokenWithDriveScopes(data: {
-    userId: string;
-    tokenHash: string;
-    tokenPrefix: string;
-    name: string;
-    isScoped: boolean;
-    // role null = INHERIT (the key acts as its owner in that drive)
-    drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[];
-  }): Promise<McpToken> {
-    return db.transaction(async (tx) => {
+  async createMcpTokenWithDriveScopes(
+    data: {
+      userId: string;
+      tokenHash: string;
+      tokenPrefix: string;
+      name: string;
+      isScoped: boolean;
+      // role null = INHERIT (the key acts as its owner in that drive)
+      drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[];
+    },
+    txClient?: Pick<typeof db, 'insert'>,
+  ): Promise<McpToken> {
+    const run = async (tx: Pick<typeof db, 'insert'>): Promise<McpToken> => {
       const [token] = await tx
         .insert(mcpTokens)
         .values({
@@ -68,7 +78,9 @@ export const sessionRepository = {
       }
 
       return token;
-    });
+    };
+
+    return txClient ? run(txClient) : db.transaction(run);
   },
 
   /**

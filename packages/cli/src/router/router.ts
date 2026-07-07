@@ -1,7 +1,7 @@
 /**
  * Router — resolves a parsed `CommandIntent.args` path against a static route
- * table. Longest-prefix match so a route like `['tokens']` and a more
- * specific `['tokens', 'create']` can coexist; unmatched args are a typed
+ * table. Longest-prefix match so a route like `['keys']` and a more
+ * specific `['keys', 'create']` can coexist; unmatched args are a typed
  * usage error, never a thrown exception.
  */
 import type { CommandIntent } from '../argv/parse.js';

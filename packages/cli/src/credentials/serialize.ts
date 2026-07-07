@@ -14,12 +14,32 @@
 
 export const DEFAULT_PROFILE_NAME = 'default';
 
-export interface HostCredential {
+/**
+ * `pagespace login`'s credential: a refresh/access-token pair from the OAuth
+ * authorization-code (or device) grant, silently refreshed on use.
+ */
+export interface OAuthHostCredential {
+  readonly kind: 'oauth';
   readonly refreshToken: string;
   readonly clientId: string;
   readonly scopes: readonly string[];
   readonly createdAt: string;
 }
+
+/**
+ * `pagespace keys create`'s credential: a real `mcp_*` token minted as the
+ * result of the same browser-consent flow `login` uses (see
+ * `oauth-repository.ts`'s `ok_mcp_token` exchange outcome) — a static bearer
+ * secret with no refresh cycle, since `mcp_*` tokens don't expire.
+ */
+export interface StaticHostCredential {
+  readonly kind: 'static';
+  readonly token: string;
+  readonly scopes: readonly string[];
+  readonly createdAt: string;
+}
+
+export type HostCredential = OAuthHostCredential | StaticHostCredential;
 
 export interface HostProfiles {
   readonly profiles: Readonly<Record<string, HostCredential>>;
@@ -57,27 +77,59 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 }
 
-function isHostCredential(value: unknown): value is HostCredential {
-  if (typeof value !== 'object' || value === null) return false;
+/**
+ * Validates + copies a raw parsed value (from a credentials file or keychain
+ * secret) into a `HostCredential`, or returns `null` if malformed. A missing
+ * `kind` is treated as `'oauth'` — every credential stored before this field
+ * existed was an OAuth refresh-token credential (`pagespace login`'s only
+ * shape at the time), so this is a lossless, zero-migration read of old data,
+ * not a guess.
+ */
+function normalizeHostCredential(value: unknown): HostCredential | null {
+  if (typeof value !== 'object' || value === null) return null;
   const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.refreshToken === 'string' &&
-    candidate.refreshToken.length > 0 &&
-    typeof candidate.clientId === 'string' &&
-    candidate.clientId.length > 0 &&
-    isStringArray(candidate.scopes) &&
-    typeof candidate.createdAt === 'string' &&
-    candidate.createdAt.length > 0
-  );
+  const kind = candidate.kind ?? 'oauth';
+
+  if (
+    !isStringArray(candidate.scopes) ||
+    typeof candidate.createdAt !== 'string' ||
+    candidate.createdAt.length === 0
+  ) {
+    return null;
+  }
+
+  if (kind === 'oauth') {
+    if (
+      typeof candidate.refreshToken !== 'string' ||
+      candidate.refreshToken.length === 0 ||
+      typeof candidate.clientId !== 'string' ||
+      candidate.clientId.length === 0
+    ) {
+      return null;
+    }
+    return { kind: 'oauth', refreshToken: candidate.refreshToken, clientId: candidate.clientId, scopes: [...candidate.scopes], createdAt: candidate.createdAt };
+  }
+
+  if (kind === 'static') {
+    if (typeof candidate.token !== 'string' || candidate.token.length === 0) {
+      return null;
+    }
+    return { kind: 'static', token: candidate.token, scopes: [...candidate.scopes], createdAt: candidate.createdAt };
+  }
+
+  return null;
 }
 
+/** Pure copy — the caller already holds a well-typed `HostCredential` (in-memory, this session). */
 function toHostCredential(value: HostCredential): HostCredential {
-  return {
-    refreshToken: value.refreshToken,
-    clientId: value.clientId,
-    scopes: [...value.scopes],
-    createdAt: value.createdAt,
-  };
+  return value.kind === 'oauth'
+    ? { kind: 'oauth', refreshToken: value.refreshToken, clientId: value.clientId, scopes: [...value.scopes], createdAt: value.createdAt }
+    : { kind: 'static', token: value.token, scopes: [...value.scopes], createdAt: value.createdAt };
+}
+
+/** The secret bytes this credential authenticates with — a refresh token (oauth) or the raw bearer token itself (static). Never the full value in a log/prefix context; callers should still only show `tokenPrefix(credentialSecret(c))`. */
+export function credentialSecret(credential: HostCredential): string {
+  return credential.kind === 'oauth' ? credential.refreshToken : credential.token;
 }
 
 /**
@@ -92,10 +144,11 @@ function toHostCredential(value: HostCredential): HostCredential {
 function parseHostsV1(rawHosts: Record<string, unknown>): Record<string, HostCredential> {
   return Object.fromEntries(
     Object.entries(rawHosts).map(([host, value]) => {
-      if (!isHostCredential(value)) {
+      const credential = normalizeHostCredential(value);
+      if (credential === null) {
         throw new CredentialsFileFormatError(`Credentials file entry for host "${host}" is malformed.`);
       }
-      return [host, toHostCredential(value)];
+      return [host, credential];
     }),
   );
 }
@@ -120,12 +173,13 @@ function parseHostsV2(rawHosts: Record<string, unknown>): Record<string, HostPro
       }
       const profiles = Object.fromEntries(
         Object.entries(rawProfiles as Record<string, unknown>).map(([profileName, profileValue]) => {
-          if (!isHostCredential(profileValue)) {
+          const credential = normalizeHostCredential(profileValue);
+          if (credential === null) {
             throw new CredentialsFileFormatError(
               `Credentials file entry for host "${host}" profile "${profileName}" is malformed.`,
             );
           }
-          return [profileName, toHostCredential(profileValue)];
+          return [profileName, credential];
         }),
       );
       return [host, { profiles }];
@@ -220,7 +274,7 @@ export function removeHost(file: CredentialsFile, host: string, profile: string 
 export function listSummaries(file: CredentialsFile, profile: string = DEFAULT_PROFILE_NAME): readonly CredentialSummary[] {
   return Object.entries(file.hosts)
     .filter(([, hostProfiles]) => Object.hasOwn(hostProfiles.profiles, profile))
-    .map(([host, hostProfiles]) => ({ host, tokenPrefix: tokenPrefix(hostProfiles.profiles[profile]!.refreshToken) }))
+    .map(([host, hostProfiles]) => ({ host, tokenPrefix: tokenPrefix(credentialSecret(hostProfiles.profiles[profile]!)) }))
     .sort((a, b) => a.host.localeCompare(b.host));
 }
 
@@ -236,10 +290,11 @@ export function parseHostCredential(raw: string): HostCredential {
   } catch {
     throw new CredentialsFileFormatError('Keychain secret is not valid JSON.');
   }
-  if (!isHostCredential(parsed)) {
+  const credential = normalizeHostCredential(parsed);
+  if (credential === null) {
     throw new CredentialsFileFormatError('Keychain secret is malformed.');
   }
-  return toHostCredential(parsed);
+  return credential;
 }
 
 const SECURE_MODE_MASK = 0o077;

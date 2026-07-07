@@ -156,7 +156,7 @@ describe('createNativeKeychainAdapter — missing native binding degrades cleanl
     const store = new CompositeCredentialStore(adapter, fakeFileStore, { write: (chunk: string) => lines.push(chunk) });
 
     await expect(
-      store.set('pagespace.ai', { refreshToken: 'ps_rt_x', clientId: 'pagespace-cli', scopes: [], createdAt: new Date(0).toISOString() }),
+      store.set('pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_x', clientId: 'pagespace-cli', scopes: [], createdAt: new Date(0).toISOString() }),
     ).resolves.toBeUndefined();
     expect(fileCalls).toEqual(['set']);
     expect(lines.some((line) => /keychain unavailable/i.test(line))).toBe(true);

@@ -9,7 +9,7 @@ import { normalizeDriveScopes } from '@pagespace/lib/auth/mcp-token-scopes';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { rejectScopedOAuth } from '../scope-guard';
 
-// 'oauth' lets the pagespace CLI (`pagespace tokens revoke`) authenticate
+// 'oauth' lets the pagespace CLI (`pagespace keys revoke`) authenticate
 // with an OAuth access token instead of a session cookie. Revocation only
 // ever narrows access — see the sibling mcp-tokens/route.ts for the
 // read/write route this pairs with.

@@ -201,12 +201,24 @@ export async function runDeviceLogin(deps: DeviceLoginDeps): Promise<DeviceLogin
 
     switch (decision.outcome.kind) {
       case 'success': {
+        const { tokens } = decision.outcome;
+        // `login --device` only ever requests `manage_keys offline_access`
+        // (never a pure drive:* grant), so the token endpoint's
+        // `ok_mcp_token` branch (oauth-repository.ts) can't fire here — this
+        // is always the classic OAuth pair. Narrowed explicitly (not just
+        // asserted) so a future scope change to this flow fails loudly
+        // instead of silently mis-persisting an mcp token as an oauth grant.
+        if (tokens.kind !== 'oauth') {
+          return { outcome: 'poll_failed', message: `Unexpected token type from device grant: ${tokens.kind}` };
+        }
+
         await deps.credentialStore.set(
           deps.host,
           {
-            refreshToken: decision.outcome.tokens.refreshToken,
+            kind: 'oauth',
+            refreshToken: tokens.refreshToken,
             clientId: deps.clientId,
-            scopes: decision.outcome.tokens.scope.split(' ').filter(Boolean),
+            scopes: tokens.scope.split(' ').filter(Boolean),
             createdAt: new Date(deps.now()).toISOString(),
           },
           deps.profile ?? DEFAULT_PROFILE_NAME,
@@ -214,12 +226,12 @@ export async function runDeviceLogin(deps: DeviceLoginDeps): Promise<DeviceLogin
 
         let identity: Identity | null;
         try {
-          identity = await deps.confirmIdentity({ host: deps.host, accessToken: decision.outcome.tokens.accessToken });
+          identity = await deps.confirmIdentity({ host: deps.host, accessToken: tokens.accessToken });
         } catch {
           identity = null;
         }
 
-        return { outcome: 'success', identity, scope: decision.outcome.tokens.scope };
+        return { outcome: 'success', identity, scope: tokens.scope };
       }
       case 'access_denied':
         return { outcome: 'access_denied' };

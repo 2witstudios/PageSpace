@@ -10,8 +10,12 @@
  *
  * POST is session-only (AUTH_OPTIONS_WRITE = { allow: ['session'] }) — no
  * OAuth bearer credential, manage_keys-scoped or otherwise, can reach this
- * route at all, regardless of any request body. That allow-list enforcement
- * is asserted directly against the real `authenticateRequestWithOptions` in
+ * route at all, regardless of any request body. The CLI mints a scoped
+ * mcp_* credential exclusively through the separate OAuth authorize/consent
+ * flow (`pagespace keys create`), which has its own step-up gate — this
+ * REST route's step-up requirement was removed as web-UI-only and
+ * redundant with that (see #1927). That allow-list enforcement is asserted
+ * directly against the real `authenticateRequestWithOptions` in
  * route.test.ts; this file only fully mocks that function to exercise the
  * manage-keys carve-out on GET, so it has nothing further to test on POST.
  */

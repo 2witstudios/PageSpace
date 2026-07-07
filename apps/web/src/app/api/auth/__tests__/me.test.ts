@@ -166,6 +166,23 @@ describe('GET /api/auth/me', () => {
       expect(body.email).toBe(mockUser.email);
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth'], requireCSRF: false });
     });
+
+    it('does not allow mcp bearer auth — a scoped agent credential must never resolve the personal owner\'s profile', async () => {
+      // `authenticateRequestWithOptions` is mocked at the boundary in this
+      // file, so this can't exercise the real allow-list rejection end to
+      // end — it pins the contract this route depends on: 'mcp' must be
+      // absent from AUTH_OPTIONS.allow, so the real (unmocked)
+      // authenticateRequestWithOptions rejects an mcp_* bearer token before
+      // this handler's own logic ever runs. `pagespace keys create` mints a
+      // scoped mcp_* token — its own `confirmIdentity` call against this
+      // route degrades to a caught, silently-absorbed failure
+      // (loopback-flow.ts), not a functional break: `keys create` never
+      // reads that result (only `login`/`login-device`/`whoami` do, and
+      // none of those authenticate with an mcp_* token).
+      await GET(createRequest());
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth'], requireCSRF: false });
+    });
   });
 
   describe('user not found', () => {

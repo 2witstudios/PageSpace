@@ -22,7 +22,7 @@ describe('tokensRevokeHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke), isTTY: true });
 
-    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['keys', 'revoke']));
 
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(invoke).not.toHaveBeenCalled();
@@ -34,7 +34,7 @@ describe('tokensRevokeHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke), isTTY: false, prompt });
 
-    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['keys', 'revoke', 'tok_1']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('--yes');
@@ -47,7 +47,7 @@ describe('tokensRevokeHandler', () => {
     const prompt = vi.fn();
     const ctx = createFakeContext({ sdk: fakeSdk(invoke), isTTY: false, prompt });
 
-    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1', '--yes']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['keys', 'revoke', 'tok_1', '--yes']));
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(prompt).not.toHaveBeenCalled();
@@ -59,7 +59,7 @@ describe('tokensRevokeHandler', () => {
     const prompt = vi.fn(async () => 'y');
     const ctx = createFakeContext({ sdk: fakeSdk(invoke), isTTY: true, prompt });
 
-    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['keys', 'revoke', 'tok_1']));
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(prompt).toHaveBeenCalledTimes(1);
@@ -72,7 +72,7 @@ describe('tokensRevokeHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke), isTTY: true, prompt });
 
-    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['keys', 'revoke', 'tok_1']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(invoke).not.toHaveBeenCalled();
@@ -86,7 +86,7 @@ describe('tokensRevokeHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke), isTTY: false });
 
-    const code = await tokensRevokeHandler(ctx, commandIntent(['tokens', 'revoke', 'tok_1', '--yes']));
+    const code = await tokensRevokeHandler(ctx, commandIntent(['keys', 'revoke', 'tok_1', '--yes']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('token not found');

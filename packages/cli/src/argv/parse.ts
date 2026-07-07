@@ -1,14 +1,14 @@
 /**
  * parseArgv — the CLI's pure grammar (Phase 4 task 1). Turns raw argv tokens
  * into a typed `CommandIntent` or a typed `UsageError`; never touches
- * `process.*`, never throws. Command-tree validity (does "tokens create"
+ * `process.*`, never throws. Command-tree validity (does "keys create"
  * resolve to a handler?) is the router's job, not this function's — parseArgv
  * only understands the fixed global-flag grammar every command shares.
  *
  * Zero trust: a rejected flag's value is never echoed back in the error
  * message, only the flag name — the value may be a secret (`--token`).
  *
- * Command-specific flags (e.g. `tokens create --drive`) are not part of this
+ * Command-specific flags (e.g. `keys create --drive`) are not part of this
  * global grammar. Once at least one positional/command token has been seen,
  * an unrecognized `--flag` is passed through into `args` verbatim for the
  * command's own pure arg-mapper to interpret — only a `--flag` with NO

@@ -72,9 +72,23 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 
+// `exchangeAuthorizationCode`'s pure-drive-grant branch calls
+// `sessionRepository.createMcpTokenWithDriveScopes` — mocked at the
+// repository seam (the established pattern this codebase already uses for
+// this exact function, see apps/web/src/app/api/auth/mcp-tokens/__tests__/route.test.ts)
+// rather than extending this file's hand-rolled fake-DB harness to also
+// model the mcp_tokens/mcp_token_drives tables `createMcpTokenWithDriveScopes`
+// itself already has its own dedicated coverage against.
+vi.mock('../session-repository', () => ({
+  sessionRepository: {
+    createMcpTokenWithDriveScopes: vi.fn(),
+  },
+}));
+
 import { deriveCodeChallenge } from '@pagespace/lib/auth/oauth/pkce';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { exchangeAuthorizationCode } from '../oauth-repository';
+import { sessionRepository } from '../session-repository';
 
 type Predicate = { _eq: [unknown, unknown] } | { _and: Predicate[] } | { _isNull: unknown };
 
@@ -211,6 +225,17 @@ beforeEach(() => {
   userTokenVersion = 0;
   userSuspendedAt = null;
   lockChain = Promise.resolve();
+  vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mockResolvedValue({
+    id: 'mcp-token-row-1',
+    userId: USER_ID,
+    tokenHash: 'unused-in-these-assertions',
+    tokenPrefix: 'mcp_xxxxxxxxxxx',
+    name: 'pagespace CLI',
+    isScoped: true,
+    createdAt: new Date(),
+    lastUsed: null,
+    revokedAt: null,
+  } as never);
 });
 
 describe('exchangeAuthorizationCode — happy path', () => {
@@ -454,5 +479,71 @@ describe('exchangeAuthorizationCode — F1: refresh token gated on offline_acces
     expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
     expect(refreshRows).toHaveLength(1);
     expect(accessRows).toHaveLength(1);
+  });
+});
+
+describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_tokens row, not an OAuth pair', () => {
+  it('returns ok_mcp_token, mints via sessionRepository against the SAME transaction, and issues zero oauth rows', async () => {
+    seedCodeRow({ scopes: ['drive:drv1:member', 'drive:drv2:admin', 'offline_access'] });
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok_mcp_token');
+    if (result.outcome !== 'ok_mcp_token') throw new Error('unreachable');
+    expect(result.userId).toBe(USER_ID);
+    expect(result.scopes).toEqual(['drive:drv1:member', 'drive:drv2:admin', 'offline_access']);
+    expect(result.mcpToken).toMatch(/^mcp_/);
+
+    // No OAuth refresh/access-token-family rows for this branch at all.
+    expect(refreshRows).toHaveLength(0);
+    expect(accessRows).toHaveLength(0);
+    // The code is still consumed (single-use), but no family was issued.
+    expect(codeRow?.consumedAt).not.toBeNull();
+    expect(codeRow?.issuedFamilyId).toBeNull();
+
+    expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledTimes(1);
+    const [data, txArg] = vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mock.calls[0]!;
+    expect(data).toMatchObject({
+      userId: USER_ID,
+      name: 'pagespace CLI',
+      isScoped: true,
+      drives: [
+        { id: 'drv1', role: 'MEMBER' },
+        { id: 'drv2', role: 'ADMIN' },
+      ],
+    });
+    expect(typeof data.tokenHash).toBe('string');
+    expect(data.tokenHash.length).toBeGreaterThan(0);
+    expect(data.tokenPrefix.length).toBeGreaterThan(0);
+    // Threaded through the SAME transaction client exchangeAuthorizationCode
+    // itself is running in — not a second, independent transaction (would
+    // risk an orphaned mcp_tokens row if the outer one ever rolled back).
+    expect(txArg).toBeDefined();
+    expect(hashToken(result.mcpToken)).toBe(data.tokenHash);
+  });
+
+  it('manage_keys/account grants (pagespace login) are completely unaffected — still the OAuth pair, sessionRepository never called', async () => {
+    seedCodeRow({ scopes: ['manage_keys', 'offline_access'] });
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok');
+    if (result.outcome !== 'ok') throw new Error('unreachable');
+    expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
+    expect(refreshRows).toHaveLength(1);
+    expect(accessRows).toHaveLength(1);
+    expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
   });
 });

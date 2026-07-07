@@ -43,7 +43,7 @@ describe('tokensListHandler', () => {
     const stdout = createRecordingSink();
     const ctx = createFakeContext({ stdout, sdk: fakeSdk(invoke) });
 
-    const code = await tokensListHandler(ctx, commandIntent(['tokens', 'list']));
+    const code = await tokensListHandler(ctx, commandIntent(['keys', 'list']));
 
     expect(code).toBe(EXIT_SUCCESS);
     const output = stdout.lines.join('');
@@ -58,7 +58,7 @@ describe('tokensListHandler', () => {
     const stdout = createRecordingSink();
     const ctx = createFakeContext({ stdout, sdk: fakeSdk(invoke) });
 
-    const code = await tokensListHandler(ctx, commandIntent(['tokens', 'list', '--json']));
+    const code = await tokensListHandler(ctx, commandIntent(['keys', 'list', '--json']));
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(JSON.parse(stdout.lines.join(''))).toEqual(TOKENS);
@@ -69,7 +69,7 @@ describe('tokensListHandler', () => {
     const stdout = createRecordingSink();
     const ctx = createFakeContext({ stdout, sdk: fakeSdk(invoke) });
 
-    const code = await tokensListHandler(ctx, commandIntent(['tokens', 'list']));
+    const code = await tokensListHandler(ctx, commandIntent(['keys', 'list']));
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(stdout.lines.join('').length).toBeGreaterThan(0);
@@ -82,7 +82,7 @@ describe('tokensListHandler', () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke) });
 
-    const code = await tokensListHandler(ctx, commandIntent(['tokens', 'list']));
+    const code = await tokensListHandler(ctx, commandIntent(['keys', 'list']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('server unreachable');

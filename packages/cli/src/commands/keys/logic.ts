@@ -5,14 +5,14 @@
  * input through these functions; every branch of "what step comes next" is
  * decided here so it's unit-testable without a real terminal.
  *
- * Scope-building deliberately delegates to `buildTokenScope`
- * (`../tokens/create.js`) rather than re-validating drive/role input a
- * second time — the wizard's per-drive role selection is just a different
- * *input shape* (`DriveRoleSelection[]`) for the exact same wire grammar
- * `tokens create --drive --role` already builds and tests.
+ * Scope-building deliberately delegates to `buildTokenScope` (`./create.js`)
+ * rather than re-validating drive/role input a second time — the wizard's
+ * per-drive role selection is just a different *input shape*
+ * (`DriveRoleSelection[]`) for the exact same wire grammar `keys create
+ * --drive --role` already builds and tests.
  */
-import type { DriveScopeArg } from '../tokens/args.js';
-import { buildTokenScope, type BuildTokenScopeResult } from '../tokens/create.js';
+import type { DriveScopeArg } from './args.js';
+import { buildTokenScope, type BuildTokenScopeResult } from './create.js';
 
 export type WizardMenuChoice = 'create' | 'list' | 'edit' | 'revoke' | 'exit';
 

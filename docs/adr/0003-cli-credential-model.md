@@ -14,7 +14,7 @@ What token does the CLI actually hold after `pagespace login`? Two live candidat
 
 ## Decision (summary)
 
-**Option (a). OAuth 2.1 tokens ARE the CLI credential.** `pagespace login` (authorization-code + PKCE, or the device-authorization grant for headless boxes) yields an opaque **access token (`ps_at_*`, 15 minutes)** plus an opaque **rotating refresh token (`ps_rt_*`, 30-day per-token TTL, 90-day absolute family cap, family revocation on reuse)**. Device tokens are **not** extended to the CLI. Scoped `mcp_*` tokens remain the non-interactive credential for agents/CI, minted trivially via `pagespace tokens create`. CLI auth precedence is fixed as `--token` flag > `PAGESPACE_TOKEN` env > stored profile.
+**Option (a). OAuth 2.1 tokens ARE the CLI credential.** `pagespace login` (authorization-code + PKCE, or the device-authorization grant for headless boxes) yields an opaque **access token (`ps_at_*`, 15 minutes)** plus an opaque **rotating refresh token (`ps_rt_*`, 30-day per-token TTL, 90-day absolute family cap, family revocation on reuse)**. Device tokens are **not** extended to the CLI. Scoped `mcp_*` tokens remain the non-interactive credential for agents/CI, minted trivially via `pagespace keys create`. CLI auth precedence is fixed as `--token` flag > `PAGESPACE_TOKEN` env > stored profile.
 
 Everything below is the verified evidence and the precise, testable contract.
 
@@ -103,6 +103,24 @@ that narrows scope on a `refresh_token` grant (RFC 6749 §6) to drop
 the presented token is still consumed (rotation semantics), but there is
 nothing left to rotate into on a subsequent call.
 
+**F1a (Phase 9 amendment, 2026-07-06) — `DEFAULT_LOGIN_SCOPE` is now
+`manage_keys offline_access`, not `account offline_access`.** `pagespace
+login` no longer requests the `account` scope by default; it requests
+`manage_keys` (ADR 0002's key-management-only scope, added by Phase 9) —
+still combined with `offline_access`, so the refresh-issuance gate above is
+unaffected and login still always receives a refresh token. The consequence
+this ADR's F1 didn't anticipate: a fresh `pagespace login` now grants zero
+content access on its own. Getting an `account` or `drive:*` grant requires a
+separate, explicit step — `pagespace keys` (guided) or `pagespace keys
+create` (flag-driven) — each going through its own browser consent screen.
+This is additive, not a correction of D2's contract: `manage_keys` is simply
+the scope `pagespace login` now requests by default, and everything else in
+§3 (lifetimes, rotation, reuse detection) applies identically regardless of
+which access scope a token carries. Existing stored credentials from before
+this change (`account offline_access`) are unaffected and keep working as
+issued — this only changes what a *new* `pagespace login` requests going
+forward.
+
 ### 3.1 Format and storage at rest (server)
 
 - Access token: **`ps_at_*`**; refresh token: **`ps_rt_*`**. Both opaque, 32 bytes base64url entropy via `generateOpaqueToken` — `TokenType` union and the `isValidTokenFormat` regex are extended with `at|rt` (`packages/lib/src/auth/opaque-tokens.ts:10,32`). No JWTs, no embedded claims — all context (user, client, scopes, family, expiry) lives in DB rows keyed by SHA3-256 hash (`token-utils.ts:42-44`), plaintext never stored, raw value returned exactly once at issuance. `tokenPrefix` (first 12 chars) stored for debugging only (`token-utils.ts:47-59`).
@@ -142,7 +160,7 @@ If the grace window is open by DB timestamp (`revokedAt` within 30s, `replacedBy
 
 ## 4. Decision D3 — Non-interactive credential and precedence
 
-- **Scoped `mcp_*` tokens are reaffirmed as the non-interactive credential** for agents/CI/scripts: hand-mintable today (`apps/web/src/app/api/auth/mcp-tokens/route.ts:100-111`), drive-scoped with fail-closed scoped-but-empty semantics (`apps/web/src/lib/auth/index.ts:129-135`), suspension-sticky (`index.ts:105-122`), and enforced through `principal-permissions` (epic ground truth). The CLI makes minting trivial: `pagespace tokens create`. CI jobs set `PAGESPACE_TOKEN=mcp_…` — no device rows, no refresh dance, no browser.
+- **Scoped `mcp_*` tokens are reaffirmed as the non-interactive credential** for agents/CI/scripts: hand-mintable today (`apps/web/src/app/api/auth/mcp-tokens/route.ts:100-111`), drive-scoped with fail-closed scoped-but-empty semantics (`apps/web/src/lib/auth/index.ts:129-135`), suspension-sticky (`index.ts:105-122`), and enforced through `principal-permissions` (epic ground truth). The CLI makes minting trivial: `pagespace keys create`. CI jobs set `PAGESPACE_TOKEN=mcp_…` — no device rows, no refresh dance, no browser.
 - **Precedence order (fixed contract Phase 4 implements):**
   1. `--token <value>` flag
   2. `PAGESPACE_TOKEN` environment variable
@@ -274,4 +292,4 @@ export function classifyRefreshFailure(
 - `authenticateRequest`'s `TokenType` union (`'mcp' | 'session'`, `apps/web/src/lib/auth/index.ts:15`) gains an `'oauth'` member; routes opt in via the existing `allow` allow-list — unchanged routes keep rejecting the new type (fail closed by default).
 - Device tokens stay exactly as they are: an Electron/mobile-only mechanism. No `platform` enum change, no CLI coupling to `trustScore` columns, and the vestigial fingerprint machinery (§1.2) can be activated for browsers later without touching CLI auth.
 - The devices/settings UI gains a sibling surface in Phase 1: active OAuth grants (CLI logins) listed and revocable per family.
-- `mcp_*` tokens are untouched; CI documentation points at `PAGESPACE_TOKEN` + `pagespace tokens create`.
+- `mcp_*` tokens are untouched; CI documentation points at `PAGESPACE_TOKEN` + `pagespace keys create`.

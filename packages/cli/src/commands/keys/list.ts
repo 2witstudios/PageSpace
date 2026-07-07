@@ -1,5 +1,5 @@
 /**
- * `pagespace tokens list` (Phase 4 task 6). Displays name/prefix/drive
+ * `pagespace keys list` (Phase 4 task 6). Displays name/prefix/drive
  * scopes/created/lastUsed for each of the caller's MCP tokens — never a
  * full token, which the server doesn't return here in the first place
  * (`listMcpTokens`'s output schema has no `token` field at all).
@@ -7,11 +7,8 @@
  * Auth flows only through `ctx.sdk` — see create.ts for why this handler
  * has no auth wiring of its own.
  *
- * `tokensList` is exported separately from `tokensListHandler` so
- * `commands/keys/aliases.ts` can wrap it in a distinct `CommandHandler`
- * reference (Phase 9 task 5) — `run.ts`'s `AUTH_EXEMPT_HANDLERS` gates by
- * handler identity, and `keys list` (ambient-credential-eligible) must be
- * exempt without also exempting `tokens list` (explicit-credential-only).
+ * `tokensList` is exported separately from `tokensListHandler` purely so
+ * tests can call the plain function without going through the router.
  */
 import type { z } from 'zod';
 import { listMcpTokens } from '@pagespace/sdk';
