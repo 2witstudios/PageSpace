@@ -32,6 +32,19 @@ deploy/crash mid-session silently loses the whole session's billing.
 - Given a free-tier user, the existing gate-driven reset should be unchanged
   (no subscription lookup added to that path).
 
+### 4. Renewal invoices must stamp the NEW service period (root cause of #1/#2's stale windows for subscribers)
+
+- Given a renewal `invoice.paid` whose invoice-level `period_start`/`period_end`
+  describe the just-ended cycle (Stripe semantics), the refill should stamp the
+  balance window from the LINE ITEM's service period — the cycle actually paid
+  for — so a subscriber's window is current, not expired-on-arrival. (Prod
+  evidence: all 4 live subscribers had windows stamped to the ended cycle; one
+  first-invoice user had start == end.)
+- Given a plan-change invoice with multiple lines (prorations + new plan), the
+  refill should stamp the line with the latest period end.
+- Given an invoice with no line periods at all, the refill should keep the
+  invoice-level fallback.
+
 ### 3. Agent-terminal heartbeat settle (deploy-time revenue loss)
 
 - Given a metered agent-terminal session that stays open longer than the settle
@@ -48,9 +61,13 @@ deploy/crash mid-session silently loses the whole session's billing.
 
 ## Out of scope
 
-- Why `invoice.paid` refills stopped landing for subscriptions that Stripe
-  still reports `active` with a long-stale `currentPeriodEnd` (webhook/payment
-  delivery issue — needs its own investigation).
+- ~~Why `invoice.paid` refills stopped landing~~ RESOLVED: they never stopped —
+  the June 13 refill landed; requirement #4's invoice-period stamping bug made
+  the window expired-on-arrival. Remaining oddity: `subscriptions.currentPeriodEnd`
+  is stale (Jun 13) for 2 of 4 live subscribers, so `customer.subscription.updated`
+  after renewal appears not to be processed for some accounts — investigate
+  separately. Existing stale balance windows self-heal at each account's next
+  renewal now that stamping is fixed; the usage-page fallback covers the gap.
 - Backfilling June's unmetered machine runtime/storage (predates metering).
 
 ## Review follow-ups (accepted, not in this change)

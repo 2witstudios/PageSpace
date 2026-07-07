@@ -242,11 +242,20 @@ async function settleAccruedWindow(
     loggers.realtime.error('Agent terminal heartbeat settle failed', error instanceof Error ? error : new Error(String(error)), {
       sessionKey,
     });
-    // Roll the rebase back (if no teardown settled the tail meanwhile) so the
-    // unbilled window is retried later against its original, still-live hold.
     if (sessionMap.getByKey(sessionKey) === session) {
+      // Roll the rebase back so the unbilled window is retried at the next
+      // heartbeat (or session end) against its original, still-live hold.
       session.connectedAt = windowStart;
       session.holdId = holdId;
+    } else {
+      // The session was torn down while this settle was failing: the teardown's
+      // end-settle only billed the post-rebase tail (with no hold), so nothing
+      // will ever retry THIS window. One compensating best-effort attempt —
+      // the same fire-and-forget guarantee the end-settle itself has. If it
+      // also fails, the hold expires via TTL and the window is lost.
+      void billing
+        .trackUsage({ payerId, holdId, activeSeconds, pageId: session.pageId })
+        .catch(() => {});
     }
     return true;
   }

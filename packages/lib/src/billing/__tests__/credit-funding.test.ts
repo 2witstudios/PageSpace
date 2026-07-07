@@ -190,6 +190,72 @@ describe('applyStripeFunding', () => {
     });
   });
 
+  it('invoice.paid stamps the LINE-ITEM service period, not the invoice-level fields (which describe the just-ended cycle)', async () => {
+    // Stripe renewal invoices: invoice.period_start/end = the cycle that just ENDED;
+    // the NEW service period being paid for lives on the line item. Stamping the
+    // invoice-level fields froze every subscriber's window at "already expired"
+    // (2026-07-07 audit: all 4 live subscribers stale immediately after renewal).
+    const OLD_START = 1_697_000_000; // just-ended cycle
+    const OLD_END = 1_700_000_000;
+    const NEW_START = 1_700_000_000; // service period actually paid for
+    const NEW_END = 1_702_592_000;
+    const renewalEvent = {
+      id: 'evt_renewal',
+      type: 'invoice.paid',
+      data: {
+        object: {
+          id: 'in_renewal',
+          customer: 'cus_1',
+          period_start: OLD_START,
+          period_end: OLD_END,
+          lines: { data: [{ period: { start: NEW_START, end: NEW_END } }] },
+        },
+      },
+    };
+    mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
+    const cap: Captured = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      await cb(refillTx(cap, [{ id: 'led_renewal' }], 0));
+    });
+
+    await applyStripeFunding(renewalEvent);
+
+    expect(cap.balanceSet).toMatchObject({
+      monthlyPeriodStart: new Date(NEW_START * 1000),
+      monthlyPeriodEnd: new Date(NEW_END * 1000),
+    });
+  });
+
+  it('invoice.paid with multiple lines (plan-change proration) stamps the line with the LATEST period end', async () => {
+    const prorationLine = { period: { start: 1_699_000_000, end: 1_700_000_000 } }; // old plan remainder
+    const newPlanLine = { period: { start: 1_700_000_000, end: 1_702_592_000 } }; // new plan's full period
+    const planChangeEvent = {
+      id: 'evt_change',
+      type: 'invoice.paid',
+      data: {
+        object: {
+          id: 'in_change',
+          customer: 'cus_1',
+          period_start: 1_697_000_000,
+          period_end: 1_700_000_000,
+          lines: { data: [prorationLine, newPlanLine] },
+        },
+      },
+    };
+    mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
+    const cap: Captured = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      await cb(refillTx(cap, [{ id: 'led_change' }], 0));
+    });
+
+    await applyStripeFunding(planChangeEvent);
+
+    expect(cap.balanceSet).toMatchObject({
+      monthlyPeriodStart: new Date(1_700_000_000 * 1000),
+      monthlyPeriodEnd: new Date(1_702_592_000 * 1000),
+    });
+  });
+
   it('invoice.paid accumulates: adds allowance on top of carried monthly balance (rollover)', async () => {
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     const cap: Captured = {};

@@ -7,6 +7,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Subscription renewals now set the correct billing period** — a renewal used to stamp your
+  account with the billing cycle that had just *ended* (Stripe reports the old cycle on the invoice
+  itself; the new one is on its line items), so every subscriber's period looked expired the moment
+  they renewed. Renewals and plan changes now record the service period actually paid for.
 - **Usage page no longer freezes on a stale billing period** — if your monthly period lapsed
   without a renewal landing (comped accounts, or a delayed invoice), the usage breakdown silently
   clamped to the old window and showed nothing you'd spent since. It now falls back to the trailing

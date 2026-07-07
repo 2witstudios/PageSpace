@@ -776,6 +776,31 @@ describe('buildAgentTerminalHandlers', () => {
         expect(retry.activeSeconds).toBeCloseTo((2 * SETTLE_HEARTBEAT_MS) / 1000, 0);
       });
 
+      it('given the session is torn down while a heartbeat settle is FAILING, retries the pre-heartbeat window once instead of dropping it', async () => {
+        let rejectSettle: (e: Error) => void = () => {};
+        const billing = makeBilling({
+          trackUsage: vi.fn()
+            .mockImplementationOnce(() => new Promise((_, rej) => { rejectSettle = rej; })) // heartbeat settle hangs, then fails
+            .mockResolvedValue(undefined),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // heartbeat fires; settle in flight
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        onExitArg(0); // teardown races the failing settle — its end-settle bills only the ~0s tail
+        rejectSettle(new Error('db blip'));
+        await vi.advanceTimersByTimeAsync(0);
+
+        // The compensating attempt re-bills the full pre-heartbeat window against the original hold.
+        const calls = billing.trackUsage.mock.calls.map((c) => c[0]);
+        const compensating = calls.filter((c) => c.holdId === 'hold-1');
+        expect(compensating.length).toBeGreaterThanOrEqual(2); // the failed attempt + the retry
+        expect(compensating[compensating.length - 1].activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
+        // Total billed across all successful-looking calls still sums to the window (tail ≈ 0).
+        expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo((2 * SETTLE_HEARTBEAT_MS) / 1000, 0);
+      });
+
       it('given a gate infra error at a heartbeat, keeps the session alive (fail-open) rather than killing a live PTY', async () => {
         const billing = makeBilling({
           gate: vi.fn()

@@ -77,19 +77,30 @@ function toDate(ts?: number | null): Date | null {
 }
 
 /**
- * The renewal invoice is the period boundary: take period_start/period_end from
- * the invoice, falling back to the first line item's period. Either may be absent
- * (the schema allows NULL period dates).
+ * The renewal invoice is the period boundary. The SERVICE period being paid for
+ * lives on the invoice's line items — Stripe's invoice-level period_start/end
+ * describe the cycle that just ENDED (for a first invoice, both equal the
+ * creation instant), so stamping those froze every subscriber's window at
+ * "already expired" the moment their renewal landed (2026-07-07 audit). Prefer
+ * the line with the LATEST period end (a plan-change invoice carries proration
+ * lines for the old plan alongside the new plan's full period); fall back to
+ * the invoice-level fields only when no line carries a period.
  */
 function invoicePeriod(obj: FundingEventObject): { start: Date | null; end: Date | null } {
-  let start = toDate(obj.period_start);
-  let end = toDate(obj.period_end);
-  if (!start || !end) {
-    const linePeriod = obj.lines?.data?.[0]?.period;
-    start = start ?? toDate(linePeriod?.start);
-    end = end ?? toDate(linePeriod?.end);
+  let start: Date | null = null;
+  let end: Date | null = null;
+  for (const line of obj.lines?.data ?? []) {
+    const lineStart = toDate(line?.period?.start);
+    const lineEnd = toDate(line?.period?.end);
+    if (lineStart && lineEnd && (!end || lineEnd > end)) {
+      start = lineStart;
+      end = lineEnd;
+    }
   }
-  return { start, end };
+  return {
+    start: start ?? toDate(obj.period_start),
+    end: end ?? toDate(obj.period_end),
+  };
 }
 
 async function resolveUser(
