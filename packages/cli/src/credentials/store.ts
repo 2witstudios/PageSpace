@@ -15,7 +15,7 @@ import {
   parseKeychainAccountKey,
 } from './keychain.js';
 import type { KeychainAdapter, KeychainCredential } from './keychain.js';
-import { CredentialsFileFormatError, DEFAULT_PROFILE_NAME, parseHostCredential, serializeHostCredential, tokenPrefix } from './serialize.js';
+import { CredentialsFileFormatError, credentialSecret, DEFAULT_PROFILE_NAME, parseHostCredential, serializeHostCredential, tokenPrefix } from './serialize.js';
 import type { CredentialSummary, HostCredential } from './serialize.js';
 
 export interface OutputSink {
@@ -115,7 +115,7 @@ export class CompositeCredentialStore implements CredentialStore {
 
       try {
         const credential = parseHostCredential(entry.secret);
-        summaries.push({ host: account.host, tokenPrefix: tokenPrefix(credential.refreshToken) });
+        summaries.push({ host: account.host, tokenPrefix: tokenPrefix(credentialSecret(credential)) });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         this.stderr.write(

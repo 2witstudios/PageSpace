@@ -164,7 +164,24 @@ describe('GET /api/auth/me', () => {
 
       expect(response.status).toBe(200);
       expect(body.email).toBe(mockUser.email);
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth'], requireCSRF: false });
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth', 'mcp'], requireCSRF: false });
+    });
+
+    it('accepts an mcp-authenticated identity (CLI `pagespace keys create`\'s browser-consent flow mints a real mcp_* token, no longer an OAuth grant)', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        userId: 'test-user-id',
+        tokenType: 'mcp',
+        tokenId: 'mcp-token-id',
+        isScoped: true,
+        driveScopes: [],
+      } as never);
+      vi.mocked(isAuthError).mockReturnValue(false);
+
+      const response = await GET(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.email).toBe(mockUser.email);
     });
   });
 

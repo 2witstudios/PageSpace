@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { hasExplicitCredential, missingCredentialsMessage, noExplicitCredentialMessage, resolveAuth, resolveProfileName } from '../resolve.js';
-import type { HostCredential } from '../../credentials/serialize.js';
+import type { OAuthHostCredential } from '../../credentials/serialize.js';
 
 const HOST = 'https://pagespace.ai';
 const OTHER_HOST = 'https://self-hosted.example';
 
-const CREDENTIAL: HostCredential = {
+const CREDENTIAL: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   clientId: 'pagespace-cli',
   scopes: ['account', 'offline_access'],
@@ -61,7 +62,7 @@ describe('resolveAuth — precedence table', () => {
   });
 
   it('multiple stored profiles: only the one matching the resolved host is used', () => {
-    const other: HostCredential = { ...CREDENTIAL, refreshToken: 'ps_rt_other_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' };
+    const other: OAuthHostCredential = { ...CREDENTIAL, refreshToken: 'ps_rt_other_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' };
     const profiles = { [HOST]: { default: CREDENTIAL }, [OTHER_HOST]: { default: other } };
     expect(resolveAuth({}, {}, profiles, HOST)).toEqual({
       kind: 'profile',
@@ -111,7 +112,7 @@ describe('resolveAuth — precedence table', () => {
 });
 
 describe('resolveAuth — named profiles (Phase 8 task 3)', () => {
-  const WORK_CREDENTIAL: HostCredential = { ...CREDENTIAL, refreshToken: 'ps_rt_work_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' };
+  const WORK_CREDENTIAL: OAuthHostCredential = { ...CREDENTIAL, refreshToken: 'ps_rt_work_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' };
 
   it('resolves the credential stored under the given profile name, keyed one level deeper than host', () => {
     const profiles = { [HOST]: { default: CREDENTIAL, work: WORK_CREDENTIAL } };

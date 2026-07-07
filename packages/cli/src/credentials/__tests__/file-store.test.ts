@@ -3,16 +3,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileCredentialStore, PermissionError } from '@pagespace/cli';
-import type { HostCredential } from '@pagespace/cli';
+import type { OAuthHostCredential } from '@pagespace/cli';
 
-const CRED_A: HostCredential = {
+const CRED_A: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   clientId: 'cli-first-party',
   scopes: ['drives:read'],
   createdAt: '2026-07-03T00:00:00.000Z',
 };
 
-const CRED_B: HostCredential = {
+const CRED_B: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   clientId: 'cli-first-party',
   scopes: ['*'],

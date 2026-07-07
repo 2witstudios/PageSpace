@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createLoginHandler,
+  credentialSecret,
   EXIT_RUNTIME_ERROR,
   EXIT_SUCCESS,
   parseArgv,
@@ -9,6 +10,7 @@ import type { CredentialStore, HostCredential, LoopbackCallback, LoopbackServer 
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
 const FIXED_TOKENS = {
+  kind: 'oauth' as const,
   accessToken: 'ps_at_test',
   refreshToken: 'ps_rt_test',
   expiresIn: 900,
@@ -35,7 +37,7 @@ function fakeStore(initial: Map<string, HostCredential> = new Map()): Credential
     list: async () =>
       [...hosts.entries()]
         .filter(([, profiles]) => profiles.has('default'))
-        .map(([host, profiles]) => ({ host, tokenPrefix: profiles.get('default')!.refreshToken.slice(0, 12) })),
+        .map(([host, profiles]) => ({ host, tokenPrefix: credentialSecret(profiles.get('default')!).slice(0, 12) })),
   };
 }
 
@@ -180,7 +182,7 @@ describe('createLoginHandler', () => {
 
   it('refuses to overwrite an existing stored profile without --yes', async () => {
     const store = fakeStore(
-      new Map([['https://pagespace.ai', { refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
+      new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
     const handler = createLoginHandler(baseHandlerDeps(store));
 
@@ -196,7 +198,7 @@ describe('createLoginHandler', () => {
 
   it('overwrites an existing stored profile when --yes is passed', async () => {
     const store = fakeStore(
-      new Map([['https://pagespace.ai', { refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
+      new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
     const fake = fakeServer();
     const handler = createLoginHandler({
@@ -214,7 +216,7 @@ describe('createLoginHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     const stored = await store.get('https://pagespace.ai');
-    expect(stored?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
   });
 
   it('resolves the host from --host, falling back to PAGESPACE_API_URL, then the default', async () => {

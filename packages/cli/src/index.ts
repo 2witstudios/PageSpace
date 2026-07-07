@@ -27,6 +27,7 @@ export type { FileCredentialStoreOptions } from './credentials/file-store.js';
 export { createNativeKeychainAdapter, keychainAccountKey, parseKeychainAccountKey } from './credentials/keychain.js';
 export type { KeychainAccount, KeychainAdapter, KeychainCredential } from './credentials/keychain.js';
 export {
+  credentialSecret,
   CredentialsFileFormatError,
   DEFAULT_PROFILE_NAME,
   emptyCredentialsFile,
@@ -42,7 +43,7 @@ export {
   tokenPrefix,
   upsertHost,
 } from './credentials/serialize.js';
-export type { CredentialSummary, CredentialsFile, HostCredential, HostProfiles } from './credentials/serialize.js';
+export type { CredentialSummary, CredentialsFile, HostCredential, HostProfiles, OAuthHostCredential, StaticHostCredential } from './credentials/serialize.js';
 
 // Fixed exit code contract.
 export { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from './exit-codes.js';

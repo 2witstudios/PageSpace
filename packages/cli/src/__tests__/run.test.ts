@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CLI_VERSION, EXIT_SUCCESS, EXIT_USAGE_ERROR, run } from '@pagespace/cli';
+import { CLI_VERSION, credentialSecret, EXIT_SUCCESS, EXIT_USAGE_ERROR, run } from '@pagespace/cli';
 import type { HostCredential, RunDependencies } from '@pagespace/cli';
 import { createFakeCredentialStore, createRecordingSink } from './fake-context.js';
 
@@ -115,6 +115,7 @@ describe('run', () => {
 
       const store = createFakeCredentialStore();
       const personalCredential: HostCredential = {
+        kind: 'oauth',
         refreshToken: 'ps_rt_personal_secret',
         clientId: 'cli',
         scopes: ['full'],
@@ -130,7 +131,7 @@ describe('run', () => {
       expect(networkCalls).toBe(0);
 
       const stillStored = await store.get('https://pagespace.ai', 'default');
-      expect(stillStored?.refreshToken).toBe('ps_rt_personal_secret');
+      expect(credentialSecret(stillStored!)).toBe('ps_rt_personal_secret');
     });
   });
 
@@ -158,6 +159,7 @@ describe('run', () => {
 
       const store = createFakeCredentialStore();
       const personalCredential: HostCredential = {
+        kind: 'oauth',
         refreshToken: 'ps_rt_personal_secret',
         clientId: 'cli',
         scopes: ['manage_keys', 'offline_access'],
@@ -173,7 +175,7 @@ describe('run', () => {
       expect(networkCalls).toBe(0);
 
       const stillStored = await store.get('https://pagespace.ai', 'default');
-      expect(stillStored?.refreshToken).toBe('ps_rt_personal_secret');
+      expect(credentialSecret(stillStored!)).toBe('ps_rt_personal_secret');
     });
   });
 
@@ -218,6 +220,7 @@ describe('run', () => {
       try {
         const store = createFakeCredentialStore();
         await store.set('https://pagespace.ai', {
+          kind: 'oauth',
           refreshToken: 'ps_rt_personal_secret',
           clientId: 'cli',
           scopes: ['full'],
@@ -229,7 +232,7 @@ describe('run', () => {
 
         expect(code).toBe(EXIT_USAGE_ERROR);
         expect(networkCalls).toBe(0);
-        expect((await store.get('https://pagespace.ai', 'default'))?.refreshToken).toBe('ps_rt_personal_secret');
+        expect(credentialSecret((await store.get('https://pagespace.ai', 'default'))!)).toBe('ps_rt_personal_secret');
       } finally {
         vi.unstubAllGlobals();
       }
@@ -257,6 +260,7 @@ describe('run', () => {
       try {
         const store = createFakeCredentialStore();
         await store.set('https://pagespace.ai', {
+          kind: 'oauth',
           refreshToken: 'ps_rt_personal_secret',
           clientId: 'cli',
           scopes: ['manage_keys', 'offline_access'],

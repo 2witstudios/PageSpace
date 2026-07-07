@@ -3,17 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CompositeCredentialStore, FileCredentialStore } from '@pagespace/cli';
-import type { HostCredential, OutputSink } from '@pagespace/cli';
+import type { OAuthHostCredential, OutputSink } from '@pagespace/cli';
 import { createFakeKeychainAdapter, createUnavailableKeychainAdapter } from './fake-keychain.js';
 
-const CRED_A: HostCredential = {
+const CRED_A: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   clientId: 'cli-first-party',
   scopes: ['drives:read'],
   createdAt: '2026-07-03T00:00:00.000Z',
 };
 
-const CRED_B: HostCredential = {
+const CRED_B: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   clientId: 'cli-first-party',
   scopes: ['*'],

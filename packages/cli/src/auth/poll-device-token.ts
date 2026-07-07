@@ -71,7 +71,12 @@ export function createPollDeviceToken(fetchImpl: typeof fetch = fetch): PollDevi
 
     return {
       kind: 'success',
+      // `login --device` only ever requests `manage_keys offline_access`
+      // (never a pure drive:* grant), so the token endpoint's `ok_mcp_token`
+      // branch (oauth-repository.ts) never fires here — this is always the
+      // classic OAuth refresh/access-token pair, hence the literal 'oauth'.
       tokens: {
+        kind: 'oauth',
         accessToken: parsed.data.access_token,
         refreshToken: parsed.data.refresh_token,
         expiresIn: parsed.data.expires_in,

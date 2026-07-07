@@ -59,6 +59,15 @@ export function buildAuthProvider(source: AuthSource, deps: BuildAuthProviderDep
     case 'profile': {
       const { host, credential } = source;
       const profileName = source.profileName ?? DEFAULT_PROFILE_NAME;
+
+      // A static (mcp) credential has no refresh cycle at all — mcp_* tokens
+      // don't expire (see credentials/serialize.ts's StaticHostCredential
+      // doc comment) — so it's used exactly as given, same as `--token`/env,
+      // never refreshed or rewritten to the store.
+      if (credential.kind === 'static') {
+        return new StaticTokenProvider(credential.token);
+      }
+
       const refreshAccessToken: RefreshAccessToken = async (refreshToken) => {
         const metadata = await deps.discoverMetadata(host);
         const doRefresh = deps.createRefreshAccessToken(metadata.tokenEndpoint, credential.clientId);
@@ -87,6 +96,7 @@ export function buildAuthProvider(source: AuthSource, deps: BuildAuthProviderDep
           await deps.credentialStore.set(
             host,
             {
+              kind: 'oauth',
               refreshToken: tokens.refreshToken,
               clientId: credential.clientId,
               scopes,

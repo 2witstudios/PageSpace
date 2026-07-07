@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideNextPoll, runDeviceLogin } from '@pagespace/cli';
+import { credentialSecret, decideNextPoll, runDeviceLogin } from '@pagespace/cli';
 import type {
   DeviceAuthorization,
   DeviceLoginDeps,
@@ -22,6 +22,7 @@ const AUTHORIZATION: DeviceAuthorization = {
 };
 
 const TOKENS: ExchangedTokens = {
+  kind: 'oauth',
   accessToken: 'ps_at_test-access-token',
   refreshToken: 'ps_rt_test-refresh-token',
   expiresIn: 900,
@@ -135,6 +136,7 @@ describe('runDeviceLogin — happy path', () => {
     expect(result).toEqual({ outcome: 'success', identity: IDENTITY, scope: TOKENS.scope });
     expect(printed).toEqual([AUTHORIZATION]);
     expect(store.get('https://pagespace.ai')).toEqual({
+      kind: 'oauth',
       refreshToken: TOKENS.refreshToken,
       clientId: 'pagespace-cli',
       scopes: ['account', 'offline_access'],
@@ -215,7 +217,24 @@ describe('runDeviceLogin — happy path', () => {
     const result = await runDeviceLogin(deps);
 
     expect(result).toEqual({ outcome: 'success', identity: null, scope: TOKENS.scope });
-    expect(store.get('https://pagespace.ai')?.refreshToken).toBe(TOKENS.refreshToken);
+    expect(credentialSecret(store.get('https://pagespace.ai')!)).toBe(TOKENS.refreshToken);
+  });
+
+  it('treats an mcp-kind token result as poll_failed rather than mis-persisting it as an oauth credential — device flow only ever requests manage_keys scope, so this is a defensive, not a real, path', async () => {
+    let setCalls = 0;
+    const { deps } = baseDeps({
+      pollDeviceToken: async () => ({ kind: 'success', tokens: { kind: 'mcp', token: 'mcp_unexpected', scope: 'drive:d1:member' } }),
+      credentialStore: {
+        set: async () => {
+          setCalls += 1;
+        },
+      },
+    });
+
+    const result = await runDeviceLogin(deps);
+
+    expect(result).toEqual({ outcome: 'poll_failed', message: 'Unexpected token type from device grant: mcp' });
+    expect(setCalls).toBe(0);
   });
 });
 

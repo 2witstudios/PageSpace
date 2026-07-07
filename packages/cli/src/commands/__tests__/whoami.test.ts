@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createWhoamiHandler, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, parseArgv } from '@pagespace/cli';
-import type { HostCredential, CredentialStore } from '@pagespace/cli';
+import { createWhoamiHandler, credentialSecret, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, parseArgv } from '@pagespace/cli';
+import type { HostCredential, CredentialStore, OAuthHostCredential } from '@pagespace/cli';
 import type { OAuthTokens } from '@pagespace/sdk';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
-const CREDENTIAL: HostCredential = {
+const CREDENTIAL: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_old',
   clientId: 'pagespace-cli',
   scopes: ['account', 'offline_access'],
@@ -29,7 +30,7 @@ function fakeStore(initial: Map<string, HostCredential> = new Map()): Credential
     delete: async (host) => {
       initial.delete(host);
     },
-    list: async () => [...initial.entries()].map(([host, credential]) => ({ host, tokenPrefix: credential.refreshToken.slice(0, 12) })),
+    list: async () => [...initial.entries()].map(([host, credential]) => ({ host, tokenPrefix: credentialSecret(credential).slice(0, 12) })),
   };
 }
 
@@ -130,7 +131,7 @@ describe('createWhoamiHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(calls).toEqual(['persist', 'confirm']);
-    expect((await wrappedStore.get('https://pagespace.ai'))?.refreshToken).toBe(REFRESHED.refreshToken);
+    expect(credentialSecret((await wrappedStore.get('https://pagespace.ai'))!)).toBe(REFRESHED.refreshToken);
   });
 
   it('exits 1 and never leaks a token when the refresh grant is rejected', async () => {
@@ -205,7 +206,7 @@ describe('createWhoamiHandler', () => {
     expect(code).toBe(EXIT_SUCCESS);
     const parsed = JSON.parse(stdout.lines.join(''));
     expect(parsed.email).toBe(IDENTITY.email);
-    expect((await store.get('https://pagespace.ai', 'work'))?.refreshToken).toBe(REFRESHED.refreshToken);
+    expect(credentialSecret((await store.get('https://pagespace.ai', 'work'))!)).toBe(REFRESHED.refreshToken);
   });
 
   it('exits 1 "not logged in" when only a different profile is stored for the host', async () => {
@@ -240,5 +241,46 @@ describe('createWhoamiHandler', () => {
     expect(allOutput).not.toContain(REFRESHED.accessToken);
     expect(allOutput).not.toContain(REFRESHED.refreshToken);
     expect(allOutput).not.toContain(CREDENTIAL.refreshToken);
+  });
+
+  it('a static (mcp) credential reports its own stored scopes directly and confirms identity with its token — no refresh grant, no discovery, no store write', async () => {
+    const staticCredential: HostCredential = { kind: 'static', token: 'mcp_abc123', scopes: ['drive:d1:member', 'offline_access'], createdAt: '2026-01-01T00:00:00.000Z' };
+    const store = fakeStore(new Map([['https://pagespace.ai', staticCredential]]));
+    let discoverCalls = 0;
+    let confirmIdentityAccessToken: string | undefined;
+    const setCalls: unknown[] = [];
+    const wrappedStore: CredentialStore = {
+      ...store,
+      set: async (...args) => {
+        setCalls.push(args);
+        return store.set(...args);
+      },
+    };
+    const handler = createWhoamiHandler({
+      createCredentialStore: () => wrappedStore,
+      discoverMetadata: async () => {
+        discoverCalls += 1;
+        throw new Error('must not be called for a static credential');
+      },
+      createRefreshAccessToken: () => {
+        throw new Error('must not be called for a static credential — mcp_* tokens never refresh');
+      },
+      confirmIdentity: async ({ accessToken }) => {
+        confirmIdentityAccessToken = accessToken;
+        return IDENTITY;
+      },
+      now: () => Date.parse('2026-07-03T00:00:00.000Z'),
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+    const code = await handler(ctx, commandIntent(['whoami', '--json']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(discoverCalls).toBe(0);
+    expect(setCalls).toEqual([]);
+    expect(confirmIdentityAccessToken).toBe('mcp_abc123');
+    const parsed = JSON.parse(stdout.lines.join(''));
+    expect(parsed.scopes).toEqual(['drive:d1:member', 'offline_access']);
   });
 });

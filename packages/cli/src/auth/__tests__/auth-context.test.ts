@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { isAuthenticationError } from '@pagespace/sdk';
 import { buildAuthProvider, enforceAuth, FailingAuthProvider } from '../auth-context.js';
 import { missingCredentialsMessage, resolveAuth } from '../resolve.js';
-import type { HostCredential } from '../../credentials/serialize.js';
+import type { HostCredential, OAuthHostCredential } from '../../credentials/serialize.js';
+import { credentialSecret } from '../../credentials/serialize.js';
 import { EXIT_RUNTIME_ERROR } from '../../exit-codes.js';
 
 const HOST = 'https://pagespace.ai';
 
-const CREDENTIAL: HostCredential = {
+const CREDENTIAL: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_original_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   clientId: 'pagespace-cli',
   scopes: ['account', 'offline_access'],
@@ -38,7 +40,7 @@ function fakeStoreSpy(initial: Record<string, HostCredential> = {}) {
       hosts.delete(host);
     },
     async list() {
-      return [...hosts.keys()].map((host) => ({ host, tokenPrefix: hosts.get(host)!.refreshToken.slice(0, 12) }));
+      return [...hosts.keys()].map((host) => ({ host, tokenPrefix: credentialSecret(hosts.get(host)!).slice(0, 12) }));
     },
   };
 }
@@ -129,6 +131,7 @@ describe('buildAuthProvider — profile source (silent OAuth refresh)', () => {
     expect(store.setCalls[0]).toEqual({
       host: HOST,
       credential: {
+        kind: 'oauth',
         refreshToken: 'ps_rt_rotated',
         clientId: CREDENTIAL.clientId,
         scopes: CREDENTIAL.scopes,
@@ -178,6 +181,39 @@ describe('buildAuthProvider — profile source (silent OAuth refresh)', () => {
     );
 
     await expect(provider.getAccessToken()).rejects.toSatisfy((error: unknown) => isAuthenticationError(error));
+    expect(store.setCalls).toEqual([]);
+  });
+});
+
+describe('buildAuthProvider — profile source, static (mcp) credential', () => {
+  const STATIC_CREDENTIAL: HostCredential = {
+    kind: 'static',
+    token: 'mcp_abc123',
+    scopes: ['drive:d1:member', 'offline_access'],
+    createdAt: '2026-07-03T00:00:00.000Z',
+  };
+
+  it('getAccessToken resolves to the stored token directly, never touching discovery or the store — same statelessness as flag/env', async () => {
+    const store = fakeStoreSpy();
+    let discoverCalls = 0;
+    const provider = buildAuthProvider(
+      { kind: 'profile', host: HOST, credential: STATIC_CREDENTIAL },
+      {
+        discoverMetadata: async () => {
+          discoverCalls += 1;
+          return { authorizationEndpoint: 'x', tokenEndpoint: 'y' };
+        },
+        createRefreshAccessToken: () => {
+          throw new Error('must not be called for a static credential — mcp_* tokens never refresh');
+        },
+        credentialStore: store,
+        now: () => 0,
+      },
+    );
+
+    expect(await provider.getAccessToken()).toBe('mcp_abc123');
+    expect(await provider.getAccessToken()).toBe('mcp_abc123');
+    expect(discoverCalls).toBe(0);
     expect(store.setCalls).toEqual([]);
   });
 });

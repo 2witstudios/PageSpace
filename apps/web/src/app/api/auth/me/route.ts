@@ -3,10 +3,12 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
 
-// Session (browser) and OAuth (CLI `pagespace login` identity confirmation,
-// ADR 0003) both resolve identity the same way; `mcp_*` tokens are scoped
-// agent credentials with no single "current user" concept and stay excluded.
-const AUTH_OPTIONS = { allow: ['session', 'oauth'] as const, requireCSRF: false };
+// Session (browser), OAuth (CLI `pagespace login` identity confirmation,
+// ADR 0003), and `mcp` (CLI `pagespace keys create` identity confirmation —
+// its browser-consent flow now mints a real mcp_* token, not an OAuth grant,
+// see oauth-repository.ts's `ok_mcp_token` branch) all resolve to a real
+// `userId` and are allowed here.
+const AUTH_OPTIONS = { allow: ['session', 'oauth', 'mcp'] as const, requireCSRF: false };
 
 export async function GET(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);

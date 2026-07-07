@@ -15,16 +15,18 @@ import {
   tokenPrefix,
   upsertHost,
 } from '@pagespace/cli';
-import type { CredentialsFile, HostCredential, HostProfiles } from '@pagespace/cli';
+import type { CredentialsFile, HostProfiles, OAuthHostCredential } from '@pagespace/cli';
 
-const CRED_A: HostCredential = {
+const CRED_A: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   clientId: 'cli-first-party',
   scopes: ['drives:read', 'drives:write'],
   createdAt: '2026-07-03T00:00:00.000Z',
 };
 
-const CRED_B: HostCredential = {
+const CRED_B: OAuthHostCredential = {
+  kind: 'oauth',
   refreshToken: 'ps_rt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   clientId: 'cli-first-party',
   scopes: ['*'],

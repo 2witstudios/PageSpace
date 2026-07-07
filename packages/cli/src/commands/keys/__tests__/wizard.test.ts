@@ -4,6 +4,7 @@ import type { CredentialStore, HostCredential, LoopbackCallback, LoopbackServer 
 import { parseArgv } from '../../../argv/parse.js';
 import type { CommandIntent } from '../../../argv/parse.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../../exit-codes.js';
+import { credentialSecret } from '../../../credentials/serialize.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
 
 // `vi.mock` factories are hoisted above every top-level `const` in this file,
@@ -61,7 +62,7 @@ function fakeStore(): CredentialStore {
       hosts.get(host)?.delete(profile);
     },
     list: async (profile = 'default') =>
-      [...hosts.entries()].filter(([, profiles]) => profiles.has(profile)).map(([host, profiles]) => ({ host, tokenPrefix: profiles.get(profile)!.refreshToken.slice(0, 12) })),
+      [...hosts.entries()].filter(([, profiles]) => profiles.has(profile)).map(([host, profiles]) => ({ host, tokenPrefix: credentialSecret(profiles.get(profile)!).slice(0, 12) })),
   };
 }
 
@@ -97,7 +98,7 @@ function fakeLoopbackServer(port = 55555) {
   };
 }
 
-const FIXED_TOKENS = { accessToken: 'ps_at_test', refreshToken: 'ps_rt_test', expiresIn: 900, scope: 'drive:drv1:member offline_access' };
+const FIXED_TOKENS = { kind: 'oauth' as const, accessToken: 'ps_at_test', refreshToken: 'ps_rt_test', expiresIn: 900, scope: 'drive:drv1:member offline_access' };
 
 function baseMintDeps(store: CredentialStore) {
   return {
@@ -178,7 +179,7 @@ describe('createKeysHandler — Create flow', () => {
     expect(code).toBe(EXIT_SUCCESS);
     expect(drivesList).toHaveBeenCalledWith({ tokenScopable: true });
     const stored = await store.get('https://pagespace.ai', 'my-profile');
-    expect(stored?.refreshToken).toBe(FIXED_TOKENS.refreshToken);
+    expect(stored && credentialSecret(stored)).toBe(FIXED_TOKENS.refreshToken);
     expect(introMock).toHaveBeenCalled();
     expect(outroMock).toHaveBeenCalledWith('Bye.');
     // The overwrite-check and the mint itself must share ONE CompositeCredentialStore

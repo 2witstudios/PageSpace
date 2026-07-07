@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runLoopbackLogin } from '@pagespace/cli';
+import { credentialSecret, runLoopbackLogin } from '@pagespace/cli';
 import type {
   DiscoveredMetadata,
   ExchangeCodeParams,
@@ -17,6 +17,7 @@ const METADATA: DiscoveredMetadata = {
 };
 
 const TOKENS: ExchangedTokens = {
+  kind: 'oauth',
   accessToken: 'ps_at_test-access-token',
   refreshToken: 'ps_rt_test-refresh-token',
   expiresIn: 900,
@@ -152,6 +153,7 @@ describe('runLoopbackLogin — happy path', () => {
 
     expect(result).toEqual({ outcome: 'success', identity: IDENTITY, scope: TOKENS.scope });
     expect(store.get('https://pagespace.ai')).toEqual({
+      kind: 'oauth',
       refreshToken: TOKENS.refreshToken,
       clientId: 'pagespace-cli',
       scopes: ['account', 'offline_access'],
@@ -255,7 +257,7 @@ describe('runLoopbackLogin — happy path', () => {
     });
 
     expect(result).toEqual({ outcome: 'success', identity: null, scope: TOKENS.scope });
-    expect(store.get('https://pagespace.ai')?.refreshToken).toBe(TOKENS.refreshToken);
+    expect(credentialSecret(store.get('https://pagespace.ai')!)).toBe(TOKENS.refreshToken);
   });
 
   it('prints the authorize URL via onBrowserOpenFailed when openBrowser fails, but still completes login', async () => {
@@ -276,6 +278,38 @@ describe('runLoopbackLogin — happy path', () => {
     expect(result.outcome).toBe('success');
     expect(failedUrls).toHaveLength(1);
     expect(failedUrls[0]).toMatch(/^https:\/\/pagespace\.ai\/api\/oauth\/authorize/);
+  });
+
+  it('persists a static credential (no refresh token, no clientId) when the exchange returns an mcp-kind token, and confirms identity using that token directly — this is pagespace keys create\'s pure drive:* grant path', async () => {
+    const mcpTokens: ExchangedTokens = { kind: 'mcp', token: 'mcp_abc123', scope: 'drive:d1:member offline_access' };
+    let confirmIdentityAccessToken: string | undefined;
+    const { deps, store } = baseDeps({
+      exchangeCode: async () => mcpTokens,
+      confirmIdentity: async ({ accessToken }) => {
+        confirmIdentityAccessToken = accessToken;
+        return IDENTITY;
+      },
+    });
+    const fake = createFakeServer();
+
+    const result = await runLoopbackLogin({
+      ...deps,
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        const state = stateFromAuthorizeUrl(url);
+        queueMicrotask(() => fake.deliver({ code: 'auth-code-123', state }));
+        return true;
+      },
+    });
+
+    expect(result).toEqual({ outcome: 'success', identity: IDENTITY, scope: mcpTokens.scope });
+    expect(store.get('https://pagespace.ai')).toEqual({
+      kind: 'static',
+      token: 'mcp_abc123',
+      scopes: ['drive:d1:member', 'offline_access'],
+      createdAt: '2026-07-03T00:00:00.000Z',
+    });
+    expect(confirmIdentityAccessToken).toBe('mcp_abc123');
   });
 });
 

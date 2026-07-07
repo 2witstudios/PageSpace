@@ -1,13 +1,17 @@
 /**
- * `pagespace whoami [--host <url>] [--json]` (Phase 4 task 5). No access
- * token is cached between CLI invocations (`pagespace login` discards it
- * once its own `confirmIdentity` call has run), so every `whoami` call
- * performs one refresh_token grant to mint a fresh access token, reusing
- * the same discovery + `confirmIdentity` effects `pagespace login` uses.
+ * `pagespace whoami [--host <url>] [--json]` (Phase 4 task 5). For an
+ * `oauth`-kind (OAuth refresh/access-token) credential, no access token is
+ * cached between CLI invocations (`pagespace login` discards it once its own
+ * `confirmIdentity` call has run), so every `whoami` call performs one
+ * refresh_token grant to mint a fresh access token, reusing the same
+ * discovery + `confirmIdentity` effects `pagespace login` uses.
  * Persist-before-use (ADR 0003 §3.5): the rotated refresh token is written
  * to the credential store BEFORE the new access token is used to call the
  * identity endpoint, so a crash between refresh and identity confirmation
- * never strands a rotated-away token.
+ * never strands a rotated-away token. A `static`-kind credential (`pagespace
+ * keys create`'s `mcp_*` token) has no refresh cycle at all — its stored
+ * scopes ARE the current grant, and the token itself confirms identity
+ * directly, no discovery/refresh effects needed.
  *
  * Non-interactive: a missing credential exits 1 immediately, never
  * prompting — safe in CI/non-TTY.
@@ -51,43 +55,57 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
       return EXIT_RUNTIME_ERROR;
     }
 
-    let tokenEndpoint: string;
-    try {
-      tokenEndpoint = (await deps.discoverMetadata(host)).tokenEndpoint;
-    } catch (error) {
-      ctx.stderr.write(`Could not confirm identity on ${host}: ${error instanceof Error ? error.message : String(error)}\n`);
-      return EXIT_RUNTIME_ERROR;
-    }
+    // A static (mcp) credential has no refresh cycle — mcp_* tokens don't
+    // expire — so there is no live refresh response to reconcile scope
+    // against; the credential's own stored scopes ARE the current grant, and
+    // the token itself is used directly to confirm identity.
+    let accessToken: string;
+    let scopes: readonly string[];
 
-    let tokens;
-    try {
-      const doRefresh = deps.createRefreshAccessToken(tokenEndpoint, credential.clientId);
-      tokens = await doRefresh(credential.refreshToken);
-    } catch {
-      ctx.stderr.write(`Not logged in to ${host}: stored credential was rejected. Run "pagespace login" again.\n`);
-      return EXIT_RUNTIME_ERROR;
-    }
+    if (credential.kind === 'static') {
+      accessToken = credential.token;
+      scopes = credential.scopes;
+    } else {
+      let tokenEndpoint: string;
+      try {
+        tokenEndpoint = (await deps.discoverMetadata(host)).tokenEndpoint;
+      } catch (error) {
+        ctx.stderr.write(`Could not confirm identity on ${host}: ${error instanceof Error ? error.message : String(error)}\n`);
+        return EXIT_RUNTIME_ERROR;
+      }
 
-    // Prefer the server's live, authoritative scope from this refresh over
-    // the locally-cached value — whoami exists to confirm CURRENT grants, and
-    // a refresh response scope reflects any server-side narrowing/change
-    // since the credential was last stored. Fall back to the stored scopes
-    // only if the transport didn't capture one.
-    const scopes = tokens.scope !== undefined ? tokens.scope.split(' ').filter(Boolean) : credential.scopes;
-    await store.set(
-      host,
-      {
-        refreshToken: tokens.refreshToken,
-        clientId: credential.clientId,
-        scopes,
-        createdAt: new Date(deps.now()).toISOString(),
-      },
-      profileName,
-    );
+      let tokens;
+      try {
+        const doRefresh = deps.createRefreshAccessToken(tokenEndpoint, credential.clientId);
+        tokens = await doRefresh(credential.refreshToken);
+      } catch {
+        ctx.stderr.write(`Not logged in to ${host}: stored credential was rejected. Run "pagespace login" again.\n`);
+        return EXIT_RUNTIME_ERROR;
+      }
+
+      // Prefer the server's live, authoritative scope from this refresh over
+      // the locally-cached value — whoami exists to confirm CURRENT grants,
+      // and a refresh response scope reflects any server-side
+      // narrowing/change since the credential was last stored. Fall back to
+      // the stored scopes only if the transport didn't capture one.
+      scopes = tokens.scope !== undefined ? tokens.scope.split(' ').filter(Boolean) : credential.scopes;
+      await store.set(
+        host,
+        {
+          kind: 'oauth',
+          refreshToken: tokens.refreshToken,
+          clientId: credential.clientId,
+          scopes,
+          createdAt: new Date(deps.now()).toISOString(),
+        },
+        profileName,
+      );
+      accessToken = tokens.accessToken;
+    }
 
     let identity;
     try {
-      identity = await deps.confirmIdentity({ host, accessToken: tokens.accessToken });
+      identity = await deps.confirmIdentity({ host, accessToken });
     } catch (error) {
       ctx.stderr.write(`Could not confirm identity on ${host}: ${error instanceof Error ? error.message : String(error)}\n`);
       return EXIT_RUNTIME_ERROR;

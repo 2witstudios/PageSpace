@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseScopeList,
   formatScopeSet,
+  isPureDriveGrant,
   isScopeSubset,
   scopeSetToDriveScopes,
   checkGrantAuthority,
@@ -463,6 +464,33 @@ describe('scopeSetToDriveScopes (bridge to mcp_token_drives shape, Decision 2)',
       { driveId: 'aaa', role: null, customRoleId: null },
       { driveId: 'bbb', role: 'ADMIN', customRoleId: null },
     ]);
+  });
+});
+
+describe('isPureDriveGrant (Phase 9 follow-up: gates OAuth token exchange vs a real mcp_tokens mint)', () => {
+  it('true for one or more drive:* scopes with no account/manage_keys', () => {
+    const scopes = emptySet({ drives: drives(['x', { kind: 'drive', driveId: 'x', role: { kind: 'member' } }]) });
+    expect(isPureDriveGrant(scopes)).toBe(true);
+  });
+
+  it('true regardless of offlineAccess', () => {
+    const scopes = emptySet({
+      offlineAccess: true,
+      drives: drives(['x', { kind: 'drive', driveId: 'x', role: { kind: 'inherit' } }]),
+    });
+    expect(isPureDriveGrant(scopes)).toBe(true);
+  });
+
+  it('false for account (parse-time exclusion already guarantees no drives alongside it, but the predicate stands on its own)', () => {
+    expect(isPureDriveGrant(emptySet({ account: true }))).toBe(false);
+  });
+
+  it('false for manage_keys', () => {
+    expect(isPureDriveGrant(emptySet({ manageKeys: true }))).toBe(false);
+  });
+
+  it('false for an empty scope set with no drives at all (e.g. offline_access alone would fail parseScopeList before reaching here, but the predicate itself must not treat "nothing" as a drive grant)', () => {
+    expect(isPureDriveGrant(emptySet())).toBe(false);
   });
 });
 
