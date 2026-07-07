@@ -162,15 +162,40 @@ export async function middleware(req: NextRequest) {
     // `/options` step) support an authenticated-session mode too — that's enforced inside the
     // route itself, not here; `/passkey/register/handoff` (which mints the handoff token) is
     // deliberately NOT in this list since it always requires a session.
+    // `/api/auth/apple/` mirrors the existing `/api/auth/google` carve-out above: OAuth
+    // initiation (signin) and the provider callback both run with no session yet.
+    // `/api/auth/step-up/magic-link/verify` is the click-through target of a step-up
+    // confirmation email — like `/api/auth/verify-email`, it authenticates via the emailed
+    // token alone and (per its own doc comment) never creates a session.
+    // `/api/auth/logout` must stay reachable with NO session cookie: per its own comment, it
+    // still needs to revoke a device token by value when the cookie is already missing or
+    // expired — exactly the moment that token is the only credential left to invalidate.
+    // `/api/internal/*` (contact, monitoring/ingest) authenticate via a shared secret in a
+    // custom header or a non-prefixed Bearer value — never a session or a recognized MCP/
+    // session/OAuth bearer prefix — same rationale as the webhooks above.
+    // `/api/notifications/unsubscribe/[token]` is an opaque-token email unsubscribe link,
+    // clicked by (often logged-out) recipients.
+    // `/api/ai/models`, `/api/compiled-css`, `/api/avatar/[userId]/[filename]`, and
+    // `/api/provisioning-status/[slug]` are public-by-design per this codebase's own
+    // apps/web/src/app/api/__tests__/security-audit-coverage.test.ts allowlist (model
+    // catalog, static CSS, public avatar images, tenant-onboarding status polling) and call
+    // no auth function at all — confirmed by reading each route.ts directly.
+    // `/api/contact` is the public marketing contact form (ContactForm.tsx), unauthenticated
+    // by design.
     if (
       pathname.startsWith('/api/auth/csrf') ||
       pathname.startsWith('/api/auth/login-csrf') ||
       pathname.startsWith('/api/auth/magic-link/') ||
       pathname.startsWith('/api/auth/google') ||
+      pathname.startsWith('/api/auth/apple/') ||
       pathname.startsWith('/api/auth/passkey/authenticate') ||
       pathname.startsWith('/api/auth/device/') ||
       pathname.startsWith('/api/auth/mobile/') ||
       pathname.startsWith('/api/auth/desktop/') ||
+      pathname.startsWith('/api/internal/') ||
+      pathname.startsWith('/api/notifications/unsubscribe/') ||
+      pathname.startsWith('/api/avatar/') ||
+      pathname.startsWith('/api/provisioning-status/') ||
       pathname.startsWith('/api/mcp/') ||
       pathname.startsWith('/api/drives') ||
       pathname.startsWith('/api/cron/') ||
@@ -188,6 +213,11 @@ export async function middleware(req: NextRequest) {
       pathname === '/api/auth/passkey/register' ||
       pathname === '/api/auth/passkey/register/options' ||
       pathname === '/api/auth/verify-email' ||
+      pathname === '/api/auth/step-up/magic-link/verify' ||
+      pathname === '/api/auth/logout' ||
+      pathname === '/api/ai/models' ||
+      pathname === '/api/compiled-css' ||
+      pathname === '/api/contact' ||
       pathname === '/api/health' ||
       pathname === '/api/version'
     ) {
