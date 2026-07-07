@@ -164,24 +164,24 @@ describe('GET /api/auth/me', () => {
 
       expect(response.status).toBe(200);
       expect(body.email).toBe(mockUser.email);
-      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth', 'mcp'], requireCSRF: false });
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth'], requireCSRF: false });
     });
 
-    it('accepts an mcp-authenticated identity (CLI `pagespace keys create`\'s browser-consent flow mints a real mcp_* token, no longer an OAuth grant)', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
-        userId: 'test-user-id',
-        tokenType: 'mcp',
-        tokenId: 'mcp-token-id',
-        isScoped: true,
-        driveScopes: [],
-      } as never);
-      vi.mocked(isAuthError).mockReturnValue(false);
+    it('does not allow mcp bearer auth — a scoped agent credential must never resolve the personal owner\'s profile', async () => {
+      // `authenticateRequestWithOptions` is mocked at the boundary in this
+      // file, so this can't exercise the real allow-list rejection end to
+      // end — it pins the contract this route depends on: 'mcp' must be
+      // absent from AUTH_OPTIONS.allow, so the real (unmocked)
+      // authenticateRequestWithOptions rejects an mcp_* bearer token before
+      // this handler's own logic ever runs. `pagespace keys create` mints a
+      // scoped mcp_* token — its own `confirmIdentity` call against this
+      // route degrades to a caught, silently-absorbed failure
+      // (loopback-flow.ts), not a functional break: `keys create` never
+      // reads that result (only `login`/`login-device`/`whoami` do, and
+      // none of those authenticate with an mcp_* token).
+      await GET(createRequest());
 
-      const response = await GET(createRequest());
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.email).toBe(mockUser.email);
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.anything(), { allow: ['session', 'oauth'], requireCSRF: false });
     });
   });
 

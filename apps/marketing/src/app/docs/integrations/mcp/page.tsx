@@ -36,13 +36,13 @@ Mint the drive-scoped key \`pagespace mcp\` actually needs with the guided wizar
 pagespace keys
 \`\`\`
 
-Or, flag-driven (same thing, no prompts — this is what **agents, CI, and service accounts** without a browser-driven human at the keyboard should script against, or use a token minted from **Settings > MCP** instead):
+Or, flag-driven (same thing, no interactive wizard prompts — for scripting the *setup* step itself, run once by a human):
 
 \`\`\`bash
 pagespace keys create --name "Claude Desktop" --drive <driveId> --role member --save-as-profile agent
 \`\`\`
 
-Either way opens a browser for a one-time consent screen (minting is always a deliberate, human-approved step, never a silent agent-runnable call) and stores the result locally under a named profile — there's no raw token to copy-paste from the CLI. For a **portable** token to hand to a different machine (CI, a service account elsewhere), mint one from **Settings > MCP** instead: it prints an \`mcp_...\` token **once** — only a SHA3-256 hash is stored server-side. Either way, scoping to specific drives joins those drives as an **app** on the member list, governed by the role you give it there; scoped credentials cannot create new drives.
+Either way opens a browser for a one-time consent screen (minting is always a deliberate, human-approved step, never a silent agent-runnable call) and stores the result locally under a named profile — there's no raw token to copy-paste from the CLI, so this only works for an agent running on *this same machine*. **Agents, CI, and service accounts without a browser-driven human at the keyboard** — or anywhere you need a portable token to hand to a *different* machine — can't use \`pagespace keys create\` at all; mint a token from **Settings > MCP** instead: it prints an \`mcp_...\` token **once** — only a SHA3-256 hash is stored server-side. Either way, scoping to specific drives joins those drives as an **app** on the member list, governed by the role you give it there; scoped credentials cannot create new drives.
 
 ## Step 2: Configure your AI tool
 

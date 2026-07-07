@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAuthenticationError } from '@pagespace/sdk';
+import { AuthenticationError, isAuthenticationError } from '@pagespace/sdk';
 import { buildAuthProvider, enforceAuth, FailingAuthProvider } from '../auth-context.js';
 import { missingCredentialsMessage, resolveAuth } from '../resolve.js';
 import type { HostCredential, OAuthHostCredential } from '../../credentials/serialize.js';
@@ -291,6 +291,31 @@ describe('enforceAuth', () => {
     expect(result).toBe(EXIT_RUNTIME_ERROR);
     expect(store.deleteCalls).toEqual([HOST]);
     expect(stderr.lines.join('')).toMatch(/pagespace login/);
+  });
+
+  it('on a static (mcp) credential rejection: purges it and tells the user to re-mint with "pagespace keys create", not "pagespace login"', async () => {
+    const staticCredential: HostCredential = {
+      kind: 'static',
+      token: 'mcp_revoked',
+      scopes: ['drive:d1:member', 'offline_access'],
+      createdAt: '2026-07-03T00:00:00.000Z',
+    };
+    const store = fakeStoreSpy({ [HOST]: staticCredential });
+    const stderr = fakeSink();
+    const source = { kind: 'profile' as const, host: HOST, credential: staticCredential };
+    const auth = {
+      getAccessToken: async () => {
+        throw new AuthenticationError('token revoked');
+      },
+    };
+
+    const result = await enforceAuth({ auth, source, credentialStore: store, stderr });
+
+    expect(result).toBe(EXIT_RUNTIME_ERROR);
+    expect(store.deleteCalls).toEqual([HOST]);
+    const message = stderr.lines.join('');
+    expect(message).toMatch(/pagespace keys create/);
+    expect(message).not.toMatch(/pagespace login/);
   });
 
   it('on zero credentials: exits 1 naming all three provision options, never purges, never prompts', async () => {

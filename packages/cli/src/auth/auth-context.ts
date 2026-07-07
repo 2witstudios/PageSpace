@@ -134,8 +134,14 @@ export async function enforceAuth(deps: EnforceAuthDeps): Promise<ExitCode | nul
   } catch (error) {
     if (deps.source.kind === 'profile' && isAuthenticationError(error)) {
       await deps.credentialStore.delete(deps.source.host, deps.source.profileName ?? DEFAULT_PROFILE_NAME);
+      // A static (mcp) credential has no refresh cycle to fail — this only
+      // fires once the token itself has been rejected (revoked/invalid), so
+      // "log in again" is the wrong remediation: there's no login session to
+      // refresh, only a key to re-mint.
       deps.stderr.write(
-        `Your stored credentials for ${deps.source.host} could not be refreshed. Run "pagespace login" again.\n`,
+        deps.source.credential.kind === 'static'
+          ? `Your stored key for ${deps.source.host} was rejected. Re-mint it with "pagespace keys create" (or "pagespace keys" for the guided wizard).\n`
+          : `Your stored credentials for ${deps.source.host} could not be refreshed. Run "pagespace login" again.\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }

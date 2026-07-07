@@ -76,7 +76,7 @@ against once that agent has real shell access.
   host, or every host with `--all`.
 - **`pagespace whoami [--json]`** — prints the identity and scope the current credential resolves
   to.
-- **`pagespace keys`** — the one surface for creating, listing, editing, and revoking drive-scoped
+- **`pagespace keys`** — the one surface for creating, listing, and revoking drive-scoped
   keys without leaving the terminal: a guided TUI wizard, plus flag-driven, scriptable equivalents
   of the same actions.
   - **`pagespace keys create --drive <id> --role member|admin|<roleId> [--drive <id> --role ...] --save-as-profile <name> [--yes]`**
@@ -95,7 +95,7 @@ against once that agent has real shell access.
 
 Every command resolves auth and host the same way:
 
-```
+```text
 --token / --host flag  >  PAGESPACE_TOKEN / PAGESPACE_API_URL env  >  stored profile credential  >  default host (https://pagespace.ai)
 ```
 
