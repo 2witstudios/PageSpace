@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
 import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
-import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { getAppDriveMembership, getScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { drives as drivesTable } from '@pagespace/db/schema/core';
@@ -10,12 +10,12 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth, isScopedOAuthAuth } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { safeParseBody } from '@/lib/validation/parse-body';
 
-const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 const createDriveSchema = z.object({
@@ -62,6 +62,23 @@ export async function GET(req: Request) {
           };
         })
       );
+    } else if (isScopedOAuthAuth(auth) && auth.allowedDriveIds.length > 0) {
+      const rows = await db.query.drives.findMany({
+        where: includeTrash
+          ? inArray(drivesTable.id, auth.allowedDriveIds)
+          : and(inArray(drivesTable.id, auth.allowedDriveIds), eq(drivesTable.isTrashed, false)),
+      });
+      drives = rows.map((drive) => {
+        const membership = getScopedDriveMembership(auth.driveScopes, drive.id);
+        const role = membership?.role
+          ?? (drive.ownerId === userId ? ('OWNER' as const) : ('MEMBER' as const));
+        return {
+          ...drive,
+          isOwned: membership?.role === null && drive.ownerId === userId,
+          role,
+          lastAccessedAt: null,
+        };
+      });
     } else {
       drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
     }

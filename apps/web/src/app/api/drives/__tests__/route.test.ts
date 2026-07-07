@@ -53,11 +53,13 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  isScopedOAuthAuth: vi.fn(() => false),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   getAppDriveMembership: vi.fn(),
+  getScopedDriveMembership: vi.fn(),
 }));
 
 import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive-service'
@@ -133,7 +135,7 @@ describe('GET /api/drives', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session', 'mcp'], requireCSRF: false }
+        { allow: ['session', 'mcp', 'oauth'], requireCSRF: false }
       );
     });
   });
