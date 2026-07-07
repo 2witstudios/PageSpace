@@ -102,7 +102,7 @@ describe('GET /api/connections/search', () => {
       { id: mockUserId, email: currentEmail } as unknown as Awaited<ReturnType<typeof verifyAuth>>,
     );
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
-    setupSelect([[{ id: mockUserId, email: currentEmail }]]);
+    setupSelect([]);
   });
 
   it('returns 401 when unauthenticated', async () => {
@@ -134,7 +134,7 @@ describe('GET /api/connections/search', () => {
   });
 
   it('returns the actionable user when one can be invited (exists, not self, no connection)', async () => {
-    setupSelect([[{ id: mockUserId, email: currentEmail }], [targetRow], []]);
+    setupSelect([[targetRow], []]);
     const response = await GET(new Request('http://localhost/api/connections/search?email=other@test.com'));
     const body = await response.json();
     expect(response.status).toBe(200);
@@ -151,16 +151,29 @@ describe('GET /api/connections/search', () => {
   });
 
   it('collapses self-search into a generic { user: null } with no error', async () => {
-    // email === current user's email
-    setupSelect([[{ id: mockUserId, email: currentEmail }], [{ ...targetRow, email: currentEmail }], []]);
+    // Searching your own email: the dual lookup resolves to the caller's own
+    // row (same id), so isSelf collapses the response.
+    setupSelect([[{ ...targetRow, id: mockUserId, email: currentEmail }], []]);
     const response = await GET(new Request(`http://localhost/api/connections/search?email=${currentEmail}`));
     const body = await response.json();
     expect(body).toEqual({ user: null });
     expect(body).not.toHaveProperty('error');
   });
 
+  it('collapses a case-variant self-search into { user: null } (no self-profile enumeration)', async () => {
+    // The blind index normalizes case, so "CURRENT@TEST.COM" resolves to the
+    // caller's own row. db is chain-mocked here, so this proves the id-based
+    // isSelf decision, not the blind-index SQL itself: a target row carrying
+    // the caller's id must collapse regardless of the searched string's case.
+    setupSelect([[{ ...targetRow, id: mockUserId, email: currentEmail }], []]);
+    const response = await GET(new Request('http://localhost/api/connections/search?email=CURRENT@TEST.COM'));
+    const body = await response.json();
+    expect(body).toEqual({ user: null });
+    expect(body).not.toHaveProperty('error');
+  });
+
   it('collapses "no account" into a generic { user: null } with no error', async () => {
-    setupSelect([[{ id: mockUserId, email: currentEmail }], [], []]);
+    setupSelect([[], []]);
     const response = await GET(new Request('http://localhost/api/connections/search?email=ghost@test.com'));
     const body = await response.json();
     expect(body).toEqual({ user: null });
@@ -169,7 +182,7 @@ describe('GET /api/connections/search', () => {
 
   it('collapses every existing-relationship state into the SAME generic response', async () => {
     for (const status of ['PENDING', 'ACCEPTED', 'BLOCKED'] as const) {
-      setupSelect([[{ id: mockUserId, email: currentEmail }], [targetRow], [{ status }]]);
+      setupSelect([[targetRow], [{ status }]]);
       const response = await GET(new Request('http://localhost/api/connections/search?email=other@test.com'));
       const body = await response.json();
       expect(body, `status=${status}`).toEqual({ user: null });
@@ -177,12 +190,10 @@ describe('GET /api/connections/search', () => {
     }
   });
 
-  it('decrypts the caller and the target in one batched call per request (dedup)', async () => {
-    const encryptedCurrentEmail = await encryptField(currentEmail);
+  it('decrypts the target in one batched call per request', async () => {
     const encryptedTargetName = await encryptField('Target');
     const encryptedTargetEmail = await encryptField('other@test.com');
     setupSelect([
-      [{ id: mockUserId, email: encryptedCurrentEmail }],
       [{ ...targetRow, name: encryptedTargetName, email: encryptedTargetEmail, displayName: null }],
       [],
     ]);
@@ -206,10 +217,9 @@ describe('GET /api/connections/search', () => {
     expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
   });
 
-  it('self-search decrypts the shared user once and still collapses to { user: null }', async () => {
+  it('self-search with ciphertext email still collapses to { user: null } with one decrypt call', async () => {
     const encryptedCurrentEmail = await encryptField(currentEmail);
     setupSelect([
-      [{ id: mockUserId, email: encryptedCurrentEmail }],
       [{ ...targetRow, id: mockUserId, email: encryptedCurrentEmail }],
       [],
     ]);
@@ -217,8 +227,8 @@ describe('GET /api/connections/search', () => {
     const response = await GET(new Request(`http://localhost/api/connections/search?email=${currentEmail}`));
     const body = await response.json();
 
-    // The caller row and the target row are the same user: one dedup'd batch,
-    // and the enumeration-safe self-collapse is unaffected.
+    // isSelf is decided by id (no caller-email decrypt at all); the target's
+    // PII decrypts in the single batched call.
     expect(body).toEqual({ user: null });
     expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
   });

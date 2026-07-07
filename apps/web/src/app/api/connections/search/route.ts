@@ -47,13 +47,6 @@ export async function GET(request: Request) {
       return NextResponse.json({ user: null });
     }
 
-    // Get current user's email to check for self-connection
-    const [currentUser] = await db
-      .select({ id: users.id, email: users.email })
-      .from(users)
-      .where(eq(users.id, user.id))
-      .limit(1);
-
     // Find user by exact email match (dual blind-index/raw-email lookup)
     const [targetRow] = await db
       .select({
@@ -69,30 +62,17 @@ export async function GET(request: Request) {
       .where(userEmailMatch(email))
       .limit(1);
 
-    // Decrypt PII at the edge so the search result shows plaintext name/email —
-    // one batched decrypt for the caller + target, once per unique user. The
-    // target row goes FIRST: on a self-search both rows share an id and
-    // decryptUsersByIdOnce keeps the first row per id, so the full profile row
-    // must win over the email-only caller row.
-    type SearchUserRow = {
-      id: string;
-      name: string | null;
-      email: string;
-      displayName?: string | null;
-      bio?: string | null;
-      avatarUrl?: string | null;
-    };
-    const decryptedUsersById = await decryptUsersByIdOnce<SearchUserRow>([
-      targetRow ?? null,
-      currentUser ? { id: currentUser.id, name: null, email: currentUser.email } : null,
-    ]);
+    // Self-search detection by id: the dual lookup above already resolves the
+    // caller's own email — in any letter case, via the normalized blind index —
+    // to the caller's row, so no separate fetch-and-decrypt of the caller's
+    // stored email is needed. (The old plaintext string compare also missed
+    // case-variant self-searches, leaking the caller's own profile as
+    // actionable; the id compare closes that.)
+    const isSelf = targetRow?.id === user.id;
 
-    // Decrypted stored email for the self-connection comparison.
-    const currentUserEmail = currentUser
-      ? decryptedUsersById.get(currentUser.id)?.email ?? null
-      : null;
-    const isSelf = !!currentUserEmail && email === currentUserEmail;
-
+    // Decrypt PII at the edge so the search result shows plaintext name/email
+    // (at most one user here; the batch helper is the shared decrypt path).
+    const decryptedUsersById = await decryptUsersByIdOnce([targetRow ?? null]);
     const targetUser = targetRow ? decryptedUsersById.get(targetRow.id) : undefined;
 
     let existingStatus: ConnectionStatus | null = null;
@@ -104,8 +84,8 @@ export async function GET(request: Request) {
         name: targetUser.name,
         email: targetUser.email,
         displayName: targetUser.displayName || targetUser.name,
-        bio: targetUser.bio ?? null,
-        avatarUrl: targetUser.avatarUrl ?? null,
+        bio: targetUser.bio,
+        avatarUrl: targetUser.avatarUrl,
       };
 
       // Check if a connection already exists - select ALL fields (status enum)
