@@ -32,17 +32,22 @@ const drives = await client.drives.list({});
 console.log(drives.map((d) => d.name));
 ```
 
-Get a token by minting one in **Settings > MCP** in the app. (The [`pagespace` CLI](../cli/README.md)'s
-own `pagespace keys create` stores its credential locally under a named profile instead of
-printing one, so it isn't a source for a `StaticTokenProvider` string on another machine.)
+Get a token by minting one in **Settings > MCP** in the app. An `mcp_` token works for every
+namespace except `client.tokens`, which requires an `oauth_` access token — see
+[the `tokens` namespace](#the-tokens-namespace-needs-an-oauth-credential). (The
+[`pagespace` CLI](../cli/README.md)'s own `pagespace keys create` stores its credential locally
+under a named profile instead of printing one, so it isn't a source for a `StaticTokenProvider`
+string on another machine.)
 
 ## Auth providers
 
 `PageSpaceClient` takes any `AuthProvider` (`{ getAccessToken(): Promise<string>; invalidate(): void }`):
 
 - **`StaticTokenProvider(token: string)`** — wraps a fixed credential (an `mcp_*` token or
-  `PAGESPACE_TOKEN`). Never refreshes; once the server rejects it, every subsequent call fails
-  closed rather than retrying the same rejected token.
+  `PAGESPACE_TOKEN`). Never refreshes. When the server rejects it, the in-flight call fails
+  closed instead of retrying the same rejected token — but the rejection is one-shot, not
+  sticky: the next call presents the same token to the server again, so a transient 401
+  doesn't permanently brick a long-lived client.
 
   ```ts
   import { StaticTokenProvider } from '@pagespace/sdk';
@@ -102,22 +107,36 @@ namespace. One example per namespace:
 | `client.agents` | `client.agents.ask({ agentId, question })` |
 | `client.conversations` | `client.conversations.read({ agentId, conversationId })` |
 | `client.export` | `client.export.pageMarkdown({ pageId })` |
-| `client.tokens` | `client.tokens.create({ name })` |
+| `client.tokens` | `client.tokens.list({})` |
 | `client.search` | `client.search.glob({ driveId, pattern })` |
 | `client.activity` | `client.activity.get({ driveId })` |
 | `client.channels` | `client.channels.send({ pageId, content })` |
+| `client.calendar` | `client.calendar.list({ startDate, endDate })` |
+| `client.collaborators` | `client.collaborators.list({})` |
+| `client.commands` | `client.commands.list({})` |
+| `client.members` | `client.members.list({ driveId })` |
+| `client.workflows` | `client.workflows.list({ driveId })` |
 
-A handful of operations (calendar, collaborators, commands, drive members, workflows) are
-registered and reachable via `pagespace mcp`, but don't yet have a generated namespace method —
-call them with `client.invoke(op, input)` using the operation exported from
-`@pagespace/sdk`'s `operations/*` modules.
+Every namespace above is a generated, fully-typed facade method — there is no second-class
+tier of operations. `client.invoke(op, input)` remains available for operations you define
+yourself with `defineOperation`.
+
+### The `tokens` namespace needs an OAuth credential
+
+`client.tokens.list` / `client.tokens.revoke` manage `mcp_` API keys, but the server only
+accepts an **`oauth_`-class access token** (what `pagespace login` / the OAuth authorize flow
+issues) — or a web session — on those routes. An `mcp_` token in a `StaticTokenProvider` works
+for every other namespace yet gets a 401 here. There is deliberately no `client.tokens.create`:
+key **minting** is session-only server-side, so new keys come only from the OAuth
+authorize/consent flow (`pagespace keys create`) or the web UI — never from the SDK.
 
 ## Errors
 
 Every failure is a typed subclass of `PageSpaceError` (`AuthenticationError`, `ValidationError`,
 `NotFoundError`, `PermissionDeniedError`, `RateLimitError`, `ServerError`, `NetworkError`,
-`TimeoutError`, `IncompatibleServerError`, `ResponseValidationError`), each with a matching
-`is*Error()` type guard:
+`TimeoutError`, `IncompatibleServerError`, `ResponseValidationError`, and `HttpError` — the
+fallback for any HTTP status not otherwise classified, e.g. 402, 409, or an unexpected 3xx),
+each with a matching `is*Error()` type guard:
 
 ```ts
 import { isRateLimitError } from '@pagespace/sdk';

@@ -40,13 +40,21 @@ describe('buildRequest — path interpolation', () => {
     expect(request.url).toBe(`https://pagespace.ai/api/drives/${encodeURIComponent('日本語')}`);
   });
 
-  it('interpolates an empty-string path param without throwing', () => {
-    const request = buildRequest(op({ path: '/api/drives/:driveId' }), { driveId: '' }, config);
-    expect(request.url).toBe('https://pagespace.ai/api/drives/');
-  });
-
   it('throws when a required path param is missing from input', () => {
     expect(() => buildRequest(op({ path: '/api/drives/:driveId' }), {}, config)).toThrow();
+  });
+
+  // encodeURIComponent leaves "." intact and fetch's URL parser collapses
+  // dot-segments, so "..", ".", and "" would silently reroute the request to
+  // a DIFFERENT endpoint (e.g. /api/pages/.. → /api/). Fail closed instead.
+  it.each(['..', '.', ''])('throws a TypeError naming the operation and parameter for dot-segment/empty value %j', (value) => {
+    expect(() => buildRequest(op({ path: '/api/pages/:pageId' }), { pageId: value }, config)).toThrow(TypeError);
+    expect(() => buildRequest(op({ path: '/api/pages/:pageId' }), { pageId: value }, config)).toThrow(/test\.op.*pageId/);
+  });
+
+  it('still accepts a normal id containing dots (e.g. "a.b")', () => {
+    const request = buildRequest(op({ path: '/api/pages/:pageId' }), { pageId: 'a.b' }, config);
+    expect(request.url).toBe('https://pagespace.ai/api/pages/a.b');
   });
 });
 

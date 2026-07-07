@@ -71,8 +71,12 @@ const driveRowSchema = z.object({
   publishSubdomain: z.string().nullable(),
   homePageId: z.string().nullable(),
   publishDefaultOgImageUrl: z.string().nullable(),
-  notFoundPageId: z.string().nullable(),
-  publishFaviconUrl: z.string().nullable(),
+  // Tolerant read: added post-1.0.0-contract (custom-404/favicon feature)
+  // without an API_CONTRACT_VERSION bump, so a server predating them still
+  // passes the version handshake. Required keys here would turn that
+  // server's successful 2xx into a ResponseValidationError.
+  notFoundPageId: z.string().nullable().optional(),
+  publishFaviconUrl: z.string().nullable().optional(),
 });
 
 export const renameDrive = defineOperation({

@@ -1,7 +1,11 @@
 import type { CompatibilityResult } from './errors.js';
 
-/** @pagespace/sdk npm package version. */
-export const SDK_VERSION = '0.1.1';
+/**
+ * @pagespace/sdk npm package version. Must equal package.json's `version` —
+ * guarded by `__tests__/version.test.ts`, which reads package.json directly,
+ * so bumping one without the other fails the suite.
+ */
+export const SDK_VERSION = '1.5.0';
 
 /**
  * The SDK's compiled-in floor for the server's API_CONTRACT_VERSION (ADR 0001
