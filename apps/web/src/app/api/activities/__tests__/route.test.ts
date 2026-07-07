@@ -56,11 +56,24 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
     isUserDriveMember: vi.fn().mockResolvedValue(true),
 }));
 
+// Wrap (not replace) the real decryptUsersByIdOnce so call counts can be
+// asserted at the route's call boundary — proves the route batches decryption
+// once per request instead of once per row (the actual regression this test
+// guards). A bare `vi.spyOn` doesn't work here because `@pagespace/lib`
+// resolves to its built CJS dist output, and the per-row-dedup internals
+// (decryptUserRow -> decryptField) are a *nested* require inside that
+// compiled module, invisible to any mock declared at this level.
+vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/auth/user-repository')>();
+  return { ...actual, decryptUsersByIdOnce: vi.fn(actual.decryptUsersByIdOnce) };
+});
+
 import { GET } from '../route';
 import { authenticateRequestWithOptions, getAllowedDriveIds } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { encryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 
 const mockUserId = 'user_123';
 
@@ -140,5 +153,24 @@ describe('GET /api/activities PII decryption', () => {
 
     expect(body.activities[0].user).toBeNull();
     expect(body.activities[0].actorDisplayName).toBe('Deleted User');
+  });
+
+  it('decrypts one actor shared across many activity rows only once (dedup)', async () => {
+    const encryptedName = await encryptField('Real Name');
+    const encryptedEmail = await encryptField('real@example.com');
+    const sharedUser = { id: 'user-1', name: encryptedName, email: encryptedEmail, image: null };
+    const activities = Array.from({ length: 50 }, (_, i) => ({ id: `act-${i}`, user: sharedUser }));
+    vi.mocked(db.query.activityLogs.findMany).mockResolvedValue(activities as never);
+
+    const res = await GET(new Request('http://localhost/api/activities?context=user'));
+    const body = await res.json();
+
+    expect(body.activities).toHaveLength(50);
+    expect(body.activities[0].user.name).toBe('Real Name');
+    expect(body.activities[49].user.email).toBe('real@example.com');
+    // Decryption is batched once per request (dedup happens inside), not
+    // once per of the 50 activity rows.
+    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(decryptUsersByIdOnce).mock.calls[0][0]).toHaveLength(50);
   });
 });

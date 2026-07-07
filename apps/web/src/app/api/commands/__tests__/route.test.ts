@@ -58,11 +58,24 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(),
 }));
 
+// Wrap (not replace) the real decryptUsersByIdOnce so call counts can be
+// asserted at the route's call boundary — proves the route batches decryption
+// once per request instead of once per author. A bare `vi.spyOn` doesn't work
+// here because `@pagespace/lib` resolves to its built CJS dist output, and
+// the per-row-dedup internals (decryptUserRow -> decryptField) are a *nested*
+// require inside that compiled module, invisible to any mock declared at
+// this level.
+vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/auth/user-repository')>();
+  return { ...actual, decryptUsersByIdOnce: vi.fn(actual.decryptUsersByIdOnce) };
+});
+
 import { GET, POST } from '../route';
 import { db } from '@pagespace/db/db';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope, checkMCPDriveScope } from '@/lib/auth';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);
@@ -229,6 +242,33 @@ describe('GET /api/commands', () => {
     const response = await GET(getRequest());
     const json = await response.json();
     expect(json.commands[0].authorName).toBe('Real Author');
+  });
+
+  it('decrypts one author shared across many commands only once (dedup)', async () => {
+    const encryptedName = await encryptField('Shared Author');
+    mockedDb.select.mockReset();
+    mockedDb.select
+      .mockReturnValueOnce(selectChain([]) as never)
+      .mockReturnValueOnce(selectChain([]) as never);
+    const manyCommands = Array.from({ length: 20 }, (_, i) => ({
+      ...storedCommand,
+      id: `cmd_${i}`,
+      trigger: `trigger-${i}`,
+      createdById: 'shared-author',
+    }));
+    mockedDb.query.commands.findMany.mockResolvedValue(manyCommands as never);
+    mockedDb.query.users.findMany.mockResolvedValue([
+      { id: 'shared-author', name: encryptedName },
+    ] as never);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+
+    expect(json.commands).toHaveLength(20);
+    expect(json.commands.every((c: { authorName: string }) => c.authorName === 'Shared Author')).toBe(true);
+    // Decryption is batched once per request (dedup happens inside), not
+    // once per of the 20 commands.
+    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
   });
 
   it('marks the entry page unavailable when it no longer exists', async () => {

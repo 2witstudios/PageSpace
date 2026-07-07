@@ -10,7 +10,7 @@ import { eq, and, sql, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
-import { decryptUserRow } from '../auth/user-repository';
+import { decryptUserRow, decryptUsersByIdOnce } from '../auth/user-repository';
 
 // ============================================================================
 // Types
@@ -265,13 +265,16 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
     ])
   );
 
-  return Promise.all(members.map(async (member) => ({
+  // Decrypt each unique joined user once (legacy plaintext passes through),
+  // even if the same user is ever joined in on more than one row.
+  const decryptedUsersById = await decryptUsersByIdOnce(members.map((member) => member.user));
+
+  return members.map((member) => ({
     ...member,
-    // Decrypt the joined user's PII at the edge (legacy plaintext passes through).
-    user: await decryptUserRow(member.user),
+    user: member.user ? decryptedUsersById.get(member.user.id) ?? member.user : member.user,
     role: member.role as 'OWNER' | 'ADMIN' | 'MEMBER',
     permissionCounts: permMap.get(member.userId) ?? { view: 0, edit: 0, share: 0 },
-  })));
+  }));
 }
 
 /**

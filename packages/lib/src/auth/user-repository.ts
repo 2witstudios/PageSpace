@@ -200,6 +200,29 @@ export async function decryptUserRows<T extends { email?: string | null; name?: 
   return Promise.all(rows.map((r) => decryptUserRow(r)));
 }
 
+/**
+ * Decrypt each row's PII exactly once per unique `id`, even when the same
+ * user appears on many rows (e.g. one actor across dozens of activity rows).
+ * Returns a map from id to the decrypted row; null/undefined entries are
+ * skipped. Callers re-attach the decrypted row to each original row by id.
+ */
+export async function decryptUsersByIdOnce<T extends DecryptableUserRow & { id: string }>(
+  rows: ReadonlyArray<T | null | undefined>,
+): Promise<Map<string, T>> {
+  const uniqueById = new Map<string, T>();
+  for (const row of rows) {
+    if (row && !uniqueById.has(row.id)) {
+      uniqueById.set(row.id, row);
+    }
+  }
+
+  const decrypted = await Promise.all(
+    Array.from(uniqueById.entries()).map(async ([id, row]) => [id, await decryptUserRow(row)] as const),
+  );
+
+  return new Map(decrypted);
+}
+
 // ---------------------------------------------------------------------------
 // Convenience full-row lookup
 // ---------------------------------------------------------------------------

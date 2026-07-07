@@ -9,34 +9,42 @@
  *  - already-encrypted values are not double-encrypted;
  *  - empty/null values are never encrypted.
  *
- * Detection is length-precise to the `encrypt()` output shape
- * (salt=64 hex : iv=32 hex : authTag=32 hex : ciphertext) so values that merely
- * contain colons (e.g. IPv6 addresses) are NOT mistaken for ciphertext.
+ * Detection is length-precise to the `encrypt()` output shape — the current
+ * `iv:authTag:ciphertext` (3 parts) and the legacy `salt:iv:authTag:ciphertext`
+ * (4 parts) — so values that merely contain colons (e.g. IPv6 addresses) are
+ * NOT mistaken for ciphertext.
  */
 import { encrypt, decrypt } from './encryption-utils';
 
-const SALT_HEX_LEN = 64; // SALT_LENGTH (32 bytes) * 2
+const SALT_HEX_LEN = 64; // legacy per-record salt (32 bytes) * 2
 const IV_HEX_LEN = 32; //   IV_LENGTH (16 bytes) * 2
 const TAG_HEX_LEN = 32; //  GCM auth tag (16 bytes) * 2
 
 const isHex = (s: string): boolean => s.length > 0 && /^[0-9a-f]+$/i.test(s);
 
-/** True iff `value` matches the exact `salt:iv:authTag:ciphertext` AES-GCM shape. */
+const isValidCiphertextHex = (iv: string, tag: string, ct: string): boolean =>
+  iv.length === IV_HEX_LEN && tag.length === TAG_HEX_LEN && ct.length % 2 === 0 && isHex(iv) && isHex(tag) && isHex(ct);
+
+/**
+ * True iff `value` matches either AES-GCM envelope shape: the current
+ * `iv:authTag:ciphertext` (3 parts, shared master key) or the legacy
+ * `salt:iv:authTag:ciphertext` (4 parts, per-record scrypt).
+ */
 export function looksEncrypted(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const parts = value.split(':');
-  if (parts.length !== 4) return false;
-  const [salt, iv, tag, ct] = parts;
-  return (
-    salt.length === SALT_HEX_LEN &&
-    iv.length === IV_HEX_LEN &&
-    tag.length === TAG_HEX_LEN &&
-    ct.length % 2 === 0 &&
-    isHex(salt) &&
-    isHex(iv) &&
-    isHex(tag) &&
-    isHex(ct)
-  );
+
+  if (parts.length === 3) {
+    const [iv, tag, ct] = parts;
+    return isValidCiphertextHex(iv, tag, ct);
+  }
+
+  if (parts.length === 4) {
+    const [salt, iv, tag, ct] = parts;
+    return salt.length === SALT_HEX_LEN && isHex(salt) && isValidCiphertextHex(iv, tag, ct);
+  }
+
+  return false;
 }
 
 /** Encrypt a field value, skipping empty/null and already-encrypted values. */

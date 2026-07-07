@@ -8,9 +8,10 @@
  *    by the raw-email fallback (dual lookup);
  *  - rows decrypt back to plaintext at the edge regardless of mixed state.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { deriveIndexKey, emailBlindIndex } from '../../encryption/blind-index';
 import { looksEncrypted, decryptField } from '../../encryption/field-crypto';
+import * as fieldCrypto from '../../encryption/field-crypto';
 import {
   getUserIndexKey,
   isPiiCiphertextWriteEnabled,
@@ -18,6 +19,7 @@ import {
   encryptUserWriteFields,
   decryptUserRow,
   decryptUserRows,
+  decryptUsersByIdOnce,
   userInListLookupTargets,
 } from '../user-repository';
 
@@ -27,6 +29,7 @@ const indexKey = deriveIndexKey(MASTER);
 const ENV = { ...process.env };
 afterEach(() => {
   process.env = { ...ENV };
+  vi.restoreAllMocks();
 });
 
 describe('getUserIndexKey (env edge)', () => {
@@ -187,5 +190,45 @@ describe('decryptUserRow / decryptUserRows — read projection', () => {
     expect(out[1]).toEqual({ id: 'b', email: 'plain@x.com', name: 'Plain' });
     // sanity: decryptField round-trips ciphertext
     expect(await decryptField(enc.email)).toBe('rows@x.com');
+  });
+});
+
+describe('decryptUsersByIdOnce — per-request dedup', () => {
+  it('given the same user id repeated across many rows, decrypts that user exactly once', async () => {
+    process.env.ENCRYPTION_KEY = MASTER;
+    const enc = await encryptUserWriteFields({ email: 'dup@x.com', name: 'Dup' }, indexKey, true);
+    const sharedUser = { id: 'shared-user', email: enc.email, name: enc.name };
+
+    const decryptFieldSpy = vi.spyOn(fieldCrypto, 'decryptField');
+    const rows = Array.from({ length: 50 }, () => sharedUser);
+
+    const decryptedById = await decryptUsersByIdOnce(rows);
+
+    // decryptUserRow calls decryptField once per field (email, name) for the
+    // one unique user — not once per of the 50 repeated rows.
+    expect(decryptFieldSpy).toHaveBeenCalledTimes(2);
+    expect(decryptedById.get('shared-user')).toEqual({ id: 'shared-user', email: 'dup@x.com', name: 'Dup' });
+  });
+
+  it('given rows from distinct users, decrypts each user once and keys the map by id', async () => {
+    process.env.ENCRYPTION_KEY = MASTER;
+    const encA = await encryptUserWriteFields({ email: 'a@x.com', name: 'A' }, indexKey, true);
+    const encB = await encryptUserWriteFields({ email: 'b@x.com', name: 'B' }, indexKey, true);
+
+    const decryptedById = await decryptUsersByIdOnce([
+      { id: 'user-a', email: encA.email, name: encA.name },
+      { id: 'user-b', email: encB.email, name: encB.name },
+      { id: 'user-a', email: encA.email, name: encA.name },
+    ]);
+
+    expect(decryptedById.size).toBe(2);
+    expect(decryptedById.get('user-a')).toEqual({ id: 'user-a', email: 'a@x.com', name: 'A' });
+    expect(decryptedById.get('user-b')).toEqual({ id: 'user-b', email: 'b@x.com', name: 'B' });
+  });
+
+  it('skips null/undefined entries', async () => {
+    const decryptedById = await decryptUsersByIdOnce([null, undefined, { id: 'x', email: 'x@x.com', name: 'X' }]);
+    expect(decryptedById.size).toBe(1);
+    expect(decryptedById.get('x')).toEqual({ id: 'x', email: 'x@x.com', name: 'X' });
   });
 });

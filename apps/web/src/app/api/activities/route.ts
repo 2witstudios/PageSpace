@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, count, gte, lt, inArray } from '@pagespace/db/operators'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
-import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
@@ -233,10 +233,11 @@ export async function GET(request: Request) {
       resultCount: activities.length,
     } });
 
-    const decryptedActivities = await Promise.all(
-      activities.map(async (activity) =>
-        activity.user ? { ...activity, user: await decryptUserRow(activity.user) } : activity
-      )
+    // Dedup: many activity rows commonly share the same actor, so decrypt
+    // each unique user once instead of once per row.
+    const decryptedUsersById = await decryptUsersByIdOnce(activities.map((activity) => activity.user));
+    const decryptedActivities = activities.map((activity) =>
+      activity.user ? { ...activity, user: decryptedUsersById.get(activity.user.id) ?? activity.user } : activity
     );
 
     return NextResponse.json({

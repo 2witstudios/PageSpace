@@ -74,6 +74,7 @@ import {
   getDriveOwnerAsMember,
 } from '../drive-member-service';
 import { encryptField } from '../../encryption/field-crypto';
+import * as fieldCrypto from '../../encryption/field-crypto';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
@@ -478,6 +479,32 @@ describe('drive-member-service', () => {
 
       const result = await listDriveMembers('drive-1');
       expect(result[0].permissionCounts).toEqual({ view: 0, edit: 0, share: 0 });
+    });
+
+    it('decrypts a user shared across multiple member rows only once (dedup)', async () => {
+      const sharedUser = { id: 'shared', email: await encryptField('shared@x.com'), name: await encryptField('Shared') };
+      const members = [
+        { userId: 'shared', role: 'MEMBER', id: 'dm-1', invitedBy: null, invitedAt: null,
+          acceptedAt: null, lastAccessedAt: null,
+          user: sharedUser, profile: null, customRole: null },
+        { userId: 'shared', role: 'MEMBER', id: 'dm-2', invitedBy: null, invitedAt: null,
+          acceptedAt: null, lastAccessedAt: null,
+          user: sharedUser, profile: null, customRole: null },
+      ];
+      const chain = { leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue(members) };
+      mockDb.select.mockReturnValue({ from: vi.fn().mockReturnValue(chain) });
+      mockDb.execute.mockResolvedValue({ rows: [] });
+
+      const decryptFieldSpy = vi.spyOn(fieldCrypto, 'decryptField');
+      const result = await listDriveMembers('drive-1');
+
+      expect(result).toHaveLength(2);
+      expect(result[0].user).toEqual({ id: 'shared', email: 'shared@x.com', name: 'Shared' });
+      expect(result[1].user).toEqual({ id: 'shared', email: 'shared@x.com', name: 'Shared' });
+      // 2 fields (email, name) decrypted once each for the one unique user,
+      // not once per of the 2 member rows.
+      expect(decryptFieldSpy).toHaveBeenCalledTimes(2);
+      decryptFieldSpy.mockRestore();
     });
   });
 });
