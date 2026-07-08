@@ -147,16 +147,18 @@ try {
 ```
 
 Failed GETs are retried automatically (network errors, timeouts, 429s, 5xx) with jittered
-exponential backoff; mutating methods are never replayed. Tune via
+exponential backoff — a 429's `Retry-After` is honored when the server sends one, capped at
+`retryPolicy.maxDelayMs`; mutating methods are never replayed. Tune via
 `PageSpaceClientOptions.retryPolicy`.
 
 ## Server version compatibility
 
 `PageSpaceClient` enforces the
 [ADR 0001](https://github.com/2witstudios/PageSpace/blob/master/docs/adr/0001-sdk-api-versioning.md)
-handshake: every 2xx response is checked, lazily and once per client instance, against the SDK's
-compiled-in `MIN_SERVER_API_VERSION`, and an incompatible server fails closed with
-`IncompatibleServerError` (opt out only via the explicit `skipVersionCheck: true`).
+handshake: on the first successful 2xx response for a client instance, the SDK checks the
+server's API version against its compiled-in `MIN_SERVER_API_VERSION` — later responses aren't
+rechecked — and an incompatible server fails closed with `IncompatibleServerError` (opt out only
+via the explicit `skipVersionCheck: true`).
 
 ## See also
 

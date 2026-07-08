@@ -31,10 +31,7 @@ async function connectedClient(registry: OperationRegistry, invoke: (op: Operati
 describe('createMcpServer — initialize handshake identity', () => {
   it('reports the real CLI release version, never a hand-maintained copy (the 0.1.0-drift class the 1.5.0 guards kill)', async () => {
     const registry = createRegistry([]);
-    const server = createMcpServer({ registry, sdk: fakeSdk(async () => ({})) });
-    const client = new Client({ name: 'test-client', version: '0.0.0' });
-    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const client = await connectedClient(registry, async () => ({}));
     expect(client.getServerVersion()).toEqual(expect.objectContaining({ name: 'pagespace', version: CLI_VERSION }));
   });
 });

@@ -89,8 +89,13 @@ export class FileActiveKeyStore implements ActiveKeyStore {
     const dir = dirname(this.path);
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     const tmpPath = `${this.path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-    await fs.writeFile(tmpPath, `${JSON.stringify(map, null, 2)}\n`, 'utf8');
-    await fs.rename(tmpPath, this.path);
+    try {
+      await fs.writeFile(tmpPath, `${JSON.stringify(map, null, 2)}\n`, 'utf8');
+      await fs.rename(tmpPath, this.path);
+    } catch (error) {
+      await fs.unlink(tmpPath).catch(() => {});
+      throw error;
+    }
   }
 }
 

@@ -47,10 +47,10 @@ The model behind those four commands:
   credential you mint in step 2, stored in your OS keychain under the name you picked.
 - **Scope changes happen in a browser; use doesn't.** Minting a key, editing its drives, and
   *activating* it on a machine each require a human approving a consent screen. Once a key is
-  active, everything in your shell — you, scripts, coding agents running the CLI in bash — uses
-  it ambiently, bounded by the drives and role you approved. Explicit credentials
-  (`--key`/`--token`/env) always override the active key; `pagespace keys use --off`
-  deactivates it.
+  active, `pagespace` content commands run by this OS user — by you, a script, or a coding
+  agent driving the CLI in bash — use it by default, bounded by the drives and role you
+  approved. Explicit credentials (`--key`/`--token`/env) always override the active key;
+  `pagespace keys use --off` deactivates it.
 - **`pagespace mcp` is deliberately excluded** from the active key — MCP configs name their
   credential explicitly so they stay portable and self-describing (see below).
 
@@ -64,7 +64,10 @@ prints it exactly once (see [Need the raw token?](#need-the-raw-token-ci-another
 
 **`pagespace login` is you. Keys are capabilities.** Minting, re-scoping, or activating a key
 always passes through a browser consent screen; there is no silent, agent-runnable way to
-create a credential or widen what's ambiently available.
+create a credential or widen what's ambiently available. That consent screen is a barrier
+against *silent* privilege escalation, not against a same-OS-user process that can already read
+the credential store — see [Agent access & isolation](docs/agent-access.md) for the exact
+trust boundary.
 
 | Command | What it does |
 |---|---|
@@ -77,6 +80,12 @@ create a credential or widen what's ambiently available.
 | `pagespace keys use <name>` / `pagespace keys use --off` | Makes a stored key this machine's **active key** (browser approval), or deactivates it locally. See above. |
 | `pagespace keys list [--json]` | Lists your keys (prefix only — never the secret). |
 | `pagespace keys revoke <tokenId> [--yes]` | Revokes a key server-side. Irreversible. |
+
+`--role` binds to the `--drive` immediately before it, not to every `--drive` on the command
+line: `--drive a --drive b --role admin` grants **admin only on `b`**; `a` gets no fixed role at
+all — it's scoped to *whatever role you personally hold on drive `a` at request time*, which
+changes if your own membership does. Give every drive its own `--role` when you want a fixed
+grant: `--drive a --role admin --drive b --role admin`.
 
 None of these need `--key`/`--token`: a plain `pagespace login` is enough to drive them all
 (`keys create` brings its own browser consent). Everything else — the content commands — needs
@@ -197,7 +206,9 @@ whatever key you last activated.
 
 Which credential goes in `env`:
 
-- **MCP client on this machine** — mint a key and reference it by name:
+- **MCP client on this machine** — a name (`PAGESPACE_KEY`) only resolves against the OS
+  keychain of the same machine and OS user that minted it, so this option requires the MCP
+  client to run there too. Mint a key and reference it by name:
   `pagespace keys create --drive <id> --role member --name agent`, then
   `"env": { "PAGESPACE_KEY": "agent" }` as above. No secret ever appears in the config file.
 - **MCP client on another machine / CI** — get a raw token (`keys create … --show-token`, or
@@ -238,14 +249,15 @@ Coming from the standalone `pagespace-mcp` npm package? It's deprecated in favor
   now `--name` — both old flags error with a pointer to the new name. `PAGESPACE_PROFILE` still
   works as a deprecated alias for `PAGESPACE_KEY`. Stored credentials are untouched: every key
   (and your login) minted by an earlier version keeps working under the same name.
-- **Zero trust:** no token is ever printed except behind the explicit `--show-token` opt-in —
-  not in output, not in errors, not in logs. `--json` mode writes nothing to stdout but the
-  JSON payload. Credentials live in the OS keychain (chmod-0600 file fallback); the active-key
-  pointer is just a name, never a secret.
+- **Credential safety:** no token is ever printed except behind the explicit `--show-token`
+  opt-in — not in output, not in errors, not in logs. `--json` mode writes nothing to stdout but
+  the JSON payload. Credentials live in the OS keychain (chmod-0600 file fallback); the
+  active-key pointer is just a name, never a secret.
 - **Pure core:** argv parsing, config resolution, and routing are pure functions over plain
-  data; only the bin entrypoint touches `process.*`. Handlers receive an injected
-  `{ sdk, stdout, stderr, env, credentialStore }` context, which is why the whole CLI is
-  testable without a network.
+  data. The pieces that must touch the outside world — the bin entrypoint, browser launching,
+  and credential storage — are isolated behind injected interfaces rather than folded into the
+  core; handlers receive an injected `{ sdk, stdout, stderr, env, credentialStore }` context,
+  which is why the routing/parsing/resolution core is testable without a network.
 
 ## See also
 
