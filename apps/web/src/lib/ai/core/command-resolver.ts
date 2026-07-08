@@ -40,6 +40,39 @@ import { serializePageContentForAI, isTextSerializablePageType } from './page-se
 const COMMAND_ID_PATTERN = /^[a-z0-9]{10,40}$/;
 /** Manifest cap — a pathological child count must not balloon the prompt. */
 const MAX_MANIFEST_CHILDREN = 100;
+/**
+ * There is deliberately no cap on how many distinct commands one message may
+ * chain (a product decision, not an oversight). This bounds CONCURRENCY
+ * instead: a message with hundreds of hand-crafted/forged command tokens
+ * must not fan out into hundreds of simultaneous DB round trips and exhaust
+ * the connection pool for the whole app. Resolution still completes for
+ * every token — this only limits how many run at once.
+ */
+const RESOLUTION_CONCURRENCY_LIMIT = 10;
+
+/**
+ * Run `fn` over every item with at most `limit` concurrent in-flight calls,
+ * preserving input order in the returned array regardless of completion
+ * order. Mirrors the pattern already used for backup export streaming
+ * (apps/web/src/services/api/backup-export-service.ts), generalized to
+ * return each call's value.
+ */
+async function mapWithConcurrencyLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 /**
  * Where the message is being sent from, as far as commands care: the drive
@@ -67,8 +100,10 @@ export async function planCommandExecutions(
   const tokens = findActiveCommandTokens(content);
   if (tokens.length === 0) return [];
 
-  const results = await Promise.all(
-    tokens.map(async (token) => {
+  const results = await mapWithConcurrencyLimit(
+    tokens,
+    RESOLUTION_CONCURRENCY_LIMIT,
+    async (token) => {
       try {
         return await resolveToken(token, senderId, context);
       } catch (error) {
@@ -77,7 +112,7 @@ export async function planCommandExecutions(
         });
         return null;
       }
-    })
+    }
   );
 
   return results.filter((plan): plan is CommandExecutionPlan => plan !== null);

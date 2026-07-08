@@ -326,6 +326,28 @@ describe('pathological number of distinct commands pasted directly as text (no p
     expect(plans).toHaveLength(25);
     expect(plans.every((p) => p.kind === 'skip' && p.reason === 'not_found')).toBe(true);
   });
+
+  it('bounds concurrent DB resolution to a fixed limit regardless of message size — no message-level cap, but no unbounded connection-pool fan-out either', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => `cmd${String(i).padStart(12, '0')}`);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockCommandsFindFirst.mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight--;
+      return undefined;
+    });
+    const content = ids.map((id, i) => `/[cmd${i}](${id}:command)`).join(' ');
+
+    const plans = await planCommandExecutions(content, SENDER);
+
+    // All 30 still resolve — the limit bounds concurrency, not the total
+    // command count (that cap was explicitly rejected as a product decision).
+    expect(plans).toHaveLength(30);
+    expect(maxInFlight).toBeGreaterThan(1); // genuinely concurrent, not serialized
+    expect(maxInFlight).toBeLessThanOrEqual(10); // but never more than the cap
+  });
 });
 
 describe('repeated identical command chip plus one distinct — dedup end to end', () => {
