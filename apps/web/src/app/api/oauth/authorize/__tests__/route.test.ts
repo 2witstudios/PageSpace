@@ -553,6 +553,38 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
   });
 });
 
+describe('POST /api/oauth/authorize — all_drives grant skips per-drive authority checks', () => {
+  const allDrivesBody = { ...approvalBody, scope: 'all_drives offline_access' };
+
+  beforeEach(() => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      tokenType: 'session',
+      userId: 'user-1',
+      role: 'user',
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      sessionId: 'sess-1',
+    } as never);
+  });
+
+  it('issues a code for "all_drives offline_access" without any per-drive getDriveAccess lookup', async () => {
+    // Proves checkGrantAuthority's per-drive loop never runs for this shape
+    // (zero drive:* scopes to iterate) — same treatment as account/manage_keys.
+    // (The default mock grants OWNER on every drive; this asserts the lookup
+    // is skipped entirely, not merely that it would have succeeded.)
+    const res = await POST(postRequest(allDrivesBody) as never);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    const location = new URL(json.redirectUri);
+    expect(location.searchParams.get('code')).toBeTruthy();
+    expect(getDriveAccess).not.toHaveBeenCalled();
+
+    expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(createAuthorizationCode).mock.calls[0][0] as { scopes: string[] };
+    expect(call.scopes).toEqual(['all_drives', 'offline_access']);
+  });
+});
+
 describe('POST /api/oauth/authorize — update_key ownership gate', () => {
   const updateKeyBody = { ...approvalBody, scope: 'update_key:tok123 drive:testdrive1:member' };
 

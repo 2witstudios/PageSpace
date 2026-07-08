@@ -96,8 +96,53 @@ export interface DriveRoleSelection {
 }
 
 /** Maps the wizard's per-drive role selections into `buildTokenScope`'s input shape and reuses its validation verbatim. */
-export function buildWizardScope(selections: readonly DriveRoleSelection[]): BuildTokenScopeResult {
-  return buildTokenScope(selections.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice)));
+export function buildWizardScope(
+  selections: readonly DriveRoleSelection[],
+  options: { readonly allDrives?: boolean } = {},
+): BuildTokenScopeResult {
+  return buildTokenScope(
+    selections.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice)),
+    options,
+  );
+}
+
+/**
+ * The Create flow's up-front choice: mint a key scoped to hand-picked drives,
+ * or an unrestricted `--all-drives` key. Edit does NOT offer this step — an
+ * EXISTING key can only ever be re-scoped among drive:* sets (`update_key:*`
+ * is grammar-mutually-exclusive with `all_drives`, and the server-side writer
+ * `updateMcpTokenDriveScopes` unconditionally sets `isScoped: true` — there is
+ * no in-place path to convert a scoped key to unscoped). Narrowing an
+ * existing all-drives key DOWN to specific drives already works today with no
+ * grammar changes (see `allDrivesDowngradeConfirmMessage` below); only the
+ * widening direction is unsupported.
+ */
+export type DriveTargetChoice = 'specific' | 'all';
+
+export const DRIVE_TARGET_SELECT_MESSAGE = 'Grant access to specific drives, or all drives (unrestricted)?';
+
+export function driveTargetSelectOptions(): readonly SelectOption<DriveTargetChoice>[] {
+  return [
+    { value: 'specific', label: 'Choose specific drives' },
+    { value: 'all', label: 'All drives (unrestricted) — maximum access, including drives created later' },
+  ];
+}
+
+/** Pre-mint confirm wording (Create) — all-drives gets dedicated maximum-privilege copy instead of echoing the raw scope string. */
+export function confirmMintMessage(scope: string, target: DriveTargetChoice): string {
+  return target === 'all'
+    ? 'Mint a new key with access to ALL your drives (including any created later)? This is the maximum-privilege key type.'
+    : `Mint a new key scoped to: ${scope}?`;
+}
+
+/**
+ * Edit's downgrade guard: shown when the key being edited is CURRENTLY
+ * all-drives (`isScoped === false`, zero driveScopes — see `KeySummary`) and
+ * the user is about to narrow it to a specific-drive set. Mirrors the web
+ * UI's downgrade guard in `MCPSettingsView.tsx`.
+ */
+export function allDrivesDowngradeConfirmMessage(keyName: string, driveCount: number): string {
+  return `"${keyName}" currently has access to ALL your drives. Narrowing it to ${driveCount} drive(s) — continue?`;
 }
 
 export interface KeyDriveScope {
@@ -112,14 +157,22 @@ export interface KeySummary {
   readonly driveScopes: readonly KeyDriveScope[];
   readonly createdAt: string;
   readonly lastUsed: string | null;
+  /**
+   * `false` with zero `driveScopes` is an `--all-drives` key (unrestricted,
+   * including drives created later); `true` with zero `driveScopes` is a
+   * scoped key whose drives were all deleted (fail-closed orphan, no access
+   * at all). Without this flag the two are indistinguishable in every
+   * display helper below — the exact ambiguity this field exists to resolve.
+   */
+  readonly isScoped: boolean;
 }
 
 function formatDateOnly(value: string | null): string {
   return value?.slice(0, 10) ?? 'never';
 }
 
-function formatDriveScopeNames(driveScopes: readonly KeyDriveScope[]): string {
-  if (driveScopes.length === 0) return '(unscoped)';
+function formatDriveScopeNames(driveScopes: readonly KeyDriveScope[], isScoped: boolean): string {
+  if (driveScopes.length === 0) return isScoped ? 'NO ACCESS (orphaned)' : 'all drives';
   const visibleNames = driveScopes.slice(0, 3).map((drive) => drive.name);
   const remaining = driveScopes.length - visibleNames.length;
   return remaining > 0 ? `${visibleNames.join(', ')} +${remaining} more` : visibleNames.join(', ');
@@ -131,7 +184,7 @@ export function renderKeysTable(keys: readonly KeySummary[]): readonly string[] 
   return keys.flatMap((key, index) => [
     ...(index === 0 ? [] : ['']),
     `${key.name}  ${key.tokenPrefix}`,
-    `  scopes: ${formatDriveScopeNames(key.driveScopes)}`,
+    `  scopes: ${formatDriveScopeNames(key.driveScopes, key.isScoped)}`,
     `  created ${formatDateOnly(key.createdAt)} · last used ${formatDateOnly(key.lastUsed)}`,
   ]);
 }
@@ -144,7 +197,12 @@ export function renderKeysTable(keys: readonly KeySummary[]): readonly string[] 
  */
 export function keySelectOptions(keys: readonly KeySummary[], activeKeyId: string | null = null): readonly SelectOption<string>[] {
   return keys.map((key) => {
-    const scopes = key.driveScopes.length > 0 ? key.driveScopes.map((drive) => drive.name).join(', ') : 'unscoped';
+    const scopes =
+      key.driveScopes.length > 0
+        ? key.driveScopes.map((drive) => drive.name).join(', ')
+        : key.isScoped
+          ? 'NO ACCESS (orphaned)'
+          : 'all drives';
     return {
       value: key.id,
       label: key.name,

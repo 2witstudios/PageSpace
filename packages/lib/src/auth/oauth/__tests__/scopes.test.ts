@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseScopeList,
   formatScopeSet,
+  isAllDrivesGrant,
   isKeyActivationGrant,
   isKeyUpdateGrant,
   isPureDriveGrant,
@@ -16,7 +17,16 @@ function drives(...entries: Array<[string, ScopeSet['drives'] extends ReadonlyMa
 }
 
 function emptySet(overrides: Partial<ScopeSet> = {}): ScopeSet {
-  return { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null, activateKeyId: null, ...overrides };
+  return {
+    account: false,
+    offlineAccess: false,
+    drives: new Map(),
+    manageKeys: false,
+    allDrives: false,
+    updateKeyId: null,
+    activateKeyId: null,
+    ...overrides,
+  };
 }
 
 describe('parseScopeList', () => {
@@ -103,6 +113,16 @@ describe('parseScopeList', () => {
     it('parses "manage_keys offline_access" together — a long-lived key-management session', () => {
       const result = parseScopeList('manage_keys offline_access');
       expect(result).toEqual({ ok: true, scopes: emptySet({ manageKeys: true, offlineAccess: true }) });
+    });
+
+    it('parses "all_drives" alone', () => {
+      const result = parseScopeList('all_drives');
+      expect(result).toEqual({ ok: true, scopes: emptySet({ allDrives: true }) });
+    });
+
+    it('parses "all_drives offline_access" together — a long-lived all-drives session', () => {
+      const result = parseScopeList('all_drives offline_access');
+      expect(result).toEqual({ ok: true, scopes: emptySet({ allDrives: true, offlineAccess: true }) });
     });
   });
 
@@ -239,6 +259,36 @@ describe('parseScopeList', () => {
       const result = parseScopeList('manage_keys offline_access');
       expect(result.ok).toBe(true);
     });
+
+    it('rejects "all_drives" mixed with "account" (all_drives_conflict)', () => {
+      expect(parseScopeList('all_drives account')).toEqual({
+        ok: false,
+        error: { code: 'all_drives_conflict' },
+      });
+    });
+
+    it('rejects "all_drives" mixed with "manage_keys" (all_drives_conflict)', () => {
+      expect(parseScopeList('all_drives manage_keys')).toEqual({
+        ok: false,
+        error: { code: 'all_drives_conflict' },
+      });
+    });
+
+    it('rejects "all_drives" mixed with any drive:* scope, regardless of order (all_drives_conflict)', () => {
+      expect(parseScopeList('all_drives drive:abc')).toEqual({
+        ok: false,
+        error: { code: 'all_drives_conflict' },
+      });
+      expect(parseScopeList('drive:abc all_drives')).toEqual({
+        ok: false,
+        error: { code: 'all_drives_conflict' },
+      });
+    });
+
+    it('does not reject "all_drives offline_access" as offline_access_alone — all_drives is its own principal shape', () => {
+      const result = parseScopeList('all_drives offline_access');
+      expect(result.ok).toBe(true);
+    });
   });
 
   it('is total: never throws, even on garbage input', () => {
@@ -268,6 +318,14 @@ describe('formatScopeSet (canonical serialization, rule 9)', () => {
 
   it('orders manage_keys before offline_access regardless of construction order', () => {
     expect(formatScopeSet(emptySet({ manageKeys: true, offlineAccess: true }))).toBe('manage_keys offline_access');
+  });
+
+  it('formats all_drives alone', () => {
+    expect(formatScopeSet(emptySet({ allDrives: true }))).toBe('all_drives');
+  });
+
+  it('orders all_drives before offline_access regardless of construction order', () => {
+    expect(formatScopeSet(emptySet({ allDrives: true, offlineAccess: true }))).toBe('all_drives offline_access');
   });
 
   it('orders drive scopes by drive id ascending, independent of Map insertion order', () => {
@@ -321,6 +379,13 @@ describe('formatScopeSet (canonical serialization, rule 9)', () => {
     expect(formatted).toBe('manage_keys offline_access');
     const reparsed = parseScopeList(formatted);
     expect(reparsed).toEqual({ ok: true, scopes: emptySet({ manageKeys: true, offlineAccess: true }) });
+  });
+
+  it('round-trips "all_drives offline_access" back to the same string (rule 9)', () => {
+    const formatted = formatScopeSet(emptySet({ allDrives: true, offlineAccess: true }));
+    expect(formatted).toBe('all_drives offline_access');
+    const reparsed = parseScopeList(formatted);
+    expect(reparsed).toEqual({ ok: true, scopes: emptySet({ allDrives: true, offlineAccess: true }) });
   });
 
   it('formatting is idempotent: format(parse(format(s))) === format(s)', () => {
@@ -426,11 +491,31 @@ describe('isScopeSubset (narrowing, rule 8 / F5) — escalation must be structur
   it('not requesting manage_keys is always fine, even if granted has it', () => {
     expect(isScopeSubset(emptySet(), emptySet({ manageKeys: true }))).toBe(true);
   });
+
+  it('all_drives is a subset of all_drives', () => {
+    expect(isScopeSubset(emptySet({ allDrives: true }), emptySet({ allDrives: true }))).toBe(true);
+  });
+
+  it('all_drives requested but not granted is rejected', () => {
+    expect(isScopeSubset(emptySet({ allDrives: true }), emptySet())).toBe(false);
+  });
+
+  it('a granted account does not implicitly satisfy a requested all_drives (fail closed, no cross-shape narrowing)', () => {
+    expect(isScopeSubset(emptySet({ allDrives: true }), emptySet({ account: true }))).toBe(false);
+  });
+
+  it('not requesting all_drives is always fine, even if granted has it', () => {
+    expect(isScopeSubset(emptySet(), emptySet({ allDrives: true }))).toBe(true);
+  });
 });
 
 describe('scopeSetToDriveScopes (bridge to mcp_token_drives shape, Decision 2)', () => {
   it('produces no rows for an account-only grant', () => {
     expect(scopeSetToDriveScopes(emptySet({ account: true }))).toEqual([]);
+  });
+
+  it('produces no rows for an all_drives-only grant', () => {
+    expect(scopeSetToDriveScopes(emptySet({ allDrives: true }))).toEqual([]);
   });
 
   it('maps inherit to a null role and null customRoleId', () => {
@@ -491,6 +576,10 @@ describe('isPureDriveGrant (Phase 9 follow-up: gates OAuth token exchange vs a r
     expect(isPureDriveGrant(emptySet({ manageKeys: true }))).toBe(false);
   });
 
+  it('false for all_drives', () => {
+    expect(isPureDriveGrant(emptySet({ allDrives: true }))).toBe(false);
+  });
+
   it('false for an empty scope set with no drives at all (e.g. offline_access alone would fail parseScopeList before reaching here, but the predicate itself must not treat "nothing" as a drive grant)', () => {
     expect(isPureDriveGrant(emptySet())).toBe(false);
   });
@@ -501,6 +590,29 @@ describe('isPureDriveGrant (Phase 9 follow-up: gates OAuth token exchange vs a r
       drives: drives(['x', { kind: 'drive', driveId: 'x', role: { kind: 'member' } }]),
     });
     expect(isPureDriveGrant(scopes)).toBe(false);
+  });
+});
+
+describe('isAllDrivesGrant (gates OAuth token exchange vs a real, unscoped mcp_tokens mint)', () => {
+  it('true when allDrives is set', () => {
+    expect(isAllDrivesGrant(emptySet({ allDrives: true }))).toBe(true);
+  });
+
+  it('false for account', () => {
+    expect(isAllDrivesGrant(emptySet({ account: true }))).toBe(false);
+  });
+
+  it('false for manage_keys', () => {
+    expect(isAllDrivesGrant(emptySet({ manageKeys: true }))).toBe(false);
+  });
+
+  it('false for a pure drive grant', () => {
+    const scopes = emptySet({ drives: drives(['x', { kind: 'drive', driveId: 'x', role: { kind: 'member' } }]) });
+    expect(isAllDrivesGrant(scopes)).toBe(false);
+  });
+
+  it('false for an empty scope set', () => {
+    expect(isAllDrivesGrant(emptySet())).toBe(false);
   });
 });
 
@@ -542,7 +654,7 @@ describe('update_key:<tokenId> (in-place key re-scope grant)', () => {
     });
   });
 
-  it.each(['account', 'manage_keys', 'offline_access'])('rejects update_key combined with %s', (conflicting) => {
+  it.each(['account', 'manage_keys', 'all_drives', 'offline_access'])('rejects update_key combined with %s', (conflicting) => {
     // account/manage_keys alongside drive:* already trip their own parse-time
     // exclusions before the update_key check runs — the exact code differs,
     // but every combination fails closed.
@@ -613,7 +725,7 @@ describe('activate_key:<tokenId> (device activation approval ceremony)', () => {
     });
   });
 
-  it.each(['account', 'manage_keys', 'offline_access', 'drive:abc123:member', 'update_key:tok999 drive:abc123:member'])(
+  it.each(['account', 'manage_keys', 'all_drives', 'offline_access', 'drive:abc123:member', 'update_key:tok999 drive:abc123:member'])(
     'rejects activate_key combined with %s — an "activate" consent must never carry a grant',
     (extra) => {
       expect(parseScopeList(`activate_key:tok123 ${extra}`)).toEqual({

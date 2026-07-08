@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allDrivesDowngradeConfirmMessage,
   availableMenuChoices,
   buildWizardScope,
+  confirmMintMessage,
   driveMultiSelectOptions,
   driveRoleChoiceToScopeArg,
+  driveTargetSelectOptions,
   keySelectOptions,
   menuSelectOptions,
   NON_INTERACTIVE_KEYS_MESSAGE,
@@ -107,6 +110,44 @@ describe('buildWizardScope', () => {
     ]);
     expect(result).toEqual({ ok: false, message: 'Duplicate --drive "drv1": each drive may only be scoped once.' });
   });
+
+  it('builds "all_drives offline_access" when allDrives is true, ignoring any selections', () => {
+    const result = buildWizardScope([], { allDrives: true });
+    expect(result).toEqual({ ok: true, scope: 'all_drives offline_access' });
+  });
+});
+
+describe('driveTargetSelectOptions', () => {
+  it('offers "specific drives" and "all drives (unrestricted)" in that order', () => {
+    expect(driveTargetSelectOptions()).toEqual([
+      { value: 'specific', label: 'Choose specific drives' },
+      { value: 'all', label: 'All drives (unrestricted) — maximum access, including drives created later' },
+    ]);
+  });
+});
+
+describe('confirmMintMessage', () => {
+  it('echoes the raw scope string for a specific-drives mint', () => {
+    expect(confirmMintMessage('drive:drv1:member offline_access', 'specific')).toBe(
+      'Mint a new key scoped to: drive:drv1:member offline_access?',
+    );
+  });
+
+  it('uses dedicated maximum-privilege copy for an all-drives mint, never the raw scope string', () => {
+    const message = confirmMintMessage('all_drives offline_access', 'all');
+    expect(message).toMatch(/ALL your drives/);
+    expect(message).toMatch(/maximum-privilege/i);
+    expect(message).not.toContain('all_drives offline_access');
+  });
+});
+
+describe('allDrivesDowngradeConfirmMessage', () => {
+  it('names the key and the drive count being narrowed to', () => {
+    const message = allDrivesDowngradeConfirmMessage('God key', 2);
+    expect(message).toContain('"God key"');
+    expect(message).toMatch(/currently has access to ALL your drives/i);
+    expect(message).toContain('2 drive(s)');
+  });
 });
 
 const SAMPLE_KEYS: readonly KeySummary[] = [
@@ -117,14 +158,16 @@ const SAMPLE_KEYS: readonly KeySummary[] = [
     driveScopes: [{ id: 'drv1', name: 'Engineering' }],
     createdAt: '2026-07-01T00:00:00.000Z',
     lastUsed: null,
+    isScoped: true,
   },
   {
     id: 'tok2',
-    name: 'Unscoped key',
+    name: 'All-drives key',
     tokenPrefix: 'mcp_zzzzzzzzzzz',
     driveScopes: [],
     createdAt: '2026-06-01T00:00:00.000Z',
     lastUsed: '2026-06-15T00:00:00.000Z',
+    isScoped: false,
   },
 ];
 
@@ -135,9 +178,26 @@ describe('renderKeysTable', () => {
       '  scopes: Engineering',
       '  created 2026-07-01 · last used never',
       '',
-      'Unscoped key  mcp_zzzzzzzzzzz',
-      '  scopes: (unscoped)',
+      'All-drives key  mcp_zzzzzzzzzzz',
+      '  scopes: all drives',
       '  created 2026-06-01 · last used 2026-06-15',
+    ]);
+  });
+
+  it('renders an orphaned key (isScoped: true, all its drives deleted) distinctly from an all-drives key', () => {
+    const orphaned: KeySummary = {
+      id: 'tok-orphan',
+      name: 'Orphaned key',
+      tokenPrefix: 'mcp_orphanorphan',
+      driveScopes: [],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      lastUsed: null,
+      isScoped: true,
+    };
+    expect(renderKeysTable([orphaned])).toEqual([
+      'Orphaned key  mcp_orphanorphan',
+      '  scopes: NO ACCESS (orphaned)',
+      '  created 2026-05-01 · last used never',
     ]);
   });
 
@@ -155,6 +215,7 @@ describe('renderKeysTable', () => {
       ],
       createdAt: '2026-04-30T16:15:07.553Z',
       lastUsed: '2026-07-06T09:00:00.000Z',
+      isScoped: true,
     };
     expect(renderKeysTable([manyScopes])).toEqual([
       'Everything key  mcp_qqqqqqqqqqq',
@@ -172,20 +233,33 @@ describe('keySelectOptions', () => {
   it('maps keys to select options, hinting their drive scopes', () => {
     expect(keySelectOptions(SAMPLE_KEYS)).toEqual([
       { value: 'tok1', label: 'CI bot', hint: 'Engineering' },
-      { value: 'tok2', label: 'Unscoped key', hint: 'unscoped' },
+      { value: 'tok2', label: 'All-drives key', hint: 'all drives' },
     ]);
   });
 
   it('prefixes the currently active key\'s hint with "active" when its id is known', () => {
     expect(keySelectOptions(SAMPLE_KEYS, 'tok1')).toEqual([
       { value: 'tok1', label: 'CI bot', hint: 'active · Engineering' },
-      { value: 'tok2', label: 'Unscoped key', hint: 'unscoped' },
+      { value: 'tok2', label: 'All-drives key', hint: 'all drives' },
     ]);
   });
 
   it('marks nothing when the active key id is null or matches no listed key', () => {
     expect(keySelectOptions(SAMPLE_KEYS, null)).toEqual(keySelectOptions(SAMPLE_KEYS));
     expect(keySelectOptions(SAMPLE_KEYS, 'tok999')).toEqual(keySelectOptions(SAMPLE_KEYS));
+  });
+
+  it('distinguishes an orphaned key (isScoped: true, no surviving drives) from an all-drives key in the hint', () => {
+    const orphaned: KeySummary = {
+      id: 'tok-orphan',
+      name: 'Orphaned key',
+      tokenPrefix: 'mcp_orphanorphan',
+      driveScopes: [],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      lastUsed: null,
+      isScoped: true,
+    };
+    expect(keySelectOptions([orphaned])).toEqual([{ value: 'tok-orphan', label: 'Orphaned key', hint: 'NO ACCESS (orphaned)' }]);
   });
 });
 

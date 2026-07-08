@@ -4,29 +4,29 @@ import { KEYS_USE_USAGE_MESSAGE, parseKeysUseArgs, parseTokensCreateArgs, parseT
 describe('parseTokensCreateArgs', () => {
   it('parses no flags as no drives and no --name', () => {
     const result = parseTokensCreateArgs([]);
-    expect(result).toEqual({ ok: true, args: { drives: [], name: undefined, showToken: false } });
+    expect(result).toEqual({ ok: true, args: { drives: [], name: undefined, showToken: false, allDrives: false } });
   });
 
   it('parses a single --drive with no --role as inherit (role null)', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1']);
-    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: null }], name: undefined, showToken: false } });
+    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: null }], name: undefined, showToken: false, allDrives: false } });
   });
 
   it('maps --role member to MEMBER (case-insensitive)', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--role', 'Member']);
-    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: 'MEMBER' }], name: undefined, showToken: false } });
+    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: 'MEMBER' }], name: undefined, showToken: false, allDrives: false } });
   });
 
   it('maps --role admin to ADMIN (case-insensitive)', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--role', 'ADMIN']);
-    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: 'ADMIN' }], name: undefined, showToken: false } });
+    expect(result).toEqual({ ok: true, args: { drives: [{ id: 'drv1', role: 'ADMIN' }], name: undefined, showToken: false, allDrives: false } });
   });
 
   it('maps any other --role value to a customRoleId, role null', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--role', 'role-xyz']);
     expect(result).toEqual({
       ok: true,
-      args: { drives: [{ id: 'drv1', role: null, customRoleId: 'role-xyz' }], name: undefined, showToken: false },
+      args: { drives: [{ id: 'drv1', role: null, customRoleId: 'role-xyz' }], name: undefined, showToken: false, allDrives: false },
     });
   });
 
@@ -45,7 +45,7 @@ describe('parseTokensCreateArgs', () => {
           { id: 'drv3', role: null },
         ],
         name: undefined,
-        showToken: false,
+        showToken: false, allDrives: false,
       },
     });
   });
@@ -54,7 +54,7 @@ describe('parseTokensCreateArgs', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--name', 'ci-bot']);
     expect(result).toEqual({
       ok: true,
-      args: { drives: [{ id: 'drv1', role: null }], name: 'ci-bot', showToken: false },
+      args: { drives: [{ id: 'drv1', role: null }], name: 'ci-bot', showToken: false, allDrives: false },
     });
   });
 
@@ -106,13 +106,34 @@ describe('parseTokensCreateArgs', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--show-token']);
     expect(result).toEqual({
       ok: true,
-      args: { drives: [{ id: 'drv1', role: null }], name: undefined, showToken: true },
+      args: { drives: [{ id: 'drv1', role: null }], name: undefined, showToken: true, allDrives: false },
     });
   });
 
   it('rejects a second --show-token', () => {
     const result = parseTokensCreateArgs(['--drive', 'drv1', '--show-token', '--show-token']);
     expect(result).toEqual({ ok: false, message: 'Flag --show-token was given more than once.' });
+  });
+
+  it('parses --all-drives as a valueless flag', () => {
+    const result = parseTokensCreateArgs(['--all-drives']);
+    expect(result).toEqual({
+      ok: true,
+      args: { drives: [], name: undefined, showToken: false, allDrives: true },
+    });
+  });
+
+  it('rejects a second --all-drives', () => {
+    const result = parseTokensCreateArgs(['--all-drives', '--all-drives']);
+    expect(result).toEqual({ ok: false, message: 'Flag --all-drives was given more than once.' });
+  });
+
+  it("parses --all-drives alongside --drive at this layer — mutual-exclusion validation is buildTokenScope's job, not args.ts's", () => {
+    const result = parseTokensCreateArgs(['--all-drives', '--drive', 'drv1']);
+    expect(result).toEqual({
+      ok: true,
+      args: { drives: [{ id: 'drv1', role: null }], name: undefined, showToken: false, allDrives: true },
+    });
   });
 
   it('is a pure function: identical input produces a deep-equal result', () => {

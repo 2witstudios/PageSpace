@@ -25,6 +25,8 @@ export function describeScopeForConsent(scope: ParsedScope, ctx: ConsentNarratio
       return 'Stay connected until you revoke access (issues a long-lived refresh credential).';
     case 'manage_keys':
       return 'Create and manage access keys on your behalf — cannot read or write any of your content directly.';
+    case 'all_drives':
+      return 'Access to all your drives, including any created later — the maximum grant for a drive-scoped key.';
     case 'update_key': {
       const keyName = ctx.keyName ?? scope.tokenId;
       return `Update the drive access of your existing key "${keyName}" — the key itself and its secret stay the same; its access becomes exactly the list below.`;

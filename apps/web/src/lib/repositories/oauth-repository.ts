@@ -22,7 +22,7 @@ import {
 } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
-import { parseScopeList, isScopeSubset, formatScopeSet, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
 import { sessionRepository } from './session-repository';
 
 /**
@@ -298,6 +298,38 @@ export async function exchangeAuthorizationCode(
         scopes: row.scopes,
         tokenId: parsedGrantedScope.scopes.activateKeyId,
       };
+    }
+
+    // An `all_drives` grant is unrestricted access to every drive the user
+    // owns, including ones created later — the CLI/wizard equivalent of the
+    // web Settings > MCP "Clear selection (allow all drives)" key. Same
+    // treatment as a pure drive:* grant (mints a real `mcp_tokens` row, not
+    // an OAuth refresh/access-token pair — the browser consent screen is
+    // still the human-approval gate), but persisted `isScoped: false` with
+    // zero drive rows instead of a drive-scoped set. Deliberately NOT the
+    // `account` branch below: `account` also grants full account control
+    // beyond drives (it resolves to a full personal OAuth session at the
+    // auth layer), which this feature must never silently produce.
+    if (parsedGrantedScope.ok && isAllDrivesGrant(parsedGrantedScope.scopes)) {
+      await tx
+        .update(oauthAuthorizationCodes)
+        .set({ consumedAt: input.now })
+        .where(eq(oauthAuthorizationCodes.id, row.id));
+
+      const { token: mcpToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
+      await sessionRepository.createMcpTokenWithDriveScopes(
+        {
+          userId: row.userId,
+          tokenHash,
+          tokenPrefix,
+          name: 'pagespace CLI',
+          isScoped: false,
+          drives: [],
+        },
+        tx,
+      );
+
+      return { outcome: 'ok_mcp_token', userId: row.userId, scopes: row.scopes, mcpToken };
     }
 
     if (parsedGrantedScope.ok && isPureDriveGrant(parsedGrantedScope.scopes)) {

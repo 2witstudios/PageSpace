@@ -35,7 +35,12 @@ export const tokensList: CommandHandler = async (ctx, intent) => {
   }
 
   for (const token of tokens) {
-    const scopes = token.driveScopes.length > 0 ? token.driveScopes.map((drive) => drive.name).join(', ') : '(unscoped)';
+    const scopes =
+      token.driveScopes.length > 0
+        ? token.driveScopes.map((drive) => drive.name).join(', ')
+        : token.isScoped
+          ? 'NO ACCESS (orphaned)'
+          : 'all drives';
     ctx.stdout.write(
       `${token.name}\t${token.tokenPrefix}\t${scopes}\tcreated ${token.createdAt}\tlast used ${token.lastUsed ?? 'never'}\n`,
     );

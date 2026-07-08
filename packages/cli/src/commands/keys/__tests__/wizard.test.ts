@@ -158,7 +158,12 @@ describe('createKeysHandler — non-interactive', () => {
 
 describe('createKeysHandler — Create flow', () => {
   it('wires drive multiselect -> role select -> key name -> mint, storing the credential under the chosen name', async () => {
-    selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce({ kind: 'member' }).mockResolvedValueOnce('exit');
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('create')
+      .mockResolvedValueOnce('specific')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
     multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
     textMock.mockReset().mockResolvedValueOnce('my-key');
     confirmMock.mockReset().mockResolvedValueOnce(true);
@@ -189,6 +194,70 @@ describe('createKeysHandler — Create flow', () => {
   });
 });
 
+describe('createKeysHandler — Create flow, --all-drives', () => {
+  it('up-front "all drives" choice skips the drive multiselect entirely, requires a name, and mints all_drives offline_access', async () => {
+    selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce('all').mockResolvedValueOnce('exit');
+    multiselectMock.mockReset();
+    textMock.mockReset().mockResolvedValueOnce('god-key');
+    confirmMock.mockReset().mockResolvedValueOnce(true);
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const store = fakeStore();
+    const fake = fakeLoopbackServer();
+    let requestedScope: string | undefined;
+    const deps = {
+      ...baseMintDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: async (url: string) => {
+        requestedScope = new URL(url).searchParams.get('scope') ?? undefined;
+        return autoApprove(fake)(url);
+      },
+    };
+    const handler = createKeysHandler(deps);
+
+    const drivesList = vi.fn(async () => [{ id: 'drv1', name: 'Engineering', slug: 'eng', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: true, role: 'OWNER', lastAccessedAt: null, homePageId: null }]);
+    const sdk = fakeSdk({ drivesList, tokensList: vi.fn(async () => []) });
+    const ctx = createFakeContext({ sdk, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(multiselectMock).not.toHaveBeenCalled();
+    expect(requestedScope).toBe('all_drives offline_access');
+    // The pre-mint confirm gets the maximum-privilege wording, not the raw scope string.
+    expect(confirmMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/maximum-privilege/i) }),
+    );
+    const stored = await store.get('https://pagespace.ai', 'god-key');
+    expect(stored && credentialSecret(stored)).toBe(FIXED_TOKENS.refreshToken);
+    const stopMessages = spinnerHandle.stop.mock.calls.flat().map(String).join('\n');
+    expect(stopMessages).toContain('scoped to: all drives.');
+  });
+
+  it('the name prompt\'s validate callback rejects an empty name for --all-drives (no drive id to default to)', async () => {
+    selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce('all').mockResolvedValueOnce('exit');
+    multiselectMock.mockReset();
+    let capturedValidate: ((value: string) => string | undefined) | undefined;
+    textMock.mockReset().mockImplementationOnce(async (opts: { validate?: (value: string) => string | undefined }) => {
+      capturedValidate = opts.validate;
+      return 'god-key';
+    });
+    confirmMock.mockReset().mockResolvedValueOnce(false);
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const store = fakeStore();
+    const handler = createKeysHandler(baseMintDeps(store));
+    const drivesList = vi.fn(async () => [{ id: 'drv1', name: 'Engineering', slug: 'eng', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: true, role: 'OWNER', lastAccessedAt: null, homePageId: null }]);
+    const sdk = fakeSdk({ drivesList, tokensList: vi.fn(async () => []) });
+    const ctx = createFakeContext({ sdk, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(capturedValidate?.('')).toMatch(/--all-drives/);
+  });
+});
+
 describe('createKeysHandler — Create flow, mcp-kind mint (the production shape for drive-scoped keys)', () => {
   const MCP_TOKENS = { kind: 'mcp' as const, token: 'mcp_wizard_tok', scope: 'drive:drv1:member offline_access' };
   const DRIVE_ROW = { id: 'drv1', name: 'Engineering', slug: 'eng', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: true, role: 'OWNER', lastAccessedAt: null, homePageId: null };
@@ -207,7 +276,12 @@ describe('createKeysHandler — Create flow, mcp-kind mint (the production shape
   }
 
   it('offers the show-once token note when accepted, then always prints the agent-wiring guidance', async () => {
-    selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce({ kind: 'member' }).mockResolvedValueOnce('exit');
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('create')
+      .mockResolvedValueOnce('specific')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
     multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
     textMock.mockReset().mockResolvedValueOnce('my-key');
     // 1st confirm: proceed with the mint; 2nd confirm: show the token.
@@ -228,7 +302,12 @@ describe('createKeysHandler — Create flow, mcp-kind mint (the production shape
   });
 
   it('never surfaces the raw token anywhere when the show-once confirm is declined, but still prints guidance', async () => {
-    selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce({ kind: 'member' }).mockResolvedValueOnce('exit');
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('create')
+      .mockResolvedValueOnce('specific')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
     multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
     textMock.mockReset().mockResolvedValueOnce('my-key');
     confirmMock.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
@@ -317,6 +396,103 @@ describe('createKeysHandler — Edit flow re-scopes the key IN PLACE (update_key
     const stopMessages = spinnerHandle.stop.mock.calls.flat().map(String).join('\n');
     expect(stopMessages).toMatch(/secret is unchanged/i);
     expect(stopMessages).toContain('CI bot');
+  });
+
+  it('narrowing an all-drives key (isScoped: false) to specific drives shows a downgrade confirm before the update consent', async () => {
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('edit')
+      .mockResolvedValueOnce('tok1')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    // 1st confirm: the downgrade guard; 2nd confirm: the ordinary update confirm.
+    confirmMock.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(true);
+    spinnerHandle.stop.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const store = fakeStore();
+    const fake = fakeLoopbackServer();
+    const deps = {
+      ...baseMintDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp_update' as const, tokenId: 'tok1', scope: 'update_key:tok1 drive:drv1:member' }),
+    };
+    const handler = createKeysHandler(deps);
+
+    const tokensList = vi.fn(async () => [
+      {
+        id: 'tok1',
+        name: 'God key',
+        tokenPrefix: 'mcp_abcdefghijk',
+        lastUsed: null,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        isScoped: false,
+        driveScopes: [],
+      },
+    ]);
+    const drivesList = vi.fn(async () => [
+      { id: 'drv1', name: 'Engineering', slug: 'eng', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: true, role: 'OWNER', lastAccessedAt: null, homePageId: null },
+    ]);
+    const sdk = fakeSdk({ drivesList, tokensList });
+    const ctx = createFakeContext({ sdk, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(confirmMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/currently has access to ALL your drives/i) }),
+    );
+    expect(confirmMock).toHaveBeenCalledTimes(2);
+    const stopMessages = spinnerHandle.stop.mock.calls.flat().map(String).join('\n');
+    expect(stopMessages).toMatch(/secret is unchanged/i);
+  });
+
+  it('declining the downgrade guard aborts before the update consent is ever requested', async () => {
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('edit')
+      .mockResolvedValueOnce('tok1')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    confirmMock.mockReset().mockResolvedValueOnce(false);
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const store = fakeStore();
+    let browserOpened = false;
+    const deps = {
+      ...baseMintDeps(store),
+      openBrowser: async () => {
+        browserOpened = true;
+        return true;
+      },
+    };
+    const handler = createKeysHandler(deps);
+
+    const tokensList = vi.fn(async () => [
+      {
+        id: 'tok1',
+        name: 'God key',
+        tokenPrefix: 'mcp_abcdefghijk',
+        lastUsed: null,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        isScoped: false,
+        driveScopes: [],
+      },
+    ]);
+    const drivesList = vi.fn(async () => [
+      { id: 'drv1', name: 'Engineering', slug: 'eng', ownerId: 'u1', kind: 'STANDARD', isTrashed: false, trashedAt: null, drivePrompt: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', isOwned: true, role: 'OWNER', lastAccessedAt: null, homePageId: null },
+    ]);
+    const sdk = fakeSdk({ drivesList, tokensList });
+    const ctx = createFakeContext({ sdk, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(browserOpened).toBe(false);
   });
 
   it('a failed update consent surfaces the failure and revokes nothing', async () => {
