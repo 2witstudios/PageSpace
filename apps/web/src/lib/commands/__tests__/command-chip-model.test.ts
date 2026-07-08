@@ -118,9 +118,15 @@ describe('preprocessCommandTokens', () => {
     );
   });
 
-  it('converts only the first command token (one command per message)', () => {
+  it('converts every command token in a message, in document order (multiple commands per message)', () => {
     expect(preprocessCommandTokens('/[a](c1:command) and /[b](c2:command)')).toBe(
-      '[command:a](/command/c1) and /[b](c2:command)'
+      '[command:a](/command/c1) and [command:b](/command/c2)'
+    );
+  });
+
+  it('converts a repeated identical commandId chip too (rendering does not dedup)', () => {
+    expect(preprocessCommandTokens('/[a](c1:command) again /[a](c1:command)')).toBe(
+      '[command:a](/command/c1) again [command:a](/command/c1)'
     );
   });
 

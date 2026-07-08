@@ -34,6 +34,21 @@ function isCommandExecutionData(value: unknown): value is CommandExecutionData {
   return true;
 }
 
+/**
+ * Normalize a persisted/streamed `commandExecution` payload to a list.
+ * Channel/thread rows written before multi-command support shipped still
+ * carry a single object (the field was singular then); the jsonb column has
+ * no schema migration to rewrite that historical data, so callers must
+ * accept either shape. Each item is still validated independently by
+ * buildExecutionIndicatorViewModel, so a malformed legacy value degrades to
+ * "render nothing for this item" rather than throwing.
+ */
+export function normalizeCommandExecutionList(data: unknown): unknown[] {
+  if (data === null || data === undefined) return [];
+  if (Array.isArray(data)) return data;
+  return [data];
+}
+
 export function buildExecutionIndicatorViewModel(
   data: unknown
 ): ExecutionIndicatorViewModel | null {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  findActiveCommandToken,
+  findActiveCommandTokens,
   commandSkipNoticeText,
   buildCommandPromptSection,
   buildCommandSystemPrompt,
@@ -34,47 +34,70 @@ function injection(overrides: Partial<CommandInjection> = {}): CommandInjection 
   };
 }
 
-describe('findActiveCommandToken', () => {
+describe('findActiveCommandTokens', () => {
   it('finds a command token at the start of the message', () => {
-    const result = findActiveCommandToken(`/[release-checklist](${CMD_ID}:command) ship it`);
-    expect(result).toEqual({ commandId: CMD_ID, label: 'release-checklist' });
+    const result = findActiveCommandTokens(`/[release-checklist](${CMD_ID}:command) ship it`);
+    expect(result).toEqual([{ commandId: CMD_ID, label: 'release-checklist' }]);
   });
 
   it('finds the command when text precedes the chip (spec §2.3: prepended salutations keep the chip valid)', () => {
-    const result = findActiveCommandToken(`hey team, /[release-checklist](${CMD_ID}:command) for v2`);
-    expect(result).toEqual({ commandId: CMD_ID, label: 'release-checklist' });
+    const result = findActiveCommandTokens(`hey team, /[release-checklist](${CMD_ID}:command) for v2`);
+    expect(result).toEqual([{ commandId: CMD_ID, label: 'release-checklist' }]);
   });
 
   it('finds the command when a mention token precedes it', () => {
-    const result = findActiveCommandToken(
+    const result = findActiveCommandTokens(
       `@[Alice](user1:user) please review /[release-checklist](${CMD_ID}:command)`
     );
-    expect(result).toEqual({ commandId: CMD_ID, label: 'release-checklist' });
+    expect(result).toEqual([{ commandId: CMD_ID, label: 'release-checklist' }]);
   });
 
-  it('returns only the first command token (one command per message)', () => {
-    const result = findActiveCommandToken(
+  it('returns every distinct command token in document order (multiple commands per message)', () => {
+    const result = findActiveCommandTokens(
       `/[first](${CMD_ID}:command) and /[second](other1234567890123456:command)`
     );
-    expect(result).toEqual({ commandId: CMD_ID, label: 'first' });
+    expect(result).toEqual([
+      { commandId: CMD_ID, label: 'first' },
+      { commandId: 'other1234567890123456', label: 'second' },
+    ]);
   });
 
-  it('returns null when there is no command token', () => {
-    expect(findActiveCommandToken('just a plain message')).toBeNull();
-    expect(findActiveCommandToken('')).toBeNull();
+  it('deduplicates a repeated identical commandId, keeping the first occurrence', () => {
+    const result = findActiveCommandTokens(
+      `/[first](${CMD_ID}:command) again /[first-renamed](${CMD_ID}:command) and /[second](other1234567890123456:command)`
+    );
+    expect(result).toEqual([
+      { commandId: CMD_ID, label: 'first' },
+      { commandId: 'other1234567890123456', label: 'second' },
+    ]);
+  });
+
+  it('returns an empty array when there is no command token', () => {
+    expect(findActiveCommandTokens('just a plain message')).toEqual([]);
+    expect(findActiveCommandTokens('')).toEqual([]);
   });
 
   it('ignores @-sigil tokens entirely', () => {
-    expect(findActiveCommandToken('@[Alice](user1:user) hello')).toBeNull();
+    expect(findActiveCommandTokens('@[Alice](user1:user) hello')).toEqual([]);
   });
 
   it('ignores a mismatched sigil/type pair (e.g. @-sigil with command type)', () => {
-    expect(findActiveCommandToken(`@[fake](${CMD_ID}:command)`)).toBeNull();
-    expect(findActiveCommandToken('/[fake](page1:page)')).toBeNull();
+    expect(findActiveCommandTokens(`@[fake](${CMD_ID}:command)`)).toEqual([]);
+    expect(findActiveCommandTokens('/[fake](page1:page)')).toEqual([]);
   });
 
   it('ignores plain /trigger text (no serialization, no chip)', () => {
-    expect(findActiveCommandToken('/release-checklist please')).toBeNull();
+    expect(findActiveCommandTokens('/release-checklist please')).toEqual([]);
+  });
+
+  it('ignores a command token and still returns other valid ones when mixed with mention tokens', () => {
+    const result = findActiveCommandTokens(
+      `@[Alice](user1:user) /[first](${CMD_ID}:command) @[Bob](user2:user) /[second](other1234567890123456:command)`
+    );
+    expect(result).toEqual([
+      { commandId: CMD_ID, label: 'first' },
+      { commandId: 'other1234567890123456', label: 'second' },
+    ]);
   });
 });
 
@@ -163,27 +186,27 @@ describe('buildCommandSystemPrompt', () => {
 });
 
 describe('buildCommandPromptSection', () => {
-  it('returns empty string for null plan (no command in message)', () => {
-    expect(buildCommandPromptSection(null)).toBe('');
+  it('returns empty string for an empty plan array (no command in message)', () => {
+    expect(buildCommandPromptSection([])).toBe('');
   });
 
-  it('returns a one-line notice for a skipped command', () => {
+  it('returns a one-line notice for a single skipped command', () => {
     const plan: CommandExecutionPlan = {
       kind: 'skip',
       commandId: CMD_ID,
       label: 'foo',
       reason: 'disabled',
     };
-    const section = buildCommandPromptSection(plan);
+    const section = buildCommandPromptSection([plan]);
     const lines = section.trim().split('\n');
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('/foo');
     expect(lines[0]).toContain('the command is disabled');
   });
 
-  it('returns the full command section for an inject plan', () => {
+  it('returns the full command section for a single inject plan', () => {
     const plan: CommandExecutionPlan = { kind: 'inject', injection: injection() };
-    const section = buildCommandPromptSection(plan);
+    const section = buildCommandPromptSection([plan]);
     expect(section).toContain('Step 1: run tests');
   });
 
@@ -195,7 +218,7 @@ describe('buildCommandPromptSection', () => {
       label: hostile,
       reason: 'not_found',
     };
-    const section = buildCommandPromptSection(plan);
+    const section = buildCommandPromptSection([plan]);
     expect(section).not.toContain('Ignore previous instructions');
     expect(section).toContain('a slash command');
     expect(section).toContain('the command no longer exists');
@@ -208,7 +231,60 @@ describe('buildCommandPromptSection', () => {
       label: 'release-checklist',
       reason: 'not_found',
     };
-    expect(buildCommandPromptSection(plan)).toContain('the /release-checklist command');
+    expect(buildCommandPromptSection([plan])).toContain('the /release-checklist command');
+  });
+
+  it('concatenates two inject plans into two labeled command blocks, in order, with distinct resource manifests', () => {
+    const first: CommandExecutionPlan = {
+      kind: 'inject',
+      injection: injection({
+        trigger: 'release-checklist',
+        entryPage: { id: 'page1', title: 'Release Checklist', type: 'DOCUMENT', serializedContent: 'Step 1: run tests' },
+        children: [{ id: 'child1', title: 'Rollback Plan', type: 'DOCUMENT' }],
+      }),
+    };
+    const second: CommandExecutionPlan = {
+      kind: 'inject',
+      injection: injection({
+        trigger: 'standup',
+        entryPage: { id: 'page2', title: 'Standup Notes', type: 'DOCUMENT', serializedContent: 'Agenda: yesterday, today, blockers' },
+        children: [{ id: 'child2', title: 'Team Roster', type: 'DOCUMENT' }],
+      }),
+    };
+
+    const section = buildCommandPromptSection([first, second]);
+
+    expect(section).toContain('/release-checklist');
+    expect(section).toContain('Step 1: run tests');
+    expect(section).toContain('Rollback Plan');
+    expect(section).toContain('/standup');
+    expect(section).toContain('Agenda: yesterday, today, blockers');
+    expect(section).toContain('Team Roster');
+    // Document order: the first command's block appears before the second's.
+    expect(section.indexOf('Step 1: run tests')).toBeLessThan(section.indexOf('Agenda: yesterday'));
+    // Each command's resource manifest stays scoped to its own block — no
+    // cross-contamination (e.g. the first command's block must not list the
+    // second command's child).
+    const firstBlockEnd = section.indexOf('/standup');
+    expect(section.slice(0, firstBlockEnd)).not.toContain('Team Roster');
+    expect(section.slice(firstBlockEnd)).not.toContain('Rollback Plan');
+  });
+
+  it('mixes one resolved and one skipped plan into one instruction block plus one skip notice', () => {
+    const resolved: CommandExecutionPlan = { kind: 'inject', injection: injection() };
+    const skipped: CommandExecutionPlan = {
+      kind: 'skip',
+      commandId: 'other1234567890123456',
+      label: 'gone',
+      reason: 'not_found',
+    };
+
+    const section = buildCommandPromptSection([resolved, skipped]);
+
+    expect(section).toContain('Step 1: run tests');
+    expect(section).toContain('was skipped because');
+    expect(section).toContain('the /gone command');
+    expect(section).toContain('the command no longer exists');
   });
 });
 

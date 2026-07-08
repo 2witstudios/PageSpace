@@ -194,11 +194,11 @@ describe('command chip and @mention in one message — both pipelines run', () =
     const sendOptions = mockSendChannelExecute.mock.calls[0][1] as {
       experimental_context: { commandExecution?: unknown };
     };
-    expect(sendOptions.experimental_context.commandExecution).toEqual({
+    expect(sendOptions.experimental_context.commandExecution).toEqual([{
       label: 'release-checklist',
       status: 'used',
       entryPageTitle: 'Release Checklist',
-    });
+    }]);
   });
 
   it('never treats the mentioned agent id as a command or the command id as a mention', async () => {
@@ -235,11 +235,11 @@ describe('command degradations never block the agent response', () => {
     const sendOptions = mockSendChannelExecute.mock.calls[0][1] as {
       experimental_context: { commandExecution?: unknown };
     };
-    expect(sendOptions.experimental_context.commandExecution).toEqual({
+    expect(sendOptions.experimental_context.commandExecution).toEqual([{
       label: 'release-checklist',
       status: 'skipped',
       reason: 'not_found',
-    });
+    }]);
   });
 
   it('command row gone (entry page or drive hard-deleted, FK cascade): skip notice, agent still replies', async () => {

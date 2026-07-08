@@ -112,8 +112,10 @@ export const channelTools = {
               senderName: senderIdentity.senderName,
               ...(senderIdentity.agentPageId && { agentPageId: senderIdentity.agentPageId }),
               // Universal Commands (§7): execution feedback for the reply,
-              // threaded in by the agent-mention responder.
-              ...((context as ToolExecutionContext).commandExecution && {
+              // threaded in by the agent-mention responder. Guard on a
+              // non-empty array, not mere truthiness — an empty array is
+              // truthy in JS and would otherwise persist `commandExecution: []`.
+              ...((context as ToolExecutionContext).commandExecution?.length && {
                 commandExecution: (context as ToolExecutionContext).commandExecution,
               }),
             },

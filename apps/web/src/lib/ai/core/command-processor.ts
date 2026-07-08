@@ -1,5 +1,5 @@
 /**
- * Command Processor for AI Chat System (Universal Commands phase 4)
+ * Command Processor for AI Chat System (Universal Commands)
  *
  * Pure core for executing a slash command attached to a user message.
  * A command implements the Agent Skills standard: its entry page is the
@@ -36,22 +36,31 @@ export interface ParsedCommandToken {
 }
 
 /**
- * Find the active command token in a message: the first command-type token
- * in document order. Chip validity is set at insertion, not send time —
- * users may prepend text (or mentions) before the chip and the command
- * still applies to the whole message (UX spec §2.3). Any later command
- * tokens are ignored: one command per message.
+ * Find every active command token in a message, in document order. Chip
+ * validity is set at insertion, not send time — users may prepend text (or
+ * mentions) before, between, or after chips and every chip still applies to
+ * the whole message (UX spec §2.3). Multiple commands per message are
+ * supported: each resolves independently (see command-resolver.ts). A
+ * repeated identical commandId is deduplicated, keeping the first
+ * occurrence — commands carry no arguments, so resolving the same command
+ * twice would inject byte-identical instructions for no benefit.
  *
  * Reuses the canonical token grammar from message-tokens, which already
  * rejects mismatched sigil/type pairs — only the exact
  * `/[Label](commandId:command)` serialization is a command.
  */
-export function findActiveCommandToken(content: string): ParsedCommandToken | null {
-  if (!content) return null;
+export function findActiveCommandTokens(content: string): ParsedCommandToken[] {
+  if (!content) return [];
   const { tokens } = parseMessageTokens(content);
-  const command = tokens.find((token) => token.type === COMMAND_TOKEN_TYPE);
-  if (!command) return null;
-  return { commandId: command.id, label: command.label };
+  const seen = new Set<string>();
+  const result: ParsedCommandToken[] = [];
+  for (const token of tokens) {
+    if (token.type !== COMMAND_TOKEN_TYPE) continue;
+    if (seen.has(token.id)) continue;
+    seen.add(token.id);
+    result.push({ commandId: token.id, label: token.label });
+  }
+  return result;
 }
 
 /** Why a command was skipped instead of injected (UX spec §7.2). */
@@ -159,20 +168,31 @@ export function buildCommandSystemPrompt(injection: CommandInjection): string {
 }
 
 /**
- * Map a resolved plan to the section joined into the system prompt.
- * Null (no command in the message) contributes nothing; a skipped command
- * contributes a one-line notice so the AI can acknowledge it without
+ * Map a single resolved plan to its section of the system prompt: a skipped
+ * command contributes a one-line notice so the AI can acknowledge it without
  * treating it as an error (spec §7.2: the response itself proceeds
- * normally).
+ * normally); an injected command contributes its full labeled block.
  */
-export function buildCommandPromptSection(plan: CommandExecutionPlan | null): string {
-  if (!plan) return '';
+function buildSinglePlanSection(plan: CommandExecutionPlan): string {
   if (plan.kind === 'skip') {
     const safe = safeCommandLabel(plan.label);
     const name = safe ? `the /${safe} command` : 'a slash command';
     return `\nNote: the user invoked ${name}, but it was skipped because ${COMMAND_SKIP_REASON_TEXT[plan.reason]}. Respond to the message text normally.\n`;
   }
   return buildCommandSystemPrompt(plan.injection);
+}
+
+/**
+ * Map every resolved plan from a message (one per command chip, in document
+ * order — see findActiveCommandTokens/planCommandExecutions) to the section
+ * joined into the system prompt. An empty array (no command in the message)
+ * contributes nothing. Each plan's section is self-contained (its own
+ * `## COMMAND: /trigger` heading and resource manifest, or its own skip
+ * notice), so multiple commands' instructions land in the same turn without
+ * their resources being confused for one another.
+ */
+export function buildCommandPromptSection(plans: CommandExecutionPlan[]): string {
+  return plans.map(buildSinglePlanSection).join('');
 }
 
 /**

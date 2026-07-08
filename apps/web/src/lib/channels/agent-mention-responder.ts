@@ -17,7 +17,7 @@ import {
   commandExecutionDataFromPlan,
   type CommandExecutionData,
 } from '@/lib/ai/core/command-processor';
-import { planCommandExecution } from '@/lib/ai/core/command-resolver';
+import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
@@ -363,7 +363,7 @@ async function postAgentThreadReply(input: {
   content: string;
   parentId: string;
   agent: MentionedAgent;
-  commandExecution?: CommandExecutionData;
+  commandExecution?: CommandExecutionData[];
   driveId?: string | null;
 }): Promise<void> {
   const result = await channelMessageRepository.insertChannelThreadReply({
@@ -520,14 +520,17 @@ export async function triggerMentionedAgentResponses(
     const locationContext = buildLocationContext(params);
 
     // Universal Commands (UX spec §6): a chip is inert in a plain channel
-    // message, but the command executes — with the SENDER's permissions —
-    // when this message triggers an agent response. Resolution degrades,
-    // never fails; a skipped command becomes a one-line notice.
-    const commandPlan = await planCommandExecution(params.content, params.userId, {
+    // message, but every command chip executes — with the SENDER's
+    // permissions — when this message triggers an agent response.
+    // Resolution degrades, never fails; a skipped command becomes a
+    // one-line notice. Both the prompt injection and the persisted
+    // execution-feedback pill carry every resolved command, in order.
+    const commandPlans = await planCommandExecutions(params.content, params.userId, {
       driveId: params.driveId ?? null,
     });
-    const commandContext = buildCommandPromptSection(commandPlan);
-    const commandExecution = commandPlan ? commandExecutionDataFromPlan(commandPlan) : undefined;
+    const commandContext = buildCommandPromptSection(commandPlans);
+    const commandExecution =
+      commandPlans.length > 0 ? commandPlans.map(commandExecutionDataFromPlan) : undefined;
 
     // Only worth resolving presigned URLs/access checks when at least one
     // eligible agent can actually view images. Resolution failure (S3

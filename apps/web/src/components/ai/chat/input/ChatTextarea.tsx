@@ -315,7 +315,7 @@ ChatTextareaInner.displayName = 'ChatTextareaInner';
  * Provides:
  * - Auto-growing textarea
  * - @ mention suggestions with search
- * - / slash-command picker at message start
+ * - / slash-command picker, mid-message and multiple per message
  * - Platform-aware Enter key: sends on desktop/external keyboard, newline on mobile
  * - Cross-drive mention support
  */

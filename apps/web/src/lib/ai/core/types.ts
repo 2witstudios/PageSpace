@@ -62,8 +62,9 @@ export interface ToolExecutionContext {
 
   // Universal Commands execution feedback for the message this context posts
   // (channel agent replies): carried into the reply's aiMeta so the channel
-  // renders the "Using /foo" / "Skipped /foo" indicator (UX spec §7).
-  commandExecution?: CommandExecutionData;
+  // renders one "Using /foo" / "Skipped /foo" indicator per resolved command
+  // (UX spec §7), in document order.
+  commandExecution?: CommandExecutionData[];
 
   // Terminal epics: the ACTIVE machine for this run's terminal tool group
   // (bash/readFile/writeFile/editFile/git + switch_machine/list_machines).
