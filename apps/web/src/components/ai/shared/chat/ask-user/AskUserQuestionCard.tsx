@@ -50,6 +50,54 @@ interface DraftAnswer {
   showOther: boolean;
 }
 
+interface OptionRowProps {
+  index: number;
+  label: string;
+  description?: string;
+  chosen: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}
+
+/**
+ * A single option as a full-width stacked row (number/check badge, label,
+ * optional description) rather than a flex-wrap pill — long labels and
+ * descriptions wrap cleanly instead of forcing a pill to stretch or break
+ * mid-word, and the description is now visible instead of a hover-only
+ * `title` tooltip. The chosen state is a soft `bg-primary/8` tint + colored
+ * border, not an opaque `bg-primary` fill, to match how restrained every
+ * other surface in the app is (badges, tabs, chips are all desaturated) —
+ * a full-saturation block read as a generic form-library "selected" state.
+ */
+const OptionRow: React.FC<OptionRowProps> = ({ index, label, description, chosen, disabled, onClick }) => (
+  <button
+    type="button"
+    disabled={disabled}
+    onClick={onClick}
+    className={cn(
+      'flex w-full items-start gap-3 rounded-md px-3.5 py-2.5 text-left text-sm transition-[background-color,border-color,box-shadow,transform] active:scale-[0.997] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none',
+      chosen
+        ? 'border border-primary bg-primary/8 shadow-[var(--shadow-elevated)] hover:bg-primary/14'
+        : 'border border-border bg-card shadow-[var(--shadow-ambient)] hover:border-primary/35 hover:shadow-[var(--shadow-elevated)]'
+    )}
+  >
+    <span
+      className={cn(
+        'mt-px flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[11px] tabular-nums',
+        chosen ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+      )}
+    >
+      {chosen ? <Check className="h-3.5 w-3.5" /> : index}
+    </span>
+    <span className="flex min-w-0 flex-col gap-0.5 pt-px">
+      <span className="font-medium">{label}</span>
+      {description && (
+        <span className="text-[12.5px] font-normal leading-[1.45] text-muted-foreground">{description}</span>
+      )}
+    </span>
+  </button>
+);
+
 export const AskUserQuestionCard: React.FC<AskUserQuestionCardProps> = ({ part }) => {
   const ctx = useAskUserAnswerContext();
   const input = useMemo(() => safeParseInput(part.input), [part.input]);
@@ -224,40 +272,31 @@ export const AskUserQuestionCard: React.FC<AskUserQuestionCardProps> = ({ part }
           </Badge>
           <p className="text-sm">{activeQuestion.question}</p>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-col gap-2">
             {activeQuestion.options.map((opt, optIndex) => {
               const isChosen = answered
                 ? answered.selectedLabel === opt.label
                 : draft?.selectedLabel === opt.label && !draft.showOther;
               return (
-                <Button
+                <OptionRow
                   key={opt.label}
-                  type="button"
-                  variant={isChosen ? 'default' : 'outline'}
-                  size="sm"
+                  index={optIndex + 1}
+                  label={opt.label}
+                  description={opt.description}
+                  chosen={isChosen}
                   disabled={!isAnswerable}
                   onClick={() => setDraft(activeIndex, { selectedLabel: opt.label, showOther: false })}
-                  className="flex items-center gap-1.5"
-                  title={opt.description}
-                >
-                  {isChosen && <Check className="h-3.5 w-3.5" />}
-                  <span className="tabular-nums opacity-60">{optIndex + 1}</span>
-                  {opt.label}
-                </Button>
+                />
               );
             })}
             {!answered && (
-              <Button
-                type="button"
-                variant={draft?.showOther ? 'default' : 'outline'}
-                size="sm"
+              <OptionRow
+                index={activeQuestion.options.length + 1}
+                label="Other…"
+                chosen={Boolean(draft?.showOther)}
                 disabled={!isAnswerable}
                 onClick={() => setDraft(activeIndex, { showOther: true })}
-                className="flex items-center gap-1.5"
-              >
-                <span className="tabular-nums opacity-60">{activeQuestion.options.length + 1}</span>
-                Other…
-              </Button>
+              />
             )}
           </div>
 
