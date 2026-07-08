@@ -60,11 +60,11 @@ describe('AskUserQuestionCard', () => {
   it('enables Submit only after selecting an option, and submits the correct answer', () => {
     let submitted: unknown = null;
     const part = answerablePart(QUESTIONS_INPUT);
-    const { getByText } = renderAnswerable(part, (_toolCallId, output) => {
+    const { getByRole, getByText } = renderAnswerable(part, (_toolCallId, output) => {
       submitted = output;
     });
 
-    fireEvent.click(getByText('OAuth'));
+    fireEvent.click(getByRole('button', { name: /OAuth/ }));
     const submitButton = getByText('Submit') as HTMLButtonElement;
     expect(submitButton.disabled).toBe(false);
 
@@ -86,7 +86,7 @@ describe('AskUserQuestionCard', () => {
     };
     const finalPart = answerablePart(QUESTIONS_INPUT);
 
-    const { rerender, getByText, queryByText } = renderAnswerable(streamingPart as never);
+    const { rerender, getByRole, getByText, queryByText } = renderAnswerable(streamingPart as never);
     expect(queryByText('Submit')).toBeNull();
 
     rerender(
@@ -102,7 +102,7 @@ describe('AskUserQuestionCard', () => {
 
     // ...and clicking an option + Submit works without throwing.
     expect(() => {
-      fireEvent.click(getByText('OAuth'));
+      fireEvent.click(getByRole('button', { name: /OAuth/ }));
       fireEvent.click(getByText('Submit'));
     }).not.toThrow();
   });
@@ -130,18 +130,77 @@ describe('AskUserQuestionCard', () => {
         ],
       },
     };
-    const { getAllByText } = renderAnswerable(part as never);
+    // With >1 question, only the active tab's question is in the DOM at a
+    // time — the first tab (backend/REST-GraphQL) is active by default.
+    const { getByRole, getAllByRole } = renderAnswerable(part as never);
 
-    // The chosen option renders a Check icon (svg child) inside its button;
-    // an unchosen option does not. Each question's OWN answer must mark its
-    // own option, not the other (same-header) question's.
-    const isChosen = (label: string) =>
-      (getAllByText(label)[0].closest('button') as HTMLButtonElement).querySelector('svg') !== null;
+    const isChosen = (name: RegExp) =>
+      (getByRole('button', { name }) as HTMLButtonElement).querySelector('svg') !== null;
 
-    expect(isChosen('REST')).toBe(true);
-    expect(isChosen('GraphQL')).toBe(false);
-    expect(isChosen('CSR')).toBe(true);
-    expect(isChosen('SSR')).toBe(false);
+    expect(isChosen(/REST/)).toBe(true);
+    expect(isChosen(/GraphQL/)).toBe(false);
+
+    // Switch to the second tab ("2. Approach") — its OWN answer (CSR) must
+    // show as chosen, not the first question's (this is exactly the bug the
+    // positional-matching fix guards against: keying by header would have
+    // shown REST's checkmark here too, since both tabs share the header).
+    fireEvent.click(getAllByRole('tab')[1]);
+    expect(isChosen(/CSR/)).toBe(true);
+    expect(isChosen(/SSR/)).toBe(false);
+  });
+
+  it('renders a tab per question only when there is more than one question', () => {
+    const { queryAllByRole } = renderAnswerable(answerablePart(QUESTIONS_INPUT));
+    expect(queryAllByRole('tab')).toHaveLength(0);
+  });
+
+  it('arrow-key navigation between tabs moves the active question', () => {
+    const twoQuestions = {
+      questions: [
+        { header: 'Q1', question: 'First?', options: [{ label: 'A' }, { label: 'B' }] },
+        { header: 'Q2', question: 'Second?', options: [{ label: 'C' }, { label: 'D' }] },
+      ],
+    };
+    const { getAllByRole, getByText } = renderAnswerable(answerablePart(twoQuestions));
+    const tabs = getAllByRole('tab');
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(tabs[0], { key: 'ArrowRight' });
+    expect(tabs[1]).toHaveAttribute('aria-selected', 'true');
+    expect(getByText('Second?')).toBeTruthy();
+
+    fireEvent.keyDown(tabs[1], { key: 'ArrowLeft' });
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
+    expect(getByText('First?')).toBeTruthy();
+  });
+
+  it('number-key shortcut selects the Nth option of the active question without a click', () => {
+    let submitted: unknown = null;
+    const part = answerablePart(QUESTIONS_INPUT);
+    const { getByRole, getByText, container } = renderAnswerable(part, (_toolCallId, output) => {
+      submitted = output;
+    });
+
+    fireEvent.keyDown(container.firstChild as HTMLElement, { key: '2' });
+    expect(getByRole('button', { name: /API key/ }).querySelector('svg')).not.toBeNull();
+
+    fireEvent.click(getByText('Submit'));
+    expect(submitted).toEqual({
+      answers: [{ header: 'Auth method', question: 'Which auth method should we use?', selectedLabel: 'API key' }],
+    });
+  });
+
+  it('does not treat digits typed into the Other… textarea as the number-key shortcut', () => {
+    const part = answerablePart(QUESTIONS_INPUT);
+    const { getByRole, getByPlaceholderText } = renderAnswerable(part);
+
+    fireEvent.click(getByRole('button', { name: /Other…/ }));
+    const textarea = getByPlaceholderText('Type your answer…');
+    fireEvent.keyDown(textarea, { key: '1' });
+
+    // OAuth (option 1) must NOT become selected just because '1' was
+    // pressed while focus was in the free-text field.
+    expect(getByRole('button', { name: /OAuth/ }).querySelector('svg')).toBeNull();
   });
 
   it('renders read-only (no interactive buttons disabled-state crash) when not answerable', () => {
