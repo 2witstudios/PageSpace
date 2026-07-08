@@ -146,6 +146,13 @@ describe('POST /api/oauth/device_authorization — scope validation', () => {
     expect(await res.json()).toEqual({ error: 'invalid_scope' });
     expect(createDeviceAuthorization).not.toHaveBeenCalled();
   });
+
+  it('rejects an all_drives scope outright — pollDeviceToken has no isAllDrivesGrant branch and would mint a token that resolves to zero access', async () => {
+    const res = await POST(deviceAuthRequest({ client_id: CLIENT_ID, scope: 'all_drives offline_access' }) as never);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_scope' });
+    expect(createDeviceAuthorization).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/oauth/device_authorization — happy path', () => {

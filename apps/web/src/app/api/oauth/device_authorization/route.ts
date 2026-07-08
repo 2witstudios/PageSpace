@@ -61,7 +61,23 @@ export async function POST(req: NextRequest) {
     // pollDeviceToken has no ok_mcp_update/ok_mcp_activate branch — reject at
     // the door rather than mint a device code that could only dead-end (fail
     // closed).
-    if (parsed.scopes.updateKeyId !== null || parsed.scopes.activateKeyId !== null) {
+    //
+    // all_drives is rejected for the same reason: pollDeviceToken has no
+    // isAllDrivesGrant branch either — it mints a plain OAuth access/refresh
+    // pair via issueInitialTokenPair, persisting `all_drives` verbatim into
+    // `oauth_access_tokens.scopes`. That shape can never resolve correctly:
+    // `scopeSetToDriveScopes` returns zero rows for all_drives (by design —
+    // "all drives" has no drive list to enumerate), so
+    // `validateOAuthAccessToken` would compute `allowedDriveIds: []` on a
+    // non-`account` OAuth token, which `isScopedOAuthAuth`/`getScopedAccessLevel`
+    // interpret as "scoped app member with zero drive rows" — the SAME shape
+    // as an orphaned key whose drives were all deleted (ADR 0002 F6) — and
+    // deny everything. all_drives only resolves correctly when minted as a
+    // real, unscoped (`isScoped: false`) `mcp_tokens` row, which only the
+    // authorization_code exchange's `isAllDrivesGrant` branch produces
+    // (`oauth-repository.ts`). Fails closed to "no all-drives keys via device
+    // flow" rather than silently minting a token that grants nothing.
+    if (parsed.scopes.updateKeyId !== null || parsed.scopes.activateKeyId !== null || parsed.scopes.allDrives) {
       return noStoreJson({ error: 'invalid_scope' }, 400);
     }
     scopes = formatScopeSet(parsed.scopes).split(' ').filter(Boolean);
