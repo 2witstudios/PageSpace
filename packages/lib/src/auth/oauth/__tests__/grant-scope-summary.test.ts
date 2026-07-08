@@ -64,4 +64,24 @@ describe('describeGrantScopes', () => {
   it('returns an empty list for a malformed/unparseable scope string rather than throwing', () => {
     expect(describeGrantScopes(['not a real scope'], NO_NAMES)).toEqual([]);
   });
+
+  it('describes a manage_keys grant (e.g. a stored `pagespace login` credential)', () => {
+    const descriptions = describeGrantScopes(['manage_keys', 'offline_access'], NO_NAMES);
+    expect(descriptions).toHaveLength(2);
+    expect(descriptions.some((d) => /manage.*access keys/i.test(d))).toBe(true);
+    expect(descriptions.some((d) => /revoke/i.test(d))).toBe(true);
+  });
+
+  it('describes an update_key grant alongside its drive scope', () => {
+    const descriptions = describeGrantScopes(['update_key:tok123', 'drive:drv123:admin'], NO_NAMES);
+    expect(descriptions).toHaveLength(2);
+    expect(descriptions.some((d) => /update the drive access/i.test(d) && d.includes('tok123'))).toBe(true);
+  });
+
+  it('describes an activate_key grant', () => {
+    const descriptions = describeGrantScopes(['activate_key:tok123'], NO_NAMES);
+    expect(descriptions).toHaveLength(1);
+    expect(descriptions[0]).toMatch(/active key/i);
+    expect(descriptions[0]).toContain('tok123');
+  });
 });

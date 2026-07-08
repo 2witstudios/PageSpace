@@ -89,14 +89,14 @@ describe('buildAuthProvider — flag/env sources (static, stateless)', () => {
   });
 });
 
-describe('buildAuthProvider — profile source (silent OAuth refresh)', () => {
+describe('buildAuthProvider — stored-credential source (silent OAuth refresh)', () => {
   it('discovers + refreshes lazily (not at construction time) and persists the rotated refresh token', async () => {
     const store = fakeStoreSpy();
     let discoverCalls = 0;
     let refreshCallArgs: { tokenEndpoint: string; clientId: string } | undefined;
 
     const provider = buildAuthProvider(
-      { kind: 'profile', host: HOST, credential: CREDENTIAL },
+      { kind: 'stored', host: HOST, credential: CREDENTIAL },
       {
         discoverMetadata: async (host) => {
           discoverCalls += 1;
@@ -143,7 +143,7 @@ describe('buildAuthProvider — profile source (silent OAuth refresh)', () => {
   it('persists the LIVE server-granted scope from the refresh response, not the stale locally-cached scopes, when the server narrows the grant', async () => {
     const store = fakeStoreSpy();
     const provider = buildAuthProvider(
-      { kind: 'profile', host: HOST, credential: CREDENTIAL },
+      { kind: 'stored', host: HOST, credential: CREDENTIAL },
       {
         discoverMetadata: async () => ({ authorizationEndpoint: 'https://x/authorize', tokenEndpoint: 'https://x/token' }),
         createRefreshAccessToken: () => async () => ({
@@ -169,7 +169,7 @@ describe('buildAuthProvider — profile source (silent OAuth refresh)', () => {
   it('a definitive refresh failure rejects getAccessToken with AuthenticationError and never persists anything', async () => {
     const store = fakeStoreSpy();
     const provider = buildAuthProvider(
-      { kind: 'profile', host: HOST, credential: CREDENTIAL },
+      { kind: 'stored', host: HOST, credential: CREDENTIAL },
       {
         discoverMetadata: async () => ({ authorizationEndpoint: 'x', tokenEndpoint: 'y' }),
         createRefreshAccessToken: () => async () => {
@@ -185,7 +185,7 @@ describe('buildAuthProvider — profile source (silent OAuth refresh)', () => {
   });
 });
 
-describe('buildAuthProvider — profile source, static (mcp) credential', () => {
+describe('buildAuthProvider — stored-credential source, static (mcp) credential', () => {
   const STATIC_CREDENTIAL: HostCredential = {
     kind: 'static',
     token: 'mcp_abc123',
@@ -197,7 +197,7 @@ describe('buildAuthProvider — profile source, static (mcp) credential', () => 
     const store = fakeStoreSpy();
     let discoverCalls = 0;
     const provider = buildAuthProvider(
-      { kind: 'profile', host: HOST, credential: STATIC_CREDENTIAL },
+      { kind: 'stored', host: HOST, credential: STATIC_CREDENTIAL },
       {
         discoverMetadata: async () => {
           discoverCalls += 1;
@@ -273,10 +273,10 @@ describe('enforceAuth', () => {
     expect(store.deleteCalls).toEqual([]);
   });
 
-  it('on a profile refresh failure: purges the stored credential, tells the user to re-login, exits 1', async () => {
+  it('on a stored-credential refresh failure: purges the stored credential, tells the user to re-login, exits 1', async () => {
     const store = fakeStoreSpy({ [HOST]: CREDENTIAL });
     const stderr = fakeSink();
-    const source = { kind: 'profile' as const, host: HOST, credential: CREDENTIAL };
+    const source = { kind: 'stored' as const, host: HOST, credential: CREDENTIAL };
     const auth = buildAuthProvider(source, {
       discoverMetadata: async () => ({ authorizationEndpoint: 'x', tokenEndpoint: 'y' }),
       createRefreshAccessToken: () => async () => {
@@ -302,7 +302,7 @@ describe('enforceAuth', () => {
     };
     const store = fakeStoreSpy({ [HOST]: staticCredential });
     const stderr = fakeSink();
-    const source = { kind: 'profile' as const, host: HOST, credential: staticCredential };
+    const source = { kind: 'stored' as const, host: HOST, credential: staticCredential };
     const auth = {
       getAccessToken: async () => {
         throw new AuthenticationError('token revoked');
@@ -367,7 +367,7 @@ describe('buildAuthProvider — persist-before-use (ADR 0003 §3.5)', () => {
     };
 
     const provider = buildAuthProvider(
-      { kind: 'profile', host: HOST, credential: CREDENTIAL },
+      { kind: 'stored', host: HOST, credential: CREDENTIAL },
       {
         discoverMetadata: async () => ({ authorizationEndpoint: 'x', tokenEndpoint: 'y' }),
         createRefreshAccessToken: () => async () => ({

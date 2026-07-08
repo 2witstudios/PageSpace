@@ -1,12 +1,26 @@
 /**
- * MCP token management operations (Phase 4 task 6) — net-new registry
- * entries backing `pagespace keys create/list/revoke`.
+ * MCP token management operations (Phase 4 task 6) — registry entries
+ * backing `pagespace keys list/revoke`.
  *
- * Route-verified against `apps/web/src/app/auth/mcp-tokens/route.ts`
- * (POST/GET) and `.../mcp-tokens/[tokenId]/route.ts` (DELETE). The server
- * owns all scope-capping (MEMBER-cannot-grant-ADMIN, custom-role ownership,
+ * Route-verified against `apps/web/src/app/api/auth/mcp-tokens/route.ts`
+ * (GET) and `.../mcp-tokens/[tokenId]/route.ts` (DELETE). The server owns
+ * all scope-capping (MEMBER-cannot-grant-ADMIN, custom-role ownership,
  * drive-access checks) — this module only shapes the request/response, never
  * re-implements that authority decision.
+ *
+ * There is deliberately NO `tokens.create` operation. The server locked
+ * POST /api/auth/mcp-tokens to session auth (Phase 8 #1878, a
+ * credential-minting-escalation fix), and neither credential class the SDK
+ * documents — `mcp_` API keys or `ps_at_` OAuth access tokens — is accepted
+ * there. Session credentials are reserved for first-party surfaces (browser
+ * cookie sessions, and the desktop/mobile apps' Bearer session tokens);
+ * they are not an SDK-supported credential, and shipping a typed minting
+ * method usable only via one would reopen the silent, agent-runnable
+ * key-minting affordance Phase 8 closed. Key MINTING happens via the OAuth
+ * authorize/consent flow (`pagespace keys create`) or the web UI. Both
+ * remaining operations require a `ps_at_` OAuth access token (from
+ * `pagespace login` / the OAuth flow) or a web session — the routes reject
+ * `mcp_` tokens.
  *
  * `listMcpTokens`'s output schema deliberately has no `token` field: even if
  * a buggy or compromised server included one, zod's default
@@ -17,34 +31,7 @@
 import { z } from 'zod';
 import { defineOperation } from '../registry/define.js';
 
-const driveScopeInputSchema = z.strictObject({
-  id: z.string(),
-  role: z.enum(['ADMIN', 'MEMBER']).nullish(),
-  customRoleId: z.string().optional(),
-});
-
 const driveScopeOutputSchema = z.object({ id: z.string(), name: z.string() });
-
-export const createMcpToken = defineOperation({
-  name: 'tokens.create',
-  method: 'POST',
-  path: '/api/auth/mcp-tokens',
-  inputSchema: z.strictObject({
-    name: z.string().min(1).max(100),
-    drives: z.array(driveScopeInputSchema).optional(),
-  }),
-  outputSchema: z.object({
-    id: z.string(),
-    name: z.string(),
-    token: z.string(),
-    createdAt: z.string(),
-    lastUsed: z.string().nullable(),
-    driveScopes: z.array(driveScopeOutputSchema),
-  }),
-  requiredScope: 'account',
-  description:
-    'Create a new MCP token, optionally scoped to one or more drives with a role/custom-role downgrade. The plaintext token is returned exactly once in this response — the server never returns it again.',
-});
 
 export const listMcpTokens = defineOperation({
   name: 'tokens.list',

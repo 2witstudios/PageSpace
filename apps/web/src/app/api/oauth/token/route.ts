@@ -98,6 +98,23 @@ function mcpUpdateSuccessBody(tokenId: string, scopes: string[]): Record<string,
   };
 }
 
+/**
+ * Success body for an `activate_key` authorization_code grant — the exchange
+ * verified ownership of the target key and changed NOTHING
+ * (`ok_mcp_activate`, `oauth-repository.ts`). No secret of any kind is
+ * returned: the PKCE-verified success signal is the whole product, telling
+ * the requesting device (`pagespace keys use`) it may set the key as its
+ * ambient default. `token_type: 'mcp_activate'` is the CLI's discriminator
+ * (`exchange-code.ts`), and `token_id` names which key was approved.
+ */
+function mcpActivateSuccessBody(tokenId: string, scopes: string[]): Record<string, unknown> {
+  return {
+    token_type: 'mcp_activate',
+    token_id: tokenId,
+    scope: scopes.join(' '),
+  };
+}
+
 const INVALID_REQUEST = { error: 'invalid_request' };
 const INVALID_GRANT = { error: 'invalid_grant' };
 const INVALID_SCOPE = { error: 'invalid_scope' };
@@ -235,6 +252,18 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
       details: { clientId: client.clientId, oauthEvent: 'code_exchange_mcp_update' },
     });
     return noStoreJson(mcpUpdateSuccessBody(result.tokenId, result.scopes), 200);
+  }
+
+  if (result.outcome === 'ok_mcp_activate') {
+    // Approval ceremony only — nothing was minted or changed, so this is an
+    // access-granted audit event (not token.created/updated), and there is
+    // no activity-trail write: the key row is untouched.
+    auditRequest(req, {
+      eventType: 'authz.access.granted',
+      userId: result.userId,
+      details: { clientId: client.clientId, oauthEvent: 'code_exchange_mcp_activate' },
+    });
+    return noStoreJson(mcpActivateSuccessBody(result.tokenId, result.scopes), 200);
   }
 
   if (result.outcome !== 'ok') {

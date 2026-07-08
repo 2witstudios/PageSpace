@@ -66,7 +66,7 @@ describe('createMcpHandler — thin stdio wiring over ctx.sdk', () => {
 });
 
 describe('createMcpHandler — fails closed with no explicit credential (Phase 8 task 4)', () => {
-  it('no --token, no PAGESPACE_TOKEN, no --profile, no PAGESPACE_PROFILE -> refuses to start, transport never touched', async () => {
+  it('no --token, no PAGESPACE_TOKEN, no --key, no PAGESPACE_KEY -> refuses to start, transport never touched', async () => {
     let createTransportCalls = 0;
     const handler = createMcpHandler({
       createTransport: () => {
@@ -89,7 +89,7 @@ describe('createMcpHandler — fails closed with no explicit credential (Phase 8
     expect(stderr.lines.join('')).not.toContain('serving');
   });
 
-  it('does not silently fall back to a stored default-profile credential just because one exists', async () => {
+  it('does not silently fall back to a stored default login credential just because one exists', async () => {
     let createTransportCalls = 0;
     const handler = createMcpHandler({
       createTransport: () => {
@@ -108,7 +108,7 @@ describe('createMcpHandler — fails closed with no explicit credential (Phase 8
     expect(createTransportCalls).toBe(0);
   });
 
-  it('--profile alone (no --token, no env) is sufficient to start', async () => {
+  it('--key alone (no --token, no env) is sufficient to start', async () => {
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     const handler = createMcpHandler({ createTransport: () => serverTransport });
 
@@ -116,7 +116,7 @@ describe('createMcpHandler — fails closed with no explicit credential (Phase 8
     const client = new Client({ name: 'test-client', version: '0.0.0' });
 
     const [code] = await Promise.all([
-      handler(ctx, commandIntent(['mcp', '--profile', 'agent'])),
+      handler(ctx, commandIntent(['mcp', '--key', 'agent'])),
       client.connect(clientTransport),
     ]);
 
@@ -135,11 +135,11 @@ describe('createMcpHandler — fails closed with no explicit credential (Phase 8
     expect(code).toBe(EXIT_SUCCESS);
   });
 
-  it('PAGESPACE_PROFILE env alone (no flags) is sufficient to start', async () => {
+  it('PAGESPACE_KEY env alone (no flags) is sufficient to start', async () => {
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     const handler = createMcpHandler({ createTransport: () => serverTransport });
 
-    const ctx = createFakeContext({ env: { PAGESPACE_PROFILE: 'agent' } });
+    const ctx = createFakeContext({ env: { PAGESPACE_KEY: 'agent' } });
     const client = new Client({ name: 'test-client', version: '0.0.0' });
 
     const [code] = await Promise.all([handler(ctx, commandIntent(['mcp'])), client.connect(clientTransport)]);

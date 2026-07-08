@@ -22,7 +22,7 @@ import {
 } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
-import { parseScopeList, isScopeSubset, formatScopeSet, isKeyUpdateGrant, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, isScopeSubset, formatScopeSet, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
 import { sessionRepository } from './session-repository';
 
 /**
@@ -105,7 +105,11 @@ export type ExchangeAuthorizationCodeResult =
   /** An `update_key` grant applied in place — no credential was minted, the target token's secret is unchanged. */
   | { outcome: 'ok_mcp_update'; userId: string; scopes: string[]; tokenId: string }
   /** The `update_key` target was revoked/deleted between consent and exchange — the route collapses this to the constant-shape invalid_grant. */
-  | { outcome: 'update_target_gone' };
+  | { outcome: 'update_target_gone' }
+  /** An `activate_key` approval verified — nothing was minted or changed; the requesting device may set the key as its ambient default. */
+  | { outcome: 'ok_mcp_activate'; userId: string; scopes: string[]; tokenId: string }
+  /** The `activate_key` target was revoked/deleted between consent and exchange — collapsed to invalid_grant by the route. */
+  | { outcome: 'activate_target_gone' };
 
 /**
  * DriveScopeRow → the drive shape `sessionRepository`'s mcp-token writers
@@ -262,6 +266,37 @@ export async function exchangeAuthorizationCode(
         userId: row.userId,
         scopes: row.scopes,
         tokenId: parsedGrantedScope.scopes.updateKeyId,
+      };
+    }
+
+    // An `activate_key:<tokenId>` grant is a pure approval ceremony: the
+    // human confirmed in a browser that the requesting device may make this
+    // EXISTING key its ambient default (`pagespace keys use`). Nothing is
+    // minted, nothing is re-scoped, and no secret is read or returned — the
+    // PKCE-verified success signal IS the product. Ownership + un-revoked is
+    // re-verified here (same FOR UPDATE transaction as the code consume) so
+    // a key revoked between consent and exchange fails closed as
+    // `activate_target_gone` (route: constant-shape invalid_grant).
+    // Deliberately no `issuedFamilyId`, mirroring ok_mcp_update.
+    if (parsedGrantedScope.ok && isKeyActivationGrant(parsedGrantedScope.scopes)) {
+      await tx
+        .update(oauthAuthorizationCodes)
+        .set({ consumedAt: input.now })
+        .where(eq(oauthAuthorizationCodes.id, row.id));
+
+      const target = await sessionRepository.findActiveMcpTokenByIdAndUser(
+        parsedGrantedScope.scopes.activateKeyId,
+        row.userId,
+      );
+      if (!target) {
+        return { outcome: 'activate_target_gone' };
+      }
+
+      return {
+        outcome: 'ok_mcp_activate',
+        userId: row.userId,
+        scopes: row.scopes,
+        tokenId: parsedGrantedScope.scopes.activateKeyId,
       };
     }
 

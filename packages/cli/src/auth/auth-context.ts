@@ -3,13 +3,13 @@
  * and enforces it before a command runs. Two effect edges only: discovery +
  * the refresh grant (both deferred until the first `getAccessToken()` call,
  * never at construction — so commands that never touch `ctx.sdk`, like
- * `help`, never trigger a network call just because a profile happens to be
+ * `help`, never trigger a network call just because a credential happens to be
  * stored) and the credential store (write the rotated refresh token on
  * success, purge it on a definitive failure).
  *
  * `--token`/env credentials build a `StaticTokenProvider` — used exactly as
  * given, never refreshed, never persisted (ADR 0003 §4; CI stays stateless).
- * A stored profile builds an `OAuthTokenProvider` wired to this CLI's own
+ * A stored key/login credential builds an `OAuthTokenProvider` wired to this CLI's own
  * refresh effect. Zero credentials builds a `FailingAuthProvider` that fails
  * closed with an actionable, secret-free message — there is no interactive
  * fallback anywhere in this module, in a TTY or not.
@@ -56,9 +56,9 @@ export function buildAuthProvider(source: AuthSource, deps: BuildAuthProviderDep
     case 'env':
       return new StaticTokenProvider(source.token);
 
-    case 'profile': {
+    case 'stored': {
       const { host, credential } = source;
-      const profileName = source.profileName ?? DEFAULT_PROFILE_NAME;
+      const keyName = source.keyName ?? DEFAULT_PROFILE_NAME;
 
       // A static (mcp) credential has no refresh cycle at all — mcp_* tokens
       // don't expire (see credentials/serialize.ts's StaticHostCredential
@@ -102,7 +102,7 @@ export function buildAuthProvider(source: AuthSource, deps: BuildAuthProviderDep
               scopes,
               createdAt: new Date(deps.now()).toISOString(),
             },
-            profileName,
+            keyName,
           );
         },
       });
@@ -132,8 +132,8 @@ export async function enforceAuth(deps: EnforceAuthDeps): Promise<ExitCode | nul
     await deps.auth.getAccessToken();
     return null;
   } catch (error) {
-    if (deps.source.kind === 'profile' && isAuthenticationError(error)) {
-      await deps.credentialStore.delete(deps.source.host, deps.source.profileName ?? DEFAULT_PROFILE_NAME);
+    if (deps.source.kind === 'stored' && isAuthenticationError(error)) {
+      await deps.credentialStore.delete(deps.source.host, deps.source.keyName ?? DEFAULT_PROFILE_NAME);
       // A static (mcp) credential has no refresh cycle to fail — this only
       // fires once the token itself has been rejected (revoked/invalid), so
       // "log in again" is the wrong remediation: there's no login session to

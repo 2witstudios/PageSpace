@@ -180,7 +180,7 @@ describe('createLoginHandler', () => {
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
   });
 
-  it('refuses to overwrite an existing stored profile without --yes', async () => {
+  it('refuses to overwrite an existing stored credential without --yes', async () => {
     const store = fakeStore(
       new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
@@ -196,7 +196,7 @@ describe('createLoginHandler', () => {
     expect(stderr.lines.join('')).not.toContain('ps_rt_existing');
   });
 
-  it('overwrites an existing stored profile when --yes is passed', async () => {
+  it('overwrites an existing stored credential when --yes is passed', async () => {
     const store = fakeStore(
       new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );

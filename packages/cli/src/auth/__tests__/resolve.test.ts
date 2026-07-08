@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasExplicitCredential, missingCredentialsMessage, noExplicitCredentialMessage, resolveAuth, resolveProfileName } from '../resolve.js';
+import { hasExplicitCredential, mcpNoExplicitCredentialMessage, missingCredentialsMessage, noExplicitCredentialMessage, resolveAuth, resolveKeyName } from '../resolve.js';
 import type { OAuthHostCredential } from '../../credentials/serialize.js';
 
 const HOST = 'https://pagespace.ai';
@@ -45,9 +45,9 @@ describe('resolveAuth — precedence table', () => {
   it('profile alone (host matches) -> profile', () => {
     const profiles = { [HOST]: { default: CREDENTIAL } };
     expect(resolveAuth({}, {}, profiles, HOST)).toEqual({
-      kind: 'profile',
+      kind: 'stored',
       host: HOST,
-      profileName: 'default',
+      keyName: 'default',
       credential: CREDENTIAL,
     });
   });
@@ -65,15 +65,15 @@ describe('resolveAuth — precedence table', () => {
     const other: OAuthHostCredential = { ...CREDENTIAL, refreshToken: 'ps_rt_other_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' };
     const profiles = { [HOST]: { default: CREDENTIAL }, [OTHER_HOST]: { default: other } };
     expect(resolveAuth({}, {}, profiles, HOST)).toEqual({
-      kind: 'profile',
+      kind: 'stored',
       host: HOST,
-      profileName: 'default',
+      keyName: 'default',
       credential: CREDENTIAL,
     });
     expect(resolveAuth({}, {}, profiles, OTHER_HOST)).toEqual({
-      kind: 'profile',
+      kind: 'stored',
       host: OTHER_HOST,
-      profileName: 'default',
+      keyName: 'default',
       credential: other,
     });
   });
@@ -95,9 +95,9 @@ describe('resolveAuth — precedence table', () => {
   it('a whitespace-only env token is absent, falls through to the stored profile', () => {
     const profiles = { [HOST]: { default: CREDENTIAL } };
     expect(resolveAuth({}, { PAGESPACE_TOKEN: '\n\t' }, profiles, HOST)).toEqual({
-      kind: 'profile',
+      kind: 'stored',
       host: HOST,
-      profileName: 'default',
+      keyName: 'default',
       credential: CREDENTIAL,
     });
   });
@@ -111,63 +111,63 @@ describe('resolveAuth — precedence table', () => {
   });
 });
 
-describe('resolveAuth — named profiles (Phase 8 task 3)', () => {
+describe('resolveAuth — named keys (Phase 8 task 3)', () => {
   const WORK_CREDENTIAL: OAuthHostCredential = { ...CREDENTIAL, refreshToken: 'ps_rt_work_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' };
 
-  it('resolves the credential stored under the given profile name, keyed one level deeper than host', () => {
+  it('resolves the credential stored under the given key name, keyed one level deeper than host', () => {
     const profiles = { [HOST]: { default: CREDENTIAL, work: WORK_CREDENTIAL } };
     expect(resolveAuth({}, {}, profiles, HOST, 'work')).toEqual({
-      kind: 'profile',
+      kind: 'stored',
       host: HOST,
-      profileName: 'work',
+      keyName: 'work',
       credential: WORK_CREDENTIAL,
     });
   });
 
-  it('defaults to the "default" profile name when none is given', () => {
+  it('defaults to the "default" key name when none is given', () => {
     const profiles = { [HOST]: { default: CREDENTIAL, work: WORK_CREDENTIAL } };
     expect(resolveAuth({}, {}, profiles, HOST)).toEqual({
-      kind: 'profile',
+      kind: 'stored',
       host: HOST,
-      profileName: 'default',
+      keyName: 'default',
       credential: CREDENTIAL,
     });
   });
 
-  it('a host with only a non-default profile never leaks in under a different profile name -> none', () => {
+  it('a host with only a non-default key never leaks in under a different key name -> none', () => {
     const profiles = { [HOST]: { work: WORK_CREDENTIAL } };
     expect(resolveAuth({}, {}, profiles, HOST, 'default')).toEqual({ kind: 'none', host: HOST });
   });
 
-  it('an unknown profile name on a host with other profiles stored -> none', () => {
+  it('an unknown key name on a host with other keys stored -> none', () => {
     const profiles = { [HOST]: { default: CREDENTIAL } };
     expect(resolveAuth({}, {}, profiles, HOST, 'nonexistent')).toEqual({ kind: 'none', host: HOST });
   });
 });
 
-describe('resolveAuth — prototype-named profiles are ordinary data, never Object.prototype lookups', () => {
+describe('resolveAuth — prototype-named keys are ordinary data, never Object.prototype lookups', () => {
   const PROTOTYPE_NAMES = ['__proto__', 'constructor', 'toString'] as const;
 
-  it('a prototype-named profile that was never stored resolves to none, not a bogus Object.prototype credential', () => {
+  it('a prototype-named key that was never stored resolves to none, not a bogus Object.prototype credential', () => {
     const profiles = { [HOST]: { default: CREDENTIAL } };
     for (const name of PROTOTYPE_NAMES) {
       expect(resolveAuth({}, {}, profiles, HOST, name)).toEqual({ kind: 'none', host: HOST });
     }
   });
 
-  it('a prototype-named profile that was never stored resolves to none even with no profiles for the host at all', () => {
+  it('a prototype-named key that was never stored resolves to none even with no keys for the host at all', () => {
     for (const name of PROTOTYPE_NAMES) {
       expect(resolveAuth({}, {}, {}, HOST, name)).toEqual({ kind: 'none', host: HOST });
     }
   });
 
-  it('stores and resolves a genuinely prototype-named profile like any other name', () => {
+  it('stores and resolves a genuinely prototype-named key like any other name', () => {
     for (const name of PROTOTYPE_NAMES) {
       const profiles = { [HOST]: { [name]: CREDENTIAL } };
       expect(resolveAuth({}, {}, profiles, HOST, name)).toEqual({
-        kind: 'profile',
+        kind: 'stored',
         host: HOST,
-        profileName: name,
+        keyName: name,
         credential: CREDENTIAL,
       });
     }
@@ -206,42 +206,42 @@ describe('resolveAuth — prototype-named hosts are ordinary data, never Object.
     for (const name of PROTOTYPE_NAMES) {
       const profiles = { [name]: { default: CREDENTIAL } };
       expect(resolveAuth({}, {}, profiles, name)).toEqual({
-        kind: 'profile',
+        kind: 'stored',
         host: name,
-        profileName: 'default',
+        keyName: 'default',
         credential: CREDENTIAL,
       });
     }
   });
 });
 
-describe('resolveProfileName — precedence table', () => {
+describe('resolveKeyName — precedence table', () => {
   it('flag alone -> flag value', () => {
-    expect(resolveProfileName({ profile: 'work' }, {})).toBe('work');
+    expect(resolveKeyName({ key: 'work' }, {})).toBe('work');
   });
 
   it('flag beats env', () => {
-    expect(resolveProfileName({ profile: 'work' }, { PAGESPACE_PROFILE: 'personal' })).toBe('work');
+    expect(resolveKeyName({ key: 'work' }, { PAGESPACE_KEY: 'personal' })).toBe('work');
   });
 
   it('env alone -> env value', () => {
-    expect(resolveProfileName({}, { PAGESPACE_PROFILE: 'personal' })).toBe('personal');
+    expect(resolveKeyName({}, { PAGESPACE_KEY: 'personal' })).toBe('personal');
   });
 
   it('nothing present -> "default"', () => {
-    expect(resolveProfileName({}, {})).toBe('default');
+    expect(resolveKeyName({}, {})).toBe('default');
   });
 
   it('an empty-string flag is absent, falls through to env', () => {
-    expect(resolveProfileName({ profile: '' }, { PAGESPACE_PROFILE: 'personal' })).toBe('personal');
+    expect(resolveKeyName({ key: '' }, { PAGESPACE_KEY: 'personal' })).toBe('personal');
   });
 
   it('a whitespace-only env value is absent, falls through to "default"', () => {
-    expect(resolveProfileName({}, { PAGESPACE_PROFILE: '   ' })).toBe('default');
+    expect(resolveKeyName({}, { PAGESPACE_KEY: '   ' })).toBe('default');
   });
 
   it('trims surrounding whitespace from a winning flag value', () => {
-    expect(resolveProfileName({ profile: '  work  \n' }, {})).toBe('work');
+    expect(resolveKeyName({ key: '  work  \n' }, {})).toBe('work');
   });
 });
 
@@ -268,31 +268,39 @@ describe('hasExplicitCredential — pagespace mcp fail-closed gate (Phase 8 task
     expect(hasExplicitCredential({}, { PAGESPACE_TOKEN: 'mcp_env' })).toBe(true);
   });
 
-  it('--profile flag alone -> true, even with no matching stored credential', () => {
-    expect(hasExplicitCredential({ profile: 'agent' }, {})).toBe(true);
+  it('--key flag alone -> true, even with no matching stored credential', () => {
+    expect(hasExplicitCredential({ key: 'agent' }, {})).toBe(true);
   });
 
-  it('PAGESPACE_PROFILE env alone -> true', () => {
+  it('PAGESPACE_KEY env alone -> true', () => {
+    expect(hasExplicitCredential({}, { PAGESPACE_KEY: 'agent' })).toBe(true);
+  });
+
+  it('the legacy PAGESPACE_PROFILE env alone -> true — an explicit key name under the old var name is still explicit', () => {
     expect(hasExplicitCredential({}, { PAGESPACE_PROFILE: 'agent' })).toBe(true);
   });
 
-  it('an explicit --profile "default" still counts as explicit — the user named it, not the resolver', () => {
-    expect(hasExplicitCredential({ profile: 'default' }, {})).toBe(true);
+  it('an explicit --key "default" still counts as explicit — the user named it, not the resolver', () => {
+    expect(hasExplicitCredential({ key: 'default' }, {})).toBe(true);
   });
 
   it('a whitespace-only --token flag is absent, same as resolveAuth', () => {
     expect(hasExplicitCredential({ token: '   ' }, {})).toBe(false);
   });
 
-  it('a whitespace-only --profile flag is absent, same as resolveProfileName', () => {
-    expect(hasExplicitCredential({ profile: '\n\t' }, {})).toBe(false);
+  it('a whitespace-only --key flag is absent, same as resolveKeyName', () => {
+    expect(hasExplicitCredential({ key: '\n\t' }, {})).toBe(false);
   });
 
   it('a whitespace-only PAGESPACE_TOKEN env is absent', () => {
     expect(hasExplicitCredential({}, { PAGESPACE_TOKEN: '   ' })).toBe(false);
   });
 
-  it('a whitespace-only PAGESPACE_PROFILE env is absent', () => {
+  it('a whitespace-only PAGESPACE_KEY env is absent', () => {
+    expect(hasExplicitCredential({}, { PAGESPACE_KEY: '   ' })).toBe(false);
+  });
+
+  it('a whitespace-only legacy PAGESPACE_PROFILE env is absent', () => {
     expect(hasExplicitCredential({}, { PAGESPACE_PROFILE: '   ' })).toBe(false);
   });
 
@@ -306,12 +314,24 @@ describe('hasExplicitCredential — pagespace mcp fail-closed gate (Phase 8 task
 });
 
 describe('noExplicitCredentialMessage', () => {
-  it('points at keys create, --save-as-profile, and how to pass the result, with no secret material', () => {
+  it('points at keys create --name and every way to pass a credential — --key, PAGESPACE_KEY, --token, keys use — with no secret material', () => {
     const message = noExplicitCredentialMessage();
     expect(message).toMatch(/never falls back to your personal login/i);
     expect(message).toContain('keys create');
-    expect(message).toContain('--save-as-profile');
-    expect(message).toContain('PAGESPACE_TOKEN');
-    expect(message).toContain('--profile');
+    expect(message).toContain('--name');
+    expect(message).toContain(
+      'Pass --key <name> (or set PAGESPACE_KEY), pass --token, or activate a key for this machine with "pagespace keys use <name>".',
+    );
+  });
+});
+
+describe('mcpNoExplicitCredentialMessage', () => {
+  it('never suggests the active key as a fix — it says outright that keys use does not apply to pagespace mcp', () => {
+    const message = mcpNoExplicitCredentialMessage();
+    expect(message).toMatch(/never falls back to your personal login/i);
+    expect(message).toContain('--key <name>');
+    expect(message).toContain('PAGESPACE_KEY');
+    expect(message).toContain('deliberately does not apply to "pagespace mcp"');
+    expect(message).not.toMatch(/activate a key for this machine/i);
   });
 });

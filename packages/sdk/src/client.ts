@@ -89,7 +89,7 @@ import {
   setTaskTrigger,
   updateTask,
 } from './operations/tasks.js';
-import { createMcpToken, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
+import { listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
 import { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
 import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 import type { Operation } from './registry/define.js';
@@ -162,7 +162,6 @@ const DEFAULT_OPERATIONS_MAP = {
     sheetCsv: exportSheetCsv,
   },
   tokens: {
-    create: createMcpToken,
     list: listMcpTokens,
     revoke: revokeMcpToken,
   },
@@ -272,14 +271,25 @@ function flattenOperations(map: OperationsMap): Operation[] {
   return Object.values(map).flatMap((methods) => Object.values(methods));
 }
 
+/** One facade wiring: which operation `client.<namespace>.<method>` invokes. */
+export interface WiredOperation {
+  readonly namespace: string;
+  readonly method: string;
+  readonly operation: Operation;
+}
+
 /**
- * Every operation actually wired into the facade, across every namespace —
- * the structural-completeness regression gate (`client-facade-completeness.test.ts`)
+ * Every operation actually wired into the facade, with the facade path it is
+ * wired under — the regression gate (`client-facade-completeness.test.ts`)
  * diffs this against the full operation registry so a new operation left out
- * of `DEFAULT_OPERATIONS_MAP` fails the suite instead of going unnoticed.
+ * of `DEFAULT_OPERATIONS_MAP` fails the suite, and asserts each
+ * `client.<namespace>.<method>` resolves to the registry operation of the
+ * same name so two wirings can't be silently swapped.
  */
-export function listWiredOperations(): readonly Operation[] {
-  return flattenOperations(DEFAULT_OPERATIONS_MAP);
+export function listWiredOperations(): readonly WiredOperation[] {
+  return Object.entries(DEFAULT_OPERATIONS_MAP as OperationsMap).flatMap(([namespace, methods]) =>
+    Object.entries(methods).map(([method, operation]) => ({ namespace, method, operation })),
+  );
 }
 
 function buildNamespaces(

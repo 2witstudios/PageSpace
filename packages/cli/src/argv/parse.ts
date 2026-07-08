@@ -15,7 +15,7 @@
  * preceding positional token is a hard usage error (there is no command yet
  * to hand it to).
  *
- * Value-bearing flags (`--host`, `--token`, `--profile`) also accept the equals-joined
+ * Value-bearing flags (`--host`, `--token`, `--key`) also accept the equals-joined
  * form (`--host=value`), not just space-separated (`--host value`) —
  * resolved before any other grammar rule so `--host=-looks-like-a-flag` is
  * unambiguously a value, not a following flag. Boolean flags (`--json`,
@@ -23,13 +23,19 @@
  * always means true, and there is no well-defined meaning for an
  * unrecognized value on a confirmation flag like `--yes=oops` — better to
  * reject it as an unknown flag than silently coerce a typo to `false`.
+ *
+ * `--profile` (the pre-1.5.0 name for `--key`) is special-cased to a
+ * dedicated rename error wherever it appears in argv — it was a GLOBAL
+ * value flag before the rename, so letting it fall through as a generic
+ * unknown flag (or worse, pass through to a command arg-mapper after a
+ * positional) would bury the one-line fix.
  */
 
 export interface ParsedFlags {
   readonly json: boolean;
   readonly host: string | undefined;
   readonly token: string | undefined;
-  readonly profile: string | undefined;
+  readonly key: string | undefined;
   readonly yes: boolean;
   readonly all: boolean;
   readonly force: boolean;
@@ -52,14 +58,16 @@ export interface UsageError {
 
 export type ParseResult = CommandIntent | UsageError;
 
-const VALUE_FLAGS = new Set(['--host', '--token', '--profile']);
+const VALUE_FLAGS = new Set(['--host', '--token', '--key']);
 const BOOLEAN_FLAGS = new Set(['--json', '--yes', '--all', '--force', '--help', '--version', '--device']);
+
+export const PROFILE_FLAG_RENAMED_MESSAGE = '--profile was renamed to --key in 1.5.0.';
 
 export function parseArgv(argv: readonly string[]): ParseResult {
   let json = false;
   let host: string | undefined;
   let token: string | undefined;
-  let profile: string | undefined;
+  let key: string | undefined;
   let yes = false;
   let all = false;
   let force = false;
@@ -74,6 +82,10 @@ export function parseArgv(argv: readonly string[]): ParseResult {
     const flagName = eqIndex === -1 ? current : current.slice(0, eqIndex);
     const inlineValue = eqIndex === -1 ? undefined : current.slice(eqIndex + 1);
 
+    if (flagName === '--profile') {
+      return { kind: 'usage-error', message: PROFILE_FLAG_RENAMED_MESSAGE };
+    }
+
     if (VALUE_FLAGS.has(flagName)) {
       const value = inlineValue ?? argv[i + 1];
       const missing = value === undefined || value.length === 0 || (inlineValue === undefined && value.startsWith('-'));
@@ -82,7 +94,7 @@ export function parseArgv(argv: readonly string[]): ParseResult {
       }
       if (flagName === '--host') host = value;
       else if (flagName === '--token') token = value;
-      else profile = value;
+      else key = value;
       if (inlineValue === undefined) i += 1;
       continue;
     }
@@ -112,6 +124,6 @@ export function parseArgv(argv: readonly string[]): ParseResult {
   return {
     kind: 'command',
     args,
-    flags: { json, host, token, profile, yes, all, force, help, version, device },
+    flags: { json, host, token, key, yes, all, force, help, version, device },
   };
 }

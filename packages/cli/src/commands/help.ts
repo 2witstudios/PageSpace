@@ -1,3 +1,4 @@
+import { KEY_ENV_VAR_NAME } from '../auth/resolve.js';
 import { EXIT_SUCCESS } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 
@@ -18,8 +19,9 @@ const GLOBAL_FLAG_LINES = [
   '  --json          Emit machine-readable JSON on stdout only',
   '  --host <url>    Override the API host',
   '  --token <tok>   Override the credential',
+  `  --key <name>    Use a stored key by name (env: ${KEY_ENV_VAR_NAME})`,
   '  --yes           Assume yes to confirmation prompts',
-  '  --all           Apply to every stored profile (logout)',
+  '  --all           Apply to every stored credential (logout)',
   '  --force         Proceed despite a non-fatal failure (logout)',
   '  --help          Show help',
   '  --version       Show the CLI version',

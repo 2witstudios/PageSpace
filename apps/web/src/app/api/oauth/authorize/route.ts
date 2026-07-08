@@ -254,20 +254,24 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // update_key ownership check — the consenting user must own the (un-revoked)
-  // target token, or a crafted authorize URL could point this user's consent
-  // at someone else's key. Uniform `invalid_scope` (same as an authority
-  // failure): a foreign token is indistinguishable from a nonexistent one.
-  // Ordered like checkGrantAuthority above — after the scope caps, BEFORE
-  // consumeStepUpGrant, so a failing target never burns the single-use
-  // step-up grant.
-  if (result.scopes.updateKeyId !== null) {
-    const target = await sessionRepository.findActiveMcpTokenByIdAndUser(result.scopes.updateKeyId, auth.userId);
+  // update_key/activate_key ownership check — the consenting user must own
+  // the (un-revoked) target token, or a crafted authorize URL could point
+  // this user's consent at someone else's key. Uniform `invalid_scope` (same
+  // as an authority failure): a foreign token is indistinguishable from a
+  // nonexistent one. Ordered like checkGrantAuthority above — after the
+  // scope caps, BEFORE consumeStepUpGrant, so a failing target never burns
+  // the single-use step-up grant.
+  const targetKeyId = result.scopes.updateKeyId ?? result.scopes.activateKeyId;
+  if (targetKeyId !== null) {
+    const target = await sessionRepository.findActiveMcpTokenByIdAndUser(targetKeyId, auth.userId);
     if (!target) {
       auditRequest(req, {
         eventType: 'authz.access.denied',
         userId: auth.userId,
-        details: { clientId: result.client.clientId, oauthEvent: 'consent_update_key_not_owned' },
+        details: {
+          clientId: result.client.clientId,
+          oauthEvent: result.scopes.updateKeyId !== null ? 'consent_update_key_not_owned' : 'consent_activate_key_not_owned',
+        },
       });
       return NextResponse.json({
         redirectUri: buildRedirectWithParams(result.redirectUri, { error: 'invalid_scope', state: result.state }),

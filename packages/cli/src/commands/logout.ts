@@ -6,7 +6,7 @@
  * would leave a live, unrevoked token sitting in backups/swap. A transient
  * revoke failure never deletes the local credential unless `--force` is
  * given; the user is told plainly that server-side revocation did not
- * happen. `--all` iterates every stored profile, continuing on individual
+ * happen. `--all` iterates every host storing the resolved key name, continuing on individual
  * failures and reporting per-host outcomes.
  *
  * Constructs its own `CredentialStore` rather than reading
@@ -21,7 +21,8 @@ import type { ExitCode } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 import { createRevokeToken } from '../auth/revoke-token.js';
 import type { RevokeToken } from '../auth/revoke-token.js';
-import { resolveProfileName } from '../auth/resolve.js';
+import { resolveEnvKeyName } from '../auth/legacy-token-env.js';
+import { resolveKeyName } from '../auth/resolve.js';
 
 export type LogoutHostOutcome =
   | { readonly host: string; readonly kind: 'not_logged_in' }
@@ -103,15 +104,17 @@ export function createLogoutHandler(deps: LogoutHandlerDeps): CommandHandler {
     const { host } = resolveConfig({
       flags: { host: intent.flags.host },
       env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
-      profile: null,
+      credential: null,
     });
-    const profileName = resolveProfileName(
-      { profile: intent.flags.profile },
-      { PAGESPACE_PROFILE: ctx.env.PAGESPACE_PROFILE },
+    const keyName = resolveKeyName(
+      { key: intent.flags.key },
+      // The deprecated PAGESPACE_PROFILE alias folds in here (run.ts already
+      // printed its one-line notice before dispatch).
+      { PAGESPACE_KEY: resolveEnvKeyName(ctx.env).name },
     );
 
     const store = deps.createCredentialStore();
-    const hosts = intent.flags.all ? (await store.list(profileName)).map((summary) => summary.host) : [host];
+    const hosts = intent.flags.all ? (await store.list(keyName)).map((summary) => summary.host) : [host];
 
     if (hosts.length === 0) {
       ctx.stdout.write('No stored credentials to log out of.\n');
@@ -120,7 +123,7 @@ export function createLogoutHandler(deps: LogoutHandlerDeps): CommandHandler {
 
     const outcomes: LogoutHostOutcome[] = [];
     for (const target of hosts) {
-      outcomes.push(await logoutHost(target, store, deps.revokeToken, intent.flags.force, profileName));
+      outcomes.push(await logoutHost(target, store, deps.revokeToken, intent.flags.force, keyName));
     }
 
     for (const outcome of outcomes) {

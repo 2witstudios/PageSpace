@@ -219,8 +219,8 @@ export function serializeCredentialsFile(file: CredentialsFile): string {
 
 /**
  * Every host/profile lookup below is an `Object.hasOwn` check, never a bare
- * bracket/`in` read: profile names are user-supplied (`--profile`,
- * `--save-as-profile`), and a name like `__proto__` or `toString` would
+ * bracket/`in` read: key names are user-supplied (`--key`,
+ * `keys create --name`), and a name like `__proto__` or `toString` would
  * otherwise resolve to `Object.prototype` members instead of stored data.
  */
 function ownHostProfiles(file: CredentialsFile, host: string): Readonly<Record<string, HostCredential>> | null {
@@ -268,6 +268,12 @@ export function removeHost(file: CredentialsFile, host: string, profile: string 
   // literally named "__proto__" would otherwise trigger the prototype setter
   // instead of creating an own data property.
   return { version: 2, hosts: { ...file.hosts, [host]: { profiles: remainingProfiles } } };
+}
+
+/** Lists every credential NAME stored for the given host (sorted) — names only, never any secret material. */
+export function listCredentialNames(file: CredentialsFile, host: string): readonly string[] {
+  const profiles = ownHostProfiles(file, host);
+  return profiles === null ? [] : Object.keys(profiles).sort((a, b) => a.localeCompare(b));
 }
 
 /** Lists every host that has the given profile stored (defaults to "default") — never the full token. */

@@ -1,8 +1,18 @@
 /**
  * Pure compatibility functions per ADR 0001 D6/D7 (docs/adr/0001-sdk-api-versioning.md).
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { checkServerCompatibility, compareApiVersions, parseApiVersion } from '../version.js';
+import { checkServerCompatibility, compareApiVersions, parseApiVersion, SDK_VERSION } from '../version.js';
+
+describe('SDK_VERSION', () => {
+  it('strictly equals package.json "version" — the hand-maintained constant already drifted once (npm 0.1.1 self-reported 0.1.0), so bumping either side alone must fail here', () => {
+    const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
+      version: string;
+    };
+    expect(SDK_VERSION).toBe(packageJson.version);
+  });
+});
 
 describe('parseApiVersion', () => {
   it('parses a strict MAJOR.MINOR.PATCH string', () => {

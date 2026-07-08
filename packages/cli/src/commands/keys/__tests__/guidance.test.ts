@@ -11,30 +11,30 @@ function embeddedJson(lines: readonly string[]): unknown {
 }
 
 describe('renderAgentWiringGuidance', () => {
-  it('embeds a valid, ready-to-paste MCP config JSON block referencing the profile', () => {
-    const lines = renderAgentWiringGuidance({ profileName: 'ci-bot', host: DEFAULT_HOST });
+  it('embeds a valid, ready-to-paste MCP config JSON block referencing the key by name', () => {
+    const lines = renderAgentWiringGuidance({ keyName: 'ci-bot', host: DEFAULT_HOST });
     expect(embeddedJson(lines)).toEqual({
       mcpServers: {
         pagespace: {
           command: 'pagespace',
           args: ['mcp'],
-          env: { PAGESPACE_PROFILE: 'ci-bot' },
+          env: { PAGESPACE_KEY: 'ci-bot' },
         },
       },
     });
   });
 
   it('adds PAGESPACE_API_URL to the env block only for a non-default host', () => {
-    const lines = renderAgentWiringGuidance({ profileName: 'ci-bot', host: 'https://dev.example.com' });
+    const lines = renderAgentWiringGuidance({ keyName: 'ci-bot', host: 'https://dev.example.com' });
     const config = embeddedJson(lines) as { mcpServers: { pagespace: { env: Record<string, string> } } };
     expect(config.mcpServers.pagespace.env).toEqual({
-      PAGESPACE_PROFILE: 'ci-bot',
+      PAGESPACE_KEY: 'ci-bot',
       PAGESPACE_API_URL: 'https://dev.example.com',
     });
   });
 
-  it('explains what a profile is and names the raw-token env var alternative for .env/CI', () => {
-    const text = renderAgentWiringGuidance({ profileName: 'ci-bot', host: DEFAULT_HOST }).join('\n');
+  it('explains what a key is and names the raw-token env var alternative for .env/CI', () => {
+    const text = renderAgentWiringGuidance({ keyName: 'ci-bot', host: DEFAULT_HOST }).join('\n');
     expect(text).toMatch(/keychain/i);
     expect(text).toContain('PAGESPACE_TOKEN=');
     expect(text).toMatch(/shown once/i);
@@ -42,9 +42,10 @@ describe('renderAgentWiringGuidance', () => {
 });
 
 describe('wizard copy constants', () => {
-  it('the intro hint explains keys and profiles in one breath', () => {
+  it('the intro hint explains keys as locally named credentials, with no "profile" vocabulary left', () => {
     expect(WIZARD_INTRO_HINT).toMatch(/scoped credentials/i);
-    expect(WIZARD_INTRO_HINT).toMatch(/profile/i);
+    expect(WIZARD_INTRO_HINT).toMatch(/named credential/i);
+    expect(WIZARD_INTRO_HINT).not.toMatch(/profile/i);
   });
 
   it('the show-token prompt warns it is shown once', () => {

@@ -31,9 +31,9 @@ Old config (`claude_desktop_config.json`):
 
 New config — install `@pagespace/cli` once (`npm install -g @pagespace/cli` or use `npx -y -p
 @pagespace/cli pagespace`), then mint a drive-scoped key for the agent (`pagespace keys`, guided,
-or `pagespace keys create --drive <id> --role member --save-as-profile agent`, flag-driven —
-either way it opens a browser for a one-time consent screen and saves the result under a profile
-name), and point the MCP config at that profile:
+or `pagespace keys create --drive <id> --role member --name agent`, flag-driven — either way
+it opens a browser for a one-time consent screen and saves the result under the key name you
+chose), and point the MCP config at that key:
 
 ```json
 {
@@ -42,16 +42,16 @@ name), and point the MCP config at that profile:
       "command": "pagespace",
       "args": ["mcp"],
       "env": {
-        "PAGESPACE_PROFILE": "agent"
+        "PAGESPACE_KEY": "agent"
       }
     }
   }
 }
 ```
 
-An `env` block naming a profile (or `PAGESPACE_TOKEN`) is required — `pagespace mcp` never falls
+An `env` block naming a key (or `PAGESPACE_TOKEN`) is required — `pagespace mcp` never falls
 back to your personal `pagespace login` credential, and that credential grants no content access
-anyway (it's scoped to key management only). See [Auth](../README.md#auth) and
+anyway (it's scoped to key management only). See [Credentials](../README.md#credentials) and
 [`agent-access.md`](agent-access.md) for why `pagespace login` isn't the right credential for an
 MCP client regardless.
 
@@ -76,14 +76,17 @@ Old:
 }
 ```
 
-New:
+New (the `env` block naming a credential is required here too):
 
 ```json
 {
   "mcpServers": {
     "pagespace": {
       "command": "pagespace",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "PAGESPACE_KEY": "agent"
+      }
     }
   }
 }
@@ -92,10 +95,11 @@ New:
 ## Explicit-token variant (agents, CI, headless boxes)
 
 `pagespace login` needs a browser and isn't appropriate for CI or a service account.
-`pagespace keys create` also opens a browser now — minting a token is always a deliberate,
-human-approved consent step, on this CLI as much as on the web — so it isn't a source for a
-copy-pasteable secret either. For a headless box, mint a scoped token from **Settings → MCP** in
-the app instead, where a human is already in an authenticated browser tab:
+`pagespace keys create` also opens a browser — minting a token is always a deliberate,
+human-approved consent step, on this CLI as much as on the web. To get a copy-pasteable secret
+for a headless box, mint on a machine with a browser: `pagespace keys create … --show-token`
+prints the `mcp_` token exactly once, or mint from **Settings → MCP** in the app, where a human
+is already in an authenticated browser tab:
 
 ```json
 {
@@ -136,7 +140,7 @@ behaves exactly like `pagespace mcp` and honors your existing `PAGESPACE_API_URL
 ```
 
 This `pagespace-mcp` bin is itself a first-class, supported entry point — not a deprecated shim —
-so there's no pressure to move off it. Whenever it's convenient, a profile created via `pagespace
+so there's no pressure to move off it. Whenever it's convenient, a key created via `pagespace
 keys` (guided) or `pagespace keys create` (flag-driven) (for a person's own machine) or a Settings
 → MCP token (for CI) plus the plain `["mcp"]` args form is the same server with one fewer moving
 part, but staying on `pagespace-mcp` via `npx` is a perfectly fine destination too.
@@ -148,7 +152,10 @@ part, but staying on `pagespace-mcp` via `npx` is a perfectly fine destination t
   is preferred going forward.
 - `PAGESPACE_API_URL` is unchanged.
 - Auth precedence is now: `--token` flag > `PAGESPACE_TOKEN` env (or legacy `PAGESPACE_AUTH_TOKEN`)
-  > a stored `pagespace login` credential. The old package only ever supported the env var.
+  > a stored key named via `--key`/`PAGESPACE_KEY` (`PAGESPACE_PROFILE` still works as a
+  deprecated alias). One of those must be given
+  explicitly — `pagespace mcp` refuses to start on a bare `pagespace login` credential. The old
+  package only ever supported the env var.
 - The tool surface itself has full parity with `pagespace-mcp` v5.2.7 (the tool's final,
   deprecated release) — see `src/mcp/__tests__/fixtures/README.md` in this package for the
   mechanical parity gate and the documented v5.2.2→v5.2.7 delta.

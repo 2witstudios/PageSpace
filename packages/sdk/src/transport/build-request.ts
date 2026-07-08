@@ -11,8 +11,12 @@ export function extractPathParamNames(path: string): string[] {
 /**
  * Interpolates `:param` segments from `input`, URL-encoding each value so a
  * literal `/` or unicode in a param can never smuggle in an extra path
- * segment. Returns the resolved path plus the set of input keys it consumed,
- * so the caller can serialize the remainder as query/body.
+ * segment. Rejects `""`, `"."`, and `".."` outright: encodeURIComponent
+ * leaves `.` intact, and the WHATWG URL parser inside `fetch` collapses
+ * dot-segments (`/api/pages/..` → `/api/`), so those values would silently
+ * retarget the request to a different endpoint. Returns the resolved path
+ * plus the set of input keys it consumed, so the caller can serialize the
+ * remainder as query/body.
  */
 export function interpolatePath(
   path: string,
@@ -25,8 +29,14 @@ export function interpolatePath(
     if (value === undefined || value === null) {
       throw new TypeError(`Operation "${operation}" is missing path parameter "${name}"`);
     }
+    const stringValue = String(value);
+    if (stringValue === '' || stringValue === '.' || stringValue === '..') {
+      throw new TypeError(
+        `Operation "${operation}" path parameter "${name}" must not be empty or a dot-segment (got ${JSON.stringify(stringValue)}) — URL normalization would reroute the request to a different endpoint`,
+      );
+    }
     consumed.add(name);
-    return encodeURIComponent(String(value));
+    return encodeURIComponent(stringValue);
   });
   return { path: resolved, consumed };
 }

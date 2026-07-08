@@ -1,20 +1,35 @@
 /**
- * Structural completeness gate (Phase 7 hardening): every operation defined
- * anywhere under `operations/` must be reachable through exactly one
- * `client.<namespace>.<method>()` facade method. The operation universe is
- * discovered mechanically (`import.meta.glob` + duck-typed `Operation`
- * filter), never a hand-maintained list — a new operations file or a new
- * operation added to an existing file is picked up automatically, so it
- * can't go silently unwired the way 9 whole namespaces previously did.
- * Wiring is checked via `listWiredOperations()` (client.ts) rather than by
- * guessing a namespace/method key from the operation's own name, since the
- * facade doesn't guarantee that convention (e.g. `channels.send` wires
- * `channels.sendMessage`).
+ * Structural completeness + identity gate (Phase 7 hardening, tightened for
+ * 1.5.0): every operation defined anywhere under `operations/` must be
+ * reachable through exactly one `client.<namespace>.<method>()` facade
+ * method, AND each facade method must resolve to the registry operation of
+ * the same name. The operation universe is discovered mechanically
+ * (`import.meta.glob` + duck-typed `Operation` filter), never a
+ * hand-maintained list — a new operations file or a new operation added to an
+ * existing file is picked up automatically, so it can't go silently unwired
+ * the way 9 whole namespaces previously did.
+ *
+ * The identity check exists because the completeness check alone only counts
+ * operation NAMES: swapping two wirings (e.g. `calendar.get` ↔
+ * `calendar.delete` — identical input schemas, same path, a data-destroying
+ * GET→DELETE) used to pass the entire suite. Now every
+ * `client.<ns>.<method>` must invoke the operation named `<ns>.<method>`,
+ * with an explicit exception table for the deliberate short names.
  */
 import { describe, expect, it } from 'vitest';
 import { listWiredOperations } from '../client.js';
 import { createRegistry } from '../registry/registry.js';
 import { loadAllOperations } from './support/load-operations.js';
+
+/**
+ * The ONLY sanctioned facade-path ↔ operation-name divergences: shorter
+ * facade verbs matching the already-shipped CLI surface. Anything else is a
+ * mis-wiring. Adding an entry here is an API decision, not a fix.
+ */
+const FACADE_NAME_EXCEPTIONS: Readonly<Record<string, string>> = {
+  'channels.send': 'channels.sendMessage',
+  'channels.delete': 'channels.deleteMessage',
+};
 
 describe('PageSpaceClient facade — structural completeness', () => {
   it('wires every registry operation into exactly one client namespace method', () => {
@@ -23,13 +38,9 @@ describe('PageSpaceClient facade — structural completeness', () => {
     const registry = createRegistry(allOps);
     expect(registry.all.length).toBeGreaterThan(0);
 
-    // Membership by the operation's own name, not by guessing a namespace/method
-    // key from it — the facade is free to expose an operation under a shorter
-    // method name than its registry name (e.g. `channels.send` for the
-    // `channels.sendMessage` operation, to match an already-shipped CLI verb).
     const wiredCounts = new Map<string, number>();
-    for (const op of listWiredOperations()) {
-      wiredCounts.set(op.name, (wiredCounts.get(op.name) ?? 0) + 1);
+    for (const wired of listWiredOperations()) {
+      wiredCounts.set(wired.operation.name, (wiredCounts.get(wired.operation.name) ?? 0) + 1);
     }
 
     const unwired = registry.all.filter((op) => !wiredCounts.has(op.name)).map((op) => op.name);
@@ -37,5 +48,28 @@ describe('PageSpaceClient facade — structural completeness', () => {
 
     expect(unwired).toEqual([]);
     expect(duplicatelyWired).toEqual([]);
+  });
+
+  it('wires every client.<ns>.<method> to the registry operation of the same name (swap-proof identity)', () => {
+    const mismatches = listWiredOperations()
+      .map(({ namespace, method, operation }) => {
+        const facadePath = `${namespace}.${method}`;
+        const expectedName = FACADE_NAME_EXCEPTIONS[facadePath] ?? facadePath;
+        return operation.name === expectedName
+          ? null
+          : `client.${facadePath} is wired to "${operation.name}", expected "${expectedName}"`;
+      })
+      .filter((entry): entry is string => entry !== null);
+
+    expect(mismatches).toEqual([]);
+  });
+
+  it('keeps the exception table honest: every listed exception is actually wired that way', () => {
+    const wiredByPath = new Map(listWiredOperations().map((w) => [`${w.namespace}.${w.method}`, w.operation.name]));
+    const stale = Object.entries(FACADE_NAME_EXCEPTIONS)
+      .filter(([facadePath, opName]) => wiredByPath.get(facadePath) !== opName)
+      .map(([facadePath, opName]) => `${facadePath} -> ${opName}`);
+
+    expect(stale).toEqual([]);
   });
 });

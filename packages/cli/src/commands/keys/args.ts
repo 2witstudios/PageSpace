@@ -1,8 +1,8 @@
 /**
- * Pure argv → request mapping for `keys create`/`keys revoke` (Phase 8
- * task 2). Operates on the leftover raw tokens the router hands a matched
- * route (`CommandIntent.args` after the path prefix is stripped) — global
- * flags (`--json`, `--yes`, `--host`, `--token`, `--profile`) are already
+ * Pure argv → request mapping for `keys create`/`keys revoke`/`keys use`
+ * (Phase 8 task 2). Operates on the leftover raw tokens the router hands a
+ * matched route (`CommandIntent.args` after the path prefix is stripped) —
+ * global flags (`--json`, `--yes`, `--host`, `--token`, `--key`) are already
  * extracted by `parseArgv` and never appear here.
  *
  * Role vocabulary mirrors the OAuth drive-scope grammar
@@ -21,7 +21,8 @@ export interface DriveScopeArg {
 
 export interface CreateTokenArgs {
   readonly drives: readonly DriveScopeArg[];
-  readonly saveAsProfile?: string;
+  /** The key's local name (`--name`; pre-1.5.0: `--save-as-profile`). */
+  readonly name?: string;
   /** Print the raw minted `mcp_*` token once (for .env/CI use) after a successful mint. */
   readonly showToken: boolean;
 }
@@ -29,6 +30,8 @@ export interface CreateTokenArgs {
 export type ParseTokensCreateArgsResult =
   | { readonly ok: true; readonly args: CreateTokenArgs }
   | { readonly ok: false; readonly message: string };
+
+export const SAVE_AS_PROFILE_FLAG_RENAMED_MESSAGE = '--save-as-profile was renamed to --name in 1.5.0.';
 
 function normalizeRole(value: string): Pick<DriveScopeArg, 'role' | 'customRoleId'> {
   const lower = value.toLowerCase();
@@ -38,7 +41,7 @@ function normalizeRole(value: string): Pick<DriveScopeArg, 'role' | 'customRoleI
 }
 
 export function parseTokensCreateArgs(rest: readonly string[]): ParseTokensCreateArgsResult {
-  let saveAsProfile: string | undefined;
+  let name: string | undefined;
   let showToken = false;
   const drives: DriveScopeArg[] = [];
 
@@ -67,13 +70,17 @@ export function parseTokensCreateArgs(rest: readonly string[]): ParseTokensCreat
       continue;
     }
 
-    if (token === '--save-as-profile') {
+    if (token === '--save-as-profile' || token.startsWith('--save-as-profile=')) {
+      return { ok: false, message: SAVE_AS_PROFILE_FLAG_RENAMED_MESSAGE };
+    }
+
+    if (token === '--name') {
       const value = rest[i + 1];
-      if (value === undefined) return { ok: false, message: 'Flag --save-as-profile requires a value.' };
-      if (saveAsProfile !== undefined) {
-        return { ok: false, message: 'Flag --save-as-profile was given more than once.' };
+      if (value === undefined) return { ok: false, message: 'Flag --name requires a value.' };
+      if (name !== undefined) {
+        return { ok: false, message: 'Flag --name was given more than once.' };
       }
-      saveAsProfile = value;
+      name = value;
       i += 2;
       continue;
     }
@@ -90,7 +97,7 @@ export function parseTokensCreateArgs(rest: readonly string[]): ParseTokensCreat
     return { ok: false, message: `Unknown flag: ${token}` };
   }
 
-  return { ok: true, args: { drives, saveAsProfile, showToken } };
+  return { ok: true, args: { drives, name, showToken } };
 }
 
 export interface RevokeTokenArgs {
@@ -106,4 +113,27 @@ export function parseTokensRevokeArgs(rest: readonly string[]): ParseTokensRevok
   if (!tokenId) return { ok: false, message: 'Usage: pagespace keys revoke <tokenId>' };
   if (rest.length > 1) return { ok: false, message: `Unexpected extra argument: ${rest[1]}` };
   return { ok: true, args: { tokenId } };
+}
+
+export const KEYS_USE_USAGE_MESSAGE = 'Usage: pagespace keys use <name>   or:   pagespace keys use --off';
+
+export type KeysUseArgs = { readonly kind: 'activate'; readonly name: string } | { readonly kind: 'off' };
+
+export type ParseKeysUseArgsResult =
+  | { readonly ok: true; readonly args: KeysUseArgs }
+  | { readonly ok: false; readonly message: string };
+
+/** `keys use <name>` activates a stored key for this machine; `keys use --off` deactivates. Exactly one of the two. */
+export function parseKeysUseArgs(rest: readonly string[]): ParseKeysUseArgsResult {
+  if (rest.length !== 1) {
+    return { ok: false, message: KEYS_USE_USAGE_MESSAGE };
+  }
+  const token = rest[0];
+  if (token === '--off') {
+    return { ok: true, args: { kind: 'off' } };
+  }
+  if (token.startsWith('-')) {
+    return { ok: false, message: KEYS_USE_USAGE_MESSAGE };
+  }
+  return { ok: true, args: { kind: 'activate', name: token } };
 }

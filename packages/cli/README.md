@@ -1,151 +1,194 @@
 # @pagespace/cli
 
-The `pagespace` command-line client — a thin verb layer over `@pagespace/sdk`. `pagespace login`
-authenticates you with a real OAuth 2.1 credential, scoped to key management only — it grants no
-content access by itself. `pagespace keys` is the guided way to mint, list, and revoke the
-drive-scoped credentials you actually read/write content with, through the same browser consent
-screen its flag-driven, scriptable equivalent — `pagespace keys create` — uses — minting a
-credential, either way, is never a silent, agent-runnable call.
+`pagespace` is the command-line client for [PageSpace](https://pagespace.ai) — work with your
+drives, pages, tasks, search, and AI agents from the terminal. It also ships `pagespace mcp`, a
+stdio [MCP](https://modelcontextprotocol.io) server that gives coding agents (Claude Code,
+Cursor, …) the same tool surface.
+
+Every CLI verb, MCP tool, and [`@pagespace/sdk`](https://github.com/2witstudios/PageSpace/tree/master/packages/sdk)
+method is generated from one operation registry, so the three surfaces never drift apart.
 
 ## Install
 
 ```bash
 npm install -g @pagespace/cli
-# or, without installing: npx -y -p @pagespace/cli pagespace whoami
+# or run without installing:
+npx -y -p @pagespace/cli pagespace whoami
 ```
 
-`npx @pagespace/cli` alone can't pick a bin — the package publishes two (`pagespace`,
-`pagespace-mcp`), neither of which matches the unscoped package name `cli` that bare `npx` looks
-for. Use `-p @pagespace/cli <bin>` to name the bin explicitly, as above.
+This installs two commands: `pagespace` (the CLI) and `pagespace-mcp` (an alias for
+`pagespace mcp`, for zero-install MCP configs — see [`pagespace mcp`](#pagespace-mcp)).
 
-This installs two commands: `pagespace` and `pagespace-mcp` — a first-class alias that runs the
-same stdio MCP server as `pagespace mcp`, meant for `npx -y -p @pagespace/cli pagespace-mcp` in an
-MCP client config with zero local install. See [`pagespace mcp`](#pagespace-mcp) below.
+> Bare `npx @pagespace/cli` can't work: the package publishes two bins and neither is named
+> `cli`, so `npx` has no default to pick. Always name the bin: `npx -y -p @pagespace/cli <bin>`.
 
 ## Quickstart
 
 ```bash
-# 1. Log in — opens a browser, completes an OAuth 2.1 + PKCE flow, stores the credential locally.
-#    This credential is scoped to key management only — it can't read or write any content yet.
+# 1. Log in — opens your browser for an OAuth 2.1 + PKCE flow.
 pagespace login
 
-# 2. Confirm it worked
-pagespace whoami
-
-# 3. Mint a content-scoped key — a guided wizard walks you through picking drive(s) and a role,
-#    opens the browser again for consent, and saves the result under a profile name you choose
+# 2. Mint a drive-scoped access key. A guided wizard picks the drive(s) and role,
+#    opens the browser once more for consent, and stores the key under a name you choose.
 pagespace keys
 
-# 4. Use that key for actual content access
-pagespace drives list --profile <name>
+# 3. Activate it for this machine — one quick browser approval.
+pagespace keys use <name>
+
+# 4. Commands just work now.
+pagespace drives list
+pagespace search text "roadmap" --all-drives
 ```
 
-No browser on this machine (CI, a remote box, a container)? Use the device flow for step 1
-instead:
+The model behind those four commands:
 
-```bash
-pagespace login --device
-```
+- **Your login can't touch content.** `pagespace login` grants key management only
+  (`manage_keys` scope). Content access always comes from a **key** — a drive-scoped `mcp_`
+  credential you mint in step 2, stored in your OS keychain under the name you picked.
+- **Scope changes happen in a browser; use doesn't.** Minting a key, editing its drives, and
+  *activating* it on a machine each require a human approving a consent screen. Once a key is
+  active, `pagespace` content commands run by this OS user — by you, a script, or a coding
+  agent driving the CLI in bash — use it by default, bounded by the drives and role you
+  approved. Explicit credentials (`--key`/`--token`/env) always override the active key;
+  `pagespace keys use --off` deactivates it.
+- **`pagespace mcp` is deliberately excluded** from the active key — MCP configs name their
+  credential explicitly so they stay portable and self-describing (see below).
 
-This prints a short code and a verification URL — approve it from any browser, and the CLI polls
-until the login completes. Step 3's `pagespace keys` wizard still needs a browser of its own (on
-any machine) to approve the drive-scoped grant; for a fully headless mint, use `pagespace keys
-create --drive <id> --role member --save-as-profile <name>` and approve that from any browser
-instead of running the interactive wizard.
+No browser on this machine (CI, container, remote box)? `pagespace login --device` prints a
+short code and URL you approve from any browser. Keys are different — their consent redirect
+lands on `127.0.0.1` of the machine running the command, so mint (and activate) where you have
+a browser, and hand a headless machine a portable token instead: `keys create … --show-token`
+prints it exactly once (see [Need the raw token?](#need-the-raw-token-ci-another-machine)).
 
-**Already had a `pagespace login` credential from before this change?** It keeps working exactly
-as it did — nothing is revoked, and you won't be silently logged out. The `manage_keys`-only
-scope above only takes effect the next time you run a *fresh* `pagespace login` (or `pagespace
-logout && pagespace login`).
+## Credentials
 
-## Auth
+**`pagespace login` is you. Keys are capabilities.** Minting, re-scoping, or activating a key
+always passes through a browser consent screen; there is no silent, agent-runnable way to
+create a credential or widen what's ambiently available. That consent screen is a barrier
+against *silent* privilege escalation, not against a same-OS-user process that can already read
+the credential store — see [Agent access & isolation](docs/agent-access.md) for the exact
+trust boundary.
 
-**`pagespace login` is for you, personally. `pagespace keys create` is for an agent.** Setting
-up your own machine? Run `login`. Wiring `pagespace mcp` into an agent, CI job, or any other
-automated caller? Run `keys create --save-as-profile agent` instead — never `login` — and see
-[`docs/agent-access.md`](docs/agent-access.md) for what a scoped token does and doesn't protect
-against once that agent has real shell access.
+| Command | What it does |
+|---|---|
+| `pagespace login [--host <url>] [--yes]` | Browser (loopback + PKCE) login. Stores your personal login credential, scoped to `manage_keys offline_access` — zero content access. `--yes` overwrites an existing stored credential. |
+| `pagespace login --device` | Device-authorization login for machines without a browser. Same scope. |
+| `pagespace logout [--host <url>] [--key <name>] [--all] [--force]` | Revokes and removes a stored credential — one host, or every host with `--all`. `--force` removes the local copy even if server-side revocation fails. |
+| `pagespace whoami [--json]` | Shows the identity and scope of the current credential, plus this machine's active key. |
+| `pagespace keys` | Interactive wizard: create, list, **edit** (re-scope in place, same secret), **set active**, and revoke keys. Needs a real terminal; in scripts use the subcommands below. |
+| `pagespace keys create --drive <id> [--role member\|admin\|<customRoleId>] [--drive … --role …] [--name <name>] [--show-token] [--yes]` | Mints a key scoped to the given drive(s) via browser consent, then stores it under `--name` (defaults to the drive id; required for multiple drives; `default` is reserved for your login). `--yes` overwrites an existing key of the same name. |
+| `pagespace keys use <name>` / `pagespace keys use --off` | Makes a stored key this machine's **active key** (browser approval), or deactivates it locally. See above. |
+| `pagespace keys list [--json]` | Lists your keys (prefix only — never the secret). |
+| `pagespace keys revoke <tokenId> [--yes]` | Revokes a key server-side. Irreversible. |
 
-- **`pagespace login [--host <url>] [--yes]`** — loopback + PKCE browser login. Stores your
-  personal credential for `--host` (default `https://pagespace.ai`), scoped to `manage_keys
-  offline_access` — key management only, zero content access. Prints the scope granted on
-  success.
-- **`pagespace login --device`** — device-authorization flow for headless machines. Same
-  `manage_keys`-only scope as above.
-- **`pagespace logout [--host <url>] [--all] [--force]`** — clears the stored credential for one
-  host, or every host with `--all`.
-- **`pagespace whoami [--json]`** — prints the identity and scope the current credential resolves
-  to.
-- **`pagespace keys`** — the one surface for creating, listing, and revoking drive-scoped
-  keys without leaving the terminal: a guided TUI wizard, plus flag-driven, scriptable equivalents
-  of the same actions.
-  - **`pagespace keys create --drive <id> --role member|admin|<roleId> [--drive <id> --role ...] --save-as-profile <name> [--yes]`**
-    — mints a credential scoped to the given drive(s)/role(s) for an agent or automated process,
-    not you. Opens the same browser consent screen `pagespace login` uses, then stores the result
-    under a named profile (`--save-as-profile`, defaulting to the drive id when only one drive is
-    given) instead of the `pagespace login` default profile — pass that profile to the agent's
-    invocation with `--profile <name>` or by setting `PAGESPACE_PROFILE`. There is no
-    non-interactive way to mint a key from the CLI — for a portable credential to hand to a CI job
-    or service account on a *different* machine, mint one from **Settings → MCP** in the app
-    instead.
-  - **`pagespace keys list [--json]`** and **`pagespace keys revoke <tokenId> [--yes]`** manage
-    keys minted either way (wizard or flags).
+`--role` binds to the `--drive` immediately before it, not to every `--drive` on the command
+line: `--drive a --drive b --role admin` grants **admin only on `b`**; `a` gets no fixed role at
+all — it's scoped to *whatever role you personally hold on drive `a` at request time*, which
+changes if your own membership does. Give every drive its own `--role` when you want a fixed
+grant: `--drive a --role admin --drive b --role admin`.
 
-### Credential precedence
+None of these need `--key`/`--token`: a plain `pagespace login` is enough to drive them all
+(`keys create` brings its own browser consent). Everything else — the content commands — needs
+a credential, resolved as described next.
 
-Every command resolves auth and host the same way:
+### How commands find a credential
+
+Highest precedence first:
 
 ```text
---token / --host flag  >  PAGESPACE_TOKEN / PAGESPACE_API_URL env  >  stored profile credential  >  default host (https://pagespace.ai)
+--token / --key flags  >  PAGESPACE_TOKEN / PAGESPACE_KEY env  >  the active key (pagespace keys use)  >  loud refusal
 ```
 
-"Stored profile credential" means whatever's saved under the resolved profile name — `--profile
-<name>` / `PAGESPACE_PROFILE` env, falling back to `"default"` (the profile `pagespace login`
-itself writes to). The legacy `PAGESPACE_AUTH_TOKEN` env var (from the old `pagespace-mcp`
-package) still works — it fills the `PAGESPACE_TOKEN` slot when that variable isn't set, with a
-one-line stderr deprecation notice. Prefer `PAGESPACE_TOKEN` going forward.
+`--host` / `PAGESPACE_API_URL` select the host the same way (default `https://pagespace.ai`).
+Explicit always wins — an agent handed `--key ci` can never be silently retargeted by the
+machine's active key. With nothing explicit and no active key, content commands refuse with
+instructions rather than falling back to your login credential (which has no content access
+anyway). `pagespace mcp` additionally never uses the active key.
 
-**This precedence only ever runs at all if the command names a credential explicitly.** Every
-command except `login`, `logout`, `whoami`, `help`, and the `keys` surface
-refuses to run with none of `--token`, `PAGESPACE_TOKEN`, `--profile`, or `PAGESPACE_PROFILE`
-given — it will not silently fall through to the `"default"` profile `pagespace login` wrote. So
-a bare `pagespace login` alone is never enough to run `pagespace drives list` (or almost anything
-else): pass `--profile <name>` (or set `PAGESPACE_PROFILE`) naming a credential minted by
-`pagespace keys` or `pagespace keys create`.
+### Need the raw token? (CI, another machine)
+
+By default a mint never displays the secret — it goes straight into your keychain. When you
+need a portable `mcp_…` token for an `.env` file, CI secret, or a different machine:
+
+- `pagespace keys create … --show-token` prints `PAGESPACE_TOKEN=mcp_…` **once** as the only
+  stdout line (pipe-friendly: `… --show-token | pbcopy`). It is never shown again.
+- The wizard offers the same show-once choice after a mint.
+- Or mint from **Settings → MCP** in the web app.
+
+Anyone holding a raw token gets that key's access — prefer named keys whenever the consumer
+runs on the machine that minted them.
 
 ## Command reference
 
-Every command follows `pagespace <resource> <verb> [args] [flags]`.
+Every command is `pagespace <resource> <verb> [args] [flags]`. `pagespace help` prints this
+list in the terminal; `pagespace --version` prints the CLI and SDK versions. Global flags,
+accepted everywhere: `--json` (machine-readable output on stdout, nothing else), `--host <url>`,
+`--token <token>`, `--key <name>`, and `--yes` (skip confirmations).
 
-| Resource | Verbs |
-|---|---|
-| `drives` | `list [--all]`, `create <name>`, `rename <driveId> <name>`, `trash <driveId> [--yes]`, `restore <driveId>` |
-| `pages` | `list --drive <id> [parentId]`, `tree --drive <id> [parentId]`, `read-details <pageId>`, `create <title> <type> [parentId] --drive <id>`, `rename <pageId> <title>`, `move <pageId> <newParentId\|root> <position>`, `trash <pageId> [--all] [--yes]`, `restore <pageId>`, `read <pageId> [--start N] [--end M] [--raw]`, `replace-lines <pageId> --start N [--end M] [--file <path>]`, `export <pageId> --format md\|csv --out <path\|-> [--force]` |
-| `sheets` | `edit-cells <pageId> [--json-input <json>]` |
-| `trash` | `list --drive <id>` |
-| `tasks` | `list <taskListPageId>`, `create <pageId> --title <title> [--priority low\|medium\|high] [--status <slug>] [--due <date>] [--assignee <userId>]`, `update <pageId> <taskId> [--status <slug>] [--title <title>] [--priority ...] [--due <date>]`, `delete <pageId> <taskId> [--yes]`, `reorder <pageId> <taskId> <position>`, `statuses <taskListPageId>`, `create-status <pageId> --name <name> --color <color> --group todo\|in_progress\|done [--position N]`, `assigned` |
-| `search` | `text <query> [--drive <id>\|--all-drives] [--max-results <n>]`, `regex <pattern> --drive <id> [--in content\|title\|both] [--max-results <n>]`, `glob <pattern> --drive <id> [--max-results <n>]` |
-| `agents` | `list --drive <id>\|--all-drives`, `ask <agentPageId> <message> [--conversation-id <id>] [--context <text>]`, `config <agentPageId> --set <key>=<value>` |
-| `models` | `list` |
-| `activity` | `<driveId>` |
-| `channels` | `send <channelId> <message>` |
-| `keys` | `(no args — guided TUI)`, `create --drive <id> --role member\|admin\|<roleId> [--drive <id> --role ...] --save-as-profile <name> [--yes]`, `list [--json]`, `revoke <tokenId> [--yes]` |
+```text
+drives    list [--all]                # --all includes trashed drives
+          create <name>
+          rename <driveId> <name>
+          set-home-page <driveId> <pageId|--clear>
+          trash <driveId> [--yes]     # asks you to type the drive name unless --yes
+          restore <driveId>
 
-Every command supports `--json` (machine-readable output on stdout, nothing else) and `--host
-<url>` / `--token <token>` (override the resolved config for that one call) — except `keys
-create`, which always prints its human-readable consent-flow status; `--json` is silently ignored
-there, since minting now blocks on an interactive browser consent screen and never prints a
-portable token to parse in the first place.
+pages     list --drive <driveId> [parentId]
+          tree --drive <driveId> [parentId]
+          read <pageId> [--start N] [--end M] [--raw]
+          read-details <pageId>
+          create <title> <type> [parentId] --drive <driveId>
+          rename <pageId> <title>
+          move <pageId> <newParentId|root> <newPosition>
+          replace-lines <pageId> --start N [--end M] [--file <path>]
+          export <pageId> --format md|csv --out <path|-> [--force]
+          trash <pageId> [--all] [--yes]
+          restore <pageId>
+
+sheets    edit-cells <pageId> [--json-input <json>]
+
+trash     list --drive <driveId>
+
+tasks     list <taskListPageId>
+          create <pageId> --title <title> [--priority low|medium|high] [--status <slug>] [--due <date>] [--assignee <userId>]
+          update <pageId> <taskId> [--title <title>] [--status <slug>] [--priority low|medium|high] [--due <date>]
+          delete <pageId> <taskId> [--yes]
+          reorder <pageId> <taskId> <position>
+          statuses <taskListPageId>
+          create-status <pageId> --name <name> --color <color> --group todo|in_progress|done [--position N]
+          assigned                    # tasks assigned to you, across drives
+
+search    text <query> [--drive <driveId>|--all-drives] [--max-results <n>]
+          regex <pattern> --drive <driveId> [--in content|title|both] [--max-results <n>]
+          glob <pattern> --drive <driveId> [--max-results <n>]
+
+agents    list --drive <driveId>|--all-drives
+          ask <agentPageId> <message> [--conversation-id <id>] [--context <text>]
+          config <agentPageId> --set <key>=<value> [--set <key>=<value> …]
+
+models    list
+
+activity  <driveId>
+
+channels  send <channelId> <message>
+
+keys      (no args: guided wizard) · create · use · list · revoke   # see Credentials above
+
+mcp       serve the MCP stdio server                                # see below
+```
+
+One exception to the global flags: `keys create` ignores `--json` — its stdout is either
+ordinary status text or, with `--show-token`, exactly the one `PAGESPACE_TOKEN=…` line.
 
 ## `pagespace mcp`
 
-Runs a stdio MCP server generated from the same operation registry the SDK and CLI use — the
-entire tool surface derives from one source, so it can't drift from `pagespace`'s own commands.
-Auth resolves through the same precedence as every other command; there's no separate MCP auth
-path.
+Runs a stdio MCP server whose tools are generated from the same operation registry as the CLI
+verbs — identical capabilities, zero drift. Auth resolves like every other command **except**
+that the active key deliberately does not apply: an MCP config must name its credential
+explicitly, so the config stays portable and self-describing, and it never silently picks up
+whatever key you last activated.
 
-**Zero-install, via `npx`** (the primary way to wire this into an MCP client — e.g. Claude Code's
-`.mcp.json`):
+**Zero-install** (the usual way to wire an MCP client — e.g. Claude Code's `.mcp.json`):
 
 ```json
 {
@@ -153,53 +196,44 @@ path.
     "pagespace": {
       "command": "npx",
       "args": ["-y", "-p", "@pagespace/cli", "pagespace-mcp"],
-      "env": {
-        "PAGESPACE_TOKEN": "mcp_..."
-      }
+      "env": { "PAGESPACE_KEY": "agent" }
     }
   }
 }
 ```
 
-Mint the portable `mcp_...` token above from **Settings → MCP** in the app — `pagespace keys
-create` (see [Auth](#auth)) stores its credential locally under a named profile instead of
-printing a copyable secret, so it isn't the right tool for populating another machine's `env`
-block. If the MCP client runs on *this* machine, skip the portable token: run `pagespace keys
-create --drive <id> --role member --save-as-profile agent`, then set `"env": { "PAGESPACE_PROFILE":
-"agent" }` (or `--profile agent`) instead of `PAGESPACE_TOKEN` — that's a credential scoped to the
-agent, not your personal login. Do not point an agent's config at `pagespace login`'s stored
-credential — it's your personal, key-management-only credential and grants no content access
-anyway, so it wouldn't even work. Either way, `mcp` never falls back silently — see
-[`docs/agent-access.md`](docs/agent-access.md) for the isolation boundary this can and can't
-provide once the agent has real shell access.
+**After a global install**, `"command": "pagespace", "args": ["mcp"]` does the same thing.
 
-**After a global install**, use the `pagespace` bin directly instead:
+Which credential goes in `env`:
 
-```json
-{
-  "mcpServers": {
-    "pagespace": {
-      "command": "pagespace",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+- **MCP client on this machine** — a name (`PAGESPACE_KEY`) only resolves against the OS
+  keychain of the same machine and OS user that minted it, so this option requires the MCP
+  client to run there too. Mint a key and reference it by name:
+  `pagespace keys create --drive <id> --role member --name agent`, then
+  `"env": { "PAGESPACE_KEY": "agent" }` as above. No secret ever appears in the config file.
+- **MCP client on another machine / CI** — get a raw token (`keys create … --show-token`, or
+  **Settings → MCP** in the app) and set `"env": { "PAGESPACE_TOKEN": "mcp_…" }`.
+- **Never your `login` credential** — it's personal, and it has no content access anyway.
 
-Both forms run the identical server — `pagespace-mcp` is simply the argv-forwarding alias that
-lets `npx` invoke it without a prior `npm install -g`.
+A scoped key limits what the *server* will allow; it is not an isolation boundary for an agent
+with shell access on your machine. See
+[Agent access](https://github.com/2witstudios/PageSpace/blob/master/packages/cli/docs/agent-access.md)
+for the threat model, and the [PageSpace MCP docs](https://pagespace.ai/docs/integrations/mcp)
+for client-by-client setup.
 
-Coming from the standalone `pagespace-mcp` npm package (the old, separate ~5.2k-line repo)? See
-[Migrating from `pagespace-mcp`](docs/migrating-from-pagespace-mcp.md) — that package is
-deprecated in favor of this one; `@pagespace/cli`'s own `pagespace-mcp` bin is not.
+Coming from the standalone `pagespace-mcp` npm package? It's deprecated in favor of this one
+(the `pagespace-mcp` *bin* in this package is not) — see
+[Migrating from `pagespace-mcp`](https://github.com/2witstudios/PageSpace/blob/master/packages/cli/docs/migrating-from-pagespace-mcp.md).
 
 ## Environment variables
 
 | Variable | Purpose |
 |---|---|
-| `PAGESPACE_TOKEN` | Bearer credential, same precedence slot as `--token`. |
-| `PAGESPACE_API_URL` | API host, same precedence slot as `--host`. Defaults to `https://pagespace.ai`. |
-| `PAGESPACE_AUTH_TOKEN` | Deprecated alias for `PAGESPACE_TOKEN`, kept for `pagespace-mcp` compatibility. |
+| `PAGESPACE_TOKEN` | Bearer credential; same precedence slot as `--token`. |
+| `PAGESPACE_KEY` | Stored key name to use; same precedence slot as `--key`. |
+| `PAGESPACE_API_URL` | API host; same precedence slot as `--host`. Defaults to `https://pagespace.ai`. |
+| `PAGESPACE_PROFILE` | Deprecated alias for `PAGESPACE_KEY` (pre-1.5 name); warns on stderr. |
+| `PAGESPACE_AUTH_TOKEN` | Deprecated alias for `PAGESPACE_TOKEN` (old `pagespace-mcp` compatibility); warns on stderr. |
 
 ## Exit codes
 
@@ -209,25 +243,27 @@ deprecated in favor of this one; `@pagespace/cli`'s own `pagespace-mcp` bin is n
 | `1` | API or runtime error (network failure, server error, authentication rejected). |
 | `2` | Usage error (bad flags, unknown command). |
 
-## Design notes
+## Notes
 
-**Pure core, effects at the edges**: `parseArgv` turns `process.argv` into a typed `CommandIntent`
-(or a typed `UsageError`) with no I/O. `resolveConfig` applies the precedence above as a pure
-function over plain data. The router matches a `CommandIntent` against a static route table and
-dispatches to a handler; handlers receive an injected `{ sdk, stdout, stderr, env,
-credentialStore }` context and never touch `process.*` directly. Only `src/bin.ts` reads
-`process.argv`/`process.env`/`process.stdout`/`process.exitCode`.
-
-**Zero trust**: no token is ever printed — not in output, not in a usage-error message, not in a
-log. `--json` mode writes nothing to stdout but the JSON payload itself.
-
-The credential store is the OS keychain with a chmod-0600 file fallback.
+- **Upgrading from 0.1.x:** `--profile` is now `--key`, and `keys create --save-as-profile` is
+  now `--name` — both old flags error with a pointer to the new name. `PAGESPACE_PROFILE` still
+  works as a deprecated alias for `PAGESPACE_KEY`. Stored credentials are untouched: every key
+  (and your login) minted by an earlier version keeps working under the same name.
+- **Credential safety:** no token is ever printed except behind the explicit `--show-token`
+  opt-in — not in output, not in errors, not in logs. `--json` mode writes nothing to stdout but
+  the JSON payload. Credentials live in the OS keychain (chmod-0600 file fallback); the
+  active-key pointer is just a name, never a secret.
+- **Pure core:** argv parsing, config resolution, and routing are pure functions over plain
+  data. The pieces that must touch the outside world — the bin entrypoint, browser launching,
+  and credential storage — are isolated behind injected interfaces rather than folded into the
+  core; handlers receive an injected `{ sdk, stdout, stderr, env, credentialStore }` context,
+  which is why the routing/parsing/resolution core is testable without a network.
 
 ## See also
 
-- [`@pagespace/sdk`](../sdk/README.md) — the typed client this CLI is a verb layer over.
-- [Migrating from `pagespace-mcp`](docs/migrating-from-pagespace-mcp.md).
-- [Agent access](docs/agent-access.md) — what a scoped token does and doesn't protect against for
-  an agent with real shell access, and the actual isolation boundary (OS user/container/VM).
-- PageSpace page `ea07mt5jvw0flihsbjce1iv9` (epic architecture + non-negotiables) and phase page
-  `ntr8palcnmkih8kiy33qo717` (Phase 4 security law) for the binding decisions this package follows.
+- [`@pagespace/sdk`](https://github.com/2witstudios/PageSpace/tree/master/packages/sdk) — the
+  typed client this CLI is a verb layer over.
+- [PageSpace MCP integration docs](https://pagespace.ai/docs/integrations/mcp)
+- [Agent access & isolation](https://github.com/2witstudios/PageSpace/blob/master/packages/cli/docs/agent-access.md)
+- [Migrating from `pagespace-mcp`](https://github.com/2witstudios/PageSpace/blob/master/packages/cli/docs/migrating-from-pagespace-mcp.md)
+- [CHANGELOG](https://github.com/2witstudios/PageSpace/blob/master/packages/cli/CHANGELOG.md)

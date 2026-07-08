@@ -79,19 +79,23 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   }
 
   // An update_key grant re-scopes one of the CONSENTING user's existing keys
-  // in place. Ownership (and un-revoked) is checked here so the consent
-  // screen can only ever narrate the user's own key — a foreign, revoked, or
-  // nonexistent token id all collapse to the same invalid_scope redirect (no
-  // oracle), killing the "point a victim's consent at the attacker's token"
-  // direction. The approval POST re-checks this server-side; this render is
-  // the human-facing half.
+  // in place; an activate_key grant approves making one of them a device's
+  // ambient default. Ownership (and un-revoked) is checked here so the
+  // consent screen can only ever narrate the user's own key — a foreign,
+  // revoked, or nonexistent token id all collapse to the same invalid_scope
+  // redirect (no oracle), killing the "point a victim's consent at the
+  // attacker's token" direction. The approval POST re-checks this
+  // server-side; this render is the human-facing half.
   let updateKeyName: string | null = null;
-  if (result.scopes.updateKeyId !== null) {
-    const target = await sessionRepository.findActiveMcpTokenByIdAndUser(result.scopes.updateKeyId, session.userId);
+  let activateKeyName: string | null = null;
+  const targetKeyId = result.scopes.updateKeyId ?? result.scopes.activateKeyId;
+  if (targetKeyId !== null) {
+    const target = await sessionRepository.findActiveMcpTokenByIdAndUser(targetKeyId, session.userId);
     if (!target) {
       redirect(errorRedirectUrl(result.redirectUri, 'invalid_scope', result.state));
     }
-    updateKeyName = target.name;
+    if (result.scopes.updateKeyId !== null) updateKeyName = target.name;
+    else activateKeyName = target.name;
   }
 
   const driveIds = [...result.scopes.drives.keys()];
@@ -113,6 +117,14 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
       describeScopeForConsent(
         { kind: 'update_key', tokenId: result.scopes.updateKeyId },
         { keyName: updateKeyName ?? undefined },
+      ),
+    );
+  }
+  if (result.scopes.activateKeyId !== null) {
+    scopeDescriptions.push(
+      describeScopeForConsent(
+        { kind: 'activate_key', tokenId: result.scopes.activateKeyId },
+        { keyName: activateKeyName ?? undefined },
       ),
     );
   }
@@ -142,7 +154,9 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
       <h1 className="text-xl font-semibold">
         {updateKeyName !== null
           ? `${result.client.name} wants to update the key "${updateKeyName}"`
-          : `${result.client.name} is requesting access`}
+          : activateKeyName !== null
+            ? `${result.client.name} wants to make "${activateKeyName}" its active key`
+            : `${result.client.name} is requesting access`}
         {result.client.firstParty && (
           <span className="ml-2 rounded bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
             Built by PageSpace

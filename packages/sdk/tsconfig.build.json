@@ -8,8 +8,14 @@
     "moduleResolution": "NodeNext",
     "target": "ES2022",
     "declaration": true,
-    "declarationMap": true,
+    // The tarball ships dist/ only, so map `sources` ("../src/*.ts") never
+    // resolve for npm consumers. inlineSources embeds sourcesContent so the
+    // .js.map files are self-sufficient (stack traces work) without shipping
+    // src/. declarationMap stays OFF: tsc never embeds sourcesContent in
+    // .d.ts.map, so those maps can only ever be dead weight in the tarball.
+    "declarationMap": false,
     "sourceMap": true,
+    "inlineSources": true,
     "esModuleInterop": true,
     "resolveJsonModule": true
   },

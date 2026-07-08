@@ -1,10 +1,10 @@
 // argv grammar — the pure entry point every command's tests parse through.
-export { parseArgv } from './argv/parse.js';
+export { parseArgv, PROFILE_FLAG_RENAMED_MESSAGE } from './argv/parse.js';
 export type { CommandIntent, ParsedFlags, ParseResult, UsageError } from './argv/parse.js';
 
-// Config precedence resolver (flags > env > profile > defaults).
+// Config precedence resolver (flags > env > loaded credential > defaults).
 export { DEFAULT_HOST, resolveConfig } from './config/resolve.js';
-export type { ConfigEnv, ConfigFlags, ConfigProfile, ConfigSources, ResolvedConfig } from './config/resolve.js';
+export type { ConfigCredential, ConfigEnv, ConfigFlags, ConfigSources, ResolvedConfig } from './config/resolve.js';
 
 // Router — resolves a parsed command path to a handler.
 export { resolveRoute } from './router/router.js';
@@ -33,6 +33,7 @@ export {
   emptyCredentialsFile,
   getHost,
   isSecureMode,
+  listCredentialNames,
   listSummaries,
   parseCredentialsFile,
   parseHostCredential,
@@ -44,6 +45,11 @@ export {
   upsertHost,
 } from './credentials/serialize.js';
 export type { CredentialSummary, CredentialsFile, HostCredential, HostProfiles, OAuthHostCredential, StaticHostCredential } from './credentials/serialize.js';
+
+// The per-machine active-key map (`pagespace keys use`) — a non-secret
+// host -> key-name JSON file next to the credential file-store fallback.
+export { createNullActiveKeyStore, defaultActiveKeysPath, FileActiveKeyStore, parseActiveKeysFile } from './credentials/active-key.js';
+export type { ActiveKeyStore, FileActiveKeyStoreOptions } from './credentials/active-key.js';
 
 // Fixed exit code contract.
 export { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from './exit-codes.js';
@@ -221,18 +227,27 @@ export {
 export type { LoginDeviceHandlerDeps } from './commands/login-device.js';
 
 // Non-interactive auth precedence resolver (Phase 4 task 7; ADR 0003 §4/§6):
-// --token flag > PAGESPACE_TOKEN env > stored profile (silent refresh) > fail.
+// --token flag > PAGESPACE_TOKEN env > stored key (silent refresh) > fail.
 // `silent-refresh.ts`'s `createRefreshAccessToken` is the sole refresh_token
 // grant effect in the CLI (SDK OAuthTokenProvider contract: absolute expiry
 // timestamps, classifyHttpError-based retry vs. terminal classification) —
 // shared by this resolver's silent-refresh wiring and by `pagespace whoami`.
-export { missingCredentialsMessage, resolveAuth, resolveProfileName } from './auth/resolve.js';
+export {
+  hasExplicitCredential,
+  KEY_ENV_VAR_NAME,
+  mcpNoExplicitCredentialMessage,
+  missingCredentialsMessage,
+  noExplicitCredentialMessage,
+  resolveAuth,
+  resolveKeyName,
+  TOKEN_ENV_VAR_NAME,
+} from './auth/resolve.js';
 export type {
   AuthSource,
   ResolveAuthEnv,
   ResolveAuthFlags,
-  ResolveProfileNameEnv,
-  ResolveProfileNameFlags,
+  ResolveKeyNameEnv,
+  ResolveKeyNameFlags,
 } from './auth/resolve.js';
 export { createRefreshAccessToken } from './auth/silent-refresh.js';
 export { buildAuthProvider, enforceAuth, FailingAuthProvider } from './auth/auth-context.js';
@@ -243,18 +258,41 @@ export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } fr
 // wizard (Phase 9 task 5). Auth flows only through ctx.sdk (task 7's
 // resolver, enforced by run.ts before dispatch) — these commands have no
 // auth wiring of their own beyond `create`'s own browser-consent mint.
-export { parseTokensCreateArgs, parseTokensRevokeArgs } from './commands/keys/args.js';
-export type { CreateTokenArgs, DriveScopeArg, RevokeTokenArgs } from './commands/keys/args.js';
 export {
+  KEYS_USE_USAGE_MESSAGE,
+  parseKeysUseArgs,
+  parseTokensCreateArgs,
+  parseTokensRevokeArgs,
+  SAVE_AS_PROFILE_FLAG_RENAMED_MESSAGE,
+} from './commands/keys/args.js';
+export type { CreateTokenArgs, DriveScopeArg, KeysUseArgs, RevokeTokenArgs } from './commands/keys/args.js';
+export {
+  buildKeyActivateScope,
   buildKeyUpdateScope,
   buildTokenScope,
   createTokensCreateHandler,
-  resolveTokenProfileName,
+  resolveNewKeyName,
   tokensCreateHandler,
 } from './commands/keys/create.js';
-export type { BuildKeyUpdateScopeResult, BuildTokenScopeResult, ResolveTokenProfileNameResult, TokensCreateHandlerDeps } from './commands/keys/create.js';
+export type { BuildKeyActivateScopeResult, BuildKeyUpdateScopeResult, BuildTokenScopeResult, ResolveNewKeyNameResult, TokensCreateHandlerDeps } from './commands/keys/create.js';
 export { tokensList, tokensListHandler } from './commands/keys/list.js';
 export { tokensRevoke, tokensRevokeHandler } from './commands/keys/revoke.js';
+
+// `pagespace keys use` — the per-machine active key (browser-approved
+// activation ceremony shared with the wizard's "Set active key").
+export {
+  activationSuccessMessage,
+  createKeysUseHandler,
+  deactivationMessage,
+  describeActivateFailure,
+  findServerTokenId,
+  keysUseHandler,
+  loginCredentialNotActivatableMessage,
+  missingKeyMessage,
+  revokedKeyMessage,
+  runActivateCeremony,
+} from './commands/keys/use.js';
+export type { ActivateCeremonyParams, ActivateCeremonyResult } from './commands/keys/use.js';
 
 // `pagespace keys`'s guided TUI wizard. `logic.ts` is the pure
 // decision-logic layer the wizard's `@clack/prompts` effects shell calls
@@ -285,10 +323,11 @@ export { renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from 
 export type { AgentWiringGuidanceParams } from './commands/keys/guidance.js';
 export { createKeysHandler, keysHandler } from './commands/keys/wizard.js';
 
-// Legacy `PAGESPACE_AUTH_TOKEN` env var support (Phase 6 task 1) — folded
-// into `run.ts`'s single auth-resolution path, never a second one.
-export { resolveEnvToken } from './auth/legacy-token-env.js';
-export type { ResolvedEnvToken } from './auth/legacy-token-env.js';
+// Legacy env var support — `PAGESPACE_AUTH_TOKEN` (Phase 6 task 1) and the
+// 1.5.0 `PAGESPACE_PROFILE` -> `PAGESPACE_KEY` rename alias — folded into
+// `run.ts`'s single auth-resolution path, never a second one.
+export { resolveEnvKeyName, resolveEnvToken } from './auth/legacy-token-env.js';
+export type { ResolvedEnvKeyName, ResolvedEnvToken } from './auth/legacy-token-env.js';
 
 // `pagespace mcp` — the stdio MCP adapter generated from the operation
 // registry (Phase 6 task 1). `mcp/serve.ts` walks the registry into MCP

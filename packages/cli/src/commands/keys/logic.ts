@@ -14,19 +14,20 @@
 import type { DriveScopeArg } from './args.js';
 import { buildTokenScope, type BuildTokenScopeResult } from './create.js';
 
-export type WizardMenuChoice = 'create' | 'list' | 'edit' | 'revoke' | 'exit';
+export type WizardMenuChoice = 'create' | 'list' | 'edit' | 'revoke' | 'use' | 'exit';
 
 const MENU_LABELS: Record<WizardMenuChoice, string> = {
   create: 'Create a new key',
   list: 'List keys',
   edit: 'Edit scope',
   revoke: 'Revoke a key',
+  use: 'Set active key',
   exit: 'Exit',
 };
 
-/** Edit/Revoke both require selecting from an existing key — omit them from the menu when there is nothing to select. */
+/** Edit/Revoke/Use all require selecting from an existing key — omit them from the menu when there is nothing to select. */
 export function availableMenuChoices(keyCount: number): readonly WizardMenuChoice[] {
-  return keyCount > 0 ? ['create', 'list', 'edit', 'revoke', 'exit'] : ['create', 'list', 'exit'];
+  return keyCount > 0 ? ['create', 'list', 'edit', 'revoke', 'use', 'exit'] : ['create', 'list', 'exit'];
 }
 
 /** Maps menu choices to the wizard's top-level `select` options, in the same order they were given. */
@@ -135,13 +136,21 @@ export function renderKeysTable(keys: readonly KeySummary[]): readonly string[] 
   ]);
 }
 
-/** Key select options for the Edit/Revoke flows, hinting each key's current drive scopes. */
-export function keySelectOptions(keys: readonly KeySummary[]): readonly SelectOption<string>[] {
-  return keys.map((key) => ({
-    value: key.id,
-    label: key.name,
-    hint: key.driveScopes.length > 0 ? key.driveScopes.map((drive) => drive.name).join(', ') : 'unscoped',
-  }));
+/**
+ * Key select options for the Edit/Revoke/Set-active flows, hinting each
+ * key's current drive scopes. `activeKeyId` (when known — the Set-active
+ * flow resolves it from the machine's active-key map) prefixes that key's
+ * hint with `active · ` so the current activation is visible in the picker.
+ */
+export function keySelectOptions(keys: readonly KeySummary[], activeKeyId: string | null = null): readonly SelectOption<string>[] {
+  return keys.map((key) => {
+    const scopes = key.driveScopes.length > 0 ? key.driveScopes.map((drive) => drive.name).join(', ') : 'unscoped';
+    return {
+      value: key.id,
+      label: key.name,
+      hint: key.id === activeKeyId ? `active · ${scopes}` : scopes,
+    };
+  });
 }
 
 /** Drive ids already scoped on a key, so the Edit flow's drive multiselect can start pre-selected on its current scopes. */
@@ -150,4 +159,4 @@ export function preselectedDriveIds(key: KeySummary): readonly string[] {
 }
 
 export const NON_INTERACTIVE_KEYS_MESSAGE =
-  'pagespace keys requires an interactive terminal. Use "pagespace keys create", "pagespace keys list", or "pagespace keys revoke" instead.';
+  'pagespace keys requires an interactive terminal. Use "pagespace keys create", "pagespace keys list", "pagespace keys revoke", or "pagespace keys use" instead.';

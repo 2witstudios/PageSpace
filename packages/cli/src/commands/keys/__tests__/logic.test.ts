@@ -14,8 +14,8 @@ import {
 import type { KeySummary } from '../logic.js';
 
 describe('availableMenuChoices', () => {
-  it('offers create/list/edit/revoke/exit when at least one key exists', () => {
-    expect(availableMenuChoices(1)).toEqual(['create', 'list', 'edit', 'revoke', 'exit']);
+  it('offers create/list/edit/revoke/use/exit when at least one key exists', () => {
+    expect(availableMenuChoices(1)).toEqual(['create', 'list', 'edit', 'revoke', 'use', 'exit']);
   });
 
   it('omits edit/revoke when there are zero keys — nothing to select', () => {
@@ -174,6 +174,24 @@ describe('keySelectOptions', () => {
       { value: 'tok1', label: 'CI bot', hint: 'Engineering' },
       { value: 'tok2', label: 'Unscoped key', hint: 'unscoped' },
     ]);
+  });
+
+  it('prefixes the currently active key\'s hint with "active" when its id is known', () => {
+    expect(keySelectOptions(SAMPLE_KEYS, 'tok1')).toEqual([
+      { value: 'tok1', label: 'CI bot', hint: 'active · Engineering' },
+      { value: 'tok2', label: 'Unscoped key', hint: 'unscoped' },
+    ]);
+  });
+
+  it('marks nothing when the active key id is null or matches no listed key', () => {
+    expect(keySelectOptions(SAMPLE_KEYS, null)).toEqual(keySelectOptions(SAMPLE_KEYS));
+    expect(keySelectOptions(SAMPLE_KEYS, 'tok999')).toEqual(keySelectOptions(SAMPLE_KEYS));
+  });
+});
+
+describe('menuSelectOptions — the Set active key item', () => {
+  it('labels the "use" choice as Set active key', () => {
+    expect(menuSelectOptions(['use'])).toEqual([{ value: 'use', label: 'Set active key' }]);
   });
 });
 

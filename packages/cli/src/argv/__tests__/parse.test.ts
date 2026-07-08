@@ -15,7 +15,7 @@ describe('parseArgv', () => {
       json: false,
       host: undefined,
       token: undefined,
-      profile: undefined,
+      key: undefined,
       yes: false,
       all: false,
       force: false,
@@ -92,10 +92,10 @@ describe('parseArgv', () => {
     expect(result.flags.token).toBe('ps_sess_abc123');
   });
 
-  it('parses --profile with its value', () => {
-    const result = parseArgv(['--profile', 'work']);
+  it('parses --key with its value', () => {
+    const result = parseArgv(['--key', 'work']);
     expectCommand(result);
-    expect(result.flags.profile).toBe('work');
+    expect(result.flags.key).toBe('work');
   });
 
   it('parses flags interleaved before and after the command', () => {
@@ -121,15 +121,33 @@ describe('parseArgv', () => {
     expect(result.kind).toBe('usage-error');
   });
 
-  it('rejects --profile with a missing value as a usage error', () => {
-    const result = parseArgv(['--profile']);
+  it('rejects --key with a missing value as a usage error', () => {
+    const result = parseArgv(['--key']);
     expect(result.kind).toBe('usage-error');
   });
 
-  it('parses --profile=value (equals-joined) the same as space-separated', () => {
-    const result = parseArgv(['--profile=work']);
+  it('parses --key=value (equals-joined) the same as space-separated', () => {
+    const result = parseArgv(['--key=work']);
     expectCommand(result);
-    expect(result.flags.profile).toBe('work');
+    expect(result.flags.key).toBe('work');
+  });
+
+  it('rejects the renamed --profile flag with a dedicated 1.5.0 rename error', () => {
+    expect(parseArgv(['--profile', 'work'])).toEqual({
+      kind: 'usage-error',
+      message: '--profile was renamed to --key in 1.5.0.',
+    });
+  });
+
+  it('rejects --profile=value (equals-joined) with the same rename error, never echoing the value', () => {
+    const result = parseArgv(['--profile=work']);
+    expect(result).toEqual({ kind: 'usage-error', message: '--profile was renamed to --key in 1.5.0.' });
+    expect(JSON.stringify(result)).not.toContain('work');
+  });
+
+  it('rejects --profile even after a command path has started (it was a global flag, never a passthrough)', () => {
+    const result = parseArgv(['whoami', '--profile', 'work']);
+    expect(result).toEqual({ kind: 'usage-error', message: '--profile was renamed to --key in 1.5.0.' });
   });
 
   it('rejects --host followed immediately by another flag as a missing value', () => {

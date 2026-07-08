@@ -104,7 +104,7 @@ describe('createLogoutHandler', () => {
     expect(stdout.lines.join('')).toMatch(/not logged in/i);
   });
 
-  it('--all iterates every stored profile, continues on individual failures, and reports per-host outcomes', async () => {
+  it('--all iterates every host with a stored credential, continues on individual failures, and reports per-host outcomes', async () => {
     const store = fakeStore(
       new Map([
         ['https://pagespace.ai', CREDENTIAL],
@@ -131,7 +131,7 @@ describe('createLogoutHandler', () => {
     expect(stderr.lines.join('')).toContain('self-hosted.example');
   });
 
-  it('--all with no stored profiles exits 0 with an informational message', async () => {
+  it('--all with no stored credentials exits 0 with an informational message', async () => {
     const store = fakeStore();
     const handler = createLogoutHandler({ createCredentialStore: () => store, revokeToken: async () => ({ outcome: 'revoked' }) });
 
@@ -176,7 +176,7 @@ describe('createLogoutHandler', () => {
   });
 });
 
-describe('createLogoutHandler — named profiles', () => {
+describe('createLogoutHandler — named keys', () => {
   function profileAwareStore(): CredentialStore & { readonly calls: Array<{ op: string; host: string; profile: string | undefined }> } {
     const hosts = new Map<string, Map<string, HostCredential>>();
     const calls: Array<{ op: string; host: string; profile: string | undefined }> = [];
@@ -202,7 +202,7 @@ describe('createLogoutHandler — named profiles', () => {
     };
   }
 
-  it('--profile logs out only the named profile, leaving "default" for the same host untouched', async () => {
+  it('--key logs out only the named credential, leaving "default" for the same host untouched', async () => {
     const store = profileAwareStore();
     await store.set('https://pagespace.ai', CREDENTIAL, 'default');
     await store.set('https://pagespace.ai', { ...CREDENTIAL, refreshToken: 'ps_rt_work' }, 'work');
@@ -210,27 +210,27 @@ describe('createLogoutHandler — named profiles', () => {
     const handler = createLogoutHandler({ createCredentialStore: () => store, revokeToken });
 
     const ctx = createFakeContext({ env: {} });
-    const code = await handler(ctx, commandIntent(['logout', '--profile', 'work']));
+    const code = await handler(ctx, commandIntent(['logout', '--key', 'work']));
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(await store.get('https://pagespace.ai', 'work')).toBeNull();
     expect(await store.get('https://pagespace.ai', 'default')).not.toBeNull();
   });
 
-  it('PAGESPACE_PROFILE env selects the profile when --profile is absent', async () => {
+  it('PAGESPACE_KEY env selects the slot when --key is absent', async () => {
     const store = profileAwareStore();
     await store.set('https://pagespace.ai', CREDENTIAL, 'work');
     const revokeToken: RevokeToken = async () => ({ outcome: 'revoked' });
     const handler = createLogoutHandler({ createCredentialStore: () => store, revokeToken });
 
-    const ctx = createFakeContext({ env: { PAGESPACE_PROFILE: 'work' } });
+    const ctx = createFakeContext({ env: { PAGESPACE_KEY: 'work' } });
     const code = await handler(ctx, commandIntent(['logout']));
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(await store.get('https://pagespace.ai', 'work')).toBeNull();
   });
 
-  it('--all with --profile only iterates hosts that have that named profile stored', async () => {
+  it('--all with --key only iterates hosts that have that named credential stored', async () => {
     const store = profileAwareStore();
     await store.set('https://pagespace.ai', CREDENTIAL, 'work');
     await store.set('https://self-hosted.example', CREDENTIAL, 'default');
@@ -239,7 +239,7 @@ describe('createLogoutHandler — named profiles', () => {
 
     const stdout = createRecordingSink();
     const ctx = createFakeContext({ stdout, env: {} });
-    const code = await handler(ctx, commandIntent(['logout', '--all', '--profile', 'work']));
+    const code = await handler(ctx, commandIntent(['logout', '--all', '--key', 'work']));
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(stdout.lines.join('')).toContain('pagespace.ai');

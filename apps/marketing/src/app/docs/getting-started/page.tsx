@@ -99,17 +99,16 @@ If you use Claude Desktop, Claude Code, Cursor, or other MCP-compatible tools, y
   "mcpServers": {
     "pagespace": {
       "command": "npx",
-      "args": ["-y", "pagespace-mcp@latest"],
+      "args": ["-y", "-p", "@pagespace/cli", "pagespace-mcp"],
       "env": {
-        "PAGESPACE_API_URL": "https://pagespace.ai",
-        "PAGESPACE_AUTH_TOKEN": "mcp_your_token_here"
+        "PAGESPACE_TOKEN": "mcp_your_token_here"
       }
     }
   }
 }
 \`\`\`
 
-See the [MCP Integration guide](/docs/integrations/mcp) for full details.
+Prefer the \`pagespace\` CLI end to end? \`npm install -g @pagespace/cli\`, then \`pagespace login\` and the \`pagespace keys\` wizard mint a drive-scoped key without ever copying a token. See the [MCP Integration guide](/docs/integrations/mcp) for full details.
 
 ## 7. Invite Your Team
 

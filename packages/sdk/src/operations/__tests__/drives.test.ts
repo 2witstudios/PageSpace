@@ -138,6 +138,12 @@ describe('drives.rename — response contract', () => {
     expect(result).toEqual(driveRowFixture);
   });
 
+  it('tolerates a pre-custom-404 server row missing notFoundPageId/publishFaviconUrl (same contract version 1.0.0)', () => {
+    const { notFoundPageId: _nf, publishFaviconUrl: _pf, ...olderServerRow } = driveRowFixture;
+    const result = parseResponse(renameDrive, 200, new Headers(), JSON.stringify(olderServerRow));
+    expect(result).toEqual(olderServerRow);
+  });
+
   it('rejects a response drifting back to the DriveWithAccess shape', () => {
     const result = parseResponse(renameDrive, 200, new Headers(), JSON.stringify(driveFixture));
     expect(result).toBeInstanceOf(ResponseValidationError);

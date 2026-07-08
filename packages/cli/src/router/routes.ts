@@ -62,6 +62,7 @@ import { whoamiHandler } from '../commands/whoami.js';
 import { tokensCreateHandler } from '../commands/keys/create.js';
 import { tokensListHandler } from '../commands/keys/list.js';
 import { tokensRevokeHandler } from '../commands/keys/revoke.js';
+import { keysUseHandler } from '../commands/keys/use.js';
 import { keysHandler } from '../commands/keys/wizard.js';
 import type { Route } from './router.js';
 
@@ -74,9 +75,9 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['logout'], handler: logoutHandler, summary: 'Revoke and remove a stored credential' },
   { path: ['whoami'], handler: whoamiHandler, summary: 'Show the currently authenticated identity' },
   // `keys` (Phase 9 task 5, consolidated Phase 9 follow-up) is the sole
-  // surface for minting/listing/revoking scoped access keys — the earlier
-  // `tokens create/list/revoke` command family was folded into it. All three
-  // routes below are ambient-credential-eligible (see `run.ts`'s
+  // surface for minting/listing/revoking/activating scoped access keys — the
+  // earlier `tokens create/list/revoke` command family was folded into it.
+  // Every keys route below is ambient-credential-eligible (see `run.ts`'s
   // `AUTH_EXEMPT_HANDLERS`): a bare `pagespace login` (manage_keys-scoped,
   // zero extra setup) can drive every one of them end-to-end. There is no
   // `keys edit`/`update` flag subcommand — per this phase's plan,
@@ -85,6 +86,7 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['keys', 'create'], handler: tokensCreateHandler, summary: 'Mint a new access key' },
   { path: ['keys', 'list'], handler: tokensListHandler, summary: 'List access keys' },
   { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
+  { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (browser approval)" },
   { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },

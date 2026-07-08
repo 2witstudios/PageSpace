@@ -131,7 +131,7 @@ describe('createLoginDeviceHandler', () => {
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
   });
 
-  it('refuses to overwrite an existing stored profile without --yes', async () => {
+  it('refuses to overwrite an existing stored credential without --yes', async () => {
     const store = fakeStore(
       new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
@@ -147,7 +147,7 @@ describe('createLoginDeviceHandler', () => {
     expect(stderr.lines.join('')).not.toContain('ps_rt_existing');
   });
 
-  it('overwrites an existing stored profile when --yes is passed', async () => {
+  it('overwrites an existing stored credential when --yes is passed', async () => {
     const store = fakeStore(
       new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
@@ -211,15 +211,15 @@ describe('createLoginDeviceHandler', () => {
   });
 });
 
-describe('createLoginDeviceHandler — named profiles', () => {
-  it('--profile stores the device-login credential under the named profile, leaving "default" for the same host untouched', async () => {
+describe('createLoginDeviceHandler — named keys', () => {
+  it('--key stores the device-login credential under the named slot, leaving "default" for the same host untouched', async () => {
     const store = fakeStore(
       new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing_default', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
     const handler = createLoginDeviceHandler(baseHandlerDeps(store));
 
     const ctx = createFakeContext({ env: {} });
-    const code = await handler(ctx, commandIntent(['login', '--device', '--profile', 'work']));
+    const code = await handler(ctx, commandIntent(['login', '--device', '--key', 'work']));
 
     expect(code).toBe(EXIT_SUCCESS);
     const workCredential = await store.get('https://pagespace.ai', 'work');
@@ -228,11 +228,11 @@ describe('createLoginDeviceHandler — named profiles', () => {
     expect((defaultCredential && credentialSecret(defaultCredential))).toBe('ps_rt_existing_default');
   });
 
-  it('PAGESPACE_PROFILE env selects the profile when --profile is absent', async () => {
+  it('PAGESPACE_KEY env selects the slot when --key is absent', async () => {
     const store = fakeStore();
     const handler = createLoginDeviceHandler(baseHandlerDeps(store));
 
-    const ctx = createFakeContext({ env: { PAGESPACE_PROFILE: 'work' } });
+    const ctx = createFakeContext({ env: { PAGESPACE_KEY: 'work' } });
     const code = await handler(ctx, commandIntent(['login', '--device']));
 
     expect(code).toBe(EXIT_SUCCESS);
@@ -240,19 +240,19 @@ describe('createLoginDeviceHandler — named profiles', () => {
     expect(await store.get('https://pagespace.ai', 'default')).toBeNull();
   });
 
-  it('the existing-credential check is scoped to the named profile, not just the host', async () => {
+  it('the existing-credential check is scoped to the named slot, not just the host', async () => {
     const store = fakeStore(
       new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing_default', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),
     );
     const handler = createLoginDeviceHandler(baseHandlerDeps(store));
 
     const ctx = createFakeContext({ env: {} });
-    const code = await handler(ctx, commandIntent(['login', '--device', '--profile', 'work']));
+    const code = await handler(ctx, commandIntent(['login', '--device', '--key', 'work']));
 
     expect(code).toBe(EXIT_SUCCESS);
   });
 
-  it('refuses to overwrite an existing named profile without --yes, naming the profile in the message', async () => {
+  it('refuses to overwrite an existing named credential without --yes, naming the key in the message', async () => {
     const store = fakeStore();
     await store.set(
       'https://pagespace.ai',
@@ -263,10 +263,10 @@ describe('createLoginDeviceHandler — named profiles', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['login', '--device', '--profile', 'work']));
+    const code = await handler(ctx, commandIntent(['login', '--device', '--key', 'work']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
-    expect(stderr.lines.join('')).toContain('profile "work"');
+    expect(stderr.lines.join('')).toContain('key "work"');
     expect(stderr.lines.join('')).not.toContain('ps_rt_existing_work');
   });
 });

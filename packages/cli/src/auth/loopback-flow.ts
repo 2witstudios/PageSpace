@@ -64,12 +64,16 @@ export type WaitMs = (ms: number) => Promise<void>;
  * `oauth-repository.ts`'s `ok_mcp_token` outcome), with no refresh cycle.
  * `'mcp_update'` is an `update_key:<id>` grant — the server re-scoped an
  * EXISTING `mcp_*` token in place (`ok_mcp_update`) and returned no secret
- * at all; the flow below persists nothing for it.
+ * at all; the flow below persists nothing for it. `'mcp_activate'` is an
+ * `activate_key:<id>` approval (`ok_mcp_activate`) — the server verified
+ * ownership and changed NOTHING; the flow persists nothing and the caller
+ * (`pagespace keys use`) records the activation locally.
  */
 export type ExchangedTokens =
   | { readonly kind: 'oauth'; readonly accessToken: string; readonly refreshToken: string; readonly expiresIn: number; readonly scope: string }
   | { readonly kind: 'mcp'; readonly token: string; readonly scope: string }
-  | { readonly kind: 'mcp_update'; readonly tokenId: string; readonly scope: string };
+  | { readonly kind: 'mcp_update'; readonly tokenId: string; readonly scope: string }
+  | { readonly kind: 'mcp_activate'; readonly tokenId: string; readonly scope: string };
 export interface ExchangeCodeParams {
   readonly tokenEndpoint: string;
   readonly clientId: string;
@@ -124,6 +128,8 @@ export type LoopbackLoginResult =
       readonly scope: string;
       /** Set only for an `mcp_update` exchange — which existing key was re-scoped in place (no credential was stored). */
       readonly updatedTokenId?: string;
+      /** Set only for an `mcp_activate` exchange — which existing key the human approved activating (nothing was stored). */
+      readonly activatedTokenId?: string;
     }
   | { readonly outcome: 'timeout' }
   | { readonly outcome: 'state_mismatch' }
@@ -371,18 +377,27 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
       return { outcome: 'success', identity: null, scope: tokens.scope, updatedTokenId: tokens.tokenId };
     }
 
-    // Flow-level invariant: a request that asked for an in-place update
-    // (`update_key:*` in the requested scope) must never persist anything.
-    // A compromised or pre-`update_key` server could answer the exchange
-    // with a real mint instead — silently storing that surprise credential
-    // (under whatever profile the caller passed) would leave a live secret
-    // in the keychain the user was never told exists, while the caller
-    // reports the in-place update it asked for. Fail closed instead.
-    if (deps.scope.split(' ').some((token) => token.startsWith('update_key:'))) {
+    // An mcp_activate exchange approved a device activation ceremony: the
+    // server verified ownership and changed nothing. Same persist-nothing
+    // posture as mcp_update — the caller records the activation locally.
+    if (tokens.kind === 'mcp_activate') {
+      await server.finish(SUCCESS_HTML);
+      return { outcome: 'success', identity: null, scope: tokens.scope, activatedTokenId: tokens.tokenId };
+    }
+
+    // Flow-level invariant: a request that asked for an in-place update or
+    // an activation approval (`update_key:*`/`activate_key:*` in the
+    // requested scope) must never persist anything. A compromised or
+    // pre-`update_key` server could answer the exchange with a real mint
+    // instead — silently storing that surprise credential (under whatever
+    // profile the caller passed) would leave a live secret in the keychain
+    // the user was never told exists, while the caller reports the ceremony
+    // it asked for. Fail closed instead.
+    if (deps.scope.split(' ').some((token) => token.startsWith('update_key:') || token.startsWith('activate_key:'))) {
       await server.finish(ERROR_HTML);
       return {
         outcome: 'token_exchange_failed',
-        message: 'The server answered an update-key request by minting a new credential; nothing was stored.',
+        message: 'The server answered a key-update/activate request by minting a new credential; nothing was stored.',
       };
     }
 

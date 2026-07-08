@@ -1,6 +1,16 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CLI_VERSION, EXIT_SUCCESS, parseArgv, versionHandler } from '@pagespace/cli';
 import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
+
+describe('CLI_VERSION', () => {
+  it('strictly equals package.json "version" — same drift guard as the SDK\'s SDK_VERSION test, so bumping either side alone fails the suite', () => {
+    const packageJson = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')) as {
+      version: string;
+    };
+    expect(CLI_VERSION).toBe(packageJson.version);
+  });
+});
 
 describe('versionHandler', () => {
   it('writes the CLI version to stdout and exits 0', async () => {

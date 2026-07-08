@@ -29,6 +29,15 @@ export function describeGrantScopes(scopes: readonly string[], resolvers: GrantS
   if (parsed.scopes.offlineAccess) {
     descriptions.push(describeScopeForConsent({ kind: 'offline_access' }, {}));
   }
+  if (parsed.scopes.manageKeys) {
+    descriptions.push(describeScopeForConsent({ kind: 'manage_keys' }, {}));
+  }
+  if (parsed.scopes.updateKeyId !== null) {
+    descriptions.push(describeScopeForConsent({ kind: 'update_key', tokenId: parsed.scopes.updateKeyId }, {}));
+  }
+  if (parsed.scopes.activateKeyId !== null) {
+    descriptions.push(describeScopeForConsent({ kind: 'activate_key', tokenId: parsed.scopes.activateKeyId }, {}));
+  }
   for (const scope of parsed.scopes.drives.values()) {
     const driveName = resolvers.driveNamesById.get(scope.driveId);
     if (scope.role.kind === 'custom') {

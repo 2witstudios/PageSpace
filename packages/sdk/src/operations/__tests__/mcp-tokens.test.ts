@@ -1,48 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createMcpToken, listMcpTokens, revokeMcpToken } from '../mcp-tokens.js';
+import { listMcpTokens, revokeMcpToken } from '../mcp-tokens.js';
 
-describe('createMcpToken', () => {
-  it('POSTs to /api/auth/mcp-tokens with account scope', () => {
-    expect(createMcpToken.method).toBe('POST');
-    expect(createMcpToken.path).toBe('/api/auth/mcp-tokens');
-    expect(createMcpToken.requiredScope).toBe('account');
-    expect(createMcpToken.destructive).toBeUndefined();
-  });
-
-  it('accepts a bare name with no drives (unscoped token)', () => {
-    const parsed = createMcpToken.inputSchema.safeParse({ name: 'CI bot' });
-    expect(parsed.success).toBe(true);
-  });
-
-  it('accepts drives with an explicit role and a customRoleId together', () => {
-    const parsed = createMcpToken.inputSchema.safeParse({
-      name: 'n',
-      drives: [
-        { id: 'd1', role: 'MEMBER' },
-        { id: 'd2', role: null, customRoleId: 'r1' },
-        { id: 'd3', role: 'MEMBER', customRoleId: 'r2' },
-      ],
-    });
-    expect(parsed.success).toBe(true);
-  });
-
-  it('rejects a role outside the ADMIN/MEMBER enum', () => {
-    const parsed = createMcpToken.inputSchema.safeParse({ name: 'n', drives: [{ id: 'd1', role: 'OWNER' }] });
-    expect(parsed.success).toBe(false);
-  });
-
-  it('validates the created-token response shape, including the once-only plaintext token', () => {
-    const parsed = createMcpToken.outputSchema.safeParse({
-      id: 'tok_1',
-      name: 'CI bot',
-      token: 'mcp_plaintext_once',
-      createdAt: '2026-07-03T00:00:00.000Z',
-      lastUsed: null,
-      driveScopes: [{ id: 'd1', name: 'Drive One' }],
-    });
-    expect(parsed.success).toBe(true);
-  });
-});
+// There is deliberately no `tokens.create` operation: the server mints keys
+// via session auth only, and no SDK-supported credential (`mcp_` API keys,
+// `ps_at_` OAuth access tokens) satisfies that. See the module doc header.
 
 describe('listMcpTokens', () => {
   it('is a GET with no input fields', () => {

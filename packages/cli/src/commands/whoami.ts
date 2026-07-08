@@ -24,7 +24,8 @@ import type { CommandHandler } from '../router/router.js';
 import { confirmIdentity } from '../auth/confirm-identity.js';
 import { createDiscoverMetadata } from '../auth/discover.js';
 import type { ConfirmIdentity, DiscoverMetadata } from '../auth/loopback-flow.js';
-import { resolveProfileName } from '../auth/resolve.js';
+import { resolveEnvKeyName } from '../auth/legacy-token-env.js';
+import { resolveKeyName } from '../auth/resolve.js';
 import { createRefreshAccessToken } from '../auth/silent-refresh.js';
 import type { RefreshAccessToken } from '@pagespace/sdk';
 
@@ -41,15 +42,17 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
     const { host } = resolveConfig({
       flags: { host: intent.flags.host },
       env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
-      profile: null,
+      credential: null,
     });
-    const profileName = resolveProfileName(
-      { profile: intent.flags.profile },
-      { PAGESPACE_PROFILE: ctx.env.PAGESPACE_PROFILE },
+    const keyName = resolveKeyName(
+      { key: intent.flags.key },
+      // The deprecated PAGESPACE_PROFILE alias folds in here (run.ts already
+      // printed its one-line notice before dispatch).
+      { PAGESPACE_KEY: resolveEnvKeyName(ctx.env).name },
     );
 
     const store = deps.createCredentialStore();
-    const credential = await store.get(host, profileName);
+    const credential = await store.get(host, keyName);
     if (!credential) {
       ctx.stderr.write(`Not logged in to ${host}. Run "pagespace login".\n`);
       return EXIT_RUNTIME_ERROR;
@@ -98,7 +101,7 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
           scopes,
           createdAt: new Date(deps.now()).toISOString(),
         },
-        profileName,
+        keyName,
       );
       accessToken = tokens.accessToken;
     }
@@ -111,11 +114,19 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
       return EXIT_RUNTIME_ERROR;
     }
 
+    // The machine's active key for this host (`pagespace keys use`) — shown
+    // whenever one is set, because it changes what a bare content command on
+    // this machine will authenticate as.
+    const activeKey = await ctx.activeKeyStore.getActiveKey(host);
+
     if (intent.flags.json) {
-      ctx.stdout.write(`${JSON.stringify({ host, name: identity.name, email: identity.email, scopes })}\n`);
+      ctx.stdout.write(`${JSON.stringify({ host, name: identity.name, email: identity.email, scopes, activeKey })}\n`);
     } else {
       ctx.stdout.write(`Logged in as ${identity.name ?? identity.email} <${identity.email}> on ${host}.\n`);
       ctx.stdout.write(`Scopes: ${scopes.length > 0 ? scopes.join(' ') : '(none)'}\n`);
+      if (activeKey !== null) {
+        ctx.stdout.write(`Active key: ${activeKey}\n`);
+      }
     }
 
     return EXIT_SUCCESS;
