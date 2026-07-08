@@ -87,10 +87,11 @@ export type BuildTokenScopeResult =
  * must stay a usage error, not silently escalate to an unrestricted key).
  *
  * `options.name`, when given, is embedded as a `name:<percent-encoded>` wire
- * token (required server-side on every mint-shaped grant, `scopes.ts`'s
- * `name_required_for_mint`). Omitted by `buildKeyUpdateScope` below, which
+ * token (required server-side on every mint-shaped grant — enforced at
+ * `POST /api/oauth/authorize` via `validateAuthorizeRequest`, not by
+ * `scopes.ts`'s parser itself). Omitted by `buildKeyUpdateScope` below, which
  * reuses this function for its drive-token list only — `update_key:*` grants
- * must never carry a name (`name_without_mint_grant`).
+ * must never carry a name (`scopes.ts`'s `name_without_mint_grant`).
  */
 export function buildTokenScope(
   drives: readonly DriveScopeArg[],
@@ -164,11 +165,7 @@ export function buildKeyUpdateScope(tokenId: string, drives: readonly DriveScope
   }
   const base = buildTokenScope(drives);
   if (!base.ok) return base;
-  const driveScope = base.scope
-    .split(' ')
-    .filter((token) => token !== 'offline_access')
-    .join(' ');
-  return { ok: true, scope: `update_key:${tokenId} ${driveScope}`, driveScope };
+  return { ok: true, scope: `update_key:${tokenId} ${base.driveScope}`, driveScope: base.driveScope };
 }
 
 export type BuildKeyActivateScopeResult =
@@ -262,6 +259,19 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
       return EXIT_USAGE_ERROR;
     }
 
+    // Structural validation (--all-drives/--drive conflict, duplicate drive
+    // ids, invalid drive/role id shape, zero drives) runs FIRST and without a
+    // name — these are more specific, more actionable errors than
+    // resolveNewKeyName's generic "--name is required" messages, and must
+    // take precedence so e.g. `--all-drives --drive x` (no --name) reports
+    // the actual flag conflict, not a --name nag that only leads to a second
+    // round trip once corrected.
+    const structuralCheck = buildTokenScope(parsedArgs.args.drives, { allDrives: parsedArgs.args.allDrives });
+    if (!structuralCheck.ok) {
+      ctx.stderr.write(`${structuralCheck.message}\n`);
+      return EXIT_USAGE_ERROR;
+    }
+
     const nameResult = resolveNewKeyName(parsedArgs.args);
     if (!nameResult.ok) {
       ctx.stderr.write(`${nameResult.message}\n`);
@@ -269,6 +279,10 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
     }
     const keyName = nameResult.name;
 
+    // Re-run with the resolved name to embed it in the wire scope string.
+    // Guaranteed to succeed given structuralCheck already passed on the same
+    // (drives, allDrives) input — the ok:false branch below is unreachable
+    // defense-in-depth, not a real path.
     const scopeResult = buildTokenScope(parsedArgs.args.drives, { name: keyName, allDrives: parsedArgs.args.allDrives });
     if (!scopeResult.ok) {
       ctx.stderr.write(`${scopeResult.message}\n`);

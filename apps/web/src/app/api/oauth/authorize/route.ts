@@ -24,7 +24,7 @@ import {
   type AuthorizeRequestParams,
 } from '@pagespace/lib/auth/oauth/authorize-request';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { checkGrantAuthority, formatScopeSet, hasNewKeyName } from '@pagespace/lib/auth/oauth/scopes';
+import { checkGrantAuthority, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import { AUTHORIZATION_CODE_TTL_SECONDS } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
@@ -265,26 +265,6 @@ export async function POST(req: NextRequest) {
         redirectUri: buildRedirectWithParams(result.redirectUri, { error: 'invalid_scope', state: result.state }),
       });
     }
-  }
-
-  // name-required-for-mint: a pure drive:* or all_drives grant reaching this consent step, once
-  // exchanged, mints a REAL mcp_tokens row (`oauth-repository.ts`'s isPureDriveGrant/isAllDrivesGrant
-  // branch) — unlike update_key/activate_key (re-scope/activate an EXISTING key, checked above) or
-  // account/manage_keys (no row minted at all), there is no server-side default to fall back to; the
-  // consenting client must supply one via the name:<percent-encoded> scope token. This is enforced
-  // HERE (not in parseScopeList, which is reused by flows — e.g. device-authorization's plain OAuth
-  // token pairs — that never mint an mcp_tokens row and legitimately carry no name) rather than at
-  // exchange time, mirroring the update_key/activate_key ownership checks: reject before a code is
-  // ever minted, uniform invalid_scope, ordered before consumeStepUpGrant so a failing request never
-  // burns the single-use step-up grant.
-  const isMintShapedGrant =
-    result.scopes.updateKeyId === null &&
-    result.scopes.activateKeyId === null &&
-    (result.scopes.allDrives || result.scopes.drives.size > 0);
-  if (isMintShapedGrant && !hasNewKeyName(result.scopes)) {
-    return NextResponse.json({
-      redirectUri: buildRedirectWithParams(result.redirectUri, { error: 'invalid_scope', state: result.state }),
-    });
   }
 
   const stepUpResult = await consumeStepUpGrant({

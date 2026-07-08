@@ -326,8 +326,7 @@ async function selectScopeAndMint(
     return null;
   }
 
-  const scopeResult =
-    target === 'all' ? buildWizardScope([], { allDrives: true, name: keyName }) : buildWizardScope(selections, { name: keyName });
+  const scopeResult = buildWizardScope(selections, { allDrives: target === 'all', name: keyName });
 
   if (!scopeResult.ok) {
     clack.log.error(scopeResult.message);

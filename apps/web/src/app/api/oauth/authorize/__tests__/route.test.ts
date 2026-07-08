@@ -538,7 +538,7 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
     // rejection, not a request-syntax one — the scope itself is well-formed).
     vi.mocked(getDriveAccess).mockResolvedValueOnce({ isOwner: false, isAdmin: false, isMember: false, role: null });
 
-    const overPrivilegedBody = { ...approvalBody, scope: 'drive:testdrive1' };
+    const overPrivilegedBody = { ...approvalBody, scope: 'drive:testdrive1 name:ci' };
     const res = await POST(postRequest(overPrivilegedBody) as never);
 
     expect(res.status).toBe(200);

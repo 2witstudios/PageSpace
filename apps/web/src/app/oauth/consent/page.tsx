@@ -7,7 +7,6 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { validateAuthorizeRequest, type AuthorizeRequestParams } from '@pagespace/lib/auth/oauth/authorize-request';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { describeScopeForConsent } from '@pagespace/lib/auth/oauth/consent';
-import { hasNewKeyName } from '@pagespace/lib/auth/oauth/scopes';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { ConsentActions } from './ConsentActions';
@@ -97,20 +96,6 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     }
     if (result.scopes.updateKeyId !== null) updateKeyName = target.name;
     else activateKeyName = target.name;
-  }
-
-  // Same "mint-shaped grant requires a name" rule the approval POST enforces
-  // (`/api/oauth/authorize`'s isMintShapedGrant check) — checked HERE too, on
-  // the render path, so an old/malformed CLI request that omits `name:*`
-  // never reaches the consent screen (or the WebAuthn/magic-link step-up
-  // ConsentActions kicks off before posting) only to fail on approval. Same
-  // uniform invalid_scope redirect, no oracle.
-  const isMintShapedGrant =
-    result.scopes.updateKeyId === null &&
-    result.scopes.activateKeyId === null &&
-    (result.scopes.allDrives || result.scopes.drives.size > 0);
-  if (isMintShapedGrant && !hasNewKeyName(result.scopes)) {
-    redirect(errorRedirectUrl(result.redirectUri, 'invalid_scope', result.state));
   }
 
   const driveIds = [...result.scopes.drives.keys()];

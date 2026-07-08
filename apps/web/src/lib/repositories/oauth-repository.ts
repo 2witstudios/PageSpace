@@ -323,9 +323,15 @@ export async function exchangeAuthorizationCode(
           userId: row.userId,
           tokenHash,
           tokenPrefix,
-          // Fallback is unreachable once the grammar guarantees a name on
-          // every mint-shaped grant (parseScopeList's name_required_for_mint
-          // rule) — defense in depth only, never meant to actually fire.
+          // Fallback is unreachable in practice: a mint-shaped grant with no
+          // name never gets this far — POST /api/oauth/authorize's
+          // validateAuthorizeRequest (packages/lib/src/auth/oauth/authorize-request.ts)
+          // rejects it before an authorization code is ever minted, and this
+          // function only runs against an already-consented, already-persisted
+          // code's scopes. NOT enforced by parseScopeList itself (that parser
+          // stays flow-agnostic — see its name_without_mint_grant rule and the
+          // doc comment on ScopeSet.newKeyName for why). Kept as defense in
+          // depth only, never meant to actually fire.
           name: hasNewKeyName(parsedGrantedScope.scopes) ? parsedGrantedScope.scopes.newKeyName : 'pagespace CLI',
           isScoped: !allDrives,
           drives: allDrives ? [] : toSessionRepoDrives(parsedGrantedScope.scopes),

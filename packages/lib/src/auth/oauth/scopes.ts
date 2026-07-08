@@ -10,6 +10,7 @@
  */
 
 const RESOURCE_ID_RE = /^[a-z0-9]{1,32}$/;
+const NAME_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 
 export type ParsedScope =
   | { kind: 'account' }
@@ -64,12 +65,19 @@ export type ScopeSet = {
   // smuggle a real grant.
   activateKeyId: string | null;
   // `name:<percent-encoded-utf8>` — the user-chosen name for the `mcp_tokens`
-  // row this grant mints. Carries no capability itself; it is REQUIRED
-  // whenever the grant shape mints a NEW `mcp_tokens` row (a pure `drive:*`
-  // set or `all_drives`) and FORBIDDEN otherwise — attaching a name to
-  // `account`/`manage_keys`/`update_key`/`activate_key` would either be
-  // meaningless (no row minted) or spoof a "creating a key" consent line
-  // when no key is actually being created.
+  // row this grant mints. Carries no capability itself; FORBIDDEN on any
+  // grant shape that doesn't mint a NEW `mcp_tokens` row (`account`/
+  // `manage_keys`/`update_key`/`activate_key` — attaching a name there would
+  // either be meaningless, since no row is minted, or spoof a "creating a
+  // key" consent line when no key is actually being created), enforced by
+  // this parser's `name_without_mint_grant` rule below. Deliberately NOT
+  // enforced as *required* on a mint-shaped grant (pure `drive:*`/
+  // `all_drives`) at this layer — this parser is reused by flows (e.g.
+  // device-authorization's plain OAuth token pairs) that never mint an
+  // `mcp_tokens` row and legitimately carry no name. The "mint-shaped grant
+  // requires a name" half is enforced at `validateAuthorizeRequest`
+  // (`authorize-request.ts`), the one call site whose result actually reaches
+  // a real mint.
   newKeyName: string | null;
 };
 
@@ -200,7 +208,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
       } catch {
         return { ok: false, error: { code: 'malformed_name' } };
       }
-      if (decoded.length === 0 || decoded.length > 100 || /[\x00-\x1F\x7F]/.test(decoded)) {
+      if (decoded.length === 0 || decoded.length > 100 || NAME_CONTROL_CHAR_RE.test(decoded)) {
         return { ok: false, error: { code: 'malformed_name' } };
       }
       newKeyName = decoded;

@@ -162,5 +162,61 @@ describe('validateAuthorizeRequest', () => {
       const withoutState = validateAuthorizeRequest(baseParams({ scope: undefined, state: undefined }), client);
       if (!withoutState.ok && withoutState.kind === 'redirect') expect(withoutState.state).toBeUndefined();
     });
+
+    describe('name required for a mint-shaped grant (the fix for the "pagespace CLI" name-loss bug)', () => {
+      it('rejects a pure drive:* grant with no name: token by redirecting with error=invalid_scope', () => {
+        const result = validateAuthorizeRequest(baseParams({ scope: 'drive:drv123:member offline_access' }), client);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.kind).toBe('redirect');
+          expect(result.error).toBe('invalid_scope');
+        }
+      });
+
+      it('rejects an all_drives grant with no name: token by redirecting with error=invalid_scope', () => {
+        const result = validateAuthorizeRequest(baseParams({ scope: 'all_drives offline_access' }), client);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.kind).toBe('redirect');
+          expect(result.error).toBe('invalid_scope');
+        }
+      });
+
+      it('accepts a pure drive:* grant that carries a name: token', () => {
+        const result = validateAuthorizeRequest(baseParams({ scope: 'drive:drv123:member name:My%20Laptop offline_access' }), client);
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.scopes.newKeyName).toBe('My Laptop');
+      });
+
+      it('accepts an all_drives grant that carries a name: token', () => {
+        const result = validateAuthorizeRequest(baseParams({ scope: 'all_drives name:God%20Key offline_access' }), client);
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.scopes.newKeyName).toBe('God Key');
+      });
+
+      it('does not require a name for an update_key grant (re-scoping an existing key mints nothing)', () => {
+        const result = validateAuthorizeRequest(baseParams({ scope: 'update_key:tok123 drive:drv123:member' }), client);
+        expect(result.ok).toBe(true);
+      });
+
+      it('does not require a name for an activate_key grant (approves nothing minted)', () => {
+        const result = validateAuthorizeRequest(baseParams({ scope: 'activate_key:tok123' }), client);
+        expect(result.ok).toBe(true);
+      });
+
+      it('does not require a name for account/manage_keys grants (no mcp_tokens row minted)', () => {
+        expect(validateAuthorizeRequest(baseParams({ scope: 'account offline_access' }), client).ok).toBe(true);
+        expect(validateAuthorizeRequest(baseParams({ scope: 'manage_keys offline_access' }), client).ok).toBe(true);
+      });
+
+      it('rejects a name: token attached to a non-mint grant (name_without_mint_grant surfaces as invalid_scope here too)', () => {
+        const result = validateAuthorizeRequest(baseParams({ scope: 'account name:Foo' }), client);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.kind).toBe('redirect');
+          expect(result.error).toBe('invalid_scope');
+        }
+      });
+    });
   });
 });
