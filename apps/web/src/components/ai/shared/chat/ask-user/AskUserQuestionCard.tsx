@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { HelpCircle, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -63,6 +63,20 @@ export const AskUserQuestionCard: React.FC<AskUserQuestionCardProps> = ({ part }
     (input?.questions ?? []).map(() => ({ showOther: false }))
   );
 
+  // `input` streams in incrementally (input-streaming state, or a partial/
+  // unparsable JSON string) and only becomes the final questions array once
+  // streaming completes — well after this component first mounted and ran
+  // the lazy useState initializer above. Resync drafts whenever the question
+  // count changes so a card that mounted with 0 questions (still streaming)
+  // grows real per-question draft slots once input finalizes, instead of
+  // permanently holding an empty drafts array.
+  const questionCount = input?.questions.length ?? 0;
+  useEffect(() => {
+    setDrafts((prev) =>
+      prev.length === questionCount ? prev : Array.from({ length: questionCount }, () => ({ showOther: false }))
+    );
+  }, [questionCount]);
+
   if (!input) return null;
 
   if (part.state === 'input-streaming') {
@@ -91,6 +105,10 @@ export const AskUserQuestionCard: React.FC<AskUserQuestionCardProps> = ({ part }
 
   const canSubmit =
     isAnswerable &&
+    // Defends against a stale drafts array (e.g. mid-resync effect): `.every`
+    // on an empty/mismatched array is vacuously true, so the length check
+    // must hold before trusting it.
+    drafts.length === questionCount &&
     drafts.every((d) => (d.showOther ? d.otherText?.trim() : d.selectedLabel));
 
   const handleSubmit = () => {
@@ -157,7 +175,7 @@ export const AskUserQuestionCard: React.FC<AskUserQuestionCardProps> = ({ part }
             </div>
 
             {answered?.otherText && (
-              <p className="text-sm italic text-muted-foreground">"{answered.otherText}"</p>
+              <p className="text-sm italic text-muted-foreground">&quot;{answered.otherText}&quot;</p>
             )}
 
             {!answered && draft?.showOther && (
