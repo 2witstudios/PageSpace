@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { listMcpTokens, revokeMcpToken } from '../mcp-tokens.js';
 
 // There is deliberately no `tokens.create` operation: the server mints keys
-// via session-only auth (OAuth consent flow / web UI), which the SDK's
-// Bearer-only transport can never satisfy. See the module doc header.
+// via session auth only, and no SDK-supported credential (`mcp_` API keys,
+// `ps_at_` OAuth access tokens) satisfies that. See the module doc header.
 
 describe('listMcpTokens', () => {
   it('is a GET with no input fields', () => {

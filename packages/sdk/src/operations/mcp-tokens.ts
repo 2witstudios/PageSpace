@@ -9,13 +9,18 @@
  * re-implements that authority decision.
  *
  * There is deliberately NO `tokens.create` operation. The server locked
- * POST /api/auth/mcp-tokens to session-only auth + CSRF (Phase 8 #1878, a
- * credential-minting-escalation fix), and the SDK only ever sends Bearer
- * tokens — so a create operation could never succeed for any SDK consumer.
- * Key MINTING happens only via the OAuth authorize/consent flow
- * (`pagespace keys create`) or the web UI. Both remaining operations require
- * an `oauth_`-class access token (from `pagespace login` / the OAuth flow) or
- * a web session — the route rejects `mcp_` tokens.
+ * POST /api/auth/mcp-tokens to session auth (Phase 8 #1878, a
+ * credential-minting-escalation fix), and neither credential class the SDK
+ * documents — `mcp_` API keys or `ps_at_` OAuth access tokens — is accepted
+ * there. Session credentials are reserved for first-party surfaces (browser
+ * cookie sessions, and the desktop/mobile apps' Bearer session tokens);
+ * they are not an SDK-supported credential, and shipping a typed minting
+ * method usable only via one would reopen the silent, agent-runnable
+ * key-minting affordance Phase 8 closed. Key MINTING happens via the OAuth
+ * authorize/consent flow (`pagespace keys create`) or the web UI. Both
+ * remaining operations require an `oauth_`-class access token (from
+ * `pagespace login` / the OAuth flow) or a web session — the routes reject
+ * `mcp_` tokens.
  *
  * `listMcpTokens`'s output schema deliberately has no `token` field: even if
  * a buggy or compromised server included one, zod's default

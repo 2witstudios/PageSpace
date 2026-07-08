@@ -7,12 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Removed
 
 - **`tokens.create` / `createMcpToken`** — removed from the facade, the registry, and the root
-  exports. The server locked key minting (POST `/api/auth/mcp-tokens`) to session-only auth +
-  CSRF as a deliberate credential-minting-escalation fix, and the SDK only ever sends Bearer
-  tokens, so this operation could never succeed for any consumer: every call returned 401
-  regardless of credential. Key minting happens only via the OAuth authorize/consent flow
-  (`pagespace keys create`) or the web UI. `tokens.list` and `tokens.revoke` remain, and require
-  an `oauth_` access token (from `pagespace login` / the OAuth flow) — not an `mcp_` token.
+  exports. The server locked key minting (POST `/api/auth/mcp-tokens`) to session auth as a
+  deliberate credential-minting-escalation fix, and neither credential class the SDK documents
+  (`mcp_` API keys, `ps_at_` OAuth access tokens) is accepted there — every such call returned
+  401. Session credentials are reserved for first-party surfaces (browser cookie sessions and
+  the desktop/mobile apps' Bearer session tokens) and are not an SDK-supported credential, so
+  the operation had no supported caller. Key minting happens via the OAuth authorize/consent
+  flow (`pagespace keys create`) or the web UI. `tokens.list` and `tokens.revoke` remain, and
+  require an `oauth_` access token (from `pagespace login` / the OAuth flow) — not an `mcp_`
+  token.
 
 ### Fixed
 
