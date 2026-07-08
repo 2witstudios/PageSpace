@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { NextFetchEvent } from 'next/server';
 import { monitoringMiddleware } from '@/middleware/monitoring';
 import {
+  applyApiCorsHeaders,
   createSecureResponse,
   createSecureErrorResponse,
   isPublicPageRoute,
@@ -93,7 +94,38 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       req.headers.get('x-real-ip') ||
       'unknown';
 
-    // Origin validation for API routes (defense-in-depth)
+    // CORS preflight for the Bearer-authenticated API surface (@pagespace/sdk and
+    // any other Bearer-token caller). Browsers never send Authorization (or
+    // cookies) on a preflight OPTIONS request, so the Bearer-prefix detection
+    // below can't tell a preflight apart from an anonymous same-origin OPTIONS —
+    // this short-circuit must be unconditional. It grants no access by itself:
+    // the real GET/POST/etc. that follows still goes through full, normal auth.
+    if (isAPIRoute && req.method === 'OPTIONS') {
+      return applyApiCorsHeaders(new NextResponse(null, { status: 204 }));
+    }
+
+    // Bearer token format check (Edge-safe - no database access), run BEFORE
+    // origin validation below. Bearer-authenticated requests are already
+    // CSRF/Origin-immune at the route layer (`isSessionAuth` gates both checks
+    // in apps/web/src/lib/auth/index.ts — CSRF/Origin only apply to cookie
+    // sessions), so this middleware must skip origin validation for them too,
+    // and must attach CORS response headers so a cross-origin browser caller
+    // (e.g. the SDK) can actually read the response.
+    // Full validation happens in route handlers via validateMCPToken()/validateSessionToken()/validateOAuthAccessToken()
+    const authHeader = req.headers.get('authorization');
+    if (
+      authHeader?.startsWith(MCP_BEARER_PREFIX) ||
+      authHeader?.startsWith(SESSION_BEARER_PREFIX) ||
+      authHeader?.startsWith(OAUTH_BEARER_PREFIX)
+    ) {
+      // API routes get restrictive CSP (no nonce needed)
+      const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
+      return applyApiCorsHeaders(response);
+    }
+
+    // Origin validation for API routes (defense-in-depth). Bearer-authenticated
+    // requests never reach here — they returned above — so this only ever
+    // enforces against cookie-session traffic, unchanged from before.
     if (pathname.startsWith('/api')) {
       const originResult = validateOriginForMiddleware(req);
 
@@ -121,19 +153,6 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
           ip,
         });
       }
-    }
-
-    // Bearer token format check (Edge-safe - no database access)
-    // Full validation happens in route handlers via validateMCPToken()/validateSessionToken()/validateOAuthAccessToken()
-    const authHeader = req.headers.get('authorization');
-    if (
-      authHeader?.startsWith(MCP_BEARER_PREFIX) ||
-      authHeader?.startsWith(SESSION_BEARER_PREFIX) ||
-      authHeader?.startsWith(OAUTH_BEARER_PREFIX)
-    ) {
-      // API routes get restrictive CSP (no nonce needed)
-      const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
-      return response;
     }
 
     // Well-known discovery routes (e.g. RFC 8414 OAuth metadata) must be

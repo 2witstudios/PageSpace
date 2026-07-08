@@ -4,6 +4,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
 import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
@@ -141,6 +142,27 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       .limit(limit)
       .offset(offset);
 
+    // users.name/email are encrypted at rest, and activityLogs.actorEmail/actorDisplayName
+    // are denormalized snapshots that may also hold ciphertext from historical write paths
+    // that predate the actor-info decrypt-before-write fix. Decrypt all four for display,
+    // batching the joined and snapshot columns of the same shape together so a repeated
+    // actor across many rows only decrypts once per unique value.
+    const decryptName = await decryptFieldValuesOnce([
+      ...logs.map((log) => log.userName),
+      ...logs.map((log) => log.actorDisplayName),
+    ]);
+    const decryptEmail = await decryptFieldValuesOnce([
+      ...logs.map((log) => log.userEmail),
+      ...logs.map((log) => log.actorEmail),
+    ]);
+    const decryptedLogs = logs.map((log) => ({
+      ...log,
+      userName: decryptName(log.userName),
+      userEmail: decryptEmail(log.userEmail),
+      actorDisplayName: decryptName(log.actorDisplayName),
+      actorEmail: decryptEmail(log.actorEmail),
+    }));
+
     auditRequest(request, { eventType: 'data.read', userId: _adminUser.id, resourceType: 'audit_log', resourceId: '*', details: {
       source: 'admin',
       resultCount: logs.length,
@@ -148,7 +170,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
     } });
 
     return Response.json({
-      logs,
+      logs: decryptedLogs,
       pagination: {
         page,
         limit,
