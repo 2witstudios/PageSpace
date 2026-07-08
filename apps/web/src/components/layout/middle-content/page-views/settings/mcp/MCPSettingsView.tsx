@@ -659,7 +659,7 @@ export default function MCPSettingsView() {
           or service account, mint a token scoped to specific drives instead — either below, or
           from the terminal with{' '}
           <code className="rounded bg-muted px-1">
-            pagespace keys create --drive &lt;id&gt; --save-as-profile agent
+            pagespace keys create --drive &lt;id&gt; --name agent
           </code>{' '}
           or the guided <code className="rounded bg-muted px-1">pagespace keys</code> wizard.
         </p>
@@ -1044,10 +1044,10 @@ export default function MCPSettingsView() {
                   <code className="rounded bg-muted px-1">pagespace login</code> — that only grants a
                   personal, key-management credential with no content access anyway. Instead run{' '}
                   <code className="rounded bg-muted px-1">
-                    pagespace keys create --drive &lt;id&gt; --save-as-profile agent
+                    pagespace keys create --drive &lt;id&gt; --name agent
                   </code>{' '}
                   once, then swap <code className="rounded bg-muted px-1">PAGESPACE_TOKEN</code> in the
-                  config below for <code className="rounded bg-muted px-1">PAGESPACE_PROFILE: &quot;agent&quot;</code>{' '}
+                  config below for <code className="rounded bg-muted px-1">PAGESPACE_KEY: &quot;agent&quot;</code>{' '}
                   — the MCP will reuse that scoped credential instead of a portable token.
                 </p>
               </div>
