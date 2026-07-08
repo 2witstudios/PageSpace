@@ -16,7 +16,7 @@ vi.mock('@pagespace/db/schema/credits', () => ({
   creditHolds: { id: 'ch.id', expiresAt: 'ch.expiresAt' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
-  aiUsageLogs: { id: 'aul.id', userId: 'aul.userId', cost: 'aul.cost', success: 'aul.success', timestamp: 'aul.timestamp' },
+  aiUsageLogs: { id: 'aul.id', userId: 'aul.userId', cost: 'aul.cost', success: 'aul.success', timestamp: 'aul.timestamp', source: 'aul.source' },
 }));
 const mockEq = vi.hoisted(() => vi.fn((a, b) => ({ op: 'eq', a, b })));
 const mockGt = vi.hoisted(() => vi.fn((a, b) => ({ op: 'gt', a, b })));
@@ -38,6 +38,7 @@ const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefi
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
 import { backfillCredits } from '../credit-backfill';
+import { TERMINAL_MARKUP_BPS } from '../credit-pricing';
 
 // Captures the WHERE clause handed to the orphan sweep so tests can assert the
 // query shape (e.g. that success:false rows are no longer excluded).
@@ -209,6 +210,32 @@ describe('backfillCredits', () => {
     // ...and must NOT gate on success any more.
     expect(mockEq).not.toHaveBeenCalledWith('aul.success', true);
     expect(lastOrphanWhere).toBeDefined();
+  });
+
+  it("recovers a source:'terminal' orphan at TERMINAL_MARKUP_BPS instead of the shared default markup", async () => {
+    // The crash-recovery gap Codex flagged on PR #1955: a terminal usage row that
+    // reached aiUsageLogs but crashed before consumeCredits claimed a ledger row
+    // has no stored markup to replay — this sweep must reconstruct it from the
+    // row's `source` field, not silently bill it at the general AI markup.
+    queuePass([], [{ aiUsageLogId: 'aul_term', userId: 'u_term', cost: 0.02, source: 'terminal' }]);
+
+    await backfillCredits();
+
+    expect(mockConsumeCredits).toHaveBeenCalledWith({
+      aiUsageLogId: 'aul_term',
+      userId: 'u_term',
+      costDollars: 0.02,
+      markupBpsOverride: TERMINAL_MARKUP_BPS,
+    });
+  });
+
+  it('does not apply a markup override to a non-terminal orphan (unchanged behavior)', async () => {
+    queuePass([], [{ aiUsageLogId: 'aul_9', userId: 'u9', cost: 0.5, source: 'chat' }]);
+
+    await backfillCredits();
+
+    const call = mockConsumeCredits.mock.calls[0][0];
+    expect(call.markupBpsOverride).toBeUndefined();
   });
 
   it('makes no Stripe calls (reconciliation is local-only)', () => {

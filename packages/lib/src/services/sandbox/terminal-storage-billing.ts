@@ -11,6 +11,7 @@ import { db } from '@pagespace/db/db';
 import { terminalSessions } from '@pagespace/db/schema/terminal-sessions';
 import { SANDBOX_RESOURCE_CAPS } from './execution-policy';
 import { lookupPageOwnerId } from '../../billing/terminal-payer';
+import { TERMINAL_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import type { ReconcileTerminalStorageDeps } from './terminal-storage-reconcile';
 
@@ -42,6 +43,9 @@ export const defaultReconcileTerminalStorageDeps: ReconcileTerminalStorageDeps =
       // No holdId: a background reconcile charge, not gated against a
       // pre-placed hold (mirrors reconcile-ai-cost's settle path).
       costSource: 'list_price',
+      // Same 1.5x substrate floor as active-runtime billing (machine-billing.ts),
+      // independent of the shared AI MARKUP_BPS default.
+      markupBpsOverride: TERMINAL_MARKUP_BPS,
       metadata: { type: 'terminal_storage', pageId, gbMonths },
     });
   },

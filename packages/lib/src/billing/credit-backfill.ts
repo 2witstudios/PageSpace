@@ -13,9 +13,18 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, lt, gt, isNull, notInArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeBackfillActions } from './credit-core';
+import { TERMINAL_MARKUP_BPS } from './credit-pricing';
 import { consumeCredits, settlePendingLedgerRow } from './credit-consume';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
+import type { AIUsageSource } from '../monitoring/usage-source';
+
+// Per-source markup floor for orphan recovery (see computeBackfillActions):
+// adding a second per-source floor is a one-line addition here, not a change
+// to the pure planning function.
+const MARKUP_BPS_OVERRIDES_BY_SOURCE: Partial<Record<AIUsageSource, number>> = {
+  terminal: TERMINAL_MARKUP_BPS,
+};
 
 const BATCH = 200;
 // Providers whose usage is metering-exempt (no credit_ledger row is ever created for them).
@@ -112,7 +121,14 @@ export async function backfillCredits(): Promise<BackfillResult> {
     // a mid-stream error: real provider spend that must be billed). Rows with
     // no/zero cost are excluded; there is nothing to draw down for them.
     const orphans = await db
-      .select({ aiUsageLogId: aiUsageLogs.id, userId: aiUsageLogs.userId, cost: aiUsageLogs.cost })
+      .select({
+        aiUsageLogId: aiUsageLogs.id,
+        userId: aiUsageLogs.userId,
+        cost: aiUsageLogs.cost,
+        // Recover the per-source markup (e.g. terminal's own floor) that the
+        // original call never got to apply — see computeBackfillActions.
+        source: aiUsageLogs.source,
+      })
       .from(aiUsageLogs)
       .leftJoin(creditLedger, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
       .where(
@@ -129,7 +145,13 @@ export async function backfillCredits(): Promise<BackfillResult> {
 
     const actions = computeBackfillActions(
       pending,
-      orphans.map((o) => ({ aiUsageLogId: o.aiUsageLogId, userId: o.userId, costDollars: o.cost ?? 0 })),
+      orphans.map((o) => ({
+        aiUsageLogId: o.aiUsageLogId,
+        userId: o.userId,
+        costDollars: o.cost ?? 0,
+        source: o.source,
+      })),
+      MARKUP_BPS_OVERRIDES_BY_SOURCE,
     );
 
     for (const action of actions) {
@@ -142,6 +164,7 @@ export async function backfillCredits(): Promise<BackfillResult> {
             aiUsageLogId: action.aiUsageLogId,
             userId: action.userId,
             costDollars: action.costDollars,
+            markupBpsOverride: action.markupBpsOverride,
           });
           orphanCount++;
         }

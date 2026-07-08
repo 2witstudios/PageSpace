@@ -41,6 +41,13 @@ export interface ConsumeCreditsInput {
    */
   conversationId?: string;
   pageId?: string;
+  /**
+   * Per-call override for the markup applied at settle, in basis points.
+   * Absent for every ordinary AI-model call (they get the shared global
+   * {@link MARKUP_BPS}); terminal/Machine billing passes `TERMINAL_MARKUP_BPS`
+   * here so its 1.5× substrate floor holds independent of AI markup changes.
+   */
+  markupBpsOverride?: number;
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -178,7 +185,8 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
   // The precise charge in millicents (sub-cent accurate). The whole-cent `amountCents`
   // on the claim row is the per-call nominal charge for audit; the authoritative
   // sub-cent value is `chargeMillicents`, which settlement and any retry replay.
-  const chargeMc = chargeMillicents(input.costDollars, MARKUP_BPS);
+  const markupBps = input.markupBpsOverride ?? MARKUP_BPS;
+  const chargeMc = chargeMillicents(input.costDollars, markupBps);
   const nominalCents = Math.round(chargeMc / 1000);
   // Signed (negative) for the usage row; `|| 0` avoids storing -0 for a sub-cent charge.
   const amountCents = -nominalCents || 0;
@@ -197,7 +205,7 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
         chargeMillicents: chargeMc,
         aiUsageLogId: input.aiUsageLogId,
         realCostCents,
-        markupBps: MARKUP_BPS,
+        markupBps,
         consumeStatus: 'pending',
       })
       // The unique index on aiUsageLogId is partial (WHERE aiUsageLogId IS NOT NULL

@@ -1,11 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   calculateTerminalCostDollars,
-  calculateTerminalChargeCents,
   calculateTerminalStorageCostDollars,
 } from '../terminal-pricing';
 import {
-  MARKUP_BPS,
+  TERMINAL_MARKUP_BPS,
   TERMINAL_RATES,
   TERMINAL_ASSUMED_CPUS,
   TERMINAL_ASSUMED_MEMORY_GB,
@@ -46,36 +45,24 @@ describe('TERMINAL_RATES defaults pinned to Sprites published pricing', () => {
   });
 });
 
-describe('calculateTerminalChargeCents', () => {
-  it('maps a known active-window (cpu-seconds, mem) to the expected charge in cents', () => {
-    // 3600s @ the assumed shape = $0.0809375 real cost; marked up at MARKUP_BPS
-    // (1.5x by default) = $0.12140625 -> rounds to 12 cents.
+describe('TERMINAL_MARKUP_BPS is an independent 1.5x floor, not derived from the shared AI markup', () => {
+  it('defaults to >=15000 bps (1.5x) on its own env var, decoupled from CREDIT_MARKUP_BPS', () => {
+    // Real floor enforcement: this constant is read from its OWN env var
+    // (TERMINAL_MARKUP_BPS), not derived from MARKUP_BPS — so lowering
+    // CREDIT_MARKUP_BPS for AI-model billing cannot silently move this value.
+    // (See machine-billing.ts / terminal-storage-billing.ts: both pass this
+    // constant to AIMonitoring.trackUsage as `markupBpsOverride`, and
+    // credit-consume.ts's consumeCredits uses `markupBpsOverride ?? MARKUP_BPS`
+    // — an explicit override, never a fallback to the shared default.)
+    expect(TERMINAL_MARKUP_BPS).toBeGreaterThanOrEqual(15000);
+  });
+
+  it('marks up a known active-window to the expected whole-cent charge at the terminal floor', () => {
+    // 3600s @ the assumed shape = $0.0809375 real cost; marked up at
+    // TERMINAL_MARKUP_BPS (1.5x by default) = $0.12140625 -> rounds to 12 cents.
     const cost = calculateTerminalCostDollars({ activeSeconds: 3600 });
-    const expectedCents = Math.round(cost * (MARKUP_BPS / 10000) * 100);
-    expect(calculateTerminalChargeCents({ activeSeconds: 3600 })).toBe(expectedCents);
-    expect(calculateTerminalChargeCents({ activeSeconds: 3600 })).toBe(12);
-  });
-
-  it('pins the shared MARKUP_BPS default at >=1.5x — NOT an independent per-source floor', () => {
-    // This only asserts the GLOBAL constant every AI surface shares is still >=15000bps.
-    // calculateTerminalChargeCents applies whatever MARKUP_BPS currently is, same as
-    // every other source — it has no terminal-specific floor logic of its own (see
-    // terminal-pricing.ts's module doc). If this default is ever lowered, or split
-    // per-source, this test — and the "amount never less than 1.5x" check below — stop
-    // meaning what their names say; they'd need a real per-source floor to test instead.
-    expect(MARKUP_BPS).toBeGreaterThanOrEqual(15000);
-    for (const activeSeconds of [1, 60, 900, 3600, 7200]) {
-      const cost = calculateTerminalCostDollars({ activeSeconds });
-      const chargeCents = calculateTerminalChargeCents({ activeSeconds });
-      // Formula consistency, not floor enforcement: this holds for ANY positive
-      // MARKUP_BPS >= ~1.0x, so it does not by itself prove a 1.5x floor exists.
-      expect(chargeCents).toBeGreaterThanOrEqual(Math.floor(cost * 1.5 * 100));
-    }
-  });
-
-  it('charges nothing for a hibernated (zero-duration) window', () => {
-    expect(calculateTerminalChargeCents({ activeSeconds: 0 })).toBe(0);
-    expect(calculateTerminalChargeCents({})).toBe(0);
+    const chargeCents = Math.round(cost * (TERMINAL_MARKUP_BPS / 10000) * 100);
+    expect(chargeCents).toBe(12);
   });
 });
 

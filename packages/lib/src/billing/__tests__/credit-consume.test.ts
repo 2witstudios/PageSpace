@@ -216,6 +216,25 @@ describe('consumeCredits', () => {
     expect(claimValues).toMatchObject({ entryType: 'usage', chargeMillicents: 495, amountCents: 0 });
   });
 
+  it('honors markupBpsOverride instead of the global MARKUP_BPS when a caller supplies one', async () => {
+    // Proves the terminal-floor override actually changes what gets charged — a caller
+    // (machine-billing.ts) that passes markupBpsOverride is NOT at the mercy of whatever
+    // MARKUP_BPS happens to default to. $1.00 at 20000bps (2x) -> 200 cents = 200000 millicents,
+    // not the 150000 millicents a MARKUP_BPS-only (1.5x) call would produce.
+    let claimValues: Record<string, unknown> | undefined;
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockImplementation((v: Record<string, unknown>) => {
+        claimValues = v;
+        return { onConflictDoNothing: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'led_override' }]) }) };
+      }),
+    });
+    mockDb.transaction.mockResolvedValue(undefined);
+
+    await consumeCredits({ aiUsageLogId: 'aul_override', userId: 'u1', costDollars: 1, markupBpsOverride: 20000 });
+
+    expect(claimValues).toMatchObject({ chargeMillicents: 200000, markupBps: 20000 });
+  });
+
   it('leaves the ledger row pending (never marks applied) when no balance row exists yet', async () => {
     // Existing users have no credit_balances row until the gate lazy-inits one.
     // Marking the ledger 'applied' without a balance to decrement would silently

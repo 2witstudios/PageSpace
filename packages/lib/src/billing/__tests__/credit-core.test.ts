@@ -598,6 +598,7 @@ describe('computeBackfillActions', () => {
     const actions = computeBackfillActions(
       [{ id: 'led_1' }, { id: 'led_2' }],
       [{ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5 }],
+      { terminal: 15000 },
     );
     expect(actions).toEqual([
       { kind: 'retry_pending', ledgerId: 'led_1' },
@@ -607,7 +608,56 @@ describe('computeBackfillActions', () => {
   });
 
   it('returns no actions when nothing is unsettled', () => {
-    expect(computeBackfillActions([], [])).toEqual([]);
+    expect(computeBackfillActions([], [], { terminal: 15000 })).toEqual([]);
+  });
+
+  it("recovers a source:'terminal' orphan with the injected terminal markup, not the shared default", () => {
+    // Proves the fix for the crash-recovery gap: a terminal usage row that reached
+    // aiUsageLogs but crashed before consumeCredits ever claimed a ledger row has no
+    // stored markup to read back — this sweep must reconstruct it from `source`
+    // rather than silently falling back to the general AI markup.
+    const actions = computeBackfillActions(
+      [],
+      [{ aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal' }],
+      { terminal: 20000 }, // a distinct value from the general markup, so passthrough is provable
+    );
+    expect(actions).toEqual([
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000 },
+    ]);
+  });
+
+  it('generalizes to a second per-source floor without touching the function — only the lookup grows', () => {
+    // Proves the altitude fix: adding a new per-source floor is a one-line addition
+    // to the map at the call site, not a code change to computeBackfillActions.
+    const actions = computeBackfillActions(
+      [],
+      [
+        { aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal' },
+        { aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, source: 'voice' },
+      ],
+      { terminal: 20000, voice: 18000 },
+    );
+    expect(actions).toEqual([
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, markupBpsOverride: 18000 },
+    ]);
+  });
+
+  it('does NOT apply the terminal markup override to a non-terminal (or missing) source', () => {
+    const actions = computeBackfillActions(
+      [],
+      [
+        { aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5, source: 'chat' },
+        { aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5 },
+      ],
+      { terminal: 20000 },
+    );
+    expect(actions).toEqual([
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5 },
+    ]);
+    expect(actions[0]).not.toHaveProperty('markupBpsOverride');
+    expect(actions[1]).not.toHaveProperty('markupBpsOverride');
   });
 });
 

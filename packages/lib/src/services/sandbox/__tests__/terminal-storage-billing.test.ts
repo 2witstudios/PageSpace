@@ -16,6 +16,7 @@ vi.mock('../../../monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage
 
 import { defaultReconcileTerminalStorageDeps } from '../terminal-storage-billing';
 import { SANDBOX_RESOURCE_CAPS } from '../execution-policy';
+import { TERMINAL_MARKUP_BPS } from '../../../billing/credit-pricing';
 
 beforeEach(() => {
   mockDb.select.mockReset();
@@ -69,6 +70,20 @@ describe('defaultReconcileTerminalStorageDeps.chargeStorage', () => {
     });
     expect(call.holdId).toBeUndefined();
     expect(call.metadata).toMatchObject({ type: 'terminal_storage', pageId: 'page-1', gbMonths: 2.5 });
+  });
+
+  it("passes TERMINAL_MARKUP_BPS as markupBpsOverride so storage floors at terminal's own rate, not the shared AI MARKUP_BPS", async () => {
+    mockTrackUsage.mockResolvedValue(undefined);
+
+    await defaultReconcileTerminalStorageDeps.chargeStorage({
+      payerId: 'owner-1',
+      pageId: 'page-1',
+      costDollars: 0.05,
+      gbMonths: 2.5,
+    });
+
+    const call = mockTrackUsage.mock.calls[0][0];
+    expect(call.markupBpsOverride).toBe(TERMINAL_MARKUP_BPS);
   });
 
   it('forwards pageId as a TOP-LEVEL field (not just inside metadata), so usage-breakdown can attribute the charge to the right machine', async () => {
