@@ -1,15 +1,17 @@
 # @pagespace/sdk
 
-The one true typed client for PageSpace. SDK resource methods, `pagespace` CLI verbs, and the
-`pagespace mcp` adapter all derive from a single **operation registry** (`{ name, method, path,
-inputSchema, outputSchema }`), so tool drift across surfaces is structurally impossible.
+The typed TypeScript/JavaScript client for the [PageSpace](https://pagespace.ai) API — drives,
+pages, tasks, roles, search, calendar, AI agents, and more, with full type inference on every
+call.
 
-The core is **pure**: request-building and response-parsing are side-effect-free functions;
-`fetch`, the clock, and randomness are constructor-injected at the edges, never reached for
-directly, so unit tests never touch the network.
+Three guarantees the design enforces, not just promises:
 
-**Zero trust end-to-end**: every server response is zod-validated against its output schema, and
-no code path in this package may ever log token material.
+- **One source of truth.** SDK methods, `pagespace` CLI verbs, and `pagespace mcp` tools are all
+  generated from a single operation registry, so the three surfaces can't drift apart.
+- **Validated I/O.** Inputs are checked before a request is built; every server response is
+  zod-validated against its output schema before you see it.
+- **No secret leaks.** No code path in this package logs or embeds token material — not in
+  errors, not in output.
 
 ## Install
 
@@ -32,22 +34,21 @@ const drives = await client.drives.list({});
 console.log(drives.map((d) => d.name));
 ```
 
-Get a token by minting one in **Settings > MCP** in the app. An `mcp_` token works for every
-namespace except `client.tokens`, which requires an `oauth_` access token — see
-[the `tokens` namespace](#the-tokens-namespace-needs-an-oauth-credential). (The
-[`pagespace` CLI](../cli/README.md)'s own `pagespace keys create` stores its credential locally
-under a named profile instead of printing one, so it isn't a source for a `StaticTokenProvider`
-string on another machine.)
+Get an `mcp_` token from **Settings → MCP** in the app, or from the CLI:
+`pagespace keys create --drive <id> --role member --show-token` (prints the token once). An
+`mcp_` token works for every namespace except `client.tokens` — see
+[the `tokens` namespace](#the-tokens-namespace-needs-an-oauth-credential).
 
 ## Auth providers
 
-`PageSpaceClient` takes any `AuthProvider` (`{ getAccessToken(): Promise<string>; invalidate(): void }`):
+`PageSpaceClient` takes any `AuthProvider` (`{ getAccessToken(): Promise<string>; invalidate(): void }`).
+Two ship with the SDK:
 
 - **`StaticTokenProvider(token: string)`** — wraps a fixed credential (an `mcp_*` token or
   `PAGESPACE_TOKEN`). Never refreshes. When the server rejects it, the in-flight call fails
   closed instead of retrying the same rejected token — but the rejection is one-shot, not
-  sticky: the next call presents the same token to the server again, so a transient 401
-  doesn't permanently brick a long-lived client.
+  sticky: the next call presents the same token again, so a transient 401 doesn't permanently
+  brick a long-lived client.
 
   ```ts
   import { StaticTokenProvider } from '@pagespace/sdk';
@@ -69,34 +70,10 @@ string on another machine.)
   });
   ```
 
-## The operation registry
-
-Every domain method comes from the same registry entry shape (`defineOperation`), so the SDK
-method, the CLI verb, and the `pagespace mcp` tool for a given operation always agree on inputs
-and outputs:
-
-```ts
-import { defineOperation } from '@pagespace/sdk';
-import { z } from 'zod';
-
-const getWidget = defineOperation({
-  name: 'widgets.get',
-  method: 'GET',
-  path: '/api/widgets/:widgetId',
-  inputSchema: z.object({ widgetId: z.string() }),
-  outputSchema: z.object({ id: z.string(), label: z.string() }),
-  description: 'Get a widget.',
-});
-```
-
-Every registered operation is also reachable through the fully-typed escape hatch
-`client.invoke(op, input)`, which preserves that operation's own input/output types regardless of
-whether it has a generated namespace method.
-
 ## Resource namespaces
 
-`PageSpaceClient` exposes one generated method per registered operation, grouped by domain
-namespace. One example per namespace:
+Every registered operation is a generated, fully-typed method under a domain namespace — no
+hand-written wrappers, no second-class tier. One example per namespace:
 
 | Namespace | Example call |
 |---|---|
@@ -117,10 +94,6 @@ namespace. One example per namespace:
 | `client.members` | `client.members.list({ driveId })` |
 | `client.workflows` | `client.workflows.list({ driveId })` |
 
-Every namespace above is a generated, fully-typed facade method — there is no second-class
-tier of operations. `client.invoke(op, input)` remains available for operations you define
-yourself with `defineOperation`.
-
 ### The `tokens` namespace needs an OAuth credential
 
 `client.tokens.list` / `client.tokens.revoke` manage `mcp_` API keys, but the server only
@@ -129,6 +102,28 @@ issues) — or a web session — on those routes. An `mcp_` token in a `StaticTo
 for every other namespace yet gets a 401 here. There is deliberately no `client.tokens.create`:
 key **minting** is session-only server-side, so new keys come only from the OAuth
 authorize/consent flow (`pagespace keys create`) or the web UI — never from the SDK.
+
+## Custom operations
+
+Operations are plain data (`defineOperation`), and `client.invoke(op, input)` runs any of them —
+including ones you define yourself — through the same validated pipeline, preserving the
+operation's own input/output types:
+
+```ts
+import { defineOperation } from '@pagespace/sdk';
+import { z } from 'zod'; // zod v4 — schemas from zod v3 are not assignable
+
+const getWidget = defineOperation({
+  name: 'widgets.get',
+  method: 'GET',
+  path: '/api/widgets/:widgetId',
+  inputSchema: z.object({ widgetId: z.string() }),
+  outputSchema: z.object({ id: z.string(), label: z.string() }),
+  description: 'Get a widget.',
+});
+
+const widget = await client.invoke(getWidget, { widgetId: 'w1' });
+```
 
 ## Errors
 
@@ -142,7 +137,7 @@ each with a matching `is*Error()` type guard:
 import { isRateLimitError } from '@pagespace/sdk';
 
 try {
-  await client.pages.create({ driveId, title: 'Notes' });
+  await client.pages.create({ driveId, title: 'Notes', type: 'DOCUMENT' });
 } catch (error) {
   if (isRateLimitError(error)) {
     // error.retryAfterMs is set when the server sent one
@@ -151,17 +146,22 @@ try {
 }
 ```
 
+Failed GETs are retried automatically (network errors, timeouts, 429s, 5xx) with jittered
+exponential backoff; mutating methods are never replayed. Tune via
+`PageSpaceClientOptions.retryPolicy`.
+
 ## Server version compatibility
 
-`PageSpaceClient` enforces the [ADR 0001](../../docs/adr/0001-sdk-api-versioning.md) handshake:
-every 2xx response is checked, lazily and once per client instance, against the SDK's compiled-in
-`MIN_SERVER_API_VERSION`, and an incompatible server fails closed with `IncompatibleServerError`
-(opt out only via the explicit `skipVersionCheck: true`).
+`PageSpaceClient` enforces the
+[ADR 0001](https://github.com/2witstudios/PageSpace/blob/master/docs/adr/0001-sdk-api-versioning.md)
+handshake: every 2xx response is checked, lazily and once per client instance, against the SDK's
+compiled-in `MIN_SERVER_API_VERSION`, and an incompatible server fails closed with
+`IncompatibleServerError` (opt out only via the explicit `skipVersionCheck: true`).
 
 ## See also
 
-- [`@pagespace/cli`](../cli/README.md) — `pagespace login`, verbs over this SDK, and `pagespace mcp`.
-- [Migrating from `pagespace-mcp`](../cli/docs/migrating-from-pagespace-mcp.md) — if you're moving
-  off the standalone MCP server.
-- PageSpace page `ea07mt5jvw0flihsbjce1iv9` (epic architecture + non-negotiables) and `docs/adr/`
-  for the binding decisions this package follows.
+- [`@pagespace/cli`](https://github.com/2witstudios/PageSpace/tree/master/packages/cli) —
+  `pagespace login`, CLI verbs over this SDK, and the `pagespace mcp` server.
+- [PageSpace MCP integration docs](https://pagespace.ai/docs/integrations/mcp)
+- [Migrating from `pagespace-mcp`](https://github.com/2witstudios/PageSpace/blob/master/packages/cli/docs/migrating-from-pagespace-mcp.md)
+- [CHANGELOG](https://github.com/2witstudios/PageSpace/blob/master/packages/sdk/CHANGELOG.md)

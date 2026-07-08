@@ -52,7 +52,7 @@ more. That combination — not the scope of the token alone — is the actual is
 | --- | --- | --- |
 | `pagespace login` | You, personally, at an interactive prompt. | A `manage_keys`-scoped credential, for as long as it lives — lets you create/list/edit/revoke your own keys (including via `pagespace keys`), but zero content access on its own. |
 | `pagespace keys` (guided wizard) or `pagespace keys create --drive <id> --role ... --save-as-profile agent` (flag-driven) | An agent or automated process on this machine. | Only the drive(s)/role(s) named, stored under a profile separate from your personal login. |
-| A token minted from **Settings → MCP** in the app | An agent, CI job, or service account on a *different* machine (there's no way to copy a `pagespace keys create` credential off the machine it was minted on). | Whatever scope you pick when minting it. |
+| A raw `mcp_` token, from `pagespace keys create … --show-token` (printed exactly once, at mint time) or from **Settings → MCP** in the app | An agent, CI job, or service account on a *different* machine. | Whatever scope you pick when minting it. |
 
 Every non-exempt command never falls back to your personal login — it requires one of `--token`,
 `PAGESPACE_TOKEN`, `--profile`, or `PAGESPACE_PROFILE` to be given explicitly. `login`, `logout`,

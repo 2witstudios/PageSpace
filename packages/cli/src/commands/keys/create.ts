@@ -5,7 +5,7 @@
  * one: opens a browser to the
  * OAuth authorize/consent screen and runs the loopback+PKCE state machine
  * (`runLoopbackLogin`) with a `drive:<id>:<role> offline_access` scope
- * instead of `login`'s `account offline_access`. There is no other minting
+ * instead of `login`'s `manage_keys offline_access`. There is no other minting
  * path in this CLI — the previous direct `POST /api/auth/mcp-tokens` call
  * (authenticated by whatever ambient credential `resolveAuth` happened to
  * find, with no human-visible step) is gone. That REST endpoint still backs
