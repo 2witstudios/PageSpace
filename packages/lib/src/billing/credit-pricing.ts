@@ -141,6 +141,18 @@ export const TERMINAL_HOLD_ESTIMATE_CENTS = envInt('TERMINAL_HOLD_ESTIMATE_CENTS
 export const TERMINAL_MAX_INFLIGHT = envInt('TERMINAL_MAX_INFLIGHT', 4);
 
 /**
+ * Markup applied to terminal/Machine substrate cost, in basis points — the
+ * founder-set floor of 1.5× real substrate cost. Deliberately a SEPARATE env
+ * var and constant from {@link MARKUP_BPS} (not derived from it): AI-model
+ * pricing and substrate-runtime pricing are different economics that may
+ * diverge, so lowering `CREDIT_MARKUP_BPS` for AI billing must never silently
+ * lower what terminal is charged. Threaded into `consumeCredits` via
+ * `markupBpsOverride` (see machine-billing.ts's `trackUsage`) so the real
+ * settle path enforces this floor independent of the shared default.
+ */
+export const TERMINAL_MARKUP_BPS = envInt('TERMINAL_MARKUP_BPS', 15000);
+
+/**
  * Published Sprites rates, in USD per resource-hour (tasks/terminal.md: active
  * CPU-hour $0.07 + mem GB-hour $0.04375). Lives here (not terminal-pricing.ts) so
  * every terminal-billing constant is env-overridable from one place, matching

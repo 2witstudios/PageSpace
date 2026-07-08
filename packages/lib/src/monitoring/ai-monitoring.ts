@@ -809,6 +809,12 @@ export interface AIUsageData {
   // provider-name heuristic.
   costSource?: 'openrouter' | 'estimate' | 'list_price';
 
+  // Per-call override for the markup applied at settle (basis points), threaded
+  // verbatim to consumeCredits. Absent for ordinary AI-model calls (they get the
+  // shared global MARKUP_BPS); terminal/Machine billing passes TERMINAL_MARKUP_BPS
+  // so its 1.5× substrate floor holds independent of AI markup changes.
+  markupBpsOverride?: number;
+
   // Context tracking - track actual conversation context vs billing tokens
   contextMessages?: string[]; // Array of message IDs included in this call's context
   contextSize?: number; // Actual tokens in context (input + system prompt + tools)
@@ -963,6 +969,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
           // refreshes the right view; the navbar widget updates regardless.
           conversationId: data.conversationId,
           pageId: data.pageId,
+          markupBpsOverride: data.markupBpsOverride,
         })
           .catch((error) => {
             loggers.ai.debug('credit consume failed', { error: (error as Error).message });

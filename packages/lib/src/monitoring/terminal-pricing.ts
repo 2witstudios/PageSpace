@@ -16,28 +16,17 @@
  * shape is confirmed.
  *
  * `calculateTerminalCostDollars` returns the PRE-markup real cost, like
- * voice-pricing.ts: callers hand it to `AIMonitoring.trackUsage` as
- * `providerCostDollars`, and the shared credit pipeline (`consumeCredits`)
- * applies the same `MARKUP_BPS` markup as every other AI call — that markup
- * defaults to 15000 bps (1.5x), which is the floor the founder has set for
- * substrate runtime: the charge must never fall below 1.5x actual substrate
- * cost, regardless of which substrate (Sprites today, Modal/GPU later) produced
- * that cost.
- *
- * `calculateTerminalChargeCents` mirrors that same formula for pure unit-test
- * coverage of the arithmetic, but it is NOT itself in the real settle path —
- * `machine-billing.ts` hands `calculateTerminalCostDollars` (pre-markup) to
- * `AIMonitoring.trackUsage`, which applies `MARKUP_BPS` generically for every
- * source, terminal included. The "1.5x floor" holds today only because
- * `MARKUP_BPS` itself defaults to 15000 bps for every surface — there is no
- * terminal-specific enforcement independent of that shared, global constant.
- * If `MARKUP_BPS` is ever split per-source, this function's result would
- * silently stop matching what terminal is actually billed at.
+ * voice-pricing.ts: callers (machine-billing.ts, terminal-storage-billing.ts)
+ * hand it to `AIMonitoring.trackUsage` as `providerCostDollars` ALONGSIDE
+ * `markupBpsOverride: TERMINAL_MARKUP_BPS` (credit-pricing.ts), so the shared
+ * credit pipeline (`consumeCredits`) marks it up at terminal's own 1.5x
+ * substrate floor rather than the general-purpose `MARKUP_BPS` every other AI
+ * call gets. The two constants happen to share the same default (15000 bps)
+ * today but are independent env vars — lowering `CREDIT_MARKUP_BPS` for
+ * AI-model billing cannot silently lower what terminal is charged.
  */
 
-import { markupCents } from '../billing/credit-core';
 import {
-  MARKUP_BPS,
   TERMINAL_RATES,
   TERMINAL_ASSUMED_CPUS,
   TERMINAL_ASSUMED_MEMORY_GB,
@@ -62,18 +51,6 @@ export function calculateTerminalCostDollars(quantity: TerminalUsageQuantity): n
       TERMINAL_ASSUMED_MEMORY_GB * TERMINAL_RATES.usdPerMemGbHour) /
     3600;
   return Number((seconds * perSecondRate).toFixed(6));
-}
-
-/**
- * Reference calculation (whole cents) of what a machine run's real substrate
- * cost marked up by `MARKUP_BPS` comes to — the same formula `consumeCredits`
- * applies at settle, reused here for arithmetic unit-test coverage. NOT called
- * by the real settle path (see module doc): the actual charge is computed by
- * `consumeCredits` from `calculateTerminalCostDollars`'s pre-markup output, not
- * by this function. Returns 0 for a missing/invalid/zero-duration window.
- */
-export function calculateTerminalChargeCents(quantity: TerminalUsageQuantity): number {
-  return markupCents(calculateTerminalCostDollars(quantity), MARKUP_BPS);
 }
 
 /**
