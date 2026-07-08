@@ -35,7 +35,8 @@ import { LocationContext } from '@/lib/ai/shared';
 import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
 import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
-import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -251,6 +252,7 @@ const SidebarChatTab: React.FC = () => {
     stop,
     isStreaming,
     setGlobalMessages,
+    addToolResult,
   } = usePageAgentSidebarChat({
     selectedAgent,
     globalChatConfig,
@@ -848,6 +850,49 @@ const SidebarChatTab: React.FC = () => {
     wrapSend,
   ]);
 
+  const buildAskUserAnswerBody = useCallback(() => {
+    const isReadOnly = !writeMode;
+    return selectedAgent
+      ? {
+          chatId: selectedAgent.id,
+          conversationId: agentConversationId,
+          isReadOnly,
+          webSearchEnabled,
+          provider: selectedAgent.aiProvider,
+          model: selectedAgent.aiModel,
+          systemPrompt: selectedAgent.systemPrompt,
+          locationContext: locationContext || undefined,
+          enabledTools: selectedAgent.enabledTools,
+        }
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
+          isReadOnly,
+          webSearchEnabled,
+          showPageTree,
+          locationContext,
+          selectedProvider: currentProvider,
+          selectedModel: currentModel,
+        });
+  }, [
+    selectedAgent,
+    agentConversationId,
+    writeMode,
+    webSearchEnabled,
+    showPageTree,
+    locationContext,
+    currentProvider,
+    currentModel,
+    currentConversationId,
+  ]);
+
+  const askUserAnswering = useAskUserAnswering({
+    messages,
+    status,
+    addToolResult,
+    wrapSend,
+    buildBody: buildAskUserAnswerBody,
+  });
+
   // Voice mode toggle handler
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
@@ -1048,6 +1093,7 @@ const SidebarChatTab: React.FC = () => {
   }
 
   return (
+    <AskUserAnswerProvider value={askUserAnswering}>
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex flex-col border-b border-gray-200 dark:border-[var(--separator)] bg-card">
@@ -1189,6 +1235,7 @@ const SidebarChatTab: React.FC = () => {
         onSuccess={handleUndoSuccess}
       />
     </div>
+    </AskUserAnswerProvider>
   );
 };
 

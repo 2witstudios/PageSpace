@@ -25,6 +25,7 @@ import { type TreeItem } from './PageTreeRenderer';
 import { TaskRenderer } from './TaskRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
+import { AskUserQuestionCard } from '../ask-user/AskUserQuestionCard';
 import { renderToolContent } from './registry';
 import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
 
@@ -87,6 +88,7 @@ const getSendChannelMessagePreview = (
 // Tool name mapping (moved outside component to avoid recreation)
 export const TOOL_NAME_MAP: Record<string, string> = {
   'ask_agent': 'Ask Agent',
+  'ask_user': 'Question',
   'list_drives': 'List Drives',
   'list_pages': 'List Pages',
   'read_page': 'Read',
@@ -377,6 +379,8 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
       return <TaskRenderer part={dispatch.part} />;
     case 'agent':
       return <PageAgentConversationRenderer part={dispatch.part} />;
+    case 'question':
+      return <AskUserQuestionCard part={dispatch.part} />;
     case 'generic':
       return (
         <CompactToolCallRendererInternal

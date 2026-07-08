@@ -190,4 +190,57 @@ describe('classifyAttempt', () => {
       expected: { kind: 'terminal', reason: 'ambiguous' },
     });
   });
+
+  it('tool-calls ending with a pause tool (ask_user) is terminal:awaiting-user-input', () => {
+    assert({
+      given: 'a tool-calls finish where an execute-less pause tool was called, no finish tool',
+      should: 'be terminal:awaiting-user-input (a deliberate pause, never retried)',
+      actual: classifyAttempt(
+        base({
+          finishReason: 'tool-calls',
+          responseMessages: [assistantToolCall('ask_user')],
+          pauseToolNames: ['ask_user'],
+        }),
+      ),
+      expected: { kind: 'terminal', reason: 'awaiting-user-input' },
+    });
+  });
+
+  it('finish tool wins over a pause tool called in the same turn', () => {
+    assert({
+      given: 'a tool-calls finish where both the finish tool and a pause tool were called',
+      should: 'be clean (finish is checked first)',
+      actual: classifyAttempt(
+        base({
+          finishReason: 'tool-calls',
+          responseMessages: [
+            {
+              role: 'assistant',
+              content: [
+                { type: 'tool-call', toolCallId: 'a', toolName: 'ask_user', input: {} },
+                { type: 'tool-call', toolCallId: 'b', toolName: FINISH, input: {} },
+              ],
+            },
+          ],
+          pauseToolNames: ['ask_user'],
+        }),
+      ),
+      expected: { kind: 'clean' },
+    });
+  });
+
+  it('a pause tool call is only recognized when its name is in pauseToolNames', () => {
+    assert({
+      given: 'a tool-calls finish calling ask_user, but pauseToolNames not configured',
+      should: 'fall through to terminal:tool-calls-no-finish',
+      actual: classifyAttempt(
+        base({
+          finishReason: 'tool-calls',
+          responseMessages: [assistantToolCall('ask_user')],
+          stepCount: 5,
+        }),
+      ),
+      expected: { kind: 'terminal', reason: 'tool-calls-no-finish' },
+    });
+  });
 });

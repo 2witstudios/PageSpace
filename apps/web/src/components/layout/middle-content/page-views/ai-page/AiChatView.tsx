@@ -60,12 +60,14 @@ import {
   useChatTransport,
   useStreamingRegistration,
   useSendHandoff,
+  useAskUserAnswering,
   buildChatConfig,
   AgentConfig,
 } from '@/lib/ai/shared';
 import {
   ProviderSetupCard,
 } from '@/components/ai/shared/chat';
+import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { AiUsageMonitor, TasksDropdown } from '@/components/ai/shared';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import {
@@ -175,7 +177,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     [page.id, transport, handleChatError]
   );
 
-  const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop } =
+  const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop, addToolResult } =
     useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -765,6 +767,37 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     });
   }, [cache, drives, driveId, page.id, page.title, page.type]);
 
+  const buildAskUserAnswerBody = useCallback(async () => {
+    const pageContext = await buildFreshPageContext();
+    return {
+      chatId: page.id,
+      conversationId: currentConversationId,
+      selectedProvider,
+      selectedModel,
+      isReadOnly,
+      webSearchEnabled,
+      mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+      pageContext,
+    };
+  }, [
+    buildFreshPageContext,
+    page.id,
+    currentConversationId,
+    selectedProvider,
+    selectedModel,
+    isReadOnly,
+    webSearchEnabled,
+    mcpToolSchemas,
+  ]);
+
+  const askUserAnswering = useAskUserAnswering({
+    messages,
+    status,
+    addToolResult,
+    wrapSend,
+    buildBody: buildAskUserAnswerBody,
+  });
+
   const handleSendMessage = useCallback(() => {
     if (isReadOnly) {
       toast.error('You do not have permission to send messages in this AI chat');
@@ -947,6 +980,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }
 
   return (
+    <AskUserAnswerProvider value={askUserAnswering}>
     <div className="flex flex-col h-full">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
         <div className="p-4 border-b border-[var(--separator)] space-y-3">
@@ -1183,6 +1217,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       </Tabs>
 
     </div>
+    </AskUserAnswerProvider>
   );
 };
 

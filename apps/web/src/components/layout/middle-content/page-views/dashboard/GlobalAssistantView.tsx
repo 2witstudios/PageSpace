@@ -65,11 +65,13 @@ import {
   useChatStop,
   useSendHandoff,
   useStreamRecovery,
+  useAskUserAnswering,
   buildChatConfig,
   AGENT_CHAT_ID,
   LocationContext,
   buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
+import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -308,6 +310,7 @@ const GlobalAssistantView: React.FC = () => {
     regenerate: globalRegenerate,
     setMessages: setGlobalLocalMessages,
     stop: globalStop,
+    addToolResult: globalAddToolResult,
   } = useChat(globalChatConfig || {});
 
   // Agent mode chat
@@ -320,6 +323,7 @@ const GlobalAssistantView: React.FC = () => {
     regenerate: agentRegenerate,
     setMessages: setAgentMessages,
     stop: agentStop,
+    addToolResult: agentAddToolResult,
   } = useChat(agentChatConfig || {});
 
   // ============================================
@@ -332,6 +336,7 @@ const GlobalAssistantView: React.FC = () => {
   const clearError = selectedAgent ? agentClearError : globalClearError;
   const regenerate = selectedAgent ? agentRegenerate : globalRegenerate;
   const rawStop = selectedAgent ? agentStop : globalStop;
+  const addToolResult = selectedAgent ? agentAddToolResult : globalAddToolResult;
   const isStreaming = status === 'submitted' || status === 'streaming';
   const { wrapSend } = useSendHandoff(currentConversationId, status);
 
@@ -872,6 +877,49 @@ const GlobalAssistantView: React.FC = () => {
     wrapSend,
   ]);
 
+  const buildAskUserAnswerBody = useCallback(() => {
+    return selectedAgent
+      ? {
+          chatId: selectedAgent.id,
+          conversationId: currentConversationId,
+          selectedProvider: agentSelectedProvider,
+          selectedModel: agentSelectedModel,
+          isReadOnly,
+          webSearchEnabled,
+          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+        }
+      : buildGlobalChatRequestBody({
+          conversationId: currentConversationId,
+          isReadOnly,
+          webSearchEnabled,
+          showPageTree,
+          locationContext,
+          selectedProvider: currentProvider,
+          selectedModel: currentModel,
+          mcpTools: mcpToolSchemas,
+        });
+  }, [
+    currentConversationId,
+    selectedAgent,
+    agentSelectedProvider,
+    agentSelectedModel,
+    isReadOnly,
+    webSearchEnabled,
+    showPageTree,
+    locationContext,
+    currentProvider,
+    currentModel,
+    mcpToolSchemas,
+  ]);
+
+  const askUserAnswering = useAskUserAnswering({
+    messages,
+    status,
+    addToolResult,
+    wrapSend,
+    buildBody: buildAskUserAnswerBody,
+  });
+
   // Track last AI response for voice mode TTS.
   // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
   // messages are never spoken — only genuinely new responses trigger TTS.
@@ -951,6 +999,7 @@ const GlobalAssistantView: React.FC = () => {
   }
 
   return (
+    <AskUserAnswerProvider value={askUserAnswering}>
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-[var(--separator)]">
@@ -1101,6 +1150,7 @@ const GlobalAssistantView: React.FC = () => {
       />
 
     </div>
+    </AskUserAnswerProvider>
   );
 };
 

@@ -6,6 +6,7 @@ import {
   ToolHeader,
 } from '@/components/ai/ui/tool';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
+import { AskUserQuestionCard } from '../ask-user/AskUserQuestionCard';
 import { TaskRenderer } from './TaskRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { renderToolContent } from './registry';
@@ -97,6 +98,7 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   'list_agents': 'Agents',
   'multi_drive_list_agents': 'All Agents',
   'ask_agent': 'Ask Agent',
+  'ask_user': 'Question',
   // Web
   'web_search': 'Web Search',
   'web_fetch': 'Fetch Page',
@@ -264,6 +266,8 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
       return <TaskRenderer part={dispatch.part} />;
     case 'agent':
       return <PageAgentConversationRenderer part={dispatch.part} />;
+    case 'question':
+      return <AskUserQuestionCard part={dispatch.part} />;
     case 'generic':
       return <ToolCallRendererInternal part={dispatch.part} toolName={dispatch.toolName} open={open} onOpenChange={onOpenChange} />;
   }

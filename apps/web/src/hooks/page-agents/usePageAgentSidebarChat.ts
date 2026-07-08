@@ -33,6 +33,13 @@ export interface UseSidebarChatReturn {
   globalMessages: UIMessage[];
   /** Set global messages */
   setGlobalMessages: (messages: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void;
+  /** Add a client-side tool result (mode-selected) — used by ask_user answers */
+  addToolResult: (args: {
+    tool: string;
+    toolCallId: string;
+    output: unknown;
+    options?: { body?: object };
+  }) => void | PromiseLike<void>;
 }
 
 interface UseSidebarChatOptions {
@@ -72,6 +79,7 @@ export function usePageAgentSidebarChat({
     regenerate: globalRegenerate,
     setMessages: setGlobalMessages,
     stop: globalStop,
+    addToolResult: globalAddToolResult,
   } = useChat(globalChatConfig || {});
 
   // ============================================
@@ -86,6 +94,7 @@ export function usePageAgentSidebarChat({
     regenerate: agentRegenerate,
     setMessages: setAgentMessages,
     stop: agentStop,
+    addToolResult: agentAddToolResult,
   } = useChat(agentChatConfig || {});
 
   // ============================================
@@ -133,6 +142,7 @@ export function usePageAgentSidebarChat({
   const clearError = selectedAgent ? agentClearError : globalClearError;
   const setMessages = selectedAgent ? setAgentMessages : setGlobalMessages;
   const stop = selectedAgent ? agentStop : globalStop;
+  const addToolResult = selectedAgent ? agentAddToolResult : globalAddToolResult;
   const isStreaming = status === 'submitted' || status === 'streaming';
 
   // Wrap sendMessage to use correct function
@@ -170,6 +180,7 @@ export function usePageAgentSidebarChat({
     setMessages,
     stop,
     isStreaming,
+    addToolResult,
     // Expose global mode specifics for syncing to GlobalChatContext
     globalStatus,
     globalStop,
@@ -185,6 +196,7 @@ export function usePageAgentSidebarChat({
     setMessages,
     stop,
     isStreaming,
+    addToolResult,
     globalStatus,
     globalStop,
     globalMessages,

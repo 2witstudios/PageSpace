@@ -2,6 +2,14 @@ import { NextResponse } from 'next/server';
 import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
+import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
+import { ASK_USER_SECTION } from '@/lib/ai/core/inline-instructions';
+import {
+  extractClientAskUserResults,
+  applyAskUserResultsToGlobalMessage,
+  dismissPendingAskUserForGlobalConversation,
+} from '@/lib/ai/core/ask-user-resume';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import { ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
@@ -477,8 +485,28 @@ export async function POST(
           userMessage: userMessage // Preserve user input for retry
         }, { status: 500 });
       }
+
+      // A typed message was sent instead of answering a pending ask_user
+      // question — dismiss it so the model doesn't re-ask.
+      await dismissPendingAskUserForGlobalConversation({ conversationId }).catch((error) => {
+        loggers.api.error('Global Assistant Chat API: Failed to dismiss pending ask_user question', error as Error);
+      });
+    } else if (userMessage?.role === 'assistant') {
+      // Resume request: the client answered a pending ask_user question via
+      // addToolResult (no new user message). Merge the answer into the
+      // persisted assistant row so history load below picks it up.
+      const clientResults = extractClientAskUserResults(userMessage);
+      if (clientResults.length > 0) {
+        await applyAskUserResultsToGlobalMessage({
+          messageId: userMessage.id,
+          conversationId,
+          results: clientResults,
+        }).catch((error) => {
+          loggers.api.error('Global Assistant Chat API: Failed to merge ask_user answer', error as Error);
+        });
+      }
     }
-    
+
     // Create AI provider using factory service
     const providerRequest: ProviderRequest = {
       selectedProvider,
@@ -720,7 +748,9 @@ MENTION PROCESSING:
 • When users @mention documents using @[Label](id:type) format, you MUST read those documents first
 • Use the read_page tool for each mentioned document before providing your main response
 • Let mentioned document content inform and enrich your response
-• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation` + drivePromptSection;
+• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation` +
+      (canUseAskUser({ role: auth.role }) ? `\n\n${ASK_USER_SECTION}` : '') +
+      drivePromptSection;
 
     // Build agent awareness prompt - lists visible AI agents for consultation
     const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId);
@@ -901,6 +931,15 @@ MENTION PROCESSING:
     // Always inject the finish tool so the model can signal task completion
     finalTools = { ...finalTools, ...finishTool } as ToolSet;
 
+    // Interactive ask_user tool (execute-less, pauses the turn for user input).
+    // Injected here like finish — deliberately NOT in filteredAllTools/nonCoreTools,
+    // so it never enters the tool_search catalog or the execute_tool dispatch map
+    // (execute_tool would crash on an execute-less tool, and the catalog is
+    // visible to non-admins).
+    if (canUseAskUser({ role: auth.role })) {
+      finalTools = { ...finalTools, ...askUserTools } as ToolSet;
+    }
+
     // Sanitize, compact, and elide via the unified seam.
     // finalSystemPrompt + finalTools are now known — pass for accurate token budgeting.
     // IIFE keeps the outputs const (each is assigned exactly once).
@@ -1056,6 +1095,7 @@ MENTION PROCESSING:
           abortSignal,
           baseMessages: modelMessages,
           finishToolName: FINISH_TOOL_NAME,
+          pauseToolNames: [ASK_USER_TOOL_NAME],
           maxSteps: AGENT_MAX_STEPS,
           startTimeMs: startTime,
           logger: loggers.api,
@@ -1078,7 +1118,9 @@ MENTION PROCESSING:
             system: finalSystemPrompt,
             messages: cachedMessages,
             tools: finalTools,
-            stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
+            // hasToolCall(ASK_USER_TOOL_NAME) is documentation: ask_user has no
+            // execute, so v6 halts the loop on it anyway (finishReason 'tool-calls').
+            stopWhen: [hasToolCall(FINISH_TOOL_NAME), hasToolCall(ASK_USER_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
             // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
             abortSignal,
             experimental_context: {

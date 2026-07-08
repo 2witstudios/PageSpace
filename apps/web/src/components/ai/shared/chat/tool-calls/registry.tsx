@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
+import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { RichContentRenderer } from './RichContentRenderer';
 import { RichDiffRenderer } from './RichDiffRenderer';
 import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
@@ -214,6 +215,7 @@ const parsePathsToTree = (paths: string[]): TreeItem[] => {
 export const SPECIAL_HANDLED_TOOLS: Set<string> = new Set<string>([
   ...TASK_TOOL_NAMES,
   'ask_agent',
+  ASK_USER_TOOL_NAME,
 ]);
 
 // pi uses lowercase tool names — these must match exactly what the pi coding agent sends.

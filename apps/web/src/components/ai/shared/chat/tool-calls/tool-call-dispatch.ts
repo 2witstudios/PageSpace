@@ -8,6 +8,7 @@
 import { isHiddenTool } from './tool-significance';
 import { isIntegrationTool, parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
 import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 
 export interface DispatchToolPart {
   type: string;
@@ -23,6 +24,7 @@ export type ToolCallDispatchResult<TPart extends DispatchToolPart> =
   | { kind: 'hidden' }
   | { kind: 'task'; part: TPart }
   | { kind: 'agent'; part: TPart }
+  | { kind: 'question'; part: TPart }
   | { kind: 'generic'; part: TPart; toolName: string };
 
 const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
@@ -68,6 +70,7 @@ export function dispatchToolCall<TPart extends DispatchToolPart>(
 
   if (taskToolNames.has(toolName)) return { kind: 'task', part: resolvedPart };
   if (toolName === 'ask_agent') return { kind: 'agent', part: resolvedPart };
+  if (toolName === ASK_USER_TOOL_NAME) return { kind: 'question', part: resolvedPart };
   return { kind: 'generic', part: resolvedPart, toolName };
 }
 

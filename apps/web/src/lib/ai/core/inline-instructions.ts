@@ -67,6 +67,16 @@ const SEARCH = `SEARCH:
 const AFTER_TOOLS = `AFTER TOOLS:
 Provide a brief summary of what was done. Suggest logical next steps when appropriate.`;
 
+/** Guidance for the ask_user tool. Exported so the Global Assistant route (which
+ * builds its own bespoke system prompt rather than calling buildInlineInstructions)
+ * can append the identical wording instead of drifting. */
+export const ASK_USER_SECTION = `ASKING THE USER:
+• Use ask_user only when you are blocked on a decision you cannot resolve yourself — ambiguous requirements, mutually exclusive approaches, or a destructive/irreversible choice
+• Never ask something you could find out by searching or reading first
+• 1-4 questions per call, 2-4 concise options each — the UI adds a free-text "Other" option automatically, don't add your own catch-all
+• After calling ask_user, stop — do not call finish or any other tool in the same turn; it resumes when the user answers
+• The result may be {"dismissed": true} — the user replied in chat instead of picking an option; treat their message as the answer`;
+
 /**
  * MENTIONS section — the @[everyone] bullet is conditional on whether a driveId
  * is available in context. Without one, instructing the model to use "DriveId from
@@ -122,6 +132,7 @@ export function buildInlineInstructions(
   const includeAgents = hasAny(availableTools, ['ask_agent', 'list_agents', 'multi_drive_list_agents', 'update_agent_config', 'list_models']);
   const includeAutomation = hasAny(availableTools, ['set_task_trigger', 'delete_task_trigger', 'set_calendar_trigger', 'delete_calendar_trigger', 'create_workflow', 'list_workflows']);
   const includeSearch = hasAny(availableTools, ['glob_search', 'regex_search', 'multi_drive_search', 'web_search', 'web_fetch']);
+  const includeAskUser = hasAny(availableTools, ['ask_user']);
 
   const sections = [
     WORKSPACE_RULES,
@@ -136,6 +147,7 @@ export function buildInlineInstructions(
     includeAgents ? AGENTS : null,
     includeAutomation ? AUTOMATION : null,
     includeSearch ? SEARCH : null,
+    includeAskUser ? ASK_USER_SECTION : null,
     AFTER_TOOLS,
     buildMentions(true),
   ].filter(Boolean);
