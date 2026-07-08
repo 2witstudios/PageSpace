@@ -159,19 +159,28 @@ export { escapeHtml };
  * to the pipeline overall — SEO/social meta from within it is extracted at a
  * higher level (see `extractAndStripOgMeta` in the publish pipeline) before
  * this function ever runs; this pure renderer only cares about structure.
+ * Any `<style>` blocks in that discarded `<head>` ARE preserved, though —
+ * they're the normal place authors put page CSS, and dropping them would
+ * silently blank out the page's styling. They're prepended to the returned
+ * markup so they flow into `extractAndSanitizeStyles` below exactly like a
+ * body-level `<style>` tag: sanitized and hoisted into the generated `<head>`.
  */
 function unwrapFullDocument(html: string): string {
   if (!/<html(?=[\s/>])/i.test(html)) return html;
 
+  const headMatch = html.match(/<head(?=[\s/>])[^>]*>([\s\S]*?)<\/head(?=[\s/>])[^>]*>/i);
+  const headStyles = headMatch ? (headMatch[1].match(/<style(?=[\s/>])[^>]*>[\s\S]*?<\/style(?=[\s/>])[^>]*>/gi) ?? []).join('\n') : '';
+
   const bodyMatch = html.match(/<body(?=[\s/>])[^>]*>([\s\S]*)<\/body(?=[\s/>])[^>]*>/i);
-  if (bodyMatch) return bodyMatch[1];
+  if (bodyMatch) return headStyles + bodyMatch[1];
 
   // No explicit <body> tag (malformed/partial document) — best-effort: strip
   // the doctype/html/head wrapper and keep whatever's left.
-  return html
+  const stripped = html
     .replace(/<!doctype[^>]*>/gi, '')
     .replace(/<\/?html(?=[\s/>])[^>]*>/gi, '')
     .replace(/<head(?=[\s/>])[^>]*>[\s\S]*?<\/head(?=[\s/>])[^>]*>/gi, '');
+  return headStyles + stripped;
 }
 
 function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): { css: string; body: string } {
