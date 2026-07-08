@@ -141,6 +141,17 @@ export const TERMINAL_HOLD_ESTIMATE_CENTS = envInt('TERMINAL_HOLD_ESTIMATE_CENTS
 export const TERMINAL_MAX_INFLIGHT = envInt('TERMINAL_MAX_INFLIGHT', 4);
 
 /**
+ * Absolute floor for {@link TERMINAL_MARKUP_BPS} — 15000bps (1.5x). The whole
+ * point of that constant is to GUARANTEE terminal billing never falls below
+ * 1.5x real substrate cost, independent of {@link MARKUP_BPS}; an env
+ * misconfiguration (typo, someone mirroring a reduced AI markup) must not be
+ * able to silently violate that guarantee. Only a value BELOW this floor is
+ * clamped up — a deliberately higher markup passes through unclamped, since
+ * there is no stated ceiling.
+ */
+export const TERMINAL_MARKUP_FLOOR_BPS = 15000;
+
+/**
  * Markup applied to terminal/Machine substrate cost, in basis points — the
  * founder-set floor of 1.5× real substrate cost. Deliberately a SEPARATE env
  * var and constant from {@link MARKUP_BPS} (not derived from it): AI-model
@@ -148,9 +159,14 @@ export const TERMINAL_MAX_INFLIGHT = envInt('TERMINAL_MAX_INFLIGHT', 4);
  * diverge, so lowering `CREDIT_MARKUP_BPS` for AI billing must never silently
  * lower what terminal is charged. Threaded into `consumeCredits` via
  * `markupBpsOverride` (see machine-billing.ts's `trackUsage`) so the real
- * settle path enforces this floor independent of the shared default.
+ * settle path enforces this floor independent of the shared default. Clamped
+ * to {@link TERMINAL_MARKUP_FLOOR_BPS} so a misconfigured env var can raise
+ * the markup but never lower it below the documented floor.
  */
-export const TERMINAL_MARKUP_BPS = envInt('TERMINAL_MARKUP_BPS', 15000);
+export const TERMINAL_MARKUP_BPS = Math.max(
+  envInt('TERMINAL_MARKUP_BPS', TERMINAL_MARKUP_FLOOR_BPS),
+  TERMINAL_MARKUP_FLOOR_BPS,
+);
 
 /**
  * Published Sprites rates, in USD per resource-hour (tasks/terminal.md: active
