@@ -2,24 +2,39 @@
  * Client-side PKCE (RFC 7636) math for the OAuth 2.1 authorization-code +
  * PKCE flow (`pagespace login`, `packages/cli/src/auth/loopback-flow.ts`).
  *
- * Pure: no I/O, no clock, no ambient randomness — every decision is a
- * function of its arguments only. Deliberately copied (not imported) from
- * the provider-side implementation (`packages/lib/src/auth/oauth/pkce.ts`,
- * which also verifies challenges server-side and pulls in
- * `packages/lib`'s `secureCompare`): the published SDK must never
- * runtime-import `@pagespace/lib` (see `operations/roles.ts`'s equivalent
- * inlining of `PagePerm`, for the same reason) — the derivation itself is
- * the same SHA256/base64url math regardless of which side of the exchange
- * calls it.
+ * Pure: no clock, no ambient randomness — every decision is a function of
+ * its arguments only. Uses the Web Crypto API (`crypto.subtle`, `btoa`)
+ * rather than `node:crypto`/`Buffer` so this module runs unmodified in a
+ * browser bundle — this file is reachable from the SDK's public entry point,
+ * so a plain browser app implementing its own login flow needs it to work
+ * without Node polyfills. Deliberately copied (not imported) from the
+ * provider-side implementation (`packages/lib/src/auth/oauth/pkce.ts`, which
+ * also verifies challenges server-side and pulls in `packages/lib`'s
+ * `secureCompare`): the published SDK must never runtime-import
+ * `@pagespace/lib` (see `operations/roles.ts`'s equivalent inlining of
+ * `PagePerm`, for the same reason) — the derivation itself is the same
+ * SHA256/base64url math regardless of which side of the exchange calls it.
  *
  * @see https://datatracker.ietf.org/doc/html/rfc7636
  */
-import { createHash } from 'node:crypto';
 
 /** Base64url-encodes to exactly a 43-char code_verifier — RFC 7636 §4.1's floor. */
 const MIN_VERIFIER_BYTES = 32;
 /** Base64url-encodes to exactly a 128-char code_verifier — RFC 7636 §4.1's ceiling. */
 const MAX_VERIFIER_BYTES = 96;
+
+/**
+ * Base64url-encodes bytes with no padding (RFC 4648 §5), byte-for-byte
+ * identical to Node's `Buffer.from(bytes).toString('base64url')` — but built
+ * from `btoa`, which (unlike `Buffer`) exists in both Node and browsers.
+ */
+function toBase64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
 /**
  * Derive a code_verifier from injected randomness (RFC 7636 §4.1 recommends
@@ -42,13 +57,16 @@ export function generateCodeVerifier(randomBytes: Uint8Array): string {
       `generateCodeVerifier requires ${MIN_VERIFIER_BYTES}-${MAX_VERIFIER_BYTES} random bytes (encodes to a 43-128 char code_verifier per RFC 7636 §4.1); got ${randomBytes.length}.`,
     );
   }
-  return Buffer.from(randomBytes).toString('base64url');
+  return toBase64Url(randomBytes);
 }
 
 /**
  * Derive the S256 code_challenge for a code_verifier:
- * BASE64URL(SHA256(ASCII(verifier))).
+ * BASE64URL(SHA256(ASCII(verifier))). Async because Web Crypto's
+ * `subtle.digest` is Promise-based (unlike `node:crypto`'s synchronous
+ * `createHash`) — the one API both Node and browsers actually share.
  */
-export function deriveCodeChallenge(verifier: string): string {
-  return createHash('sha256').update(verifier, 'ascii').digest('base64url');
+export async function deriveCodeChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return toBase64Url(new Uint8Array(digest));
 }

@@ -311,7 +311,7 @@ export async function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<Loopbac
 
   try {
     const verifier = generateCodeVerifier(deps.randomBytes(32));
-    const challenge = deriveCodeChallenge(verifier);
+    const challenge = await deriveCodeChallenge(verifier);
     const state = toBase64Url(deps.randomBytes(16));
     const redirectUri = `http://127.0.0.1:${server.port}${CALLBACK_PATH}`;
     const authorizeUrl = buildAuthorizeUrl({
