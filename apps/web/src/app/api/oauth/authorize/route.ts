@@ -65,11 +65,12 @@ function buildRedirectWithParams(redirectUri: string, params: Record<string, str
   return url.toString();
 }
 
-function firstForwardedValue(value: string | null): string | undefined {
-  return value?.split(',')[0]?.trim() || undefined;
-}
-
-function configuredAppOrigin(): string | null {
+// Deliberately does NOT fall back to x-forwarded-host/x-forwarded-proto or
+// req.url — those are client-influenceable, and this origin feeds a redirect
+// target on an unauthenticated OAuth endpoint. WEB_APP_URL/NEXT_PUBLIC_APP_URL
+// is baked into every real deployment's build image, so this should never be
+// unset outside of misconfiguration; fail closed rather than trust a header.
+function appOrigin(): string | null {
   const configuredUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
   if (!configuredUrl) return null;
 
@@ -83,24 +84,6 @@ function configuredAppOrigin(): string | null {
   }
 
   return null;
-}
-
-function forwardedAppOrigin(req: NextRequest): string | null {
-  const host = firstForwardedValue(req.headers.get('x-forwarded-host')) ?? req.headers.get('host');
-  const proto =
-    firstForwardedValue(req.headers.get('x-forwarded-proto')) ??
-    (new URL(req.url).protocol === 'https:' ? 'https' : 'http');
-  if (!host || (proto !== 'http' && proto !== 'https')) return null;
-
-  try {
-    return new URL(`${proto}://${host}`).origin;
-  } catch {
-    return null;
-  }
-}
-
-function appOrigin(req: NextRequest): string {
-  return configuredAppOrigin() ?? forwardedAppOrigin(req) ?? new URL(req.url).origin;
 }
 
 export async function GET(req: NextRequest) {
@@ -131,17 +114,22 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  const origin = appOrigin();
+  if (!origin) {
+    return renderErrorPage('Server misconfiguration.');
+  }
+
   const auth = await authenticateRequestWithOptions(req, { allow: ['session'], requireCSRF: false });
   const consentTarget = `/oauth/consent${search}`;
 
   if (isAuthError(auth)) {
     return NextResponse.redirect(
-      new URL(`/auth/signin?next=${encodeURIComponent(consentTarget)}`, appOrigin(req)),
+      new URL(`/auth/signin?next=${encodeURIComponent(consentTarget)}`, origin),
       302,
     );
   }
 
-  return NextResponse.redirect(new URL(consentTarget, appOrigin(req)), 302);
+  return NextResponse.redirect(new URL(consentTarget, origin), 302);
 }
 
 const approvalSchema = z.object({

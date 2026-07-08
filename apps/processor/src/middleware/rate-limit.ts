@@ -9,6 +9,23 @@ const buckets = new Map<string, RateLimitBucket>();
 const DEFAULT_LIMIT = parseInt(process.env.PROCESSOR_UPLOAD_RATE_LIMIT ?? '100', 10);
 const WINDOW_SECONDS = parseInt(process.env.PROCESSOR_UPLOAD_RATE_WINDOW ?? '3600', 10);
 
+// Express's req.headers is a plain object, not a Fetch Headers instance, so
+// it can't use @pagespace/lib/security/client-ip directly — same trust
+// priority (Fly-Client-IP first, unspoofable), adapted to Express's shape.
+function getClientIP(req: Request): string {
+  const flyClientIP = req.headers['fly-client-ip'];
+  if (typeof flyClientIP === 'string' && flyClientIP.length > 0) {
+    return flyClientIP.trim();
+  }
+
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    return forwarded.split(',')[0].trim();
+  }
+
+  return req.ip ?? 'unknown';
+}
+
 function getBucketKey(req: Request): string {
   const auth = req.auth;
   // Use userId for rate limiting - this ensures rate limits accumulate per-user
@@ -17,12 +34,7 @@ function getBucketKey(req: Request): string {
   }
 
   // Fallback to IP-based limiting for unauthenticated requests
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.length > 0) {
-    return `ip:${forwarded.split(',')[0]}`;
-  }
-
-  return `ip:${req.ip}`;
+  return `ip:${getClientIP(req)}`;
 }
 
 function createRateLimiter(

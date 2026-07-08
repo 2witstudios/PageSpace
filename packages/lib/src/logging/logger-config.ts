@@ -4,6 +4,7 @@
 
 import { logger, LogContext } from './logger';
 import type { LogInput, HttpMethod } from './logger-types';
+import { getClientIP } from '../security/client-ip';
 
 interface NextLikeRequest {
   nextUrl: { pathname: string; searchParams: URLSearchParams };
@@ -47,9 +48,7 @@ export function extractRequestContext(req: LoggableRequest): LogContext {
   if ('nextUrl' in req) {
     context.endpoint = req.nextUrl.pathname;
     context.method = req.method;
-    context.ip = req.headers.get('x-forwarded-for')?.split(',')[0] || 
-                  req.headers.get('x-real-ip') || 
-                  'unknown';
+    context.ip = getClientIP(req);
     context.userAgent = req.headers.get('user-agent') || undefined;
     
     // Extract query params

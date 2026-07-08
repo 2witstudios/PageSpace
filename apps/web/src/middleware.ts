@@ -21,6 +21,7 @@ import {
 } from '@/lib/auth/token-prefixes';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { WELL_KNOWN_REWRITES } from '@/lib/well-known/rewrites';
+import { getClientIP } from '@/lib/security/edge-client-ip';
 
 // Edge-safe middleware: only checks presence of auth tokens, not validity.
 // Full validation happens in route handlers via verifyAuth()/validateMCPToken().
@@ -88,10 +89,7 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       return response;
     }
 
-    const ip =
-      req.headers.get('x-forwarded-for')?.split(',')[0] ||
-      req.headers.get('x-real-ip') ||
-      'unknown';
+    const ip = getClientIP(req);
 
     // Origin validation for API routes (defense-in-depth)
     if (pathname.startsWith('/api')) {
