@@ -2,6 +2,47 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.0] — 2026-07-08
+
+### Breaking Changes
+
+- **`deriveCodeChallenge` is now `async`, returning `Promise<string>` instead of `string`.**
+  Required to make the PKCE helpers work in a browser bundle (see below) — there is no synchronous
+  SHA-256 primitive available in a browser, so this could not ship as a patch/minor release without
+  silently breaking any caller that used the return value synchronously. Confirmed via automated
+  review before merge: the already-published `@pagespace/cli@1.5.0` depends on
+  `@pagespace/sdk: ^1.5.0` and its published build calls this synchronously (unawaited) — publishing
+  this fix as a `1.x` patch would have meant every *existing* CLI install silently picked up the
+  new async SDK on its next `npm install` and started sending `[object Promise]` as the OAuth
+  `code_challenge`, breaking `pagespace login` with no code change on the CLI's side at all. Shipping
+  as `2.0.0` means npm's `^1.5.0` range on the already-published CLI does not resolve to it — only a
+  consumer that explicitly opts into `^2.0.0` (this repo's own `packages/cli`, bumped in the same
+  change) is affected.
+  **Migration:** `await deriveCodeChallenge(verifier)` instead of `deriveCodeChallenge(verifier)`.
+  `generateCodeVerifier` is unaffected (still synchronous).
+
+### Fixed
+
+- **Every API call from a real browser threw `TypeError: Failed to execute 'fetch' on 'Window':
+  Illegal invocation`, before the request ever reached the network.** `client.ts` captured a
+  detached reference to the global `fetch` (`options.fetch ?? fetch`) and later invoked it in
+  method-call position through an options object (`options.fetch(url, ...)`). Browsers require
+  `fetch`'s receiver to be the real `Window` object; Node's `fetch` (undici) has no such check, so
+  this was invisible to the entirely-Node vitest suite and only surfaced building a real
+  browser-based demo app. Fixed by binding to `globalThis` at construction time
+  (`fetch.bind(globalThis)`), which satisfies the receiver check in both environments. The
+  existing `options.fetch` injection point (used throughout the test suite's `vi.fn()` mocks) is
+  unaffected — this only changes the default when no `fetch` override is supplied.
+- **`generateCodeVerifier`/`deriveCodeChallenge` (PKCE math, public SDK surface) used
+  `node:crypto` and `Buffer` directly and could not run in a browser bundle at all.** Needed by any
+  browser app implementing its own `pagespace login`-equivalent OAuth flow (not needed for simple
+  `StaticTokenProvider` API usage). Rewrote `packages/sdk/src/auth/pkce.ts` on the Web Crypto API
+  (`crypto.subtle.digest`, `btoa`), which both Node 20+ and every real browser provide. Output is
+  byte-for-byte identical to the old `Buffer`-based encoding for the same inputs, verified by the
+  existing drift-guard test against `@pagespace/lib`'s canonical (Node-only, server-side) copy. Its
+  one in-repo caller, `packages/cli/src/auth/loopback-flow.ts`, now `await`s it — see the breaking
+  change entry above for why this could not ship as a patch/minor version.
+
 ## [1.5.1] — 2026-07-08
 
 ### Fixed
