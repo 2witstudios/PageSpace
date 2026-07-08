@@ -609,6 +609,22 @@ describe('extractAndStripOgMeta', () => {
     expect(meta.description).toBe('Plain description');
     expect(meta.ogDescription).toBe('OG description');
   });
+
+  it('given an inline <svg><title>…</title></svg> icon label, should preserve it verbatim and NOT extract it as the page title', () => {
+    const html = '<p>hi</p><svg role="img"><title>Search icon</title><path d="M1 1"/></svg>';
+    const { meta, html: result } = extractAndStripOgMeta(html);
+    expect(meta.title).toBeUndefined();
+    expect(result).toBe(html);
+  });
+
+  it('given a real top-level <title> alongside an inline SVG with its own <title>, should extract only the page title and leave the SVG untouched', () => {
+    const svg = '<svg role="img"><title>Search icon</title><path d="M1 1"/></svg>';
+    const html = `<title>Page Title</title><p>hi</p>${svg}`;
+    const { meta, html: result } = extractAndStripOgMeta(html);
+    expect(meta.title).toBe('Page Title');
+    expect(result).not.toContain('<title>Page Title</title>');
+    expect(result).toContain(svg);
+  });
 });
 
 // ---------------------------------------------------------------------------

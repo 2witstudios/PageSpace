@@ -101,11 +101,26 @@ function stripMetaName(html: string, name: string, assign: (content: string) => 
     });
 }
 
-/** Strip a `<title>…</title>` tag (only valid in `<head>`, so any occurrence is stray content), invoking `assign` with its text. */
+/**
+ * Strip a document-level `<title>…</title>` tag, invoking `assign` with its
+ * text. A `<title>` nested inside an inline `<svg>…</svg>` is valid
+ * accessibility markup (the SVG's accessible name), not page metadata, so it
+ * must be left untouched — both the tag itself and any title text inside it.
+ *
+ * Mirrors the alternation pattern in `extractAndSanitizeStyles`
+ * (packages/lib/src/canvas/render-document.ts): a single regex alternates
+ * between whole `<svg>...</svg>` blocks (consumed first, returned verbatim)
+ * and the `<title>` pattern, acting only on the capture group that matched.
+ */
 function stripTitle(html: string, assign: (content: string) => void): string {
-  return html.replace(/<title(?=[\s/>])[^>]*>([\s\S]*?)<\/title(?=[\s/>])[^>]*>/gi, (_, content: string) => {
-    assign(content);
-    return '';
+  const svgOrTitle =
+    /<svg(?=[\s/>])[^>]*>[\s\S]*?<\/svg(?=[\s/>])[^>]*>|<title(?=[\s/>])[^>]*>([\s\S]*?)<\/title(?=[\s/>])[^>]*>/gi;
+  return html.replace(svgOrTitle, (match, content: string | undefined) => {
+    if (content !== undefined) {
+      assign(content);
+      return '';
+    }
+    return match; // <svg> block — leave verbatim, including any nested <title>
   });
 }
 
