@@ -95,7 +95,20 @@ describe('buildWizardScope', () => {
       { driveId: 'drv1', choice: { kind: 'member' } },
       { driveId: 'drv2', choice: { kind: 'admin' } },
     ]);
-    expect(result).toEqual({ ok: true, scope: 'drive:drv1:member drive:drv2:admin offline_access' });
+    expect(result).toEqual({
+      ok: true,
+      scope: 'drive:drv1:member drive:drv2:admin offline_access',
+      driveScope: 'drive:drv1:member drive:drv2:admin',
+    });
+  });
+
+  it('embeds a given name as a name: token', () => {
+    const result = buildWizardScope([{ driveId: 'drv1', choice: { kind: 'member' } }], { name: 'ci' });
+    expect(result).toEqual({
+      ok: true,
+      scope: 'drive:drv1:member name:ci offline_access',
+      driveScope: 'drive:drv1:member',
+    });
   });
 
   it('propagates buildTokenScope validation failures (e.g. zero drives selected)', () => {
@@ -111,9 +124,13 @@ describe('buildWizardScope', () => {
     expect(result).toEqual({ ok: false, message: 'Duplicate --drive "drv1": each drive may only be scoped once.' });
   });
 
-  it('builds "all_drives offline_access" when allDrives is true, ignoring any selections', () => {
-    const result = buildWizardScope([], { allDrives: true });
-    expect(result).toEqual({ ok: true, scope: 'all_drives offline_access' });
+  it('builds "all_drives name:<name> offline_access" when allDrives is true, ignoring any selections', () => {
+    const result = buildWizardScope([], { allDrives: true, name: 'god-key' });
+    expect(result).toEqual({
+      ok: true,
+      scope: 'all_drives name:god-key offline_access',
+      driveScope: 'all drives',
+    });
   });
 });
 

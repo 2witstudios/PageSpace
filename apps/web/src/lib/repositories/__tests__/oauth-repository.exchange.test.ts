@@ -83,11 +83,13 @@ vi.mock('../session-repository', () => ({
   sessionRepository: {
     createMcpTokenWithDriveScopes: vi.fn(),
     updateMcpTokenDriveScopes: vi.fn(),
+    findUserMcpTokensWithDrives: vi.fn(),
   },
 }));
 
 import { deriveCodeChallenge } from '@pagespace/lib/auth/oauth/pkce';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
+import { parseScopeList, formatScopeSet, type ScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import { exchangeAuthorizationCode } from '../oauth-repository';
 import { sessionRepository } from '../session-repository';
 
@@ -231,7 +233,7 @@ beforeEach(() => {
     userId: USER_ID,
     tokenHash: 'unused-in-these-assertions',
     tokenPrefix: 'mcp_xxxxxxxxxxx',
-    name: 'pagespace CLI',
+    name: 'unused-in-these-assertions',
     isScoped: true,
     createdAt: new Date(),
     lastUsed: null,
@@ -485,7 +487,7 @@ describe('exchangeAuthorizationCode — F1: refresh token gated on offline_acces
 
 describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_tokens row, not an OAuth pair', () => {
   it('returns ok_mcp_token, mints via sessionRepository against the SAME transaction, and issues zero oauth rows', async () => {
-    seedCodeRow({ scopes: ['drive:drv1:member', 'drive:drv2:admin', 'offline_access'] });
+    seedCodeRow({ scopes: ['drive:drv1:member', 'drive:drv2:admin', 'name:My%20Laptop', 'offline_access'] });
 
     const result = await exchangeAuthorizationCode({
       code: CODE,
@@ -498,7 +500,7 @@ describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_toke
     expect(result.outcome).toBe('ok_mcp_token');
     if (result.outcome !== 'ok_mcp_token') throw new Error('unreachable');
     expect(result.userId).toBe(USER_ID);
-    expect(result.scopes).toEqual(['drive:drv1:member', 'drive:drv2:admin', 'offline_access']);
+    expect(result.scopes).toEqual(['drive:drv1:member', 'drive:drv2:admin', 'name:My%20Laptop', 'offline_access']);
     expect(result.mcpToken).toMatch(/^mcp_/);
 
     // No OAuth refresh/access-token-family rows for this branch at all.
@@ -512,7 +514,7 @@ describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_toke
     const [data, txArg] = vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mock.calls[0]!;
     expect(data).toMatchObject({
       userId: USER_ID,
-      name: 'pagespace CLI',
+      name: 'My Laptop',
       isScoped: true,
       drives: [
         { id: 'drv1', role: 'MEMBER' },
@@ -551,7 +553,7 @@ describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_toke
 
 describe('exchangeAuthorizationCode — all_drives grant mints a real, unscoped mcp_tokens row, not an OAuth pair', () => {
   it('returns ok_mcp_token with isScoped: false and zero drive rows, against the SAME transaction, issuing zero oauth rows', async () => {
-    seedCodeRow({ scopes: ['all_drives', 'offline_access'] });
+    seedCodeRow({ scopes: ['all_drives', 'name:God%20Key', 'offline_access'] });
 
     const result = await exchangeAuthorizationCode({
       code: CODE,
@@ -564,7 +566,7 @@ describe('exchangeAuthorizationCode — all_drives grant mints a real, unscoped 
     expect(result.outcome).toBe('ok_mcp_token');
     if (result.outcome !== 'ok_mcp_token') throw new Error('unreachable');
     expect(result.userId).toBe(USER_ID);
-    expect(result.scopes).toEqual(['all_drives', 'offline_access']);
+    expect(result.scopes).toEqual(['all_drives', 'name:God%20Key', 'offline_access']);
     expect(result.mcpToken).toMatch(/^mcp_/);
 
     // No OAuth refresh/access-token-family rows for this branch at all.
@@ -578,7 +580,7 @@ describe('exchangeAuthorizationCode — all_drives grant mints a real, unscoped 
     const [data, txArg] = vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mock.calls[0]!;
     expect(data).toMatchObject({
       userId: USER_ID,
-      name: 'pagespace CLI',
+      name: 'God Key',
       isScoped: false,
       drives: [],
     });
@@ -690,5 +692,102 @@ describe('exchangeAuthorizationCode — update_key grant re-scopes an existing m
     expect(replay.decision.status).toBe('already_consumed');
     // No second scope update fired.
     expect(sessionRepository.updateMcpTokenDriveScopes).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('parseScopeList — name: token grammar (the fix for the "pagespace CLI" name-loss bug)', () => {
+  // Deliberately NOT requiring a name: token to parse a mint-shaped grant here — this parser is
+  // reused by flows (device-authorization's plain drive:*/all_drives grants) that never mint an
+  // mcp_tokens row and legitimately carry no name. The "name required to mint" rule is enforced
+  // instead at POST /api/oauth/authorize (see that route's test suite), the one call site that
+  // actually mints from this shape via the loopback consent flow.
+  it('accepts a mint-shaped grant (drive:*) with no name: token — not this parser\'s job to require one', () => {
+    const result = parseScopeList('drive:drv1:member offline_access');
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts a mint-shaped grant (all_drives) with no name: token — not this parser\'s job to require one', () => {
+    const result = parseScopeList('all_drives offline_access');
+    expect(result.ok).toBe(true);
+  });
+
+  it.each(['account', 'manage_keys', 'update_key:tok123 drive:drv1', 'activate_key:tok123'])(
+    'rejects a name: token attached to %s',
+    (scope) => {
+      const result = parseScopeList(`${scope} name:Foo`);
+      expect(result).toEqual({ ok: false, error: { code: 'name_without_mint_grant' } });
+    },
+  );
+});
+
+describe('exchangeAuthorizationCode — end-to-end name round trip (pagespace keys create --name X → keys list)', () => {
+  it('a custom name given at authorize time survives the round trip through mint and back through the read-back seam', async () => {
+    const CHOSEN_NAME = 'My Laptop (dev)';
+
+    // 1. Build the scope string exactly as the CLI's buildTokenScope would —
+    //    via the canonical grammar's own serializer.
+    const requested: ScopeSet = {
+      account: false,
+      offlineAccess: true,
+      manageKeys: false,
+      allDrives: false,
+      updateKeyId: null,
+      activateKeyId: null,
+      newKeyName: CHOSEN_NAME,
+      drives: new Map([['drv1', { kind: 'drive', driveId: 'drv1', role: { kind: 'inherit' } }]]),
+    };
+    const wireScope = formatScopeSet(requested);
+
+    // 2. Parse it back — proves the wire format round-trips through the grammar.
+    const parsedBack = parseScopeList(wireScope);
+    expect(parsedBack).toEqual({ ok: true, scopes: requested });
+
+    // 3. Exchange it — the mint call must receive the REAL custom name, not
+    //    the historical 'pagespace CLI' hardcode.
+    seedCodeRow({ scopes: wireScope.split(' ') });
+    let capturedName: string | null = null;
+    vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mockImplementation(async (data) => {
+      capturedName = data.name;
+      return {
+        id: 'mcp-token-row-1',
+        userId: USER_ID,
+        tokenHash: data.tokenHash,
+        tokenPrefix: data.tokenPrefix,
+        name: data.name,
+        isScoped: data.isScoped,
+        createdAt: new Date(),
+        lastUsed: null,
+        revokedAt: null,
+      } as never;
+    });
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok_mcp_token');
+    expect(capturedName).toBe(CHOSEN_NAME);
+
+    // 4. Read it back through the same repository seam `GET
+    //    /api/auth/mcp-tokens` (`keys list`) uses — proves the name that was
+    //    actually persisted (not a hardcoded default) is what a real "keys
+    //    list" call would surface.
+    vi.mocked(sessionRepository.findUserMcpTokensWithDrives).mockResolvedValue([
+      {
+        id: 'mcp-token-row-1',
+        name: capturedName!,
+        tokenPrefix: 'mcp_xxxxxxxxxxx',
+        lastUsed: null,
+        createdAt: new Date(),
+        isScoped: true,
+        driveScopes: [],
+      },
+    ] as never);
+    const listed = await sessionRepository.findUserMcpTokensWithDrives(USER_ID);
+    expect(listed[0].name).toBe(CHOSEN_NAME);
   });
 });

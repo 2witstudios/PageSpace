@@ -223,7 +223,7 @@ describe('createKeysHandler — Create flow, --all-drives', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(multiselectMock).not.toHaveBeenCalled();
-    expect(requestedScope).toBe('all_drives offline_access');
+    expect(requestedScope).toBe('all_drives name:god-key offline_access');
     // The pre-mint confirm gets the maximum-privilege wording, not the raw scope string.
     expect(confirmMock).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringMatching(/maximum-privilege/i) }),
@@ -573,7 +573,7 @@ describe('createKeysHandler — unknown "keys" subcommand', () => {
 describe('createKeysHandler — Set active key flow (menu choice "use")', () => {
   const SERVER_KEY = {
     id: 'tok1',
-    name: 'pagespace CLI',
+    name: 'CI bot',
     tokenPrefix: 'mcp_abcdefghijk',
     lastUsed: null,
     createdAt: '2026-07-01T00:00:00.000Z',

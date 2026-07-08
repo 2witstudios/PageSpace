@@ -98,7 +98,7 @@ export interface DriveRoleSelection {
 /** Maps the wizard's per-drive role selections into `buildTokenScope`'s input shape and reuses its validation verbatim. */
 export function buildWizardScope(
   selections: readonly DriveRoleSelection[],
-  options: { readonly allDrives?: boolean } = {},
+  options: { readonly name?: string; readonly allDrives?: boolean } = {},
 ): BuildTokenScopeResult {
   return buildTokenScope(
     selections.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice)),

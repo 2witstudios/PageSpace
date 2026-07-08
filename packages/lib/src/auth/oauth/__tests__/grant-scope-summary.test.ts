@@ -24,41 +24,50 @@ describe('describeGrantScopes', () => {
   });
 
   it('resolves a drive scope to its drive name', () => {
-    const descriptions = describeGrantScopes(['drive:drv123'], {
+    const descriptions = describeGrantScopes(['drive:drv123', 'name:ci'], {
       driveNamesById: new Map([['drv123', 'Marketing']]),
       roleNamesById: new Map(),
     });
-    expect(descriptions).toHaveLength(1);
-    expect(descriptions[0]).toMatch(/Marketing/);
+    expect(descriptions).toHaveLength(2);
+    expect(descriptions[1]).toMatch(/Marketing/);
   });
 
   it('falls back to the raw drive id when no name was resolved', () => {
-    const descriptions = describeGrantScopes(['drive:drv123'], NO_NAMES);
-    expect(descriptions[0]).toMatch(/drv123/);
+    const descriptions = describeGrantScopes(['drive:drv123', 'name:ci'], NO_NAMES);
+    expect(descriptions[1]).toMatch(/drv123/);
   });
 
   it('resolves a custom-role drive scope to its role name and summary', () => {
-    const descriptions = describeGrantScopes(['drive:drv123:role:rol456'], {
+    const descriptions = describeGrantScopes(['drive:drv123:role:rol456', 'name:ci'], {
       driveNamesById: new Map([['drv123', 'Marketing']]),
       roleNamesById: new Map([['rol456', { name: 'Editor', description: 'Can edit pages' }]]),
     });
-    expect(descriptions[0]).toMatch(/Marketing/);
-    expect(descriptions[0]).toMatch(/Editor/);
-    expect(descriptions[0]).toMatch(/Can edit pages/);
+    expect(descriptions[1]).toMatch(/Marketing/);
+    expect(descriptions[1]).toMatch(/Editor/);
+    expect(descriptions[1]).toMatch(/Can edit pages/);
   });
 
   it('describes multiple drive scopes in the granted order', () => {
-    const descriptions = describeGrantScopes(['drive:drv1:admin', 'drive:drv2:member'], {
+    const descriptions = describeGrantScopes(['drive:drv1:admin', 'drive:drv2:member', 'name:ci'], {
       driveNamesById: new Map([
         ['drv1', 'Alpha'],
         ['drv2', 'Beta'],
       ]),
       roleNamesById: new Map(),
     });
+    expect(descriptions).toHaveLength(3);
+    expect(descriptions[1]).toMatch(/Alpha/);
+    expect(descriptions[1]).toMatch(/admin/i);
+    expect(descriptions[2]).toMatch(/Beta/);
+  });
+
+  it('describes the key name first, before any capability description', () => {
+    const descriptions = describeGrantScopes(['drive:drv123', 'name:My%20Laptop'], {
+      driveNamesById: new Map([['drv123', 'Marketing']]),
+      roleNamesById: new Map(),
+    });
     expect(descriptions).toHaveLength(2);
-    expect(descriptions[0]).toMatch(/Alpha/);
-    expect(descriptions[0]).toMatch(/admin/i);
-    expect(descriptions[1]).toMatch(/Beta/);
+    expect(descriptions[0]).toMatch(/Name this key "My Laptop"/);
   });
 
   it('returns an empty list for a malformed/unparseable scope string rather than throwing', () => {
@@ -73,8 +82,8 @@ describe('describeGrantScopes', () => {
   });
 
   it('describes an all_drives grant (e.g. a CLI --all-drives key)', () => {
-    const descriptions = describeGrantScopes(['all_drives', 'offline_access'], NO_NAMES);
-    expect(descriptions).toHaveLength(2);
+    const descriptions = describeGrantScopes(['all_drives', 'offline_access', 'name:god-key'], NO_NAMES);
+    expect(descriptions).toHaveLength(3);
     expect(descriptions.some((d) => /all your drives/i.test(d))).toBe(true);
     expect(descriptions.some((d) => /revoke/i.test(d))).toBe(true);
   });

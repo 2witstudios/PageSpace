@@ -62,7 +62,15 @@ function formatDriveScope({ id, role, customRoleId }: DriveScopeArg): string {
   return `drive:${id}`;
 }
 
-export type BuildTokenScopeResult = { readonly ok: true; readonly scope: string } | { readonly ok: false; readonly message: string };
+export type BuildTokenScopeResult =
+  | {
+      readonly ok: true;
+      /** The full wire scope, including `name:...` when a name was given. */
+      readonly scope: string;
+      /** Human-readable, display-only: the drive/all-drives grant without the `name:...` plumbing token or `offline_access`. */
+      readonly driveScope: string;
+    }
+  | { readonly ok: false; readonly message: string };
 
 /**
  * Maps `--drive`/`--role` flags to the OAuth drive-scope grammar
@@ -77,16 +85,24 @@ export type BuildTokenScopeResult = { readonly ok: true; readonly scope: string 
  * grant — never inferred from `drives.length === 0`, which is exactly the
  * ambiguity this flag exists to avoid (a bare "no --drive given" usage error
  * must stay a usage error, not silently escalate to an unrestricted key).
+ *
+ * `options.name`, when given, is embedded as a `name:<percent-encoded>` wire
+ * token (required server-side on every mint-shaped grant, `scopes.ts`'s
+ * `name_required_for_mint`). Omitted by `buildKeyUpdateScope` below, which
+ * reuses this function for its drive-token list only — `update_key:*` grants
+ * must never carry a name (`name_without_mint_grant`).
  */
 export function buildTokenScope(
   drives: readonly DriveScopeArg[],
-  options: { readonly allDrives?: boolean } = {},
+  options: { readonly name?: string; readonly allDrives?: boolean } = {},
 ): BuildTokenScopeResult {
+  const nameToken = options.name !== undefined ? [`name:${encodeURIComponent(options.name)}`] : [];
+
   if (options.allDrives) {
     if (drives.length > 0) {
       return { ok: false, message: '--all-drives cannot be combined with --drive.' };
     }
-    return { ok: true, scope: 'all_drives offline_access' };
+    return { ok: true, scope: ['all_drives', ...nameToken, 'offline_access'].join(' '), driveScope: 'all drives' };
   }
 
   if (drives.length === 0) {
@@ -120,7 +136,8 @@ export function buildTokenScope(
   }
 
   const driveScopeTokens = [...drives].sort((a, b) => a.id.localeCompare(b.id)).map(formatDriveScope);
-  return { ok: true, scope: [...driveScopeTokens, 'offline_access'].join(' ') };
+  const driveScope = driveScopeTokens.join(' ');
+  return { ok: true, scope: [...driveScopeTokens, ...nameToken, 'offline_access'].join(' '), driveScope };
 }
 
 export type BuildKeyUpdateScopeResult =
@@ -182,6 +199,13 @@ export type ResolveNewKeyNameResult = { readonly ok: true; readonly name: string
  * (stored by `pagespace login`), and letting a scoped key land there (whether
  * named explicitly or auto-derived from a drive literally named "default")
  * would let either credential silently clobber the other.
+ *
+ * Runs BEFORE `buildTokenScope` in the create handler (the name must be
+ * embedded inside the scope string it builds) — so the true "no --drive at
+ * all" usage error must be raised HERE too, not left for `buildTokenScope`'s
+ * own "at least one --drive is required" check to catch downstream; letting
+ * it fall through to the "more than one drive" branch below would surface a
+ * confusing --name-shaped message for what's actually a missing --drive.
  */
 export function resolveNewKeyName({
   name,
@@ -192,6 +216,12 @@ export function resolveNewKeyName({
     return {
       ok: false,
       message: '--name <name> is required when using --all-drives.',
+    };
+  }
+  if (!allDrives && drives.length === 0) {
+    return {
+      ok: false,
+      message: 'At least one --drive is required to create a scoped token.',
     };
   }
   if (!allDrives && name === undefined && drives.length !== 1) {
@@ -232,18 +262,18 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
       return EXIT_USAGE_ERROR;
     }
 
-    const scopeResult = buildTokenScope(parsedArgs.args.drives, { allDrives: parsedArgs.args.allDrives });
-    if (!scopeResult.ok) {
-      ctx.stderr.write(`${scopeResult.message}\n`);
-      return EXIT_USAGE_ERROR;
-    }
-
     const nameResult = resolveNewKeyName(parsedArgs.args);
     if (!nameResult.ok) {
       ctx.stderr.write(`${nameResult.message}\n`);
       return EXIT_USAGE_ERROR;
     }
     const keyName = nameResult.name;
+
+    const scopeResult = buildTokenScope(parsedArgs.args.drives, { name: keyName, allDrives: parsedArgs.args.allDrives });
+    if (!scopeResult.ok) {
+      ctx.stderr.write(`${scopeResult.message}\n`);
+      return EXIT_USAGE_ERROR;
+    }
 
     // Safety gate for the "quick flag typo mints a max-privilege key" risk:
     // --all-drives requires --yes (scriptable/CI) or an interactive TTY
@@ -314,8 +344,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
 
     switch (result.outcome) {
       case 'success': {
-        const scopeDescription = parsedArgs.args.allDrives ? 'all drives' : scopeResult.scope;
-        info.write(`Created key "${keyName}" on ${host}, scoped to: ${scopeDescription}.\n`);
+        info.write(`Created key "${keyName}" on ${host}, scoped to: ${scopeResult.driveScope}.\n`);
         if (parsedArgs.args.showToken) {
           if (mintedToken !== null) {
             // The ONLY stdout line in --show-token mode (see `info` above).

@@ -58,11 +58,17 @@ Scope strings are a space-delimited list per RFC 6749 §3.3. The grammar (ABNF):
 
 ```abnf
 scope-list   = scope *( SP scope )
-scope        = "account" / "offline_access" / "manage_keys" / "all_drives" / drive-scope
+scope        = "account" / "offline_access" / "manage_keys" / "all_drives"
+             / "name:" 1*100( pct-encoded-utf8-octet ) / drive-scope
 drive-scope  = "drive:" resource-id [ ":" drive-role ]
 drive-role   = "admin" / "member" / ( "role:" resource-id )
 resource-id  = 1*32( DIGIT / %x61-7A )   ; lowercase alphanum, cuid2-shaped
 ```
+
+(`update_key:<tokenId>` and `activate_key:<tokenId>` scope tokens also exist as of Phase 9's
+key-management follow-up — see `packages/lib/src/auth/oauth/scopes.ts`'s `ScopeSet.updateKeyId`/
+`activateKeyId` doc comments for their grammar and rationale; not yet reflected in this ADR's
+tables, a pre-existing documentation gap this amendment does not attempt to close.)
 
 Scope tokens and their meaning:
 
@@ -76,6 +82,7 @@ Scope tokens and their meaning:
 | `offline_access` | Request a refresh token (OAuth 2.1 convention). Must accompany `account`, `manage_keys`, or ≥1 `drive:*` scope — see rule 10. | Grant flag; orthogonal to access scopes. |
 | `manage_keys` *(Phase 9 addition)* | Key-management-only grant: the principal can create/list/edit/revoke its own owner's access keys (the same keys `account`/`drive:*` grants mint), but has **zero content access** — no drive, page, task, or channel reads/writes. This is what `pagespace login` requests by default as of Phase 9 (`packages/cli/src/commands/login.ts` `DEFAULT_LOGIN_SCOPE`); content access requires a separate, explicit `account`/`drive:*` grant (`pagespace keys` or `pagespace keys create`). | No drive rows; grant marked `manageKeys = true` (`packages/lib/src/auth/oauth/scopes.ts` `ScopeSet.manageKeys`). Resolved by `isManageKeysOnly()` (`apps/web/src/lib/auth/index.ts:574`), which short-circuits every `*Principal*`/`allowedDriveIds` helper to a deny result before any drive-scope logic runs. |
 | `all_drives` *(CLI keys-all-drives addition)* | Access to all your drives — maximum grant for a drive-scoped key. Unrestricted content access to every drive the granting user owns, including ones created **later**. The CLI/wizard equivalent of the web Settings > MCP "Clear selection (allow all drives)" control (`pagespace keys create --all-drives`, or the wizard's "All drives (unrestricted)" choice). Distinct from `account`: `account` resolves to a full personal OAuth session (everything the user can do, not just drives); `all_drives` mints an ordinary `mcp_tokens` row, just an unscoped one, so it shows up in `keys list`, is revocable via `keys revoke`, and never grants beyond drive content. | No drive rows; grant marked `allDrives = true` (`packages/lib/src/auth/oauth/scopes.ts` `ScopeSet.allDrives`). Resolved by `isAllDrivesGrant()` at token-issuance time — mints a real `mcp_tokens` row with `isScoped: false` and zero `mcp_token_drives` rows (same "unscoped acts as the user" resolution an unscoped MCP token already has, `apps/web/src/lib/auth/index.ts:24-32`), not an OAuth refresh/access-token pair. |
+| `name:<percent-encoded-utf8>` *(CLI keys-name-fix addition)* | The user-chosen name for the `mcp_tokens` row a pure `drive:*` or `all_drives` grant mints (`pagespace keys create --name`/the wizard's name prompt) — fixes a bug where every CLI-minted key was hardcoded to `'pagespace CLI'` server-side regardless of the name the user gave it. Carries no capability itself. Rides inside `scope` for the same reason `update_key`/`activate_key` do (Decision 1 rule 13 below): the consent step-up grant's action binding, the authorization-code row, and PKCE all already bind `scope`. | No DB representation of its own — read at token-issuance time by `hasNewKeyName()`/hasNewKeyName-gated mint code (`oauth-repository.ts`) and written into `mcp_tokens.name`. Not required to *parse* a pure `drive:*`/`all_drives` grant (that would incorrectly reject the device-authorization flow's plain, never-named drive grants, and break re-parsing of already-persisted `oauth_access_tokens.scopes`) — instead enforced specifically at `POST /api/oauth/authorize`'s consent decision, the one call site that actually mints an `mcp_tokens` row from this shape via the loopback flow. |
 
 Grammar rules (each is a testable assertion; all fail closed):
 
@@ -137,6 +144,21 @@ Grammar rules (each is a testable assertion; all fail closed):
     grant and from `manage_keys`'s zero content access — so mixing it with any of them, or with a
     specific `drive:*` set, is the same kind of ambiguity rules 3/11 reject
     (`packages/lib/src/auth/oauth/scopes.ts` `parseScopeList`).
+13. **`name:*` is only valid on a grant shaped to mint a NEW `mcp_tokens` row (a pure `drive:*`
+    set or `all_drives`) → reject `name:*` alongside `account`/`manage_keys`/`update_key:*`/
+    `activate_key:*`** (`name_without_mint_grant`). *(CLI keys-name-fix addition.)* Those shapes
+    either have no row to name (`account`/`manage_keys` mint nothing from `mcp_tokens`, or mint
+    an OAuth session, not a key) or explicitly change nothing (`update_key`/`activate_key`
+    re-scope/activate an EXISTING key) — attaching a name would either be meaningless or spoof a
+    "creating a key" consent line when no key is being created. Deliberately **not** the
+    inverse rule ("mint-shaped ⇒ `name:*` required") at the grammar level: this parser is reused
+    by the device-authorization flow, whose plain `drive:*`/`all_drives` grants never mint an
+    `mcp_tokens` row at all (they resolve to an ordinary OAuth access/refresh pair,
+    `issueInitialTokenPair`) and legitimately carry no name, and by every authenticated request
+    re-parsing an already-persisted `oauth_access_tokens.scopes` array for schema validation. The
+    "mint-shaped grant requires a name" half of this rule is enforced instead at
+    `POST /api/oauth/authorize`'s consent decision — see Decision 2's `all_drives` row and
+    Decision 5 point 3's `name:<percent-encoded-utf8>` row.
 
 ### Considered and rejected: resource-family scopes (`pages:read`, `tasks:write`, …)
 
@@ -266,6 +288,7 @@ to trust what the screen says. Requirements:
 | `offline_access` | "Stay connected until you revoke access (issues a long-lived refresh credential)." |
 | `manage_keys` *(Phase 9 addition)* | "Create and manage access keys on your behalf — cannot read or write any of your content directly." (`describeScopeForConsent`, `packages/lib/src/auth/oauth/consent.ts:24-25`.) |
 | `all_drives` *(CLI keys-all-drives addition)* | "Access to all your drives, including any created later — the maximum grant for a drive-scoped key." (`describeScopeForConsent`, `packages/lib/src/auth/oauth/consent.ts`.) Flagged as a maximum grant, the same as `account`. |
+| `name:<percent-encoded-utf8>` *(CLI keys-name-fix addition)* | 'Name this key "{name}" — shown in `pagespace keys list` and to anyone else with access to this account's key list.' (`describeScopeForConsent`, `packages/lib/src/auth/oauth/consent.ts`.) Rendered **first**, before every capability description, so the user reads "this creates a key named X" before what it can access — `POST /api/oauth/authorize` rejects a mint-shaped grant with no `name:*` token before a consent screen is ever rendered (Decision 1 rule 13), so this row is never missing when it's expected. |
 
 4. **Client identity:** display the client's registered name, and a "Built by PageSpace"
    badge if and only if `firstParty` — dynamically registered clients can never claim it.
@@ -352,6 +375,8 @@ function describeScopeForConsent(
 | F14 | `manage_keys` mixed with `account` or with any `drive:*` scope *(Phase 9 addition)* | Reject, `invalid_scope` (`manage_keys_conflict`, rule 11) |
 | F15 | `manage_keys` credential used against any content-access route *(Phase 9 addition)* | Deny — `isManageKeysOnly()` short-circuits every `*Principal*`/`allowedDriveIds` helper before drive-scope logic runs (`index.ts:574`) |
 | F16 | `all_drives` mixed with `account`, `manage_keys`, or any `drive:*` scope *(CLI keys-all-drives addition)* | Reject, `invalid_scope` (`all_drives_conflict`, rule 12) |
+| F17 | `name:*` mixed with `account`, `manage_keys`, `update_key:*`, or `activate_key:*` *(CLI keys-name-fix addition)* | Reject, `invalid_scope` (`name_without_mint_grant`, rule 13) |
+| F18 | A pure `drive:*` or `all_drives` grant with no `name:*` token reaches `POST /api/oauth/authorize`'s consent decision *(CLI keys-name-fix addition)* | Reject with the uniform `invalid_scope` redirect before a code is ever minted (mirrors the `update_key`/`activate_key` ownership-gate checks); NOT a `parseScopeList` rejection — see rule 13's note on why the requirement lives at the consent route instead |
 
 ## Consequences
 
@@ -379,3 +404,16 @@ function describeScopeForConsent(
   `account` (which grants strictly more than "all drives" — a full personal session, not just
   content access). `all_drives` mints a real, revocable `mcp_tokens` row via `isAllDrivesGrant()`,
   parallel to `isPureDriveGrant()`, with `isScoped: false` and zero drive rows.
+- **CLI keys-name-fix amendment:** the grammar gained a `name:<percent-encoded-utf8>` scope
+  token — additive per the same rule. It closes a bug where `pagespace keys create --name X`
+  silently discarded the user's chosen name: the mint call in `oauth-repository.ts` hardcoded
+  `name: 'pagespace CLI'` for every key minted via a pure `drive:*` or `all_drives` grant,
+  regardless of what name the user gave it, so `keys list` and the wizard's key picker showed
+  every CLI-minted key as an indistinguishable "pagespace CLI". The name now rides inside `scope`
+  (the CLI resolves it locally but the OAuth wire protocol had no field to carry it), mirroring
+  `update_key`/`activate_key`'s established house style for plumbing that belongs inside the
+  already-consent-bound `scope` string rather than a new authorize param. Notably, the
+  "mint-shaped grant requires a name" requirement is enforced at `POST /api/oauth/authorize`
+  (F18), not inside `parseScopeList` — an earlier version of this fix put it in the parser
+  itself and broke the device-authorization flow's plain, legitimately-unnamed drive grants and
+  re-parsing of already-persisted `oauth_access_tokens.scopes`; see rule 13's note.

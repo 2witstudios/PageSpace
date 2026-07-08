@@ -305,29 +305,32 @@ async function selectScopeAndMint(
   }
 
   let driveScopeArgs: readonly DriveScopeArg[];
-  let scopeResult: ReturnType<typeof buildWizardScope>;
+  let selections: readonly DriveRoleSelection[];
 
   if (target === 'all') {
     driveScopeArgs = [];
-    scopeResult = buildWizardScope([], { allDrives: true });
+    selections = [];
   } else {
-    const selections = await selectDriveRoleScopes(ctx, drives, messages.selectDrives, initialDriveIds);
-    if (selections === null) {
+    const selected = await selectDriveRoleScopes(ctx, drives, messages.selectDrives, initialDriveIds);
+    if (selected === null) {
       abortSubflow();
       return null;
     }
-    driveScopeArgs = selections.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice));
-    scopeResult = buildWizardScope(selections);
-  }
-
-  if (!scopeResult.ok) {
-    clack.log.error(scopeResult.message);
-    return null;
+    selections = selected;
+    driveScopeArgs = selected.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice));
   }
 
   const keyName = await promptKeyName(driveScopeArgs, messages.keyName, { allDrives: target === 'all' });
   if (keyName === null) {
     abortSubflow();
+    return null;
+  }
+
+  const scopeResult =
+    target === 'all' ? buildWizardScope([], { allDrives: true, name: keyName }) : buildWizardScope(selections, { name: keyName });
+
+  if (!scopeResult.ok) {
+    clack.log.error(scopeResult.message);
     return null;
   }
 
@@ -337,7 +340,7 @@ async function selectScopeAndMint(
     return null;
   }
 
-  const proceed = await clack.confirm({ message: confirmMintMessage(scopeResult.scope, target) });
+  const proceed = await clack.confirm({ message: confirmMintMessage(scopeResult.driveScope, target) });
   if (clack.isCancel(proceed) || !proceed) {
     abortSubflow();
     return null;
@@ -347,7 +350,7 @@ async function selectScopeAndMint(
     host,
     scope: scopeResult.scope,
     keyName,
-    displayScope: target === 'all' ? 'all drives' : scopeResult.scope,
+    displayScope: scopeResult.driveScope,
   });
 }
 

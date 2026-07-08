@@ -578,7 +578,7 @@ describe('POST /api/oauth/authorize — step-up gate (Phase 8: bearer-OAuth mint
 });
 
 describe('POST /api/oauth/authorize — all_drives grant skips per-drive authority checks', () => {
-  const allDrivesBody = { ...approvalBody, scope: 'all_drives offline_access' };
+  const allDrivesBody = { ...approvalBody, scope: 'all_drives offline_access name:god-key' };
 
   beforeEach(() => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
@@ -591,7 +591,7 @@ describe('POST /api/oauth/authorize — all_drives grant skips per-drive authori
     } as never);
   });
 
-  it('issues a code for "all_drives offline_access" without any per-drive getDriveAccess lookup', async () => {
+  it('issues a code for "all_drives offline_access name:god-key" without any per-drive getDriveAccess lookup', async () => {
     // Proves checkGrantAuthority's per-drive loop never runs for this shape
     // (zero drive:* scopes to iterate) — same treatment as account/manage_keys.
     // (The default mock grants OWNER on every drive; this asserts the lookup
@@ -605,7 +605,64 @@ describe('POST /api/oauth/authorize — all_drives grant skips per-drive authori
 
     expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
     const call = vi.mocked(createAuthorizationCode).mock.calls[0][0] as { scopes: string[] };
-    expect(call.scopes).toEqual(['all_drives', 'offline_access']);
+    expect(call.scopes).toEqual(['name:god-key', 'all_drives', 'offline_access']);
+  });
+});
+
+describe('POST /api/oauth/authorize — name required to mint (the fix for the "pagespace CLI" name-loss bug)', () => {
+  beforeEach(() => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      tokenType: 'session',
+      userId: 'user-1',
+      role: 'user',
+      tokenVersion: 0,
+      adminRoleVersion: 0,
+      sessionId: 'sess-1',
+    } as never);
+  });
+
+  it('rejects a pure drive:* grant with no name: token, never minting a code', async () => {
+    const body = { ...approvalBody, scope: 'drive:testdrive1:member' };
+    const res = await POST(postRequest(body) as never);
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    const location = new URL(json.redirectUri);
+    expect(location.searchParams.get('error')).toBe('invalid_scope');
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
+  });
+
+  it('rejects an all_drives grant with no name: token, never minting a code', async () => {
+    const body = { ...approvalBody, scope: 'all_drives offline_access' };
+    const res = await POST(postRequest(body) as never);
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    const location = new URL(json.redirectUri);
+    expect(location.searchParams.get('error')).toBe('invalid_scope');
+    expect(vi.mocked(createAuthorizationCode)).not.toHaveBeenCalled();
+  });
+
+  it('accepts a pure drive:* grant carrying a name: token', async () => {
+    const body = { ...approvalBody, scope: 'drive:testdrive1:member name:ci' };
+    const res = await POST(postRequest(body) as never);
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    const location = new URL(json.redirectUri);
+    expect(location.searchParams.get('code')).toBeTruthy();
+    expect(vi.mocked(createAuthorizationCode)).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not require a name for an update_key grant (re-scoping an existing key, nothing new minted)', async () => {
+    vi.mocked(sessionRepository.findActiveMcpTokenByIdAndUser).mockResolvedValue({ id: 'tok123', name: 'CI key' });
+    const body = { ...approvalBody, scope: 'update_key:tok123 drive:testdrive1:member' };
+    const res = await POST(postRequest(body) as never);
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(new URL(json.redirectUri).searchParams.get('code')).toBeTruthy();
   });
 });
 

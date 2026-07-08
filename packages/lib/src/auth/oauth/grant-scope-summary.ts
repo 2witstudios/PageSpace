@@ -23,6 +23,11 @@ export function describeGrantScopes(scopes: readonly string[], resolvers: GrantS
   if (!parsed.ok) return [];
 
   const descriptions: string[] = [];
+  // Named first so the user reads "this creates a key named X" before the
+  // capability list that follows.
+  if (parsed.scopes.newKeyName !== null) {
+    descriptions.push(describeScopeForConsent({ kind: 'name', name: parsed.scopes.newKeyName }, {}));
+  }
   if (parsed.scopes.account) {
     descriptions.push(describeScopeForConsent({ kind: 'account' }, {}));
   }

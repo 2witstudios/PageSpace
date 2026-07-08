@@ -28,7 +28,7 @@ const LOGIN_CREDENTIAL: HostCredential = {
 const SERVER_KEYS = [
   {
     id: 'tok1',
-    name: 'pagespace CLI',
+    name: 'CI bot',
     tokenPrefix: 'mcp_abcdefghijk',
     lastUsed: null,
     createdAt: '2026-07-01T00:00:00.000Z',

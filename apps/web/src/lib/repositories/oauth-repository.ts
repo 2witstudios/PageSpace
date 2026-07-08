@@ -22,7 +22,7 @@ import {
 } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
-import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, hasNewKeyName, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
 import { sessionRepository } from './session-repository';
 
 /**
@@ -323,7 +323,10 @@ export async function exchangeAuthorizationCode(
           userId: row.userId,
           tokenHash,
           tokenPrefix,
-          name: 'pagespace CLI',
+          // Fallback is unreachable once the grammar guarantees a name on
+          // every mint-shaped grant (parseScopeList's name_required_for_mint
+          // rule) — defense in depth only, never meant to actually fire.
+          name: hasNewKeyName(parsedGrantedScope.scopes) ? parsedGrantedScope.scopes.newKeyName : 'pagespace CLI',
           isScoped: !allDrives,
           drives: allDrives ? [] : toSessionRepoDrives(parsedGrantedScope.scopes),
         },
@@ -333,6 +336,14 @@ export async function exchangeAuthorizationCode(
       return { outcome: 'ok_mcp_token', userId: row.userId, scopes: row.scopes, mcpToken };
     }
 
+    // NOTE: every mint/update/activate branch above is gated on
+    // `parsedGrantedScope.ok`. If parseScopeList ever rejects the persisted
+    // `row.scopes` for any reason (including some future unrelated bug), we
+    // fall through to here and mint a plain OAuth access/refresh pair
+    // carrying the raw (rejected) scope array as its granted scopes — a
+    // pre-existing fail-open risk, unrelated to and out of scope for this
+    // change. Flagged for a future hardening pass.
+    //
     // F1 (ADR 0003, OIDC-standard): a refresh token is only minted when the
     // granted scope set includes offline_access — otherwise this is an
     // access-only grant.

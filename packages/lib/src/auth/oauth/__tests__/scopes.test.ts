@@ -9,6 +9,7 @@ import {
   isScopeSubset,
   scopeSetToDriveScopes,
   checkGrantAuthority,
+  hasNewKeyName,
   type ScopeSet,
 } from '../scopes';
 
@@ -25,6 +26,7 @@ function emptySet(overrides: Partial<ScopeSet> = {}): ScopeSet {
     allDrives: false,
     updateKeyId: null,
     activateKeyId: null,
+    newKeyName: null,
     ...overrides,
   };
 }
@@ -904,5 +906,124 @@ describe('checkGrantAuthority (consent-time authority cap, Decision 2 / F4)', ()
       ]),
     );
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('name:<percent-encoded-utf8> (the fix for the "pagespace CLI" name-loss bug)', () => {
+  const driveEntry = drives(['abc123', { kind: 'drive', driveId: 'abc123', role: { kind: 'member' } }]);
+
+  it('parses name:<encoded> alongside a drive scope', () => {
+    const result = parseScopeList('drive:abc123:member name:My%20Laptop');
+    expect(result).toEqual({
+      ok: true,
+      scopes: emptySet({ newKeyName: 'My Laptop', drives: driveEntry }),
+    });
+  });
+
+  it('parses name:<encoded> alongside all_drives', () => {
+    const result = parseScopeList('all_drives name:God%20Key');
+    expect(result).toEqual({ ok: true, scopes: emptySet({ allDrives: true, newKeyName: 'God Key' }) });
+  });
+
+  it('round-trips through formatScopeSet, positioned right after update_key/activate_key and before account/all_drives/manage_keys/offline_access', () => {
+    const scopes = emptySet({ newKeyName: 'ci', drives: driveEntry, offlineAccess: true });
+    const formatted = formatScopeSet(scopes);
+    expect(formatted).toBe('name:ci offline_access drive:abc123:member');
+    expect(parseScopeList(formatted)).toEqual({ ok: true, scopes });
+  });
+
+  it('percent-encodes non-ASCII and reserved characters and decodes them back exactly', () => {
+    const name = 'Café — "prod" key/2';
+    const scopes = emptySet({ newKeyName: name, drives: driveEntry });
+    const formatted = formatScopeSet(scopes);
+    expect(formatted).toBe(`name:${encodeURIComponent(name)} drive:abc123:member`);
+    expect(parseScopeList(formatted)).toEqual({ ok: true, scopes });
+  });
+
+  it('rejects a duplicate name: token', () => {
+    expect(parseScopeList('drive:abc123 name:a name:b')).toEqual({
+      ok: false,
+      error: { code: 'duplicate_name' },
+    });
+  });
+
+  it('rejects malformed percent-encoding (decodeURIComponent failure)', () => {
+    expect(parseScopeList('drive:abc123 name:%')).toEqual({
+      ok: false,
+      error: { code: 'malformed_name' },
+    });
+  });
+
+  it('rejects an empty name', () => {
+    expect(parseScopeList('drive:abc123 name:')).toEqual({
+      ok: false,
+      error: { code: 'malformed_name' },
+    });
+  });
+
+  it('rejects a name longer than 100 characters', () => {
+    const tooLong = 'a'.repeat(101);
+    expect(parseScopeList(`drive:abc123 name:${tooLong}`)).toEqual({
+      ok: false,
+      error: { code: 'malformed_name' },
+    });
+  });
+
+  it('accepts a name exactly 100 characters long', () => {
+    const maxLen = 'a'.repeat(100);
+    const result = parseScopeList(`drive:abc123 name:${maxLen}`);
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a name containing a percent-encoded control character (UI-integrity, not XSS)', () => {
+    expect(parseScopeList(`drive:abc123 name:a${encodeURIComponent('\n')}b`)).toEqual({
+      ok: false,
+      error: { code: 'malformed_name' },
+    });
+    expect(parseScopeList(`drive:abc123 name:a${encodeURIComponent('\x00')}b`)).toEqual({
+      ok: false,
+      error: { code: 'malformed_name' },
+    });
+    expect(parseScopeList(`drive:abc123 name:a${encodeURIComponent('\x7F')}b`)).toEqual({
+      ok: false,
+      error: { code: 'malformed_name' },
+    });
+  });
+
+  it.each(['account', 'manage_keys', 'update_key:tok123 drive:abc123', 'activate_key:tok123'])(
+    'rejects name: attached to %s (name_without_mint_grant)',
+    (scope) => {
+      expect(parseScopeList(`${scope} name:Foo`)).toEqual({
+        ok: false,
+        error: { code: 'name_without_mint_grant' },
+      });
+    },
+  );
+
+  it('accepts a pure drive:* grant with no name: token — parsing does not require one; the CLI mint path enforces it at /api/oauth/authorize instead', () => {
+    const result = parseScopeList('drive:abc123:member');
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.scopes.newKeyName).toBeNull();
+  });
+
+  it('accepts an all_drives grant with no name: token — the device-authorization flow legitimately produces this shape with no name at all', () => {
+    const result = parseScopeList('all_drives offline_access');
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.scopes.newKeyName).toBeNull();
+  });
+
+  it('isScopeSubset rejects a requested name the grant does not carry (effectively dead code today — mint-shaped grants never reach a persisted subset check — but every ScopeSet field must be compared here)', () => {
+    const requested = emptySet({ newKeyName: 'ci', drives: driveEntry });
+    const grantedWithout = emptySet({ drives: driveEntry });
+    const grantedOther = emptySet({ newKeyName: 'other', drives: driveEntry });
+    expect(isScopeSubset(requested, grantedWithout)).toBe(false);
+    expect(isScopeSubset(requested, grantedOther)).toBe(false);
+    expect(isScopeSubset(requested, emptySet({ newKeyName: 'ci', drives: driveEntry }))).toBe(true);
+  });
+
+  it('hasNewKeyName discriminates a named mint from an unnamed one', () => {
+    expect(hasNewKeyName(emptySet({ newKeyName: 'ci', drives: driveEntry }))).toBe(true);
+    expect(hasNewKeyName(emptySet({ drives: driveEntry }))).toBe(false);
+    expect(hasNewKeyName(emptySet())).toBe(false);
   });
 });
