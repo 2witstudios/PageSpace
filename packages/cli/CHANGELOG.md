@@ -2,6 +2,25 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.0] — 2026-07-08
+
+### Added
+
+- **`pagespace keys create --all-drives`** — mints an unrestricted key with access to every drive
+  you own, including ones created later, equivalent to the web Settings > MCP "Clear selection
+  (allow all drives)" control. Requires `--name` (there's no single drive id to default a name
+  from), rejects being combined with `--drive`, and is gated behind `--yes` (or an interactive
+  TTY confirm) since it mints the maximum-privilege key type. Backed by a new `all_drives` OAuth
+  scope — deliberately not the `account` scope, which would silently mint a full personal login
+  session instead of a revocable, listable mcp key.
+- The interactive wizard's Create flow now asks up front whether to grant specific drives or all
+  drives (unrestricted), instead of only offering a per-drive picker. Edit gains a confirm guard
+  when narrowing an existing all-drives key down to specific drives; converting an existing key
+  *to* all-drives is out of scope for Edit — mint a new key with `keys create --all-drives`
+  instead.
+- `keys list`/the wizard's key table now distinguish an all-drives key from an orphaned key (one
+  whose scoped drives were all deleted) — both used to render identically as `(unscoped)`.
+
 ## [1.5.1] — 2026-07-08
 
 ### Changed
