@@ -26,10 +26,10 @@ import { num } from "@/lib/format";
 import type { GrowthMetricsData } from "@/lib/monitoring";
 
 const TIER_COLORS: Record<string, string> = {
-  free: "#94a3b8",
-  pro: "#3b82f6",
-  founder: "#8b5cf6",
-  business: "#10b981",
+  free: "var(--muted-foreground)",
+  pro: "var(--chart-4)",
+  founder: "var(--chart-5)",
+  business: "var(--chart-3)",
 };
 
 const TIER_LABELS: Record<string, string> = {
@@ -181,24 +181,24 @@ export default function GrowthPage() {
                     <AreaChart data={mauTrendData}>
                       <defs>
                         <linearGradient id="mauGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
-                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                          <stop offset="5%" stopColor="var(--chart-4)" stopOpacity={0.2} />
+                          <stop offset="95%" stopColor="var(--chart-4)" stopOpacity={0} />
                         </linearGradient>
                         <linearGradient id="signupGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
-                          <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                          <stop offset="5%" stopColor="var(--chart-3)" stopOpacity={0.2} />
+                          <stop offset="95%" stopColor="var(--chart-3)" stopOpacity={0} />
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                       <XAxis dataKey="label" tick={{ fontSize: 12 }} className="text-muted-foreground" />
                       <YAxis tick={{ fontSize: 12 }} className="text-muted-foreground" />
                       <Tooltip
-                        contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                        labelStyle={{ color: "hsl(var(--foreground))" }}
+                        contentStyle={{ backgroundColor: "var(--popover)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--popover-foreground)" }}
+                        labelStyle={{ color: "var(--popover-foreground)" }}
                       />
                       <Legend />
-                      <Area type="monotone" dataKey="mau" name="MAU" stroke="#3b82f6" fill="url(#mauGrad)" strokeWidth={2} dot={false} />
-                      <Area type="monotone" dataKey="newUsers" name="New Signups" stroke="#10b981" fill="url(#signupGrad)" strokeWidth={2} dot={false} />
+                      <Area type="monotone" dataKey="mau" name="MAU" stroke="var(--chart-4)" fill="url(#mauGrad)" strokeWidth={2} dot={false} />
+                      <Area type="monotone" dataKey="newUsers" name="New Signups" stroke="var(--chart-3)" fill="url(#signupGrad)" strokeWidth={2} dot={false} />
                     </AreaChart>
                   </ResponsiveContainer>
                 )}
@@ -228,11 +228,12 @@ export default function GrowthPage() {
                           outerRadius={70}
                         >
                           {tierData.map((entry) => (
-                            <Cell key={entry.tier} fill={TIER_COLORS[entry.tier] ?? "#64748b"} />
+                            <Cell key={entry.tier} fill={TIER_COLORS[entry.tier] ?? "var(--muted-foreground)"} />
                           ))}
                         </Pie>
                         <Tooltip
-                          contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
+                          contentStyle={{ backgroundColor: "var(--popover)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--popover-foreground)" }}
+                          labelStyle={{ color: "var(--popover-foreground)" }}
                           formatter={(value, name) => [num(Number(value ?? 0)), TIER_LABELS[String(name)] ?? String(name)]}
                         />
                       </PieChart>
@@ -241,7 +242,7 @@ export default function GrowthPage() {
                       {tierData.map((t) => (
                         <div key={t.tier} className="flex items-center justify-between text-sm">
                           <div className="flex items-center gap-2">
-                            <div className="h-3 w-3 rounded-full" style={{ background: TIER_COLORS[t.tier] ?? "#64748b" }} />
+                            <div className="h-3 w-3 rounded-full" style={{ background: TIER_COLORS[t.tier] ?? "var(--muted-foreground)" }} />
                             <span className="capitalize">{TIER_LABELS[t.tier] ?? t.tier}</span>
                           </div>
                           <div className="flex items-center gap-2">
@@ -275,12 +276,12 @@ export default function GrowthPage() {
                     <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" className="text-muted-foreground" />
                     <YAxis tick={{ fontSize: 11 }} className="text-muted-foreground" />
                     <Tooltip
-                      contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                      labelStyle={{ color: "hsl(var(--foreground))" }}
+                      contentStyle={{ backgroundColor: "var(--popover)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--popover-foreground)" }}
+                      labelStyle={{ color: "var(--popover-foreground)" }}
                     />
                     <Legend />
-                    <Bar dataKey="dau" name="DAU" fill="#3b82f6" radius={[2, 2, 0, 0]} />
-                    <Bar dataKey="signups" name="New Signups" fill="#10b981" radius={[2, 2, 0, 0]} />
+                    <Bar dataKey="dau" name="DAU" fill="var(--chart-4)" radius={[2, 2, 0, 0]} />
+                    <Bar dataKey="signups" name="New Signups" fill="var(--chart-3)" radius={[2, 2, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}

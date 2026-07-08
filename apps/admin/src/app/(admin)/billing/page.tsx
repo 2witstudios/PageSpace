@@ -171,7 +171,7 @@ interface BillingResponse {
 
 function marginClass(value: number | null): string {
   if (value === null) return 'text-muted-foreground';
-  return value < 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400';
+  return value < 0 ? 'text-destructive' : 'text-success';
 }
 
 function userLabel(row: { userName: string | null; userEmail: string | null; userId: string }): string {
@@ -280,11 +280,15 @@ function MarginsTab({ data }: { data: BillingResponse }) {
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis dataKey="period" tick={{ fontSize: 11 }} />
                   <YAxis tickFormatter={(v) => `$${v}`} tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v) => [`$${Number(v ?? 0).toFixed(2)}`]} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: 'var(--popover)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', color: 'var(--popover-foreground)' }}
+                    labelStyle={{ color: 'var(--popover-foreground)' }}
+                    formatter={(v) => [`$${Number(v ?? 0).toFixed(2)}`]}
+                  />
                   <Legend />
-                  <Line type="monotone" dataKey="charged" name="Charged" stroke="#2563eb" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="realCost" name="Provider cost" stroke="#dc2626" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="margin" name="Margin" stroke="#16a34a" strokeWidth={2} dot={false} strokeDasharray="4 2" />
+                  <Line type="monotone" dataKey="charged" name="Charged" stroke="var(--chart-4)" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="realCost" name="Provider cost" stroke="var(--destructive)" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="margin" name="Margin" stroke="var(--success)" strokeWidth={2} dot={false} strokeDasharray="4 2" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -572,7 +576,7 @@ function UsersTab({ data }: { data: BillingResponse }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <ShieldAlert className="h-4 w-4 text-red-600 dark:text-red-400" />
+            <ShieldAlert className="h-4 w-4 text-destructive" />
             Negative margin ({alerts.negativeMargin.length})
           </CardTitle>
           <CardDescription>Accounts where provider cost exceeds what we charged.</CardDescription>
@@ -634,7 +638,7 @@ function UsersTab({ data }: { data: BillingResponse }) {
                     <TableCell className="max-w-[260px] truncate">{userLabel(row)}</TableCell>
                     <TableCell className="text-right">{usd(row.expectedSpendableCents)}</TableCell>
                     <TableCell className="text-right">{usd(row.materializedSpendableCents)}</TableCell>
-                    <TableCell className="text-right font-medium text-red-600 dark:text-red-400">{usd(row.driftCents)}</TableCell>
+                    <TableCell className="text-right font-medium text-destructive">{usd(row.driftCents)}</TableCell>
                     <TableCell className="text-right">{usd(row.debtCents)}</TableCell>
                   </TableRow>
                 ))
@@ -666,7 +670,7 @@ function UsersTab({ data }: { data: BillingResponse }) {
                   {debtByUser.map((row) => (
                     <TableRow key={row.userId}>
                       <TableCell className="max-w-[260px] truncate">{userLabel(row)}</TableCell>
-                      <TableCell className="text-right text-red-600 dark:text-red-400">{usd(row.debtCents)}</TableCell>
+                      <TableCell className="text-right text-destructive">{usd(row.debtCents)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

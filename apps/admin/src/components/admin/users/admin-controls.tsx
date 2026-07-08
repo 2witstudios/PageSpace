@@ -86,7 +86,7 @@ export function AdminControls({ user, onActionComplete }: AdminControlsProps) {
       )}
 
       {status && (
-        <p className="mb-2 text-xs text-emerald-600 dark:text-emerald-400" role="status">{status}</p>
+        <p className="mb-2 text-xs text-success" role="status">{status}</p>
       )}
       {statusError && (
         <p className="mb-2 text-xs text-destructive" role="alert">{statusError}</p>

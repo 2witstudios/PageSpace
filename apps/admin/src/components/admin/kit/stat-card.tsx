@@ -7,9 +7,9 @@ export type StatTone = 'default' | 'positive' | 'negative' | 'warning';
 
 const toneClasses: Record<StatTone, string> = {
   default: 'text-foreground',
-  positive: 'text-emerald-600 dark:text-emerald-400',
+  positive: 'text-success',
   negative: 'text-destructive',
-  warning: 'text-amber-600 dark:text-amber-400',
+  warning: 'text-warning',
 };
 
 interface StatCardProps {

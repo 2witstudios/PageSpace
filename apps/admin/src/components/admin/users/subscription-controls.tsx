@@ -83,8 +83,8 @@ export function SubscriptionControls({ user, onActionComplete }: SubscriptionCon
         )}
 
         {user.subscription?.isGifted && (
-          <div className="p-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded text-xs">
-            <div className="flex items-center gap-1 text-amber-800 dark:text-amber-200">
+          <div className="p-2 bg-warning/10 border border-warning/30 rounded text-xs">
+            <div className="flex items-center gap-1 text-warning">
               <Gift className="h-3 w-3" />
               <span>Gifted subscription</span>
             </div>
@@ -97,7 +97,7 @@ export function SubscriptionControls({ user, onActionComplete }: SubscriptionCon
         )}
 
         {status && (
-          <p className="text-xs text-emerald-600 dark:text-emerald-400" role="status">{status}</p>
+          <p className="text-xs text-success" role="status">{status}</p>
         )}
 
         {!user.subscription ? (
@@ -139,8 +139,8 @@ export function SubscriptionControls({ user, onActionComplete }: SubscriptionCon
           </Button>
         ) : (
           <div className="space-y-2">
-            <div className="p-2 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded text-xs">
-              <div className="flex items-center gap-1 text-blue-800 dark:text-blue-200">
+            <div className="p-2 bg-info/10 border border-info/30 rounded text-xs">
+              <div className="flex items-center gap-1 text-info">
                 <CreditCard className="h-3 w-3" />
                 <span>Paid subscription - manage in Stripe</span>
               </div>

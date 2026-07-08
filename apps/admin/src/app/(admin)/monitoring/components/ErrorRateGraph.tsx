@@ -64,14 +64,14 @@ export default function ErrorRateGraph({ data, detailed = false }: ErrorRateGrap
               />
               <YAxis tick={{ fontSize: 12 }} />
               <Tooltip
-                contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                labelStyle={{ color: "hsl(var(--foreground))" }}
+                contentStyle={{ backgroundColor: "var(--popover)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--popover-foreground)" }}
+                labelStyle={{ color: "var(--popover-foreground)" }}
               />
               <Legend />
-              <Line type="monotone" dataKey="auth" stroke="#FF6B6B" name="Auth" strokeWidth={2} />
-              <Line type="monotone" dataKey="api" stroke="#FFA500" name="API" strokeWidth={2} />
-              <Line type="monotone" dataKey="ai" stroke="#8884d8" name="AI" strokeWidth={2} />
-              <Line type="monotone" dataKey="database" stroke="#82ca9d" name="Database" strokeWidth={2} />
+              <Line type="monotone" dataKey="auth" stroke="var(--destructive)" name="Auth" strokeWidth={2} />
+              <Line type="monotone" dataKey="api" stroke="var(--chart-1)" name="API" strokeWidth={2} />
+              <Line type="monotone" dataKey="ai" stroke="var(--chart-5)" name="AI" strokeWidth={2} />
+              <Line type="monotone" dataKey="database" stroke="var(--chart-3)" name="Database" strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
         </CardContent>
@@ -99,10 +99,10 @@ export default function ErrorRateGraph({ data, detailed = false }: ErrorRateGrap
                     tick={{ fontSize: 10 }}
                   />
                   <Tooltip
-                    contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                    labelStyle={{ color: "hsl(var(--foreground))" }}
+                    contentStyle={{ backgroundColor: "var(--popover)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--popover-foreground)" }}
+                    labelStyle={{ color: "var(--popover-foreground)" }}
                   />
-                  <Bar dataKey="count" fill="#FF6B6B" name="Error Count" />
+                  <Bar dataKey="count" fill="var(--destructive)" name="Error Count" />
                 </BarChart>
               </ResponsiveContainer>
 

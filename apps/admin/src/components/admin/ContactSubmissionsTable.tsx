@@ -303,7 +303,7 @@ export function ContactSubmissionsTable({
                               title={isResolved(submission) ? 'Mark open' : 'Mark resolved'}
                             >
                               {isResolved(submission)
-                                ? <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                                ? <CheckCircle2 className="h-4 w-4 text-success" />
                                 : <Circle className="h-4 w-4 text-muted-foreground" />
                               }
                             </Button>
@@ -396,7 +396,7 @@ export function ContactSubmissionsTable({
                                       {isResolved(submission) && (
                                         <div>
                                           <span className="text-muted-foreground">Resolved:</span>
-                                          <span className="ml-2 text-green-600 dark:text-green-400">Yes</span>
+                                          <span className="ml-2 text-success">Yes</span>
                                         </div>
                                       )}
                                     </div>
@@ -427,7 +427,7 @@ export function ContactSubmissionsTable({
                                   >
                                     {isResolved(submission)
                                       ? <><Circle className="h-4 w-4" />Mark open</>
-                                      : <><CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />Mark resolved</>
+                                      : <><CheckCircle2 className="h-4 w-4 text-success" />Mark resolved</>
                                     }
                                   </Button>
                                   <Button asChild size="sm">

@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useTheme } from 'next-themes';
 import {
   Activity,
   CreditCard,
@@ -14,6 +16,8 @@ import {
   LogOut,
   Menu,
   MessageSquareText,
+  Moon,
+  Sun,
   TrendingUp,
   Users,
   X,
@@ -92,7 +96,37 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 function AlertDot() {
-  return <span className="ml-auto inline-flex h-2 w-2 shrink-0 rounded-full bg-red-500" aria-label="Attention needed" />;
+  return <span className="ml-auto inline-flex h-2 w-2 shrink-0 rounded-full bg-destructive" aria-label="Attention needed" />;
+}
+
+function BrandMark() {
+  return (
+    <div className="flex items-center gap-2.5">
+      <Image src="/pagespace-mark.png" alt="" width={24} height={24} className="rounded-md" priority />
+      <span className="text-sm font-semibold tracking-tight">
+        PageSpace <span className="font-normal text-muted-foreground">Admin</span>
+      </span>
+    </div>
+  );
+}
+
+function ThemeToggle() {
+  const { resolvedTheme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-10 w-10 text-sidebar-foreground/70 hover:text-sidebar-foreground"
+      onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+      aria-label="Toggle theme"
+    >
+      {/* Render a stable icon until mounted to avoid a hydration mismatch. */}
+      {mounted && resolvedTheme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+    </Button>
+  );
 }
 
 function NavLinks({ pathname, alerts, onNavigate }: {
@@ -110,7 +144,7 @@ function NavLinks({ pathname, alerts, onNavigate }: {
       {NAV_GROUPS.map((group) => (
         <div key={group.label ?? 'root'}>
           {group.label && (
-            <p className="px-3 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{group.label}</p>
+            <p className="px-3 pb-1.5 text-[11px] font-medium uppercase tracking-wider text-sidebar-foreground/45">{group.label}</p>
           )}
           <div className="flex flex-col gap-0.5">
             {group.items.map((item) => {
@@ -125,8 +159,8 @@ function NavLinks({ pathname, alerts, onNavigate }: {
                   className={cn(
                     'flex min-h-10 items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors',
                     active
-                      ? 'bg-primary/10 font-medium text-primary'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                      ? 'bg-sidebar-primary/10 font-medium text-sidebar-primary dark:bg-sidebar-accent dark:text-sidebar-accent-foreground'
+                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground dark:hover:bg-sidebar-accent/30',
                   )}
                 >
                   <Icon className="h-4 w-4 shrink-0" aria-hidden />
@@ -139,6 +173,23 @@ function NavLinks({ pathname, alerts, onNavigate }: {
         </div>
       ))}
     </nav>
+  );
+}
+
+function SidebarFooter({ signingOut, onSignOut }: { signingOut: boolean; onSignOut: () => void }) {
+  return (
+    <div className="flex items-center gap-1 border-t border-[var(--sidebar-divider)] p-3">
+      <Button
+        variant="ghost"
+        className="min-h-10 flex-1 justify-start gap-2.5 text-sidebar-foreground/70 hover:text-sidebar-foreground"
+        onClick={onSignOut}
+        disabled={signingOut}
+      >
+        <LogOut className="h-4 w-4" aria-hidden />
+        {signingOut ? 'Signing out…' : 'Sign out'}
+      </Button>
+      <ThemeToggle />
+    </div>
   );
 }
 
@@ -186,19 +237,14 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
   return (
     <div className="flex min-h-screen bg-background">
       {/* Desktop sidebar */}
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r bg-card lg:flex">
-        <div className="flex h-14 items-center gap-2 border-b px-5">
-          <span className="text-sm font-semibold">PageSpace Admin</span>
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:flex">
+        <div className="flex h-14 items-center border-b border-[var(--sidebar-divider)] px-5">
+          <BrandMark />
         </div>
         <div className="flex-1 overflow-y-auto">
           <NavLinks pathname={pathname} alerts={alerts} />
         </div>
-        <div className="border-t p-3">
-          <Button variant="ghost" className="w-full justify-start gap-2.5 text-muted-foreground" onClick={signOut} disabled={signingOut}>
-            <LogOut className="h-4 w-4" aria-hidden />
-            {signingOut ? 'Signing out…' : 'Sign out'}
-          </Button>
-        </div>
+        <SidebarFooter signingOut={signingOut} onSignOut={signOut} />
       </aside>
 
       {/* Mobile drawer */}
@@ -210,9 +256,9 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
             className="absolute inset-0 bg-black/50"
             onClick={() => setDrawerOpen(false)}
           />
-          <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r bg-card shadow-xl">
-            <div className="flex h-14 items-center justify-between border-b px-4">
-              <span className="text-sm font-semibold">PageSpace Admin</span>
+          <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[var(--shadow-elevated)]">
+            <div className="flex h-14 items-center justify-between border-b border-[var(--sidebar-divider)] px-4">
+              <BrandMark />
               <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setDrawerOpen(false)} aria-label="Close navigation">
                 <X className="h-5 w-5" />
               </Button>
@@ -220,19 +266,14 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
             <div className="flex-1 overflow-y-auto">
               <NavLinks pathname={pathname} alerts={alerts} onNavigate={() => setDrawerOpen(false)} />
             </div>
-            <div className="border-t p-3">
-              <Button variant="ghost" className="w-full justify-start gap-2.5 text-muted-foreground" onClick={signOut} disabled={signingOut}>
-                <LogOut className="h-4 w-4" aria-hidden />
-                {signingOut ? 'Signing out…' : 'Sign out'}
-              </Button>
-            </div>
+            <SidebarFooter signingOut={signingOut} onSignOut={signOut} />
           </div>
         </div>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Mobile header */}
-        <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur lg:hidden">
+        {/* Mobile header — Liquid Glass material over content */}
+        <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-[var(--material-regular)] px-3 backdrop-blur-xl lg:hidden">
           <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setDrawerOpen(true)} aria-label="Open navigation">
             <Menu className="h-5 w-5" />
           </Button>

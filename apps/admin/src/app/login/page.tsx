@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { Shield, Loader2, AlertCircle, MailCheck } from "lucide-react";
+import Image from "next/image";
+import { Loader2, AlertCircle, MailCheck } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -64,14 +65,14 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-sm">
+      <Card className="w-full max-w-sm shadow-[var(--shadow-elevated)]">
         <CardHeader className="text-center">
           <div className="mb-2 flex justify-center">
-            <div className="rounded-full bg-primary/10 p-3">
-              <Shield className="h-6 w-6 text-primary" />
-            </div>
+            <Image src="/pagespace-mark.png" alt="PageSpace" width={44} height={44} className="rounded-xl shadow-[var(--shadow-ambient)]" priority />
           </div>
-          <CardTitle className="text-2xl">Admin Console</CardTitle>
+          <CardTitle className="text-2xl tracking-tight">
+            PageSpace <span className="font-normal text-muted-foreground">Admin</span>
+          </CardTitle>
           <CardDescription>Sign in with your admin email address</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
