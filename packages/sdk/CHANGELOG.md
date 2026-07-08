@@ -2,6 +2,30 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.2] — 2026-07-08
+
+### Fixed
+
+- **Every API call from a real browser threw `TypeError: Failed to execute 'fetch' on 'Window':
+  Illegal invocation`, before the request ever reached the network.** `client.ts` captured a
+  detached reference to the global `fetch` (`options.fetch ?? fetch`) and later invoked it in
+  method-call position through an options object (`options.fetch(url, ...)`). Browsers require
+  `fetch`'s receiver to be the real `Window` object; Node's `fetch` (undici) has no such check, so
+  this was invisible to the entirely-Node vitest suite and only surfaced building a real
+  browser-based demo app. Fixed by binding to `globalThis` at construction time
+  (`fetch.bind(globalThis)`), which satisfies the receiver check in both environments. The
+  existing `options.fetch` injection point (used throughout the test suite's `vi.fn()` mocks) is
+  unaffected — this only changes the default when no `fetch` override is supplied.
+- **`generateCodeVerifier`/`deriveCodeChallenge` (PKCE math, public SDK surface) used
+  `node:crypto` and `Buffer` directly and could not run in a browser bundle at all.** Needed by any
+  browser app implementing its own `pagespace login`-equivalent OAuth flow (not needed for simple
+  `StaticTokenProvider` API usage). Rewrote `packages/sdk/src/auth/pkce.ts` on the Web Crypto API
+  (`crypto.subtle.digest`, `btoa`), which both Node 20+ and every real browser provide.
+  `deriveCodeChallenge` is now `async` (`subtle.digest` is Promise-based) — a signature change;
+  updated its one caller, `packages/cli/src/auth/loopback-flow.ts`, to `await` it. Output is
+  byte-for-byte identical to the old `Buffer`-based encoding for the same inputs, verified by the
+  existing drift-guard test against `@pagespace/lib`'s canonical (Node-only, server-side) copy.
+
 ## [1.5.1] — 2026-07-08
 
 ### Fixed

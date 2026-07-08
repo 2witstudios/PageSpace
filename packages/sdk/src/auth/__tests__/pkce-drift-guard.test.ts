@@ -27,7 +27,7 @@ import {
 import { deriveCodeChallenge, generateCodeVerifier } from '../pkce.js';
 
 describe('deriveCodeChallenge — drift guard vs @pagespace/lib canonical implementation', () => {
-  it('produces byte-for-byte identical output for a range of verifier strings', () => {
+  it('produces byte-for-byte identical output for a range of verifier strings', async () => {
     const verifiers = [
       'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
       'a',
@@ -35,7 +35,7 @@ describe('deriveCodeChallenge — drift guard vs @pagespace/lib canonical implem
       'mixed-Case_and-Digits012789',
     ];
     for (const verifier of verifiers) {
-      expect(deriveCodeChallenge(verifier)).toBe(libDeriveCodeChallenge(verifier));
+      expect(await deriveCodeChallenge(verifier)).toBe(libDeriveCodeChallenge(verifier));
     }
   });
 });

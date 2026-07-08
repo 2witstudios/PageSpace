@@ -1,6 +1,6 @@
 {
   "name": "@pagespace/sdk",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "Typed TypeScript/JavaScript client SDK for the PageSpace API — drives, pages, tasks, roles, search, agents, and more.",
   "keywords": [
     "pagespace",
