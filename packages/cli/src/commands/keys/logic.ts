@@ -171,8 +171,19 @@ function formatDateOnly(value: string | null): string {
   return value?.slice(0, 10) ?? 'never';
 }
 
+/**
+ * The one place that decides what zero `driveScopes` means for display: an
+ * `--all-drives` key (`isScoped: false`) vs. an orphaned key whose drives
+ * were all deleted (`isScoped: true` — see `KeySummary`'s doc comment). Every
+ * display surface (this file's two helpers below, plus `keys/list.ts`) calls
+ * this instead of re-deriving the wording, so the two labels can't drift.
+ */
+export function describeEmptyDriveScopes(isScoped: boolean): string {
+  return isScoped ? 'NO ACCESS (orphaned)' : 'all drives';
+}
+
 function formatDriveScopeNames(driveScopes: readonly KeyDriveScope[], isScoped: boolean): string {
-  if (driveScopes.length === 0) return isScoped ? 'NO ACCESS (orphaned)' : 'all drives';
+  if (driveScopes.length === 0) return describeEmptyDriveScopes(isScoped);
   const visibleNames = driveScopes.slice(0, 3).map((drive) => drive.name);
   const remaining = driveScopes.length - visibleNames.length;
   return remaining > 0 ? `${visibleNames.join(', ')} +${remaining} more` : visibleNames.join(', ');
@@ -200,9 +211,7 @@ export function keySelectOptions(keys: readonly KeySummary[], activeKeyId: strin
     const scopes =
       key.driveScopes.length > 0
         ? key.driveScopes.map((drive) => drive.name).join(', ')
-        : key.isScoped
-          ? 'NO ACCESS (orphaned)'
-          : 'all drives';
+        : describeEmptyDriveScopes(key.isScoped);
     return {
       value: key.id,
       label: key.name,
