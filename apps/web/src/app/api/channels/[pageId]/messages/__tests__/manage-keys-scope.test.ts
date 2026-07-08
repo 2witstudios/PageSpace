@@ -38,7 +38,6 @@ vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
     insertChannelThreadReply: vi.fn(),
     upsertChannelReadStatus: vi.fn(),
     loadChannelMessageWithRelations: vi.fn(),
-    fileExists: vi.fn(),
     listChannelThreadFollowers: vi.fn(),
   },
 }));

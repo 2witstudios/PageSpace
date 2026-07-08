@@ -135,15 +135,16 @@ export async function isFileOrphaned(database: DB, fileId: string): Promise<bool
  * The scan that decided `fileIds` (findOrphanedFileRecords) may be long past
  * by the time this runs — reapOrphanedFiles loops per-orphan doing an HTTP
  * call to the processor before batching this call. A message send racing
- * that window (insertDmMessageWithAttachment/insertChannelMessageWithAttachment)
- * takes FOR UPDATE on the same `files` row before referencing it, so we lock
- * the candidate rows first and re-verify referencedness in a *separate*
- * statement afterward — mirroring purgeInactiveMessages's two-statement
- * protocol (dm-message-repository.ts). A single locking DELETE would keep
- * its pre-block snapshot and could still drop a row a just-committed insert
- * now depends on.
+ * that window (insertDmMessageWithAttachment/insertChannelMessageWithAttachment
+ * for top-level sends, insertDmThreadReply/insertChannelThreadReply for thread
+ * replies and their alsoSendToParent mirror) takes FOR UPDATE on the same
+ * `files` row before referencing it, so we lock the candidate rows first and
+ * re-verify referencedness in a *separate* statement afterward — mirroring
+ * purgeInactiveMessages's two-statement protocol (dm-message-repository.ts).
+ * A single locking DELETE would keep its pre-block snapshot and could still
+ * drop a row a just-committed insert now depends on.
  *
- * This closes the race for the two insert paths above, which are the only
+ * This closes the race for the four insert paths above, which are the only
  * writers that take FOR UPDATE on `files` before referencing it. The
  * content-addressed-storage dedup path (a `pages` row pointing at an
  * existing upload's storagePath, apps/web's upload-complete route) does not
