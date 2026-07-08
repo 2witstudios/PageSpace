@@ -172,6 +172,31 @@ export const applySecurityHeaders = (
   return response;
 };
 
+// CORS for the Bearer-authenticated API surface (`@pagespace/sdk` and any other
+// Bearer-token caller — MCP API keys, OAuth access tokens). Wildcard origin
+// mirrors the existing precedent in api/public/forms/[token]/submit/route.ts:
+// Bearer tokens require explicit JS header-setting (unlike cookies), so a
+// wildcard doesn't expose a visitor's own session to a malicious page the way
+// it would for cookie auth. `Access-Control-Expose-Headers` is required, not
+// optional — the SDK reads X-PageSpace-API-Version (version-compat check) and
+// Retry-After (429 backoff) directly off the response, and neither is in the
+// CORS default-safelisted response-header set; omitting this makes every
+// cross-origin call fail with IncompatibleServerError even though CORS itself
+// "succeeded".
+export const API_CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, PUT, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-PageSpace-API-Version',
+  'Access-Control-Expose-Headers': 'X-PageSpace-API-Version, Retry-After',
+};
+
+export const applyApiCorsHeaders = (response: NextResponse): NextResponse => {
+  for (const [key, value] of Object.entries(API_CORS_HEADERS)) {
+    response.headers.set(key, value);
+  }
+  return response;
+};
+
 export const isPublicPageRoute = (pathname: string): boolean =>
   pathname === '/auth' ||
   pathname.startsWith('/auth/') ||

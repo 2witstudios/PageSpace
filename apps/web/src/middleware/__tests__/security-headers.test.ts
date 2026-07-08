@@ -10,6 +10,8 @@ import {
   buildCSPPolicy,
   buildAPICSPPolicy,
   applySecurityHeaders,
+  applyApiCorsHeaders,
+  API_CORS_HEADERS,
   createSecureResponse,
   createSecureErrorResponse,
   isPublicPageRoute,
@@ -515,6 +517,43 @@ describe('Security Headers', () => {
       const csp = r3.headers.get('Content-Security-Policy');
       expect(csp).toContain("default-src 'none'");
       expect(csp).not.toContain('nonce-');
+    });
+  });
+
+  describe('applyApiCorsHeaders', () => {
+    it('sets a wildcard origin, matching the existing Bearer-token CORS precedent (forms/submit route)', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    });
+
+    it('exposes X-PageSpace-API-Version and Retry-After — required for the SDK to read them cross-origin', () => {
+      // Neither header is in the CORS default-safelisted response-header set, so
+      // without this a cross-origin call succeeds at the network/CORS layer but
+      // the SDK still throws IncompatibleServerError reading a null version header.
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+
+      const exposed = response.headers.get('Access-Control-Expose-Headers');
+      expect(exposed).toContain('X-PageSpace-API-Version');
+      expect(exposed).toContain('Retry-After');
+    });
+
+    it('allows Authorization in preflight — the one header a Bearer-token caller must send', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+
+      expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+    });
+
+    it('every declared header in API_CORS_HEADERS is actually applied to the response', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+
+      for (const [key, value] of Object.entries(API_CORS_HEADERS)) {
+        expect(response.headers.get(key)).toBe(value);
+      }
     });
   });
 });
