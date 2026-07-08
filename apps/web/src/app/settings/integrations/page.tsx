@@ -14,6 +14,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowLeft, Cable, Calendar, Plug2, Loader2, AlertCircle, Package, Clock, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useAuth } from '@/hooks/useAuth';
 import { useProviders, useUserConnections, useAvailableBuiltins, useGoogleCalendarStatus } from '@/hooks/useIntegrations';
 import { IntegrationStatusBadge } from '@/components/integrations/IntegrationStatusBadge';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
@@ -30,6 +31,8 @@ const visibilityLabels: Record<string, string> = {
 export default function IntegrationsSettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const { providers, isLoading: loadingProviders, error: providersError, mutate: mutateProviders } = useProviders();
   const { connections, isLoading: loadingConnections, error: connectionsError, mutate: mutateConnections } = useUserConnections();
 
@@ -59,8 +62,8 @@ export default function IntegrationsSettingsPage() {
     [connections]
   );
   const availableProviders = useMemo(
-    () => providers.filter((p) => !connectedProviderIds.has(p.id)),
-    [providers, connectedProviderIds]
+    () => providers.filter((p) => !connectedProviderIds.has(p.id) && (isAdmin || p.slug === 'github')),
+    [providers, connectedProviderIds, isAdmin]
   );
 
   const handleDisconnect = async () => {
@@ -304,67 +307,69 @@ export default function IntegrationsSettingsPage() {
         </Card>
 
         {/* Built-in Integrations */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Package className="h-5 w-5" />
-              Built-in Integrations
-            </CardTitle>
-            <CardDescription>
-              Install built-in integrations to make them available for connection.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {loadingBuiltins ? (
-              <div className="space-y-3">
-                <Skeleton className="h-16 w-full" />
-              </div>
-            ) : builtinsError ? (
-              <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
-                <AlertCircle className="h-4 w-4" />
-                <span>Failed to load available integrations</span>
-              </div>
-            ) : builtins.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">
-                All built-in integrations have been installed.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {builtins.map((builtin) => (
-                  <div
-                    key={builtin.id}
-                    className="flex items-center justify-between p-3 border rounded-lg bg-card"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="p-2 rounded-full bg-muted flex-shrink-0">
-                        <Package className="h-4 w-4 text-muted-foreground" />
-                      </div>
-                      <div className="min-w-0">
-                        <span className="font-medium">{builtin.name}</span>
-                        {builtin.description && (
-                          <p className="text-xs text-muted-foreground truncate">
-                            {builtin.description}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={installingBuiltin === builtin.id}
-                      onClick={() => handleInstallBuiltin(builtin.id)}
+        {isAdmin && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Package className="h-5 w-5" />
+                Built-in Integrations
+              </CardTitle>
+              <CardDescription>
+                Install built-in integrations to make them available for connection.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loadingBuiltins ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-16 w-full" />
+                </div>
+              ) : builtinsError ? (
+                <div className="flex items-center gap-2 p-4 text-sm text-destructive bg-destructive/10 rounded-lg">
+                  <AlertCircle className="h-4 w-4" />
+                  <span>Failed to load available integrations</span>
+                </div>
+              ) : builtins.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">
+                  All built-in integrations have been installed.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {builtins.map((builtin) => (
+                    <div
+                      key={builtin.id}
+                      className="flex items-center justify-between p-3 border rounded-lg bg-card"
                     >
-                      {installingBuiltin === builtin.id ? (
-                        <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                      ) : null}
-                      Install
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="p-2 rounded-full bg-muted flex-shrink-0">
+                          <Package className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="font-medium">{builtin.name}</span>
+                          {builtin.description && (
+                            <p className="text-xs text-muted-foreground truncate">
+                              {builtin.description}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={installingBuiltin === builtin.id}
+                        onClick={() => handleInstallBuiltin(builtin.id)}
+                      >
+                        {installingBuiltin === builtin.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                        ) : null}
+                        Install
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Connect Dialog */}
