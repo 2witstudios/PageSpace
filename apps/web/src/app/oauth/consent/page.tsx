@@ -137,6 +137,9 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   if (result.scopes.manageKeys) {
     scopeDescriptions.push(describeScopeForConsent({ kind: 'manage_keys' }, {}));
   }
+  if (result.scopes.allDrives) {
+    scopeDescriptions.push(describeScopeForConsent({ kind: 'all_drives' }, {}));
+  }
   for (const scope of result.scopes.drives.values()) {
     const driveName = driveNamesById.get(scope.driveId);
     if (scope.role.kind === 'custom') {

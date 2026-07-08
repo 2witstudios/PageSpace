@@ -49,10 +49,14 @@ import { buildKeyUpdateScope, resolveNewKeyName, type TokensCreateHandlerDeps } 
 import { findServerTokenId, runActivateCeremony } from './use.js';
 import { renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from './guidance.js';
 import {
+  allDrivesDowngradeConfirmMessage,
   availableMenuChoices,
   buildWizardScope,
+  confirmMintMessage,
   driveMultiSelectOptions,
   driveRoleChoiceToScopeArg,
+  driveTargetSelectOptions,
+  DRIVE_TARGET_SELECT_MESSAGE,
   keySelectOptions,
   menuSelectOptions,
   NON_INTERACTIVE_KEYS_MESSAGE,
@@ -60,7 +64,7 @@ import {
   renderKeysTable,
   roleSelectOptions,
 } from './logic.js';
-import type { DriveOption, DriveRoleChoice, DriveRoleSelection, KeySummary } from './logic.js';
+import type { DriveOption, DriveRoleChoice, DriveRoleSelection, DriveTargetChoice, KeySummary } from './logic.js';
 
 type FlowOutcome = ExitCode | null;
 
@@ -159,19 +163,31 @@ async function selectDriveRoleScopes(
   return selections;
 }
 
-async function promptKeyName(driveScopeArgs: readonly DriveScopeArg[], message: string): Promise<string | null> {
+async function promptKeyName(
+  driveScopeArgs: readonly DriveScopeArg[],
+  message: string,
+  options: { readonly allDrives?: boolean } = {},
+): Promise<string | null> {
   const name = await clack.text({
     message,
-    placeholder: driveScopeArgs.length === 1 ? driveScopeArgs[0].id : undefined,
+    placeholder: !options.allDrives && driveScopeArgs.length === 1 ? driveScopeArgs[0].id : undefined,
     validate: (value) => {
       const trimmed = (value ?? '').trim();
-      const result = resolveNewKeyName({ name: trimmed.length > 0 ? trimmed : undefined, drives: driveScopeArgs });
+      const result = resolveNewKeyName({
+        name: trimmed.length > 0 ? trimmed : undefined,
+        drives: driveScopeArgs,
+        allDrives: options.allDrives,
+      });
       return result.ok ? undefined : result.message;
     },
   });
   if (clack.isCancel(name)) return null;
   const trimmed = name.trim();
-  const result = resolveNewKeyName({ name: trimmed.length > 0 ? trimmed : undefined, drives: driveScopeArgs });
+  const result = resolveNewKeyName({
+    name: trimmed.length > 0 ? trimmed : undefined,
+    drives: driveScopeArgs,
+    allDrives: options.allDrives,
+  });
   return result.ok ? result.name : null;
 }
 
@@ -213,7 +229,7 @@ function consentFlowDeps(deps: TokensCreateHandlerDeps, s: ReturnType<typeof cla
 async function mintScopedKey(
   deps: TokensCreateHandlerDeps,
   store: CredentialStore,
-  params: { readonly host: string; readonly scope: string; readonly keyName: string },
+  params: { readonly host: string; readonly scope: string; readonly keyName: string; readonly displayScope?: string },
 ): Promise<LoopbackLoginResult> {
   const s = clack.spinner();
   s.start(`Opening your browser to approve access for key "${params.keyName}" on ${params.host}...`);
@@ -234,7 +250,7 @@ async function mintScopedKey(
   });
 
   if (result.outcome === 'success') {
-    s.stop(`Created key "${params.keyName}" on ${params.host}, scoped to: ${params.scope}.`);
+    s.stop(`Created key "${params.keyName}" on ${params.host}, scoped to: ${params.displayScope ?? params.scope}.`);
     if (mintedToken !== null) {
       const show = await clack.confirm({ message: SHOW_TOKEN_PROMPT, initialValue: false });
       if (!clack.isCancel(show) && show) {
@@ -251,19 +267,28 @@ async function mintScopedKey(
 interface ScopeAndMintMessages {
   readonly selectDrives: string;
   readonly keyName: string;
-  readonly confirmMint: (scope: string) => string;
+}
+
+/** Up-front "specific drives or all drives" choice — only Create offers this; see `DriveTargetChoice`'s doc comment (`logic.js`) for why Edit doesn't. */
+async function selectDriveTarget(): Promise<DriveTargetChoice | null> {
+  const choice = await clack.select<DriveTargetChoice>({
+    message: DRIVE_TARGET_SELECT_MESSAGE,
+    options: [...driveTargetSelectOptions()],
+  });
+  return clack.isCancel(choice) ? null : choice;
 }
 
 /**
- * Create's "pick drives/roles, name the key, confirm, mint" flow (Edit
- * used to share it back when editing meant minting a replacement — it now
- * re-scopes in place, see `runEdit`). Constructs the credential store exactly ONCE and
- * threads that single instance through both the overwrite check and the mint
- * itself, so `CompositeCredentialStore`'s one-way keychain-degradation notice
- * (`credentials/store.ts`) can only ever print once per flow, matching how
- * `keys create` (`commands/keys/create.ts`) does it — two independently
- * constructed stores would each probe and degrade independently, printing the
- * "OS keychain unavailable" notice twice for what is logically one operation.
+ * Create's "pick drives/roles (or all drives), name the key, confirm, mint"
+ * flow (Edit used to share it back when editing meant minting a replacement —
+ * it now re-scopes in place, see `runEdit`). Constructs the credential store
+ * exactly ONCE and threads that single instance through both the overwrite
+ * check and the mint itself, so `CompositeCredentialStore`'s one-way
+ * keychain-degradation notice (`credentials/store.ts`) can only ever print
+ * once per flow, matching how `keys create` (`commands/keys/create.ts`) does
+ * it — two independently constructed stores would each probe and degrade
+ * independently, printing the "OS keychain unavailable" notice twice for what
+ * is logically one operation.
  */
 async function selectScopeAndMint(
   ctx: HandlerContext,
@@ -273,20 +298,34 @@ async function selectScopeAndMint(
   initialDriveIds: readonly string[],
   messages: ScopeAndMintMessages,
 ): Promise<LoopbackLoginResult | null> {
-  const selections = await selectDriveRoleScopes(ctx, drives, messages.selectDrives, initialDriveIds);
-  if (selections === null) {
+  const target = await selectDriveTarget();
+  if (target === null) {
     abortSubflow();
     return null;
   }
 
-  const scopeResult = buildWizardScope(selections);
+  let driveScopeArgs: readonly DriveScopeArg[];
+  let scopeResult: ReturnType<typeof buildWizardScope>;
+
+  if (target === 'all') {
+    driveScopeArgs = [];
+    scopeResult = buildWizardScope([], { allDrives: true });
+  } else {
+    const selections = await selectDriveRoleScopes(ctx, drives, messages.selectDrives, initialDriveIds);
+    if (selections === null) {
+      abortSubflow();
+      return null;
+    }
+    driveScopeArgs = selections.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice));
+    scopeResult = buildWizardScope(selections);
+  }
+
   if (!scopeResult.ok) {
     clack.log.error(scopeResult.message);
     return null;
   }
-  const driveScopeArgs = selections.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice));
 
-  const keyName = await promptKeyName(driveScopeArgs, messages.keyName);
+  const keyName = await promptKeyName(driveScopeArgs, messages.keyName, { allDrives: target === 'all' });
   if (keyName === null) {
     abortSubflow();
     return null;
@@ -298,13 +337,18 @@ async function selectScopeAndMint(
     return null;
   }
 
-  const proceed = await clack.confirm({ message: messages.confirmMint(scopeResult.scope) });
+  const proceed = await clack.confirm({ message: confirmMintMessage(scopeResult.scope, target) });
   if (clack.isCancel(proceed) || !proceed) {
     abortSubflow();
     return null;
   }
 
-  return mintScopedKey(deps, store, { host, scope: scopeResult.scope, keyName });
+  return mintScopedKey(deps, store, {
+    host,
+    scope: scopeResult.scope,
+    keyName,
+    displayScope: target === 'all' ? 'all drives' : scopeResult.scope,
+  });
 }
 
 async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: string): Promise<FlowOutcome> {
@@ -318,7 +362,6 @@ async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, hos
   await selectScopeAndMint(ctx, deps, host, drives, [], {
     selectDrives: 'Select drives to grant access to',
     keyName: 'Name this key (agents on this machine reference it by this name)',
-    confirmMint: (scope) => `Mint a new key scoped to: ${scope}?`,
   });
   return null;
 }
@@ -348,6 +391,12 @@ async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host:
     return null;
   }
 
+  // Edit can only ever re-scope among specific drives — widening an existing
+  // key to all-drives isn't offered (see `DriveTargetChoice`'s doc comment,
+  // `logic.js`, for why). Surface the escape hatch up front rather than
+  // leaving a user who wants that stuck guessing.
+  clack.log.info('Editing narrows or changes which specific drives this key can access. To grant access to ALL drives instead, run "pagespace keys create --all-drives" to mint a new key.');
+
   const selections = await selectDriveRoleScopes(ctx, drives, `Select drives for "${key.name}"`, preselectedDriveIds(key));
   if (selections === null) return abortSubflow();
 
@@ -356,6 +405,20 @@ async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host:
   if (!updateScope.ok) {
     clack.log.error(updateScope.message);
     return null;
+  }
+
+  // Downgrade guard: this key currently has NO driveScopes with isScoped ===
+  // false, i.e. it's an --all-drives key (see `KeySummary`'s doc comment) —
+  // about to be narrowed to the specific-drive set just selected. This
+  // direction is the one Edit CAN actually perform in place (unlike the
+  // reverse — see `DriveTargetChoice`'s doc comment, `logic.js`), but it's
+  // still a real access reduction the user should confirm explicitly.
+  if (!key.isScoped) {
+    const confirmDowngrade = await clack.confirm({
+      message: allDrivesDowngradeConfirmMessage(key.name, driveScopeArgs.length),
+      initialValue: false,
+    });
+    if (clack.isCancel(confirmDowngrade) || !confirmDowngrade) return abortSubflow();
   }
 
   const proceed = await clack.confirm({

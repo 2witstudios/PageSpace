@@ -15,6 +15,7 @@ export type ParsedScope =
   | { kind: 'account' }
   | { kind: 'offline_access' }
   | { kind: 'manage_keys' }
+  | { kind: 'all_drives' }
   | { kind: 'update_key'; tokenId: string }
   | { kind: 'activate_key'; tokenId: string }
   | {
@@ -32,6 +33,15 @@ export type ScopeSet = {
   // check below); downstream fail-closed checks live in
   // apps/web/src/lib/auth/index.ts.
   manageKeys: boolean;
+  // Unrestricted access to every drive the granting user owns, including ones
+  // created later — the CLI/wizard equivalent of the web Settings > MCP "Clear
+  // selection (allow all drives)" key. Mutually exclusive with `account`,
+  // `manageKeys`, any `drive:*` scope, and `update_key:*`/`activate_key:*` (see
+  // the all_drives_conflict check below); may combine with `offlineAccess`.
+  // Resolves to an unscoped (`isScoped: false`, zero drive rows) mcp_tokens
+  // row via `isAllDrivesGrant` at token-issuance time — same treatment as
+  // `isPureDriveGrant`, just with no drive rows instead of a scoped set.
+  allDrives: boolean;
   // `update_key:<tokenId>` — this authorization request grants nothing new;
   // it re-scopes the caller's EXISTING mcp_* token (same secret) to exactly
   // the drive:* set alongside it. Riding inside the scope string (rather
@@ -60,6 +70,7 @@ export type ScopeError =
   | { code: 'empty_scope' }
   | { code: 'account_drive_conflict' }
   | { code: 'manage_keys_conflict' }
+  | { code: 'all_drives_conflict' }
   | { code: 'duplicate_drive'; driveId: string }
   | { code: 'offline_access_alone' }
   | { code: 'duplicate_update_key' }
@@ -121,6 +132,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   let account = false;
   let offlineAccess = false;
   let manageKeys = false;
+  let allDrives = false;
   let updateKeyId: string | null = null;
   let activateKeyId: string | null = null;
   const drives = new Map<string, ParsedScope & { kind: 'drive' }>();
@@ -136,6 +148,10 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     }
     if (token === 'manage_keys') {
       manageKeys = true;
+      continue;
+    }
+    if (token === 'all_drives') {
+      allDrives = true;
       continue;
     }
     if (token.startsWith('update_key:')) {
@@ -185,12 +201,23 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     return { ok: false, error: { code: 'manage_keys_conflict' } };
   }
 
+  // all_drives is its own principal shape (unrestricted, but drive-scoped —
+  // distinct from account's full-user grant and from manage_keys' zero
+  // content access), so mixing it with any of them, or with a specific
+  // drive:* set, is ambiguous the same way rule 3/11 reject those pairings.
+  if (allDrives && (account || manageKeys || drives.size > 0)) {
+    return { ok: false, error: { code: 'all_drives_conflict' } };
+  }
+
   // activate_key is a pure approval ceremony — it grants nothing, so ANY
   // other scope alongside it (including update_key or another grant) would
   // let a consent screen narrating "activate" carry a real grant. Sole-scope
   // or rejected, checked before the update_key/offline_access rules so its
   // error shape is its own.
-  if (activateKeyId !== null && (account || manageKeys || offlineAccess || updateKeyId !== null || drives.size > 0)) {
+  if (
+    activateKeyId !== null &&
+    (account || manageKeys || allDrives || offlineAccess || updateKeyId !== null || drives.size > 0)
+  ) {
     return { ok: false, error: { code: 'activate_key_not_alone' } };
   }
 
@@ -201,7 +228,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     // Nothing but drives can be attached to an mcp token, and this grant
     // mints nothing refreshable — offline_access alongside it would promise
     // a refresh credential that structurally cannot exist.
-    if (account || manageKeys || offlineAccess) {
+    if (account || manageKeys || allDrives || offlineAccess) {
       return { ok: false, error: { code: 'update_key_conflict' } };
     }
     // Re-scoping to zero drives is "disable the key" — that's revocation's
@@ -215,14 +242,15 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   // Rule 10: offline_access alone has no principal shape (Decision 2) — a
   // refresh token minted for it could only ever mint access tokens with no
   // access scope. Reject rather than grant a token that is structurally
-  // useless (fail closed, Codex #1754). manage_keys is its own principal
-  // shape, so offline_access + manage_keys is a valid, expected combination
-  // (a long-lived key-management session).
-  if (offlineAccess && !account && !manageKeys && drives.size === 0) {
+  // useless (fail closed, Codex #1754). manage_keys and all_drives are each
+  // their own principal shape, so offline_access + manage_keys or
+  // offline_access + all_drives is a valid, expected combination (a
+  // long-lived key-management or all-drives session).
+  if (offlineAccess && !account && !manageKeys && !allDrives && drives.size === 0) {
     return { ok: false, error: { code: 'offline_access_alone' } };
   }
 
-  return { ok: true, scopes: { account, offlineAccess, drives, manageKeys, updateKeyId, activateKeyId } };
+  return { ok: true, scopes: { account, offlineAccess, drives, manageKeys, allDrives, updateKeyId, activateKeyId } };
 }
 
 function formatDriveScope(scope: ParsedScope & { kind: 'drive' }): string {
@@ -244,6 +272,7 @@ export function formatScopeSet(scopes: ScopeSet): string {
   if (scopes.activateKeyId !== null) tokens.push(`activate_key:${scopes.activateKeyId}`);
   if (scopes.updateKeyId !== null) tokens.push(`update_key:${scopes.updateKeyId}`);
   if (scopes.account) tokens.push('account');
+  if (scopes.allDrives) tokens.push('all_drives');
   if (scopes.manageKeys) tokens.push('manage_keys');
   if (scopes.offlineAccess) tokens.push('offline_access');
 
@@ -279,6 +308,13 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
   // granted-bit check is the whole story.
   if (requested.manageKeys && !granted.manageKeys) return false;
 
+  // Same treatment as manage_keys: all_drives is its own principal shape,
+  // never combined with account or drive:* (parse-time exclusion), so its own
+  // granted-bit check is the whole story — a granted `account` does not
+  // implicitly satisfy a requested `all_drives` (fail closed, no cross-shape
+  // narrowing asserted by the grammar).
+  if (requested.allDrives && !granted.allDrives) return false;
+
   // update_key/activate_key never survive narrowing: each exists only inside
   // a single consent-bound authorization code, so any request carrying one
   // against a grant that doesn't carry the identical one (e.g. a
@@ -292,6 +328,16 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
   }
 
   if (granted.account) return true;
+
+  // Symmetric with the `granted.account` case above: `all_drives` is
+  // documented (ADR 0002) as "the maximum grant for a drive-scoped key" — a
+  // granted `all_drives` covers any requested `drive:*` subset the exact
+  // same way a granted `account` does. (A requested `all_drives` was already
+  // resolved by the `requested.allDrives` check above and never reaches this
+  // line unless `granted.allDrives` is also true, so this only ever narrows
+  // a plain drive:* request here — not a second, redundant path for the
+  // all_drives-vs-all_drives case.)
+  if (granted.allDrives) return true;
 
   for (const [driveId, requestedScope] of requested.drives) {
     const grantedScope = granted.drives.get(driveId);
@@ -313,6 +359,21 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
  */
 export function isPureDriveGrant(scopes: ScopeSet): boolean {
   return !scopes.account && !scopes.manageKeys && scopes.drives.size > 0 && scopes.updateKeyId === null && scopes.activateKeyId === null;
+}
+
+/**
+ * True iff this grant is the `all_drives` shape — unrestricted access to
+ * every drive the granting user owns, including ones created later. Parse-time
+ * exclusion already guarantees `account`/`manageKeys`/`drives`/`updateKeyId`/
+ * `activateKeyId` are all empty whenever this is true (see `parseScopeList`
+ * above), so this is just the "has the allDrives flag" case named for callers
+ * that need to branch on it — the token-issuance sibling of `isPureDriveGrant`:
+ * both mint a real `mcp_tokens` row instead of an OAuth refresh/access-token
+ * pair, but this shape mints it `isScoped: false` with zero drive rows
+ * instead of the drive-scoped set `isPureDriveGrant` produces.
+ */
+export function isAllDrivesGrant(scopes: ScopeSet): boolean {
+  return scopes.allDrives;
 }
 
 /**

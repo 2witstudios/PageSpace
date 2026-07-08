@@ -32,6 +32,9 @@ export function describeGrantScopes(scopes: readonly string[], resolvers: GrantS
   if (parsed.scopes.manageKeys) {
     descriptions.push(describeScopeForConsent({ kind: 'manage_keys' }, {}));
   }
+  if (parsed.scopes.allDrives) {
+    descriptions.push(describeScopeForConsent({ kind: 'all_drives' }, {}));
+  }
   if (parsed.scopes.updateKeyId !== null) {
     descriptions.push(describeScopeForConsent({ kind: 'update_key', tokenId: parsed.scopes.updateKeyId }, {}));
   }

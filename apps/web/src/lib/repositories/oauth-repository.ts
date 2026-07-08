@@ -22,7 +22,7 @@ import {
 } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
-import { parseScopeList, isScopeSubset, formatScopeSet, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
 import { sessionRepository } from './session-repository';
 
 /**
@@ -300,12 +300,23 @@ export async function exchangeAuthorizationCode(
       };
     }
 
-    if (parsedGrantedScope.ok && isPureDriveGrant(parsedGrantedScope.scopes)) {
+    // A pure drive:* grant OR an `all_drives` grant both mint a real
+    // `mcp_tokens` row, not an OAuth refresh/access-token pair — the browser
+    // consent screen is still the human-approval gate for either. `all_drives`
+    // is the CLI/wizard equivalent of the web Settings > MCP "Clear selection
+    // (allow all drives)" key: unrestricted access to every drive the user
+    // owns, including ones created later, persisted `isScoped: false` with
+    // zero drive rows instead of a drive-scoped set. Deliberately NOT the
+    // `account` branch below: `account` also grants full account control
+    // beyond drives (it resolves to a full personal OAuth session at the auth
+    // layer), which this feature must never silently produce.
+    if (parsedGrantedScope.ok && (isAllDrivesGrant(parsedGrantedScope.scopes) || isPureDriveGrant(parsedGrantedScope.scopes))) {
       await tx
         .update(oauthAuthorizationCodes)
         .set({ consumedAt: input.now })
         .where(eq(oauthAuthorizationCodes.id, row.id));
 
+      const allDrives = isAllDrivesGrant(parsedGrantedScope.scopes);
       const { token: mcpToken, hash: tokenHash, tokenPrefix } = generateToken('mcp');
       await sessionRepository.createMcpTokenWithDriveScopes(
         {
@@ -313,8 +324,8 @@ export async function exchangeAuthorizationCode(
           tokenHash,
           tokenPrefix,
           name: 'pagespace CLI',
-          isScoped: true,
-          drives: toSessionRepoDrives(parsedGrantedScope.scopes),
+          isScoped: !allDrives,
+          drives: allDrives ? [] : toSessionRepoDrives(parsedGrantedScope.scopes),
         },
         tx,
       );
