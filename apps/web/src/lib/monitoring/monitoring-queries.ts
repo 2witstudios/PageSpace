@@ -10,29 +10,11 @@ import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '
 import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
-import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { getTierFromPrice } from '@/lib/stripe/price-config';
 import type { SubscriptionTier } from '@/lib/subscription/plans';
-
-/**
- * Decrypt the displayed `userName`/`userEmail` columns on admin-panel rows (GDPR
- * #965). The SQL groupBy/orderBy on the ciphertext columns is fine (ciphertext is
- * opaque but stable per user); only the DISPLAYED value must be decrypted. Legacy
- * plaintext passes through unchanged.
- */
-async function decryptUserDisplayFields<
-  T extends { userName?: string | null; userEmail?: string | null },
->(rows: T[]): Promise<T[]> {
-  return Promise.all(
-    rows.map(async (r) => ({
-      ...r,
-      ...(r.userName !== undefined ? { userName: await decryptField(r.userName) } : {}),
-      ...(r.userEmail !== undefined ? { userEmail: await decryptField(r.userEmail) } : {}),
-    })),
-  );
-}
 
 /**
  * Get system health overview

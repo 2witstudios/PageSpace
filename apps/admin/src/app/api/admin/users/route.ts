@@ -9,12 +9,13 @@ import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { withAdminAuth } from '@/lib/auth';
 
 export const GET = withAdminAuth(async (_adminUser, _request) => {
   try {
     // Get all users
-    const allUsers = await db
+    const rawUsers = await db
       .select({
         id: users.id,
         name: users.name,
@@ -27,8 +28,12 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
         subscriptionTier: users.subscriptionTier,
         stripeCustomerId: users.stripeCustomerId,
       })
-      .from(users)
-      .orderBy(users.name);
+      .from(users);
+
+    // name/email are encrypted at rest; decrypt before any sorting/display.
+    const allUsers = (await decryptUserRows(rawUsers)).sort((a, b) =>
+      (a.name ?? '').localeCompare(b.name ?? '')
+    );
 
     if (allUsers.length === 0) {
       return Response.json({ users: [] });

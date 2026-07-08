@@ -14,6 +14,7 @@ import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/cr
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { getTierFromPrice } from './stripe/price-config';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
 
 /**
  * Get system health overview
@@ -199,7 +200,7 @@ export async function getUserActivity(startDate?: Date, endDate?: Date) {
 
   return {
     heatmapData,
-    mostActiveUsers,
+    mostActiveUsers: await decryptUserDisplayFields(mostActiveUsers),
     featureUsage,
   };
 }
@@ -292,7 +293,7 @@ export async function getAiUsageMetrics(startDate?: Date, endDate?: Date) {
     tokenUsageOverTime,
     modelPopularity,
     successRate,
-    topSpenders,
+    topSpenders: await decryptUserDisplayFields(topSpenders),
   };
 }
 
@@ -679,7 +680,7 @@ export async function getTopSpendersByMargin(
     .orderBy(desc(chargedSum))
     .limit(limit);
 
-  return rows.map((r) => ({
+  return (await decryptUserDisplayFields(rows)).map((r) => ({
     ...r,
     marginCents: r.chargedCents - r.realCostCents,
     marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
@@ -740,7 +741,7 @@ export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRo
     .orderBy(desc(creditBalances.debtCents))
     .limit(limit);
 
-  return rows.map((r) => ({
+  return (await decryptUserDisplayFields(rows)).map((r) => ({
     userId: r.userId,
     userName: r.userName,
     userEmail: r.userEmail,
@@ -785,7 +786,7 @@ export async function getBalanceDriftAlerts(
       creditBalances.debtCents,
     );
 
-  return rows
+  return (await decryptUserDisplayFields(rows))
     .map((r): BalanceDriftRow | null => {
       const drift = computeBalanceDrift(
         {
@@ -849,7 +850,7 @@ export async function getNegativeMarginAccounts(
     .orderBy(asc(sql`${chargedSum} - ${realCostSum}`))
     .limit(limit);
 
-  return rows
+  return (await decryptUserDisplayFields(rows))
     .filter((r) => isNegativeMargin(r.realCostCents, r.chargedCents, floorBps))
     .map((r) => ({
       ...r,
@@ -1015,7 +1016,7 @@ export async function getTokenUsageByUser(
   endDate?: Date,
   limit = 10,
 ): Promise<TokenUsageByUserRow[]> {
-  return db
+  const rows = await db
     .select({
       userId: aiUsageLogs.userId,
       userName: users.name,
@@ -1031,6 +1032,8 @@ export async function getTokenUsageByUser(
     .groupBy(aiUsageLogs.userId, users.name, users.email)
     .orderBy(desc(totalTokenSum))
     .limit(limit);
+
+  return decryptUserDisplayFields(rows);
 }
 
 export async function getProviderCostRollup(

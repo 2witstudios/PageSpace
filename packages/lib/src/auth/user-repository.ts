@@ -223,6 +223,26 @@ export async function decryptUsersByIdOnce<T extends DecryptableUserRow & { id: 
   return new Map(decrypted);
 }
 
+/**
+ * Decrypt the displayed `userName`/`userEmail` columns on admin-panel/monitoring
+ * rows (GDPR #965). The SQL groupBy/orderBy on the ciphertext columns is fine
+ * (ciphertext is opaque but stable per user); only the DISPLAYED value must be
+ * decrypted. Legacy plaintext passes through unchanged. Distinct from
+ * `decryptUserRows` because monitoring queries alias the joined columns to
+ * `userName`/`userEmail` rather than `name`/`email`.
+ */
+export async function decryptUserDisplayFields<
+  T extends { userName?: string | null; userEmail?: string | null },
+>(rows: T[]): Promise<T[]> {
+  return Promise.all(
+    rows.map(async (r) => ({
+      ...r,
+      ...(r.userName !== undefined ? { userName: await decryptField(r.userName) } : {}),
+      ...(r.userEmail !== undefined ? { userEmail: await decryptField(r.userEmail) } : {}),
+    })),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Convenience full-row lookup
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import { eq, and, desc, gte, lte, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
 import { withAdminAuth } from '@/lib/auth';
 import { format } from 'date-fns';
 
@@ -211,9 +212,29 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
               .limit(BATCH_SIZE)
               .offset(offset);
 
+            // users.name/email are encrypted at rest, and activityLogs.actorEmail/actorDisplayName
+            // are denormalized snapshots that may also hold ciphertext from historical write paths
+            // that predate the actor-info decrypt-before-write fix. Decrypt all four for export,
+            // batching the joined and snapshot columns of the same shape together so a repeated
+            // actor across many rows only decrypts once per unique value.
+            const decryptName = await decryptFieldValuesOnce([
+              ...logs.map((log) => log.userName),
+              ...logs.map((log) => log.actorDisplayName),
+            ]);
+            const decryptEmail = await decryptFieldValuesOnce([
+              ...logs.map((log) => log.userEmail),
+              ...logs.map((log) => log.actorEmail),
+            ]);
+
             // Write each log as a CSV row
             for (const log of logs) {
-              const row = logToCSVRow(log as Record<string, unknown>);
+              const row = logToCSVRow({
+                ...log,
+                userName: decryptName(log.userName),
+                userEmail: decryptEmail(log.userEmail),
+                actorDisplayName: decryptName(log.actorDisplayName),
+                actorEmail: decryptEmail(log.actorEmail),
+              } as Record<string, unknown>);
               controller.enqueue(encoder.encode(row + '\n'));
             }
 
