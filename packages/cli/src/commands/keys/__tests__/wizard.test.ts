@@ -638,6 +638,50 @@ describe('createKeysHandler — Set active key flow (menu choice "use")', () => 
     expect(stopMessages).toContain('"my-agent" is now the active key');
   });
 
+  it('activates by exact name match even when listCredentialNames is broken (regression: real OS keychains have been observed truncating enumerated account names, making the reverse-lookup fallback unable to find anything)', async () => {
+    selectMock.mockReset().mockResolvedValueOnce('use').mockResolvedValueOnce('tok1').mockResolvedValueOnce('exit');
+    spinnerHandle.stop.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const { createFakeActiveKeyStore } = await import('../../../__tests__/fake-context.js');
+    const base = fakeStore();
+    // The local profile name is IDENTICAL to the server key's name ("CI bot")
+    // — exactly the case create.ts always produces (resolveNewKeyName writes
+    // the name verbatim as the profile, and the same string is embedded as
+    // the mint's name:<...> token). listCredentialNames simulates a real
+    // truncated-keychain enumeration: it can see something is stored, but
+    // never returns "CI bot" as a distinguishable name.
+    const store: CredentialStore = {
+      ...base,
+      listCredentialNames: async () => ['default'],
+    };
+    await store.set(
+      'https://pagespace.ai',
+      { kind: 'static', token: 'mcp_abcdefghijk_full_secret', scopes: ['drive:drv1:member'], createdAt: '2026-07-01T00:00:00.000Z' },
+      'CI bot',
+    );
+
+    const fake = fakeLoopbackServer();
+    const deps = {
+      ...baseMintDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp_activate' as const, tokenId: 'tok1', scope: 'activate_key:tok1' }),
+    };
+    const handler = createKeysHandler(deps);
+
+    const activeKeyStore = createFakeActiveKeyStore();
+    const sdk = fakeSdk({ tokensList: vi.fn(async () => [SERVER_KEY]) });
+    const ctx = createFakeContext({ sdk, activeKeyStore, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(activeKeyStore.entries.get('https://pagespace.ai')).toBe('CI bot');
+    const stopMessages = spinnerHandle.stop.mock.calls.flat().map(String).join('\n');
+    expect(stopMessages).toContain('"CI bot" is now the active key');
+  });
+
   it('a key with no locally stored credential cannot be activated from the wizard', async () => {
     selectMock.mockReset().mockResolvedValueOnce('use').mockResolvedValueOnce('tok1').mockResolvedValueOnce('exit');
     logMock.error.mockReset();
