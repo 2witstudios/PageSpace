@@ -86,6 +86,42 @@ describe('buildTokenScope', () => {
   });
 });
 
+describe('buildTokenScope — --all-drives', () => {
+  it('builds "all_drives offline_access" when allDrives is true and no drives are given', () => {
+    expect(buildTokenScope([], { allDrives: true })).toEqual({
+      ok: true,
+      scope: 'all_drives offline_access',
+    });
+  });
+
+  it('rejects --all-drives combined with --drive', () => {
+    expect(buildTokenScope([{ id: 'drv1', role: null }], { allDrives: true })).toEqual({
+      ok: false,
+      message: '--all-drives cannot be combined with --drive.',
+    });
+  });
+
+  it('never infers all_drives from an empty drives array without the explicit option — the zero-drive usage error stays a usage error', () => {
+    expect(buildTokenScope([])).toEqual({
+      ok: false,
+      message: 'At least one --drive is required to create a scoped token.',
+    });
+  });
+
+  it('drift guard: the canonical parser accepts "all_drives offline_access" as an all_drives grant', () => {
+    const result = buildTokenScope([], { allDrives: true });
+    if (!result.ok) throw new Error('expected buildTokenScope to succeed');
+
+    const parsed = parseScopeList(result.scope);
+    if (!parsed.ok) throw new Error(`expected the canonical parser to accept: ${result.scope}`);
+
+    expect(parsed.scopes.allDrives).toBe(true);
+    expect(parsed.scopes.offlineAccess).toBe(true);
+    expect(parsed.scopes.drives.size).toBe(0);
+    expect(parseScopeList(formatScopeSet(parsed.scopes))).toEqual(parsed);
+  });
+});
+
 describe('buildTokenScope — drift guard vs @pagespace/lib canonical grammar', () => {
   it('produces a scope string the canonical parser accepts as the intended drive/role/offline_access set', () => {
     const result = buildTokenScope([
@@ -204,6 +240,26 @@ describe('resolveNewKeyName', () => {
   it('is a pure function: identical input produces a deep-equal result', () => {
     const input = { name: undefined, drives: [{ id: 'drv1', role: null }] as DriveScopeArg[] };
     expect(resolveNewKeyName(input)).toEqual(resolveNewKeyName(input));
+  });
+
+  it('requires an explicit --name when using --all-drives (no drive id to default to)', () => {
+    expect(resolveNewKeyName({ name: undefined, drives: [], allDrives: true })).toEqual({
+      ok: false,
+      message: '--name <name> is required when using --all-drives.',
+    });
+  });
+
+  it('accepts an explicit --name with --all-drives', () => {
+    expect(resolveNewKeyName({ name: 'god-key', drives: [], allDrives: true })).toEqual({
+      ok: true,
+      name: 'god-key',
+    });
+  });
+
+  it('rejects "default" as the --all-drives key name too', () => {
+    const result = resolveNewKeyName({ name: 'default', drives: [], allDrives: true });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain('pagespace login');
   });
 });
 
@@ -704,6 +760,158 @@ describe('createTokensCreateHandler', () => {
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
     expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
+  });
+
+  it('--all-drives --yes mints a key scoped to "all drives" and stores it under the given name', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    let requestedScope: string | undefined;
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: async (url) => {
+        requestedScope = new URL(url).searchParams.get('scope') ?? undefined;
+        return autoApprove(fake)(url);
+      },
+    });
+
+    const code = await handler(
+      createFakeContext({ env: {} }),
+      commandIntent(['keys', 'create', '--all-drives', '--name', 'god-key', '--yes']),
+    );
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(requestedScope).toBe('all_drives offline_access');
+    const stored = await store.get('https://pagespace.ai', 'god-key');
+    expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
+  });
+
+  it('--all-drives prints "scoped to: all drives" rather than the raw scope string', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--all-drives', '--name', 'god-key', '--yes']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(stdout.lines.join('')).toContain('scoped to: all drives.');
+    expect(stdout.lines.join('')).not.toContain('all_drives offline_access');
+  });
+
+  it('--all-drives requires --name (no drive id to default to) as a usage error without opening a browser', async () => {
+    const store = fakeStore();
+    let browserOpened = false;
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      openBrowser: async () => {
+        browserOpened = true;
+        return true;
+      },
+    });
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--all-drives', '--yes']));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(stderr.lines.join('')).toContain('--all-drives');
+    expect(browserOpened).toBe(false);
+  });
+
+  it('--all-drives combined with --drive is a usage error without opening a browser', async () => {
+    const store = fakeStore();
+    let browserOpened = false;
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      openBrowser: async () => {
+        browserOpened = true;
+        return true;
+      },
+    });
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+
+    const code = await handler(
+      ctx,
+      commandIntent(['keys', 'create', '--all-drives', '--drive', 'drv1', '--name', 'god-key', '--yes']),
+    );
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(stderr.lines.join('')).toContain('--all-drives cannot be combined with --drive.');
+    expect(browserOpened).toBe(false);
+  });
+
+  it('--all-drives without --yes in a non-TTY session fails closed without opening a browser', async () => {
+    const store = fakeStore();
+    let browserOpened = false;
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      openBrowser: async () => {
+        browserOpened = true;
+        return true;
+      },
+    });
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {}, isTTY: false });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--all-drives', '--name', 'god-key']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toMatch(/--yes/);
+    expect(browserOpened).toBe(false);
+  });
+
+  it('--all-drives without --yes in a TTY session prompts and proceeds on an affirmative answer', async () => {
+    const store = fakeStore();
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+    });
+    let promptedMessage: string | undefined;
+    const ctx = createFakeContext({
+      env: {},
+      isTTY: true,
+      prompt: async (message) => {
+        promptedMessage = message;
+        return 'y';
+      },
+    });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--all-drives', '--name', 'god-key']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(promptedMessage).toMatch(/ALL your drives/);
+    const stored = await store.get('https://pagespace.ai', 'god-key');
+    expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
+  });
+
+  it('--all-drives without --yes in a TTY session aborts without opening a browser on a declined answer', async () => {
+    const store = fakeStore();
+    let browserOpened = false;
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(store),
+      openBrowser: async () => {
+        browserOpened = true;
+        return true;
+      },
+    });
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {}, isTTY: true, prompt: async () => 'n' });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--all-drives', '--name', 'god-key']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(browserOpened).toBe(false);
+    expect(await store.get('https://pagespace.ai', 'god-key')).toBeNull();
   });
 
   it('maps exhausting all loopback port-bind attempts to exit 1 without storing a credential', async () => {

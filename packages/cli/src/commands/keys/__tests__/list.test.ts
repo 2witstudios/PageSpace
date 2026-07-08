@@ -53,6 +53,28 @@ describe('tokensListHandler', () => {
     expect(output).toContain('Engineering');
   });
 
+  it('renders an isScoped:false, zero-drive token as "all drives", distinct from an orphaned scoped token', async () => {
+    const orphaned = {
+      id: 't3',
+      name: 'Orphaned key',
+      tokenPrefix: 'mcp_orphanorphan',
+      lastUsed: null,
+      createdAt: '2026-05-01T00:00:00.000Z',
+      isScoped: true,
+      driveScopes: [],
+    };
+    const invoke = vi.fn(async () => [...TOKENS, orphaned]);
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk(invoke) });
+
+    const code = await tokensListHandler(ctx, commandIntent(['keys', 'list']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const lines = stdout.lines.join('').split('\n');
+    expect(lines.find((line) => line.startsWith('Full access key'))).toContain('all drives');
+    expect(lines.find((line) => line.startsWith('Orphaned key'))).toContain('NO ACCESS (orphaned)');
+  });
+
   it('emits the raw token array as JSON with --json', async () => {
     const invoke = vi.fn(async () => TOKENS);
     const stdout = createRecordingSink();

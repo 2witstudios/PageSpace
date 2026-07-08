@@ -68,7 +68,7 @@ export function CreateUserForm({ onSuccess }: CreateUserFormProps) {
         </div>
       )}
       {success && (
-        <div className="flex items-start gap-2 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700 dark:border-green-800 dark:bg-green-950/50 dark:text-green-400">
+        <div className="flex items-start gap-2 rounded-md border border-success/30 bg-success/10 p-3 text-sm text-success">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{success}</span>
         </div>

@@ -61,21 +61,21 @@ vi.mock('@pagespace/lib/services/preview', () => ({
   buildThreadPreview: vi.fn(() => 'preview'),
 }));
 vi.mock('@/lib/ai/core/command-resolver', () => ({
-  planCommandExecution: vi.fn(),
+  planCommandExecutions: vi.fn(),
 }));
 
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
-import { planCommandExecution } from '@/lib/ai/core/command-resolver';
+import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import type { CommandExecutionPlan } from '@/lib/ai/core/command-processor';
 import { triggerMentionedAgentResponses } from '../agent-mention-responder';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
-const mockPlanCommandExecution = vi.mocked(planCommandExecution);
+const mockPlanCommandExecutions = vi.mocked(planCommandExecutions);
 const mockAskAgentExecute = agentCommunicationTools.ask_agent.execute as unknown as Mock;
 const mockSendChannelExecute = channelTools.send_channel_message.execute as unknown as Mock;
 
@@ -123,28 +123,28 @@ beforeEach(() => {
   mockCanUserViewPage.mockResolvedValue(true);
   mockAskAgentExecute.mockResolvedValue({ success: true, response: 'done' });
   mockSendChannelExecute.mockResolvedValue({ success: true });
-  mockPlanCommandExecution.mockResolvedValue(null);
+  mockPlanCommandExecutions.mockResolvedValue([]);
 });
 
 describe('triggerMentionedAgentResponses — universal commands', () => {
   it("resolves the command with the SENDER's permissions and the channel's drive context", async () => {
-    mockPlanCommandExecution.mockResolvedValue(injectPlan);
+    mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
     await triggerMentionedAgentResponses({ ...baseParams, driveId: 'drive-1' });
-    expect(mockPlanCommandExecution).toHaveBeenCalledWith(baseParams.content, 'user-1', {
+    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, 'user-1', {
       driveId: 'drive-1',
     });
   });
 
   it('resolves with a null drive context when the channel has none', async () => {
-    mockPlanCommandExecution.mockResolvedValue(injectPlan);
+    mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
     await triggerMentionedAgentResponses(baseParams);
-    expect(mockPlanCommandExecution).toHaveBeenCalledWith(baseParams.content, 'user-1', {
+    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, 'user-1', {
       driveId: null,
     });
   });
 
   it('injects the command section into the agent ask context', async () => {
-    mockPlanCommandExecution.mockResolvedValue(injectPlan);
+    mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
     await triggerMentionedAgentResponses(baseParams);
 
     const askArgs = mockAskAgentExecute.mock.calls[0][0] as { context: string };
@@ -153,7 +153,7 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
   });
 
   it('passes the skip notice into the ask context for a skipped command', async () => {
-    mockPlanCommandExecution.mockResolvedValue(skipPlan);
+    mockPlanCommandExecutions.mockResolvedValue([skipPlan]);
     await triggerMentionedAgentResponses(baseParams);
 
     const askArgs = mockAskAgentExecute.mock.calls[0][0] as { context: string };
@@ -161,7 +161,7 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
   });
 
   it('adds nothing to the ask context when the message has no command', async () => {
-    mockPlanCommandExecution.mockResolvedValue(null);
+    mockPlanCommandExecutions.mockResolvedValue([]);
     await triggerMentionedAgentResponses(baseParams);
 
     const askArgs = mockAskAgentExecute.mock.calls[0][0] as { context: string };
@@ -169,21 +169,23 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
   });
 
   it('threads execution feedback into the top-level reply tool context', async () => {
-    mockPlanCommandExecution.mockResolvedValue(injectPlan);
+    mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
     await triggerMentionedAgentResponses(baseParams);
 
     const sendOptions = mockSendChannelExecute.mock.calls[0][1] as {
       experimental_context: { commandExecution?: unknown };
     };
-    expect(sendOptions.experimental_context.commandExecution).toEqual({
-      label: 'release-checklist',
-      status: 'used',
-      entryPageTitle: 'Release Checklist',
-    });
+    expect(sendOptions.experimental_context.commandExecution).toEqual([
+      {
+        label: 'release-checklist',
+        status: 'used',
+        entryPageTitle: 'Release Checklist',
+      },
+    ]);
   });
 
   it('attaches execution feedback to thread replies via aiMeta', async () => {
-    mockPlanCommandExecution.mockResolvedValue(skipPlan);
+    mockPlanCommandExecutions.mockResolvedValue([skipPlan]);
     mockInsertChannelThreadReply.mockResolvedValue({
       kind: 'ok',
       reply: { id: 'reply-1' },
@@ -199,20 +201,51 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
     const insertInput = mockInsertChannelThreadReply.mock.calls[0][0] as {
       aiMeta: { commandExecution?: unknown };
     };
-    expect(insertInput.aiMeta.commandExecution).toEqual({
-      label: 'release-checklist',
-      status: 'skipped',
-      reason: 'disabled',
-    });
+    expect(insertInput.aiMeta.commandExecution).toEqual([
+      {
+        label: 'release-checklist',
+        status: 'skipped',
+        reason: 'disabled',
+      },
+    ]);
   });
 
   it('omits commandExecution entirely when there is no command', async () => {
-    mockPlanCommandExecution.mockResolvedValue(null);
+    mockPlanCommandExecutions.mockResolvedValue([]);
     await triggerMentionedAgentResponses(baseParams);
 
     const sendOptions = mockSendChannelExecute.mock.calls[0][1] as {
       experimental_context: Record<string, unknown>;
     };
     expect('commandExecution' in sendOptions.experimental_context).toBe(false);
+  });
+
+  it('threads feedback for EVERY resolved command, in order, including a skip followed by an inject', async () => {
+    // Regression case flagged in review: with only the first plan surfaced,
+    // a skip-then-inject ordering would render a misleading pill (showing
+    // "Skipped /gone" while the reply was actually informed by the second,
+    // successfully-injected command). All resolved commands must be present.
+    const otherInjectPlan: CommandExecutionPlan = {
+      kind: 'inject',
+      injection: {
+        commandId: 'other1234567890123456',
+        trigger: 'help',
+        label: 'help',
+        scope: 'builtin',
+        description: 'Show available commands.',
+        entryPage: null,
+        children: [],
+      },
+    };
+    mockPlanCommandExecutions.mockResolvedValue([skipPlan, otherInjectPlan]);
+    await triggerMentionedAgentResponses(baseParams);
+
+    const sendOptions = mockSendChannelExecute.mock.calls[0][1] as {
+      experimental_context: { commandExecution?: unknown };
+    };
+    expect(sendOptions.experimental_context.commandExecution).toEqual([
+      { label: 'release-checklist', status: 'skipped', reason: 'disabled' },
+      { label: 'help', status: 'used' },
+    ]);
   });
 });

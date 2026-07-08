@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { createHash } from 'crypto';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 /**
  * WebSocket Security Utilities
@@ -25,10 +26,7 @@ import { createHash } from 'crypto';
  */
 export function getConnectionFingerprint(request: NextRequest): string {
   // Extract IP address (handle proxies)
-  const ip =
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-    request.headers.get('x-real-ip') ||
-    'unknown';
+  const ip = getClientIP(request);
 
   // Extract User-Agent
   const userAgent = request.headers.get('user-agent') || 'unknown';

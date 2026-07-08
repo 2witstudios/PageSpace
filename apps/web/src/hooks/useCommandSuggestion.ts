@@ -79,9 +79,11 @@ const FILTER_DEBOUNCE_MS = 200;
  *
  * Mirrors the mention `useSuggestion` grammar (query extraction, Escape
  * dismissal memory, close-when-no-trigger, placement-aware keyboard nav) with
- * the spec §1.1 deltas: start-of-message only, one command per message, and
- * opening only on typing insertions (`InputEvent.inputType`), which the
- * mention hook's value-diffing cannot distinguish. State is hook-local — the
+ * the spec §1.1 deltas: trigger position mirrors the mention rule (mid-message
+ * allowed, multiple command chips per message allowed — only an existing
+ * chip's own tracked range excludes a fresh trigger) and opening only on
+ * typing insertions (`InputEvent.inputType`), which the mention hook's
+ * value-diffing cannot distinguish. State is hook-local — the
  * picker has no inner search input, so keyboard events flow through the
  * textarea and the hook owns the item list (unlike `MentionPickerPortal`,
  * which fetches behind an autofocused search field).
@@ -211,7 +213,6 @@ export function useCommandSuggestion({
         cursorPos,
         inputType,
         isComposing: isComposingRef.current,
-        hasCommandToken: tokens.some((t) => t.type === COMMAND_TOKEN_TYPE),
         tokenRanges: tokens,
         isOpen: isOpenRef.current,
         memory: memoryRef.current,

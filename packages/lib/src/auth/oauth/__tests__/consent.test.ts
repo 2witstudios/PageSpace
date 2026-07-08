@@ -50,6 +50,12 @@ describe('describeScopeForConsent', () => {
     expect(text).toMatch(/cannot read or write/i);
   });
 
+  it('describes all_drives as the maximum grant for a drive-scoped key', () => {
+    const text = describeScopeForConsent({ kind: 'all_drives' }, {});
+    expect(text).toMatch(/all your drives/i);
+    expect(text).toMatch(/created later/i);
+  });
+
   it('describes a custom-role drive scope by resolved role name + summary', () => {
     const scope: ParsedScope = { kind: 'drive', driveId: 'drv123', role: { kind: 'custom', customRoleId: 'role1' } };
     const text = describeScopeForConsent(scope, {

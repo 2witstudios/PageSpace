@@ -2,11 +2,8 @@ import { NextResponse } from 'next/server';
 import { withAdminAuth } from '@/lib/auth';
 import {
   getSystemHealth,
-  getApiMetrics,
   getUserActivity,
-  getAiUsageMetrics,
   getErrorAnalytics,
-  getPerformanceMetrics,
   getGrowthMetrics,
   getDateRange
 } from '@/lib/monitoring';
@@ -33,25 +30,13 @@ export const GET = withAdminAuth<RouteContext>(async (_adminUser, request, conte
       case 'system-health':
         data = await getSystemHealth(startDate, endDate);
         break;
-        
-      case 'api-metrics':
-        data = await getApiMetrics(startDate, endDate);
-        break;
-        
+
       case 'user-activity':
         data = await getUserActivity(startDate, endDate);
         break;
-        
-      case 'ai-usage':
-        data = await getAiUsageMetrics(startDate, endDate);
-        break;
-        
+
       case 'error-logs':
         data = await getErrorAnalytics(startDate, endDate);
-        break;
-        
-      case 'performance':
-        data = await getPerformanceMetrics(startDate, endDate);
         break;
 
       case 'growth':

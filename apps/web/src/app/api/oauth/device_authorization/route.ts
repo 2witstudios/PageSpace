@@ -61,7 +61,29 @@ export async function POST(req: NextRequest) {
     // pollDeviceToken has no ok_mcp_update/ok_mcp_activate branch — reject at
     // the door rather than mint a device code that could only dead-end (fail
     // closed).
-    if (parsed.scopes.updateKeyId !== null || parsed.scopes.activateKeyId !== null) {
+    //
+    // all_drives is rejected for the same reason: pollDeviceToken has no
+    // isAllDrivesGrant branch either — it mints a plain OAuth access/refresh
+    // pair via issueInitialTokenPair, persisting `all_drives` verbatim into
+    // `oauth_access_tokens.scopes`. `scopeSetToDriveScopes` returns zero rows
+    // for all_drives (by design — "all drives" has no drive list to
+    // enumerate), so such a token would carry `allowedDriveIds: []` — a shape
+    // this codebase's two authorization helper families disagree on: the
+    // `isScopedOAuthAuth`/`getScopedAccessLevel` path (principal-permissions.ts)
+    // treats it as a scoped app member with zero drive rows and denies
+    // everything (the orphaned-key shape, ADR 0002 F6); the
+    // `checkMCPDriveScope`/`getAllowedDriveIds` path (index.ts) treats an
+    // empty `allowedDriveIds` as full access and would grant everything.
+    // Which one a given route hits depends on which helper it calls — this
+    // ambiguity already exists in the codebase for any malformed empty-scope
+    // OAuth token and is out of scope to resolve here. all_drives only
+    // resolves unambiguously when minted as a real, unscoped
+    // (`isScoped: false`) `mcp_tokens` row, which only the authorization_code
+    // exchange's `isAllDrivesGrant` branch produces (`oauth-repository.ts`).
+    // Rejecting at the device door means a bearer token in this ambiguous
+    // shape can never be minted in the first place, sidestepping the
+    // ambiguity rather than resolving it.
+    if (parsed.scopes.updateKeyId !== null || parsed.scopes.activateKeyId !== null || parsed.scopes.allDrives) {
       return noStoreJson({ error: 'invalid_scope' }, 400);
     }
     scopes = formatScopeSet(parsed.scopes).split(' ').filter(Boolean);

@@ -31,6 +31,7 @@ import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
 import { MessageLinkPreviews } from '@/components/messages/MessageLinkPreviews';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 import { isCommandInertForMessage } from '@/lib/commands/command-chip-model';
+import { normalizeCommandExecutionList } from '@/lib/commands/execution-indicator-model';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
@@ -70,8 +71,9 @@ export interface ThreadReply {
   file?: FileRelation | null;
   reactions?: Reaction[];
   aiSenderName?: string | null;
-  /** Universal Commands execution feedback on agent replies (UX spec §7). */
-  commandExecution?: ThreadCommandExecution | null;
+  /** Universal Commands execution feedback on agent replies (UX spec §7) —
+   * one entry per resolved command in the triggering message, in order. */
+  commandExecution?: ThreadCommandExecution[] | null;
   parentId?: string | null;
 }
 
@@ -122,7 +124,11 @@ interface RawReply {
   // channel shape
   userId?: string | null;
   user?: { id: string; name: string | null; image: string | null } | null;
-  aiMeta?: { senderName: string; commandExecution?: ThreadCommandExecution } | null;
+  // Rows persisted before multi-command support shipped still carry a
+  // single object here (no data migration for the jsonb column) — always
+  // read this through normalizeCommandExecutionList, never assume the array
+  // shape.
+  aiMeta?: { senderName: string; commandExecution?: ThreadCommandExecution[] | ThreadCommandExecution } | null;
   // dm shape
   senderId?: string | null;
   sender?: { id: string; name: string | null; image: string | null } | null;
@@ -168,7 +174,9 @@ const normalizeReply = (raw: RawReply): ThreadReply => ({
   file: raw.file ?? null,
   reactions: raw.reactions ?? [],
   aiSenderName: raw.aiMeta?.senderName ?? null,
-  commandExecution: raw.aiMeta?.commandExecution ?? null,
+  commandExecution: raw.aiMeta?.commandExecution
+    ? (normalizeCommandExecutionList(raw.aiMeta.commandExecution) as ThreadCommandExecution[])
+    : null,
   parentId: raw.parentId ?? null,
 });
 
@@ -826,9 +834,9 @@ export function ThreadPanel({
                     </div>
                   ) : (
                     <>
-                      {reply.commandExecution && (
-                        <CommandExecutionIndicator data={reply.commandExecution} />
-                      )}
+                      {reply.commandExecution?.map((execution, index) => (
+                        <CommandExecutionIndicator key={index} data={execution} />
+                      ))}
                       {reply.content && (
                         <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
                           <RichText

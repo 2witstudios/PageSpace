@@ -43,19 +43,19 @@ describe('generateCodeVerifier', () => {
 });
 
 describe('deriveCodeChallenge', () => {
-  it('derives BASE64URL(SHA256(ASCII(verifier)))', () => {
+  it('derives BASE64URL(SHA256(ASCII(verifier)))', async () => {
     // Known RFC 7636 Appendix B test vector.
     const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
-    expect(deriveCodeChallenge(verifier)).toBe('E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+    await expect(deriveCodeChallenge(verifier)).resolves.toBe('E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
   });
 
-  it('is pure — same verifier in, same challenge out, every time', () => {
+  it('is pure — same verifier in, same challenge out, every time', async () => {
     const verifier = 'a-fixed-verifier-string-for-determinism-check';
-    expect(deriveCodeChallenge(verifier)).toBe(deriveCodeChallenge(verifier));
+    expect(await deriveCodeChallenge(verifier)).toBe(await deriveCodeChallenge(verifier));
   });
 
-  it('produces a challenge with no padding characters', () => {
-    const challenge = deriveCodeChallenge('some-arbitrary-verifier-value-1234567890');
+  it('produces a challenge with no padding characters', async () => {
+    const challenge = await deriveCodeChallenge('some-arbitrary-verifier-value-1234567890');
     expect(challenge).not.toContain('=');
   });
 });

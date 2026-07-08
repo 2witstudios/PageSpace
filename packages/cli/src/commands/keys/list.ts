@@ -14,6 +14,7 @@ import type { z } from 'zod';
 import { listMcpTokens } from '@pagespace/sdk';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../../exit-codes.js';
 import type { CommandHandler } from '../../router/router.js';
+import { describeEmptyDriveScopes } from './logic.js';
 
 export const tokensList: CommandHandler = async (ctx, intent) => {
   let tokens: z.infer<typeof listMcpTokens.outputSchema>;
@@ -35,7 +36,10 @@ export const tokensList: CommandHandler = async (ctx, intent) => {
   }
 
   for (const token of tokens) {
-    const scopes = token.driveScopes.length > 0 ? token.driveScopes.map((drive) => drive.name).join(', ') : '(unscoped)';
+    const scopes =
+      token.driveScopes.length > 0
+        ? token.driveScopes.map((drive) => drive.name).join(', ')
+        : describeEmptyDriveScopes(token.isScoped);
     ctx.stdout.write(
       `${token.name}\t${token.tokenPrefix}\t${scopes}\tcreated ${token.createdAt}\tlast used ${token.lastUsed ?? 'never'}\n`,
     );

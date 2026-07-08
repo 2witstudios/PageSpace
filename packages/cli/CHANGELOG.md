@@ -2,6 +2,15 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.1] — 2026-07-08
+
+### Changed
+
+- **Requires `@pagespace/sdk` `^2.0.0`** (was `^1.5.0`). The SDK's `deriveCodeChallenge` — used
+  internally by `pagespace login`'s loopback flow — became `async` in the SDK's `2.0.0` release
+  (browser-compat fix; see `@pagespace/sdk`'s changelog), so `loopback-flow.ts` now `await`s it.
+  No user-facing behavior change.
+
 ## [1.5.0] — 2026-07-07
 
 ### Added

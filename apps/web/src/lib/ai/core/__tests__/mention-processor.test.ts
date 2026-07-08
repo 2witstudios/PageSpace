@@ -47,7 +47,7 @@ describe('processMentionsInMessage', () => {
     });
   });
 
-  describe('given a message with a leading command chip (phase 2: inert until execution ships)', () => {
+  describe('given a message with a leading command chip (the mention processor ignores it — command execution is handled separately by command-processor.ts)', () => {
     it('should ignore the /[Label](commandId:command) token and process mentions normally', () => {
       const result = processMentionsInMessage(
         '/[release-checklist](cmd1:command) compare @[Doc A](id1:page)'

@@ -25,6 +25,7 @@ import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 import { isCommandInertForMessage } from '@/lib/commands/command-chip-model';
+import { normalizeCommandExecutionList } from '@/lib/commands/execution-indicator-model';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -54,18 +55,24 @@ interface ChannelViewProps {
   page: ChannelRef;
 }
 
+interface CommandExecutionEntry {
+  label: string;
+  status: 'used' | 'skipped';
+  reason?: 'page_trashed' | 'no_access' | 'not_found' | 'disabled';
+  entryPageTitle?: string;
+}
+
 // AI sender metadata for messages posted by AI tools
 interface AiMeta {
   senderType: 'global_assistant' | 'agent';
   senderName: string;
   agentPageId?: string;
-  // Universal Commands execution feedback (UX spec §7) on agent replies
-  commandExecution?: {
-    label: string;
-    status: 'used' | 'skipped';
-    reason?: 'page_trashed' | 'no_access' | 'not_found' | 'disabled';
-    entryPageTitle?: string;
-  };
+  // Universal Commands execution feedback (UX spec §7) on agent replies —
+  // one entry per resolved command in the triggering message, in order.
+  // Rows persisted before multi-command support shipped still carry a
+  // single object (no data migration for the jsonb column) — always read
+  // this through normalizeCommandExecutionList, never assume the array shape.
+  commandExecution?: CommandExecutionEntry[] | CommandExecutionEntry;
 }
 
 
@@ -584,9 +591,9 @@ function ChannelView({ page }: ChannelViewProps) {
               {new Date(m.createdAt).toLocaleTimeString()}
             </span>
           </div>
-          {m.aiMeta?.commandExecution && (
-            <CommandExecutionIndicator data={m.aiMeta.commandExecution} />
-          )}
+          {normalizeCommandExecutionList(m.aiMeta?.commandExecution).map((execution, index) => (
+            <CommandExecutionIndicator key={index} data={execution} />
+          ))}
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
               <RichText
@@ -763,9 +770,9 @@ function ChannelView({ page }: ChannelViewProps) {
                                     {(m.quotedMessage || m.quotedMessageId) && (
                                       <MessageQuoteBlock quoted={m.quotedMessage ?? null} />
                                     )}
-                                    {m.aiMeta?.commandExecution && (
-                                      <CommandExecutionIndicator data={m.aiMeta.commandExecution} />
-                                    )}
+                                    {normalizeCommandExecutionList(m.aiMeta?.commandExecution).map((execution, index) => (
+                                      <CommandExecutionIndicator key={index} data={execution} />
+                                    ))}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
                                         <RichText

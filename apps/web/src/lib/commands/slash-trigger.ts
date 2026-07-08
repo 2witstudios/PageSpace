@@ -4,8 +4,10 @@ import { findEditRegion } from '@/lib/tokens/message-tokens';
  * Pure state machine for the universal `/` command trigger (spec §1.1).
  *
  * Deltas from the mention trigger lifecycle in `useSuggestion`:
- *   - `/` triggers only at the start of the message (position 0 or preceded
- *     only by whitespace), one command per message;
+ *   - trigger position matches the mention rule exactly: `/` is valid at
+ *     position 0 or immediately after whitespace, anywhere in the message,
+ *     any number of times — the only exclusion is an existing tracked token
+ *     range (a `/` inside an already-inserted chip is never a fresh trigger);
  *   - the picker opens only when a *typing insertion* (keystroke or committed
  *     IME composition, per `InputEvent.inputType`) places the `/` at the
  *     trigger position — paste/drop/autofill stay literal;
@@ -25,7 +27,9 @@ export interface TokenRange {
 
 /**
  * Find the active `/` trigger for the current value + cursor, or null.
- * Mirrors the mention detection grammar with the start-of-message constraint.
+ * Mirrors the mention detection grammar: a `/` is a valid trigger at
+ * position 0 or immediately after whitespace, anywhere in the message
+ * (same rule as the `@` mention trigger in useSuggestion.ts).
  */
 export function findSlashTrigger(
   value: string,
@@ -33,11 +37,25 @@ export function findSlashTrigger(
   tokenRanges: readonly TokenRange[] = []
 ): SlashTriggerHit | null {
   const textBeforeCursor = value.slice(0, cursorPos);
-  const triggerIndex = textBeforeCursor.search(/\S/);
 
-  // Start-of-message rule: the first non-whitespace character before the
-  // cursor must be the `/` itself.
-  if (triggerIndex === -1 || textBeforeCursor[triggerIndex] !== '/') return null;
+  // Find the start of the current "word" — the run of non-whitespace text
+  // immediately before the cursor — rather than the nearest `/` to the
+  // cursor. Anchoring on the nearest `/` would incorrectly invalidate a
+  // still-valid earlier trigger whenever a second `/` appears later in the
+  // same word (e.g. a path- or fraction-like query such as "/foo/bar", or
+  // typing a stray `/` while a trigger's query is already in progress).
+  let wordStart = 0;
+  for (let i = textBeforeCursor.length - 1; i >= 0; i--) {
+    if (/\s/.test(textBeforeCursor[i])) {
+      wordStart = i + 1;
+      break;
+    }
+  }
+
+  // Mid-message rule: the current word is a valid trigger only when its
+  // first character is `/` — position 0, or immediately after whitespace.
+  if (textBeforeCursor[wordStart] !== '/') return null;
+  const triggerIndex = wordStart;
 
   // The `/` may not sit inside an existing tracked token (e.g. a chip).
   if (tokenRanges.some((r) => triggerIndex >= r.start && triggerIndex < r.end)) {
@@ -109,8 +127,6 @@ export interface SlashEvaluationInput {
   /** Native InputEvent.inputType for this change; null when unknown/programmatic. */
   inputType: string | null;
   isComposing: boolean;
-  /** One command per message: true when a command chip is already tracked. */
-  hasCommandToken: boolean;
   tokenRanges?: readonly TokenRange[];
   isOpen: boolean;
   memory: SlashTriggerMemory;
@@ -134,15 +150,10 @@ export function evaluateSlashTrigger(input: SlashEvaluationInput): SlashEvaluati
     cursorPos,
     inputType,
     isComposing,
-    hasCommandToken,
     tokenRanges = [],
     isOpen,
     memory,
   } = input;
-
-  if (hasCommandToken) {
-    return { action: isOpen ? 'close' : 'none', memory };
-  }
 
   const hit = findSlashTrigger(value, cursorPos, tokenRanges);
 

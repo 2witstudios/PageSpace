@@ -549,6 +549,66 @@ describe('exchangeAuthorizationCode — pure drive:* grant mints a real mcp_toke
   });
 });
 
+describe('exchangeAuthorizationCode — all_drives grant mints a real, unscoped mcp_tokens row, not an OAuth pair', () => {
+  it('returns ok_mcp_token with isScoped: false and zero drive rows, against the SAME transaction, issuing zero oauth rows', async () => {
+    seedCodeRow({ scopes: ['all_drives', 'offline_access'] });
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok_mcp_token');
+    if (result.outcome !== 'ok_mcp_token') throw new Error('unreachable');
+    expect(result.userId).toBe(USER_ID);
+    expect(result.scopes).toEqual(['all_drives', 'offline_access']);
+    expect(result.mcpToken).toMatch(/^mcp_/);
+
+    // No OAuth refresh/access-token-family rows for this branch at all.
+    expect(refreshRows).toHaveLength(0);
+    expect(accessRows).toHaveLength(0);
+    // The code is still consumed (single-use), but no family was issued.
+    expect(codeRow?.consumedAt).not.toBeNull();
+    expect(codeRow?.issuedFamilyId).toBeNull();
+
+    expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledTimes(1);
+    const [data, txArg] = vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mock.calls[0]!;
+    expect(data).toMatchObject({
+      userId: USER_ID,
+      name: 'pagespace CLI',
+      isScoped: false,
+      drives: [],
+    });
+    expect(typeof data.tokenHash).toBe('string');
+    expect(data.tokenHash.length).toBeGreaterThan(0);
+    expect(data.tokenPrefix.length).toBeGreaterThan(0);
+    expect(txArg).toBeDefined();
+    expect(hashToken(result.mcpToken)).toBe(data.tokenHash);
+  });
+
+  it('account grants (pagespace login) are completely unaffected — still the OAuth pair, sessionRepository never called', async () => {
+    seedCodeRow({ scopes: ['account', 'offline_access'] });
+
+    const result = await exchangeAuthorizationCode({
+      code: CODE,
+      redirectUri: REDIRECT_URI,
+      codeVerifier: CODE_VERIFIER,
+      clientDbId: CLIENT_DB_ID,
+      now: new Date(),
+    });
+
+    expect(result.outcome).toBe('ok');
+    if (result.outcome !== 'ok') throw new Error('unreachable');
+    expect(result.tokens.refreshToken).toMatch(/^ps_rt_/);
+    expect(refreshRows).toHaveLength(1);
+    expect(accessRows).toHaveLength(1);
+    expect(sessionRepository.createMcpTokenWithDriveScopes).not.toHaveBeenCalled();
+  });
+});
+
 describe('exchangeAuthorizationCode — update_key grant re-scopes an existing mcp token in place', () => {
   const UPDATE_SCOPES = ['update_key:tok123', 'drive:drv1:member', 'drive:drv2:admin'];
 

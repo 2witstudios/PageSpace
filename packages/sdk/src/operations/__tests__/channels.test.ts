@@ -128,6 +128,47 @@ describe('channels.sendMessage — response contract', () => {
     expect(result).toEqual(aiMessage);
   });
 
+  it('parses an AI-authored message with the current array-shaped commandExecution (one entry per resolved command, Universal Commands multi-command support)', () => {
+    const aiMessage = {
+      ...channelMessageFixture,
+      userId: 'agent1',
+      user: { id: 'agent1', name: 'Support Agent', image: null },
+      aiMeta: {
+        senderType: 'agent',
+        senderName: 'Support Agent',
+        agentPageId: 'ag1abc',
+        commandExecution: [
+          { label: 'release-checklist', status: 'used', entryPageTitle: 'Release Checklist' },
+          { label: 'standup', status: 'skipped', reason: 'disabled' },
+        ],
+      },
+    };
+    const result = parseResponse(sendChannelMessage, 201, new Headers(), JSON.stringify(aiMessage));
+    expect(result).toEqual(aiMessage);
+  });
+
+  it('normalizes a LEGACY single-object commandExecution (persisted before multi-command support shipped, no data migration) into a one-element array', () => {
+    const legacyAiMessage = {
+      ...channelMessageFixture,
+      userId: 'agent1',
+      user: { id: 'agent1', name: 'Support Agent', image: null },
+      aiMeta: {
+        senderType: 'agent',
+        senderName: 'Support Agent',
+        agentPageId: 'ag1abc',
+        commandExecution: { label: 'release-checklist', status: 'used', entryPageTitle: 'Release Checklist' },
+      },
+    };
+    const result = parseResponse(sendChannelMessage, 201, new Headers(), JSON.stringify(legacyAiMessage));
+    expect(result).toEqual({
+      ...legacyAiMessage,
+      aiMeta: {
+        ...legacyAiMessage.aiMeta,
+        commandExecution: [{ label: 'release-checklist', status: 'used', entryPageTitle: 'Release Checklist' }],
+      },
+    });
+  });
+
   it('rejects a response that drifts from the message row contract', () => {
     const malformed = { ...channelMessageFixture, replyCount: 'not-a-number' };
     const result = parseResponse(sendChannelMessage, 201, new Headers(), JSON.stringify(malformed));

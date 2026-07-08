@@ -1,13 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, type ReactNode } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Suspense, useMemo, useState, type ReactNode } from "react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -19,12 +18,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { AlertCircle, ChevronDown, ChevronRight, MessageSquare, RefreshCw, Wrench } from "lucide-react";
-import { fetchWithAuth } from "@/lib/auth/auth-fetch";
+import { ChevronDown, ChevronRight, MessageSquare, RefreshCw, Wrench } from "lucide-react";
+import { PageHeader, DataState } from "@/components/admin/kit";
+import { useAdminQuery } from "@/hooks/use-admin-query";
+import { useUrlTab } from "@/hooks/use-url-tab";
+import { num } from "@/lib/format";
 import type { GlobalPromptResponse, RolePromptData, PromptSection, ToolSchemaInfo } from "./types";
 
-function fmt(n: number) {
-  return n.toLocaleString();
+/** Render the actual mode key as a readable label ("fullAccess" -> "Full Access"). */
+function formatModeLabel(mode: string): string {
+  return mode
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function SectionBlock({ section }: { section: PromptSection }) {
@@ -37,7 +43,7 @@ function SectionBlock({ section }: { section: PromptSection }) {
           <span className="font-medium truncate">{section.name}</span>
           <Badge variant="outline" className="text-xs shrink-0">{section.source}</Badge>
         </div>
-        <span className="text-xs text-muted-foreground shrink-0 ml-2">{fmt(section.tokens)} tok</span>
+        <span className="text-xs text-muted-foreground shrink-0 ml-2">{num(section.tokens)} tok</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <ScrollArea className="h-64 mt-1 mb-2">
@@ -64,7 +70,7 @@ function ToolsTable({ tools }: { tools: ToolSchemaInfo[] }) {
         {tools.map((tool) => (
           <TableRow key={tool.name}>
             <TableCell className="font-mono text-xs font-medium">{tool.name}</TableCell>
-            <TableCell className="text-right text-xs text-muted-foreground">{fmt(tool.tokenEstimate)}</TableCell>
+            <TableCell className="text-right text-xs text-muted-foreground">{num(tool.tokenEstimate)}</TableCell>
             <TableCell className="text-xs text-muted-foreground max-w-sm truncate">{tool.description}</TableCell>
           </TableRow>
         ))}
@@ -98,8 +104,8 @@ function ModePanel({ data, tools }: { data: RolePromptData; tools: ToolSchemaInf
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2 text-sm">
-        <Badge variant="secondary">{fmt(data.totalTokens)} prompt tokens</Badge>
-        <Badge variant="secondary">{fmt(totalToolTokens)} tool tokens</Badge>
+        <Badge variant="secondary">{num(data.totalTokens)} prompt tokens</Badge>
+        <Badge variant="secondary">{num(totalToolTokens)} tool tokens</Badge>
         <Badge variant="secondary">{data.sections.length} sections</Badge>
         <Badge variant="secondary">{data.toolsAllowed.length} tools allowed</Badge>
         {data.toolsDenied.length > 0 && (
@@ -148,7 +154,7 @@ function ModePanel({ data, tools }: { data: RolePromptData; tools: ToolSchemaInf
       {data.completePayload?.formattedString && (
         <>
           <Separator />
-          <CollapsibleBlock label={`Complete Payload (raw) — ${fmt(data.completePayload.tokenEstimates.total)} tok`} height="h-96">
+          <CollapsibleBlock label={`Complete Payload (raw) — ${num(data.completePayload.tokenEstimates.total)} tok`} height="h-96">
             <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-words font-mono leading-relaxed">
               {data.completePayload.formattedString}
             </pre>
@@ -159,49 +165,28 @@ function ModePanel({ data, tools }: { data: RolePromptData; tools: ToolSchemaInf
   );
 }
 
-export default function GlobalPromptPage() {
-  const [data, setData] = useState<GlobalPromptResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+function GlobalPromptContent() {
   const [selectedDriveId, setSelectedDriveId] = useState<string>("");
   const [selectedPageId, setSelectedPageId] = useState<string>("");
 
-  const fetchData = useCallback(async (driveId: string, pageId: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      if (driveId) params.set("driveId", driveId);
-      if (pageId) params.set("pageId", pageId);
-      const qs = params.toString();
-      const res = await fetchWithAuth(`/api/admin/global-prompt${qs ? `?${qs}` : ""}`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
-      }
-      setData(await res.json());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load prompt data");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const url = useMemo(() => {
+    const params = new URLSearchParams();
+    if (selectedDriveId) params.set("driveId", selectedDriveId);
+    if (selectedPageId) params.set("pageId", selectedPageId);
+    const qs = params.toString();
+    return `/api/admin/global-prompt${qs ? `?${qs}` : ""}`;
+  }, [selectedDriveId, selectedPageId]);
 
-  useEffect(() => {
-    fetchData("", "");
-  }, [fetchData]);
+  const { data, isLoading, isFetching, error, refetch } = useAdminQuery<GlobalPromptResponse>(url);
 
   function handleDriveChange(val: string) {
     const driveId = val === "__none__" ? "" : val;
     setSelectedDriveId(driveId);
     setSelectedPageId("");
-    fetchData(driveId, "");
   }
 
   function handlePageChange(val: string) {
-    const pageId = val === "__none__" ? "" : val;
-    setSelectedPageId(pageId);
-    fetchData(selectedDriveId, pageId);
+    setSelectedPageId(val === "__none__" ? "" : val);
   }
 
   const availableDrives = data?.availableDrives ?? [];
@@ -210,38 +195,40 @@ export default function GlobalPromptPage() {
   const tools = data?.toolSchemas ?? [];
   const contextLabel = data?.metadata.contextType ?? "dashboard";
 
+  // Modes come from the response, so the valid-tab list is dynamic; before
+  // data arrives the Tabs block isn't rendered and the fallback is unused.
+  const [activeTab, setTab] = useUrlTab<string>(modes, modes[0] ?? "");
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <PageHeader
+        title="Global Prompt"
+        description={
+          data
+            ? `${formatModeLabel(contextLabel)} context — generated ${new Date(data.metadata.generatedAt).toLocaleTimeString()}`
+            : "Inspect the assembled system prompt, sections, and tool payload per mode."
+        }
+        actions={
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-10 w-10"
+            onClick={refetch}
+            disabled={isFetching}
+            title="Refresh"
+          >
+            <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+          </Button>
+        }
+      />
+
       <Card>
-        <CardHeader className="pb-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <MessageSquare className="h-4 w-4" />
-              Global Prompt Viewer
-            </CardTitle>
-            <Badge variant="outline" className="capitalize">{contextLabel} context</Badge>
-            {data && (
-              <span className="text-xs text-muted-foreground ml-auto">
-                {new Date(data.metadata.generatedAt).toLocaleTimeString()}
-              </span>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => fetchData(selectedDriveId, selectedPageId)}
-              disabled={loading}
-            >
-              <RefreshCw className={`h-3 w-3 mr-1 ${loading ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="pt-0">
+        <CardContent className="pt-6">
           <div className="flex flex-wrap gap-3">
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground">Drive</span>
-              <Select value={selectedDriveId || "__none__"} onValueChange={handleDriveChange} disabled={loading}>
-                <SelectTrigger className="w-48 h-8 text-xs">
+              <Select value={selectedDriveId || "__none__"} onValueChange={handleDriveChange} disabled={isFetching}>
+                <SelectTrigger className="h-10 w-48 text-xs">
                   <SelectValue placeholder="Dashboard (no drive)" />
                 </SelectTrigger>
                 <SelectContent>
@@ -255,8 +242,8 @@ export default function GlobalPromptPage() {
             {selectedDriveId && (
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Page</span>
-                <Select value={selectedPageId || "__none__"} onValueChange={handlePageChange} disabled={loading}>
-                  <SelectTrigger className="w-56 h-8 text-xs">
+                <Select value={selectedPageId || "__none__"} onValueChange={handlePageChange} disabled={isFetching}>
+                  <SelectTrigger className="h-10 w-56 text-xs">
                     <SelectValue placeholder="Drive root" />
                   </SelectTrigger>
                   <SelectContent>
@@ -272,44 +259,53 @@ export default function GlobalPromptPage() {
         </CardContent>
       </Card>
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {loading && (
-        <Card>
-          <CardContent className="pt-6 space-y-3">
-            <Skeleton className="h-4 w-48" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-32 w-full" />
-          </CardContent>
-        </Card>
-      )}
-
-      {!loading && data && modes.length > 0 && (
-        <Card>
-          <CardContent className="pt-4">
-            <Tabs defaultValue={modes[0]}>
-              <TabsList>
+      <DataState
+        isLoading={isLoading}
+        error={error}
+        isEmpty={modes.length === 0}
+        emptyMessage="No prompt data returned for this context."
+        onRetry={refetch}
+        hasData={!!data}
+        skeleton={
+          <Card>
+            <CardContent className="pt-6 space-y-3">
+              <Skeleton className="h-4 w-48" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-32 w-full" />
+            </CardContent>
+          </Card>
+        }
+      >
+        {data && modes.length > 0 && (
+          <Card>
+            <CardContent className="pt-4">
+              <Tabs value={activeTab} onValueChange={setTab}>
+                <TabsList>
+                  {modes.map((mode) => (
+                    <TabsTrigger key={mode} value={mode}>
+                      {formatModeLabel(mode)}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
                 {modes.map((mode) => (
-                  <TabsTrigger key={mode} value={mode} className="capitalize">
-                    {mode === "fullAccess" ? "Full Access" : "Read Only"}
-                  </TabsTrigger>
+                  <TabsContent key={mode} value={mode} className="mt-4">
+                    <ModePanel data={data.promptData[mode]} tools={tools} />
+                  </TabsContent>
                 ))}
-              </TabsList>
-              {modes.map((mode) => (
-                <TabsContent key={mode} value={mode} className="mt-4">
-                  <ModePanel data={data.promptData[mode]} tools={tools} />
-                </TabsContent>
-              ))}
-            </Tabs>
-          </CardContent>
-        </Card>
-      )}
+              </Tabs>
+            </CardContent>
+          </Card>
+        )}
+      </DataState>
     </div>
+  );
+}
+
+export default function GlobalPromptPage() {
+  return (
+    <Suspense fallback={null}>
+      <GlobalPromptContent />
+    </Suspense>
   );
 }

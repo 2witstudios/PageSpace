@@ -72,6 +72,13 @@ describe('describeGrantScopes', () => {
     expect(descriptions.some((d) => /revoke/i.test(d))).toBe(true);
   });
 
+  it('describes an all_drives grant (e.g. a CLI --all-drives key)', () => {
+    const descriptions = describeGrantScopes(['all_drives', 'offline_access'], NO_NAMES);
+    expect(descriptions).toHaveLength(2);
+    expect(descriptions.some((d) => /all your drives/i.test(d))).toBe(true);
+    expect(descriptions.some((d) => /revoke/i.test(d))).toBe(true);
+  });
+
   it('describes an update_key grant alongside its drive scope', () => {
     const descriptions = describeGrantScopes(['update_key:tok123', 'drive:drv123:admin'], NO_NAMES);
     expect(descriptions).toHaveLength(2);
