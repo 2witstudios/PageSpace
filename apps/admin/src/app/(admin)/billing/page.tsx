@@ -1,7 +1,6 @@
 'use client';
 
 import { Suspense, useCallback, useState } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +29,7 @@ import {
 } from 'recharts';
 import { StatCard, PageHeader, DataState } from '@/components/admin/kit';
 import { useAdminQuery } from '@/hooks/use-admin-query';
+import { useUrlTab } from '@/hooks/use-url-tab';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { usd, pct, num } from '@/lib/format';
 
@@ -39,10 +39,6 @@ type Coverage = 'real' | 'estimate' | 'list_price';
 
 const TABS = ['overview', 'margins', 'users', 'enforcement'] as const;
 type TabKey = (typeof TABS)[number];
-
-function isTabKey(value: string | null): value is TabKey {
-  return TABS.includes(value as TabKey);
-}
 
 interface Summary {
   realCostCents: number;
@@ -165,7 +161,7 @@ interface BillingResponse {
   providerCost: ProviderCostRow[];
   topSpenders: SpenderRow[];
   debtByUser: DebtRow[];
-  revenue: { topupCents: number; monthlyGrantCents: number };
+  revenue: { topupCents: number; topupCount: number; monthlyGrantCents: number; monthlyGrantCount: number };
   subscriptionsByTier: SubscriptionTierRow[];
   liability: { monthlyRemainingCents: number; topupRemainingCents: number; totalLiabilityCents: number; userCount: number };
   holds: { holdCount: number; heldCents: number };
@@ -196,8 +192,8 @@ function OverviewTab({ data }: { data: BillingResponse }) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <StatCard label="Top-up revenue" value={usd(revenue.topupCents)} icon={Banknote} hint="Real cash from Stripe top-ups in range" />
-        <StatCard label="Allowance grants" value={usd(revenue.monthlyGrantCents)} icon={HandCoins} hint="Monthly credit grants in range — not cash revenue" />
+        <StatCard label="Top-up revenue" value={usd(revenue.topupCents)} icon={Banknote} hint={`${num(revenue.topupCount)} purchases — real cash from Stripe top-ups in range`} />
+        <StatCard label="Allowance grants" value={usd(revenue.monthlyGrantCents)} icon={HandCoins} hint={`${num(revenue.monthlyGrantCount)} grants in range — not cash revenue`} />
         <StatCard label="Provider cost (what we paid)" value={usd(summary.realCostCents)} icon={Coins} />
         <StatCard label="Charged to users (credits)" value={usd(summary.chargedCents)} hint={`Credits applied: ${usd(summary.appliedCents)}`} />
         <StatCard
@@ -763,28 +759,13 @@ function EnforcementTab({ data }: { data: BillingResponse }) {
 }
 
 function BillingPageInner() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const tabParam = searchParams.get('tab');
-  const tab: TabKey = isTabKey(tabParam) ? tabParam : 'overview';
+  const [tab, setTab] = useUrlTab<TabKey>(TABS, 'overview');
 
   const [range, setRange] = useState<Range>('30d');
   const [granularity, setGranularity] = useState<Granularity>('day');
 
   const query = useAdminQuery<BillingResponse>(`/api/admin/billing?range=${range}&granularity=${granularity}`);
   const { data } = query;
-
-  const setTab = useCallback(
-    (next: string) => {
-      const params = new URLSearchParams(searchParams.toString());
-      if (next === 'overview') params.delete('tab');
-      else params.set('tab', next);
-      const qs = params.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-    },
-    [router, pathname, searchParams],
-  );
 
   const downloadCsv = useCallback(async () => {
     const params = new URLSearchParams({ range, granularity, format: 'csv' });
@@ -838,7 +819,7 @@ function BillingPageInner() {
         }
       />
 
-      <Tabs value={tab} onValueChange={setTab}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="margins">Margins</TabsTrigger>
@@ -847,7 +828,7 @@ function BillingPageInner() {
         </TabsList>
 
         <div className="mt-4">
-          <DataState isLoading={query.isLoading} error={query.error} onRetry={query.refetch}>
+          <DataState isLoading={query.isLoading} error={query.error} onRetry={query.refetch} hasData={!!data}>
             {data && (
               <>
                 <TabsContent value="overview"><OverviewTab data={data} /></TabsContent>

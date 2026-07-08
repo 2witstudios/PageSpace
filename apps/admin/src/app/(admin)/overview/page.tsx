@@ -6,18 +6,9 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { StatCard, PageHeader, DataState } from '@/components/admin/kit';
 import { useAdminQuery } from '@/hooks/use-admin-query';
-
-interface OverviewSummary {
-  totalUsers: number;
-  newUsers7d: number;
-  activeUsers15m: number;
-  payingSubscribers: number;
-  errorRate24h: number;
-  openSupport: number;
-  realCostCents: number;
-  chargedCents: number;
-  marginPct: number | null;
-}
+import { usd, pct, num } from '@/lib/format';
+// Type-only import: erased at compile time, so no server code enters the bundle.
+import type { OverviewSummary } from '@/app/api/admin/overview/route';
 
 interface AlertsResponse {
   errorRateAlert: boolean;
@@ -27,8 +18,6 @@ interface AlertsResponse {
   negativeMarginCount: number;
   liveHoldsCount: number;
 }
-
-const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 export default function OverviewPage() {
   const summary = useAdminQuery<OverviewSummary>('/api/admin/overview', { refreshInterval: 60_000 });
@@ -77,22 +66,22 @@ export default function OverviewPage() {
         </Alert>
       ))}
 
-      <DataState isLoading={summary.isLoading} error={summary.error} onRetry={summary.refetch}>
+      <DataState isLoading={summary.isLoading} error={summary.error} onRetry={summary.refetch} hasData={!!s}>
         <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-          <StatCard label="Total users" value={s?.totalUsers.toLocaleString() ?? '—'} icon={Users} />
-          <StatCard label="New users (7d)" value={s?.newUsers7d.toLocaleString() ?? '—'} icon={UserPlus} />
-          <StatCard label="Active now (15m)" value={s?.activeUsers15m.toLocaleString() ?? '—'} icon={Activity} />
-          <StatCard label="Paying subscribers" value={s?.payingSubscribers.toLocaleString() ?? '—'} icon={CreditCard} hint="Active + trialing, excludes gifted" />
+          <StatCard label="Total users" value={s ? num(s.totalUsers) : '—'} icon={Users} />
+          <StatCard label="New users (7d)" value={s ? num(s.newUsers7d) : '—'} icon={UserPlus} />
+          <StatCard label="Active now (15m)" value={s ? num(s.activeUsers15m) : '—'} icon={Activity} />
+          <StatCard label="Paying subscribers" value={s ? num(s.payingSubscribers) : '—'} icon={CreditCard} hint="Active + trialing, excludes gifted" />
           <StatCard
             label="API error rate (24h)"
-            value={s ? `${s.errorRate24h.toFixed(1)}%` : '—'}
+            value={s ? pct(s.errorRate24h) : '—'}
             tone={s && s.errorRate24h > 5 ? 'negative' : 'default'}
           />
           <StatCard label="AI cost (30d)" value={s ? usd(s.realCostCents) : '—'} hint="Actual provider cost" />
           <StatCard label="AI charged (30d)" value={s ? usd(s.chargedCents) : '—'} hint="Credits charged to users" />
           <StatCard
             label="AI margin (30d)"
-            value={s?.marginPct == null ? 'n/a' : `${s.marginPct.toFixed(1)}%`}
+            value={s ? pct(s.marginPct) : '—'}
             tone={marginTone}
             icon={TrendingUp}
           />
@@ -102,7 +91,7 @@ export default function OverviewPage() {
           <div className="mt-4">
             <StatCard
               label="Open support requests"
-              value={s.openSupport.toLocaleString()}
+              value={num(s.openSupport)}
               icon={LifeBuoy}
               tone="warning"
               hint={<Link className="underline" href="/support">Go to Support</Link>}

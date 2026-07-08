@@ -494,6 +494,7 @@ export default function AdminAuditLogsPage() {
             isEmpty={logs.length === 0}
             emptyMessage="No audit logs found matching your criteria."
             onRetry={refetch}
+            hasData={!!data}
             skeleton={
               <div className="space-y-2 p-4">
                 {[...Array(8)].map((_, i) => (

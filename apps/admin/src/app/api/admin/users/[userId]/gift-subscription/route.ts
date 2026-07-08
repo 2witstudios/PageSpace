@@ -38,6 +38,15 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
     const { userId: targetUserId } = await context.params;
     const adminUserId = adminUser.id;
 
+    // Same self-guard as suspend/role/sessions: admins do not act on their
+    // own account (self-gifting is a self-dealing path).
+    if (targetUserId === adminUserId) {
+      return NextResponse.json(
+        { error: 'You cannot gift a subscription to your own account' },
+        { status: 400 }
+      );
+    }
+
     const parsed = giftSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json(
@@ -189,6 +198,14 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
   try {
     const { userId: targetUserId } = await context.params;
     const adminUserId = adminUser.id;
+
+    // Same self-guard as POST: admins do not act on their own subscription.
+    if (targetUserId === adminUserId) {
+      return NextResponse.json(
+        { error: 'You cannot revoke a subscription on your own account' },
+        { status: 400 }
+      );
+    }
 
     const parsed = revokeSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {

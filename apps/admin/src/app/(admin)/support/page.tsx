@@ -152,6 +152,7 @@ export default function AdminSupportPage() {
         isLoading={isLoading}
         error={error}
         onRetry={refetch}
+        hasData={!!data}
       />
     </div>
   );

@@ -12,12 +12,16 @@ import { z } from 'zod/v4';
  * (stats aggregates, Stripe lookups) for the requested page.
  */
 
-export const DORMANT_DAYS = 30;
+// Dormancy lives in the shared module; re-exported here because the route
+// and the list-params tests import it alongside the other list helpers.
+export { DORMANT_DAYS, isDormant } from '@/lib/dormancy';
 
 export const listUsersParamsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
   offset: z.coerce.number().int().min(0).default(0),
-  q: z.string().trim().max(200).default(''),
+  // Clamp instead of reject — an over-long paste into the search box must
+  // degrade to a truncated search, not 400 the whole list.
+  q: z.string().trim().transform((s) => s.slice(0, 200)).default(''),
   sort: z.enum(['name', 'email', 'created', 'lastActive', 'tier']).default('name'),
   dir: z.enum(['asc', 'desc']).default('asc'),
   dormant: z.enum(['true', 'false']).optional(),
@@ -51,11 +55,6 @@ export function matchesSearch(user: SortableUser, normalizedQuery: string): bool
     (user.email ?? '').toLowerCase().includes(normalizedQuery) ||
     (user.currentAiProvider ?? '').toLowerCase().includes(normalizedQuery)
   );
-}
-
-export function isDormant(lastActiveAt: Date | null, now = Date.now()): boolean {
-  if (!lastActiveAt) return true;
-  return now - lastActiveAt.getTime() > DORMANT_DAYS * 24 * 60 * 60 * 1000;
 }
 
 const TIER_RANK: Record<string, number> = { free: 0, pro: 1, founder: 2, business: 3 };

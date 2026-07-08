@@ -91,6 +91,7 @@ export default function AdminCompactionPage() {
         isLoading={isLoading}
         error={error}
         onRetry={refetch}
+        hasData={!!data}
         skeleton={
           <div className="space-y-6">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

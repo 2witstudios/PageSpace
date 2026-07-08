@@ -96,6 +96,7 @@ export default function AdminTablesPage() {
         isEmpty={tables.length === 0}
         emptyMessage="No tables found."
         onRetry={refetch}
+        hasData={!!data}
         skeleton={
           <div className="space-y-4">
             <Skeleton className="h-10 w-full" />

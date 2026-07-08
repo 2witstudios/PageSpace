@@ -163,12 +163,15 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
     const chatMessagesCountMap = toCountMap(chatMessageCounts);
     const globalMessagesCountMap = toCountMap(globalMessageCounts);
 
-    // Fetch Stripe subscription details to check if gifted (skip on-prem - no Stripe)
+    // Gift attribution (giftedBy/reason) lives only in Stripe metadata, but
+    // whether a sub IS gifted lives in the local `gifted` column — so only
+    // gifted subs (the rare subset) pay a Stripe round-trip, not every
+    // subscribed user on the page.
     const stripeSubscriptionDetails = new Map<string, { isGifted: boolean; giftedBy?: string; reason?: string }>();
 
     if (!isOnPrem()) {
       const usersWithSubscriptions = pageOfUsers.filter(user =>
-        subscriptionsByUserId.has(user.id)
+        subscriptionsByUserId.get(user.id)?.gifted === true
       );
 
       const STRIPE_LOOKUP_CONCURRENCY = 10;
@@ -217,7 +220,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
           status: subscription.status,
           currentPeriodEnd: subscription.currentPeriodEnd,
           cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
-          isGifted: stripeDetails?.isGifted || false,
+          isGifted: subscription.gifted,
           giftedBy: stripeDetails?.giftedBy,
           giftReason: stripeDetails?.reason,
         } : null,

@@ -56,9 +56,9 @@ export function useAdminQuery<T>(url: string | null, options: AdminQueryOptions 
     }
   }, [url, enabled]);
 
+  // On URL/param change keep the previous data visible (isFetching signals the
+  // refresh) instead of blanking the page to skeletons; only clear the error.
   useEffect(() => {
-    hasDataRef.current = false;
-    setData(null);
     setError(null);
     void load();
   }, [load]);

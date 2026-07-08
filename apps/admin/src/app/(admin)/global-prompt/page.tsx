@@ -1,7 +1,6 @@
 "use client";
 
 import { Suspense, useMemo, useState, type ReactNode } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -22,6 +21,7 @@ import {
 import { ChevronDown, ChevronRight, MessageSquare, RefreshCw, Wrench } from "lucide-react";
 import { PageHeader, DataState } from "@/components/admin/kit";
 import { useAdminQuery } from "@/hooks/use-admin-query";
+import { useUrlTab } from "@/hooks/use-url-tab";
 import { num } from "@/lib/format";
 import type { GlobalPromptResponse, RolePromptData, PromptSection, ToolSchemaInfo } from "./types";
 
@@ -166,10 +166,6 @@ function ModePanel({ data, tools }: { data: RolePromptData; tools: ToolSchemaInf
 }
 
 function GlobalPromptContent() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-
   const [selectedDriveId, setSelectedDriveId] = useState<string>("");
   const [selectedPageId, setSelectedPageId] = useState<string>("");
 
@@ -199,14 +195,9 @@ function GlobalPromptContent() {
   const tools = data?.toolSchemas ?? [];
   const contextLabel = data?.metadata.contextType ?? "dashboard";
 
-  const tabParam = searchParams.get("tab");
-  const activeTab = tabParam && modes.includes(tabParam) ? tabParam : modes[0];
-
-  const setTab = (value: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", value);
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
-  };
+  // Modes come from the response, so the valid-tab list is dynamic; before
+  // data arrives the Tabs block isn't rendered and the fallback is unused.
+  const [activeTab, setTab] = useUrlTab<string>(modes, modes[0] ?? "");
 
   return (
     <div className="space-y-6">
@@ -274,6 +265,7 @@ function GlobalPromptContent() {
         isEmpty={modes.length === 0}
         emptyMessage="No prompt data returned for this context."
         onRetry={refetch}
+        hasData={!!data}
         skeleton={
           <Card>
             <CardContent className="pt-6 space-y-3">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { UsersTable } from "@/components/admin/UsersTable";
+import { UserRow } from "@/components/admin/users/user-row";
 import { CreateUserForm } from "@/components/admin/CreateUserForm";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -172,10 +172,15 @@ export default function AdminUsersPage() {
         emptyMessage="No users match the current filters."
         onRetry={refetch}
         skeleton={<UsersSkeleton />}
+        hasData={!!data}
       >
         {data && (
           <>
-            <UsersTable users={data.users} onActionComplete={refetch} />
+            <div className="grid gap-4">
+              {data.users.map((user) => (
+                <UserRow key={user.id} user={user} onActionComplete={refetch} />
+              ))}
+            </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
               <p className="text-sm text-muted-foreground">

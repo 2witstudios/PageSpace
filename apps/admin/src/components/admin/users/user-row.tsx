@@ -30,9 +30,9 @@ import {
   formatDateTime,
   formatLastActive,
   getUserInitials,
-  isDormant,
   tierLabel,
 } from './user-format';
+import { isDormant } from '@/lib/dormancy';
 import type { AdminUser } from './types';
 
 interface UserRowProps {

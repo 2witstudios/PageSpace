@@ -111,7 +111,7 @@ export default function GrowthPage() {
         }
       />
 
-      <DataState isLoading={isLoading} error={error} onRetry={refetch} skeleton={<GrowthSkeleton />}>
+      <DataState isLoading={isLoading} error={error} onRetry={refetch} hasData={!!data} skeleton={<GrowthSkeleton />}>
         {/* Hero stats */}
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">

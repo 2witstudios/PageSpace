@@ -75,12 +75,3 @@ export interface GrowthMetricsData {
   dauTrend: Array<{ day: string; dau: number; signups: number }>;
   tierBreakdown: Array<{ tier: string; count: number; pct: number }>;
 }
-
-export interface MonitoringWidgetProps<T> {
-  data: T | null;
-  isLoading: boolean;
-}
-
-export interface DetailedWidgetProps<T> extends MonitoringWidgetProps<T> {
-  detailed?: boolean;
-}

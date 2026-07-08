@@ -207,20 +207,34 @@ export async function getUserActivity(startDate?: Date, endDate?: Date) {
   };
 }
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_PATTERN = /[^\s@"']+@[^\s@"']+\.[^\s@"',)\]}]+/g;
+
+function maskEmailsDeep(value: unknown): unknown {
+  if (typeof value === 'string') {
+    // Replace every email occurrence, including ones embedded in longer
+    // strings ("login failed for jane@example.com").
+    return value.replace(EMAIL_PATTERN, (match) => maskEmail(match));
+  }
+  if (Array.isArray(value)) return value.map(maskEmailsDeep);
+  if (value && typeof value === 'object') {
+    const masked: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      masked[key] = maskEmailsDeep(entry);
+    }
+    return masked;
+  }
+  return value;
+}
 
 /**
- * Mask any email-shaped string values in log metadata so raw PII never
- * reaches the monitoring UI. Some writers (e.g. account-lockout) already
- * mask before logging — maskEmail is idempotent on masked values.
+ * Mask every email occurrence in log metadata — at any nesting depth and
+ * embedded anywhere inside strings — so raw PII never reaches the monitoring
+ * UI. Some writers (e.g. account-lockout) already mask before logging;
+ * maskEmail is idempotent on masked values.
  */
 function maskEmailsInMetadata(metadata: unknown): Record<string, unknown> | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
-  const masked: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(metadata as Record<string, unknown>)) {
-    masked[key] = typeof value === 'string' && EMAIL_PATTERN.test(value) ? maskEmail(value) : value;
-  }
-  return masked;
+  return maskEmailsDeep(metadata) as Record<string, unknown>;
 }
 
 /**
@@ -1126,23 +1140,26 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
   const [totalUsersResult] = await db.select({ count: count() }).from(users);
   const totalUsers = totalUsersResult?.count ?? 0;
 
-  // Current MAU/WAU/DAU from session activity — count ALL sessions with lastUsedAt in
-  // the window, regardless of revokedAt. A user who was active 15 days ago and then logged
-  // out still counts toward MAU; revokedAt describes current session state, not history.
+  // Current MAU/WAU/DAU from activity_logs — the ONE active-user definition for
+  // all growth metrics (headline + trends). Sessions cannot serve any window
+  // beyond ~2 weeks: they expire after 7 days and expired rows are hard-deleted
+  // 7 days later (sessionService.cleanupExpiredSessions), so a sessions-based
+  // 30d MAU or 12-month trend silently undercounts. activity_logs is retained
+  // 365 days (activity-log-archival), covering every window used here.
   const [mauResult] = await db
-    .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
-    .from(sessions)
-    .where(gte(sessions.lastUsedAt, thirtyDaysAgo));
+    .select({ count: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int` })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, thirtyDaysAgo));
 
   const [wauResult] = await db
-    .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
-    .from(sessions)
-    .where(gte(sessions.lastUsedAt, sevenDaysAgo));
+    .select({ count: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int` })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, sevenDaysAgo));
 
   const [dauResult] = await db
-    .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
-    .from(sessions)
-    .where(gte(sessions.lastUsedAt, oneDayAgo));
+    .select({ count: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int` })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, oneDayAgo));
 
   const mau = mauResult?.count ?? 0;
   const wau = wauResult?.count ?? 0;
@@ -1180,17 +1197,17 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
   const payingUsers = payingResult?.count ?? 0;
 
   // MAU trend (12 months). Same active-user definition as the headline
-  // mau/wau/dau above: distinct sessions.userId bucketed by sessions.lastUsedAt.
-  // Trend and headline must reconcile — do NOT mix in activity_logs here.
+  // mau/wau/dau above: distinct activity_logs.userId bucketed by timestamp.
+  // Trend and headline must reconcile — one definition, one durable source.
   const mauTrendRaw = await db
     .select({
-      month: sql<string>`DATE_TRUNC('month', ${sessions.lastUsedAt})`,
-      mau: sql<number>`COUNT(DISTINCT ${sessions.userId})::int`,
+      month: sql<string>`DATE_TRUNC('month', ${activityLogs.timestamp})`,
+      mau: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int`,
     })
-    .from(sessions)
-    .where(gte(sessions.lastUsedAt, twelveMonthsAgo))
-    .groupBy(sql`DATE_TRUNC('month', ${sessions.lastUsedAt})`)
-    .orderBy(asc(sql`DATE_TRUNC('month', ${sessions.lastUsedAt})`));
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, twelveMonthsAgo))
+    .groupBy(sql`DATE_TRUNC('month', ${activityLogs.timestamp})`)
+    .orderBy(asc(sql`DATE_TRUNC('month', ${activityLogs.timestamp})`));
 
   const signupsByMonthRaw = await db
     .select({
@@ -1218,16 +1235,16 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
     newUsers: signupsByMonth.get(key) ?? 0,
   }));
 
-  // DAU trend (last 30 days) — sessions-based, same definition as headline dau.
+  // DAU trend (last 30 days) — activity_logs, same definition as headline dau.
   const dauTrendRaw = await db
     .select({
-      day: sql<string>`DATE_TRUNC('day', ${sessions.lastUsedAt})`,
-      dau: sql<number>`COUNT(DISTINCT ${sessions.userId})::int`,
+      day: sql<string>`DATE_TRUNC('day', ${activityLogs.timestamp})`,
+      dau: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int`,
     })
-    .from(sessions)
-    .where(gte(sessions.lastUsedAt, thirtyDaysAgo))
-    .groupBy(sql`DATE_TRUNC('day', ${sessions.lastUsedAt})`)
-    .orderBy(asc(sql`DATE_TRUNC('day', ${sessions.lastUsedAt})`));
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, thirtyDaysAgo))
+    .groupBy(sql`DATE_TRUNC('day', ${activityLogs.timestamp})`)
+    .orderBy(asc(sql`DATE_TRUNC('day', ${activityLogs.timestamp})`));
 
   const signupsByDayRaw = await db
     .select({

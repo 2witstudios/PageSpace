@@ -14,6 +14,13 @@ interface DataStateProps {
   onRetry?: () => void;
   /** Skeleton shown while loading; defaults to three stacked bars. */
   skeleton?: React.ReactNode;
+  /**
+   * True when stale data is still renderable (useAdminQuery keeps previous
+   * data across refreshes). On error, the alert renders ABOVE the stale
+   * content instead of replacing it — a failed background poll must not wipe
+   * a populated dashboard.
+   */
+  hasData?: boolean;
   children: React.ReactNode;
 }
 
@@ -21,14 +28,14 @@ interface DataStateProps {
  * The one loading/error/empty idiom. Errors are always loud — a failed fetch
  * must never render as zeros or an empty chart.
  */
-export function DataState({ isLoading, error, isEmpty, emptyMessage = 'No data for this range.', onRetry, skeleton, children }: DataStateProps) {
+export function DataState({ isLoading, error, isEmpty, emptyMessage = 'No data for this range.', onRetry, skeleton, hasData, children }: DataStateProps) {
   if (error) {
-    return (
+    const alert = (
       <Alert variant="destructive">
         <AlertCircle className="h-4 w-4" />
         <AlertTitle>Failed to load</AlertTitle>
         <AlertDescription className="flex flex-wrap items-center gap-3">
-          <span>{error}</span>
+          <span>{error}{hasData ? ' — showing last loaded data.' : ''}</span>
           {onRetry && (
             <Button variant="outline" size="sm" onClick={onRetry}>
               <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Retry
@@ -36,6 +43,13 @@ export function DataState({ isLoading, error, isEmpty, emptyMessage = 'No data f
           )}
         </AlertDescription>
       </Alert>
+    );
+    if (!hasData) return alert;
+    return (
+      <div className="space-y-4">
+        {alert}
+        {children}
+      </div>
     );
   }
   if (isLoading) {

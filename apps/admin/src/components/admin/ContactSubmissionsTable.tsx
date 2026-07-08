@@ -66,6 +66,8 @@ interface ContactSubmissionsTableProps {
   isLoading?: boolean;
   error?: string | null;
   onRetry?: () => void;
+  /** True when a stale response is still renderable behind an error. */
+  hasData?: boolean;
 }
 
 function formatDate(dateString: string) {
@@ -101,6 +103,7 @@ export function ContactSubmissionsTable({
   isLoading = false,
   error = null,
   onRetry,
+  hasData,
 }: ContactSubmissionsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedSubmissions, setExpandedSubmissions] = useState<Record<string, boolean>>({});
@@ -218,6 +221,7 @@ export function ContactSubmissionsTable({
                 : 'When users submit the contact form on your website, their messages will appear here.'
             }
             onRetry={onRetry}
+            hasData={hasData}
             skeleton={
               <div className="space-y-3">
                 {[...Array(6)].map((_, i) => (

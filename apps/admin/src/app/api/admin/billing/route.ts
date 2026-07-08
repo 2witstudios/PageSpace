@@ -26,6 +26,7 @@ import {
   TIER_MONTHLY_ALLOWANCE_CENTS,
 } from '@pagespace/lib/billing/credit-pricing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { toCsv } from '@/lib/csv';
 
 type Range = '24h' | '7d' | '30d' | 'all';
 
@@ -39,20 +40,6 @@ function parseGranularity(value: string | null): Granularity {
 
 function centsToDollars(cents: number): string {
   return (cents / 100).toFixed(2);
-}
-
-function sanitizeSpreadsheetCell(value: string): string {
-  if (/^-?\d+(\.\d+)?$/.test(value)) return value;
-  return /^[=+\-@]/.test(value) ? `'${value}` : value;
-}
-
-function csvField(value: string | number | null): string {
-  const s = sanitizeSpreadsheetCell(value === null ? '' : String(value));
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-function toCsv(rows: (string | number | null)[][]): string {
-  return rows.map((row) => row.map(csvField).join(',')).join('\r\n');
 }
 
 function fmtPct(value: number | null): string {
@@ -112,10 +99,14 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       tierAllowanceCents: TIER_MONTHLY_ALLOWANCE_CENTS,
     };
 
-    // Top-up revenue is real cash; monthly grants are allowance, never summed with it.
+    // Top-up revenue is real cash; monthly grants are allowance, never summed
+    // with it. Counts stay in so reconciliation can tell one whale top-up
+    // apart from hundreds of small ones.
     const revenue = {
       topupCents: creditRevenue.topupCents,
+      topupCount: creditRevenue.topupCount,
       monthlyGrantCents: creditRevenue.monthlyGrantCents,
+      monthlyGrantCount: creditRevenue.monthlyGrantCount,
     };
 
     if (format === 'csv') {
@@ -156,8 +147,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
         rows.push(['tokens_user', r.userEmail ?? r.userName ?? r.userId, '', r.inputTokens, r.outputTokens, r.totalTokens, r.requestCount, '', '', '', '', '', '']);
       }
 
-      rows.push(['revenue', 'topup_purchase', '', '', '', '', '', '', '', '', '', '', centsToDollars(revenue.topupCents)]);
-      rows.push(['revenue', 'monthly_grant', '', '', '', '', '', '', '', '', '', '', centsToDollars(revenue.monthlyGrantCents)]);
+      rows.push(['revenue', 'topup_purchase', String(revenue.topupCount), '', '', '', '', '', '', '', '', '', centsToDollars(revenue.topupCents)]);
+      rows.push(['revenue', 'monthly_grant', String(revenue.monthlyGrantCount), '', '', '', '', '', '', '', '', '', centsToDollars(revenue.monthlyGrantCents)]);
       for (const r of subscriptionsByTier) {
         rows.push(['subscriptions', r.tier, String(r.count), '', '', '', '', '', '', '', '', '', '']);
       }
