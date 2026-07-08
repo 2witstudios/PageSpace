@@ -8,20 +8,30 @@ import { PageSpaceClient } from '@pagespace/sdk';
 import { parseArgv } from './argv/parse.js';
 import { buildAuthProvider, enforceAuth } from './auth/auth-context.js';
 import { createDiscoverMetadata } from './auth/discover.js';
-import { resolveEnvToken } from './auth/legacy-token-env.js';
+import { resolveEnvKeyName, resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
-import { hasExplicitCredential, noExplicitCredentialMessage, resolveAuth, resolveProfileName } from './auth/resolve.js';
+import {
+  hasExplicitCredential,
+  mcpNoExplicitCredentialMessage,
+  noExplicitCredentialMessage,
+  resolveAuth,
+  resolveKeyName,
+} from './auth/resolve.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
 import { logoutHandler } from './commands/logout.js';
+import { mcpHandler } from './commands/mcp.js';
 import { tokensCreateHandler } from './commands/keys/create.js';
 import { tokensListHandler } from './commands/keys/list.js';
 import { tokensRevokeHandler } from './commands/keys/revoke.js';
+import { keysUseHandler } from './commands/keys/use.js';
 import { keysHandler } from './commands/keys/wizard.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
 import { resolveConfig } from './config/resolve.js';
+import { createNullActiveKeyStore, type ActiveKeyStore } from './credentials/active-key.js';
 import type { CredentialStore } from './credentials/store.js';
+import type { HostCredential } from './credentials/serialize.js';
 import { EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
 import type { HandlerContext, OutputSink } from './handler-context.js';
 import { resolveRoute } from './router/router.js';
@@ -33,6 +43,12 @@ export interface RunDependencies {
   readonly stdout: OutputSink;
   readonly stderr: OutputSink;
   readonly credentialStore: CredentialStore;
+  /**
+   * The host → active-key-name map (`pagespace keys use`). Defaults to a
+   * null store (no active key ever resolves; fail-closed) when omitted —
+   * only `bin.ts` knows the real file location.
+   */
+  readonly activeKeyStore?: ActiveKeyStore;
   /** Defaults to `false` (fail-closed) when omitted — only `bin.ts` knows the real terminal state. */
   readonly isTTY?: boolean;
   /** Defaults to a function that never resolves truthily when omitted; only called when `isTTY` is true. */
@@ -50,11 +66,11 @@ export interface RunDependencies {
  * This set gates BOTH checks below — the ambient-credential-fallback gate
  * (first) and `enforceAuth` (second) — for the handlers above, since neither
  * check's subject (the `source`/`auth` built from `resolveAuth`'s flag > env
- * > stored-profile precedence) is ever consulted by them. Every OTHER
+ * > stored-key precedence) is ever consulted by them. Every OTHER
  * handler, including `mcp`, DOES eventually authenticate through `ctx.sdk`
  * when given a credential, so both checks matter there: the ambient gate
  * refuses to even attempt that authentication on nothing but a stored
- * default/personal profile (originally Phase 8 task 4's `mcp`-only gate,
+ * default/personal credential (originally Phase 8 task 4's `mcp`-only gate,
  * generalized here in Phase 9 task 4 to every command — a coding agent with
  * shell access must never be able to ride a human's `pagespace login`
  * credential into content access), and `enforceAuth` is what actually
@@ -68,9 +84,12 @@ export interface RunDependencies {
  * `tokensCreateHandler`/`tokensListHandler`/`tokensRevokeHandler`
  * (`commands/keys/create.ts`/`list.ts`/`revoke.ts`) back its flag-driven
  * `keys create`/`keys list`/`keys revoke` equivalents and are exempted for
- * the identical reason. (These handlers predate the `keys` surface — Phase 4
- * task 6 first shipped them under a since-removed `tokens` command family,
- * folded into `keys` by a later Phase 9 follow-up — hence the name.)
+ * the identical reason, as is `keysUseHandler` (`keys use` — the activation
+ * ceremony is its own browser-consent step-up, and its server lookup rides
+ * the same ambient `manage_keys` credential `keys list` does). (The
+ * `tokens*` handler names predate the `keys` surface — Phase 4 task 6 first
+ * shipped them under a since-removed `tokens` command family, folded into
+ * `keys` by a later Phase 9 follow-up — hence the name.)
  */
 const AUTH_EXEMPT_HANDLERS = new Set([
   helpHandler,
@@ -80,6 +99,7 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   tokensCreateHandler,
   tokensListHandler,
   tokensRevokeHandler,
+  keysUseHandler,
   keysHandler,
 ]);
 
@@ -115,7 +135,7 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   const { host } = resolveConfig({
     flags: { host: parsed.flags.host },
     env: { PAGESPACE_API_URL: deps.env.PAGESPACE_API_URL },
-    profile: null,
+    credential: null,
   });
 
   const envToken = resolveEnvToken(deps.env);
@@ -123,14 +143,54 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     deps.stderr.write(`${envToken.deprecationNotice}\n`);
   }
 
-  const profileName = resolveProfileName({ profile: parsed.flags.profile }, { PAGESPACE_PROFILE: deps.env.PAGESPACE_PROFILE });
-  const credential = await deps.credentialStore.get(host, profileName);
+  const envKey = resolveEnvKeyName(deps.env);
+  if (envKey.deprecationNotice) {
+    deps.stderr.write(`${envKey.deprecationNotice}\n`);
+  }
+
+  const activeKeyStore = deps.activeKeyStore ?? createNullActiveKeyStore();
+
+  // Route resolution is pure, so it can inform auth resolution here even
+  // though dispatch (and the shortcut flags that bypass routing entirely)
+  // happens further down against this same result.
+  const resolution = resolveRoute(ROUTES, parsed.args);
+  const routedHandler = resolution.kind === 'match' ? resolution.route.handler : null;
+  const isAuthExempt = routedHandler !== null && AUTH_EXEMPT_HANDLERS.has(routedHandler);
+  const explicit = hasExplicitCredential({ token: parsed.flags.token, key: parsed.flags.key }, deps.env);
+
+  // The active key (`pagespace keys use`) is the lowest-priority source, and
+  // only for gated CONTENT commands: explicit --token/--key/env always wins
+  // (`explicit` above), auth-exempt handlers keep their ambient login
+  // credential (the keys family needs its `manage_keys` scope, which a
+  // drive-scoped active key doesn't carry), and `pagespace mcp` — invoked
+  // unattended by an MCP client — deliberately never rides a human's
+  // per-machine activation (its config must name a credential itself).
+  const activeKeyEligible = routedHandler !== null && !isAuthExempt && routedHandler !== mcpHandler;
+
+  let keyName = resolveKeyName({ key: parsed.flags.key }, { PAGESPACE_KEY: envKey.name });
+  let credential: HostCredential | null = null;
+  let activeKeyName: string | null = null;
+  if (!explicit && activeKeyEligible) {
+    const active = await activeKeyStore.getActiveKey(host);
+    if (active !== null) {
+      const activeCredential = await deps.credentialStore.get(host, active);
+      if (activeCredential !== null) {
+        keyName = active;
+        credential = activeCredential;
+        activeKeyName = active;
+      }
+    }
+  }
+  if (activeKeyName === null) {
+    credential = await deps.credentialStore.get(host, keyName);
+  }
+
   const source = resolveAuth(
     { token: parsed.flags.token },
     { PAGESPACE_TOKEN: envToken.token },
-    credential ? { [host]: { [profileName]: credential } } : {},
+    credential ? { [host]: { [keyName]: credential } } : {},
     host,
-    profileName,
+    keyName,
   );
 
   const auth = buildAuthProvider(source, {
@@ -146,6 +206,7 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     stderr: deps.stderr,
     env: deps.env,
     credentialStore: deps.credentialStore,
+    activeKeyStore,
     isTTY: deps.isTTY ?? false,
     prompt: deps.prompt ?? (async () => ''),
   };
@@ -160,25 +221,26 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     return loginDeviceHandler(ctx, parsed);
   }
 
-  const resolution = resolveRoute(ROUTES, parsed.args);
   if (resolution.kind === 'usage-error') {
     deps.stderr.write(`${resolution.message}\n`);
     return EXIT_USAGE_ERROR;
   }
 
-  const isAuthExempt = AUTH_EXEMPT_HANDLERS.has(resolution.route.handler);
-
-  if (!isAuthExempt && !hasExplicitCredential({ token: parsed.flags.token, profile: parsed.flags.profile }, deps.env)) {
+  if (!isAuthExempt && !explicit && activeKeyName === null) {
     // Must run before `enforceAuth` below: that call materializes `source` by
-    // calling `auth.getAccessToken()`, which for a `kind: 'profile'` source
-    // (the ambient "default"/personal profile falling through here with
+    // calling `auth.getAccessToken()`, which for a `kind: 'stored'` source
+    // (the ambient "default"/personal credential falling through here with
     // nothing explicit given) performs a real discovery + refresh-token
     // network exchange and rotates the stored personal credential — exactly
     // the fallback this gate exists to block, for every command that isn't
     // exempt above (Phase 8 task 4, generalized in Phase 9 task 4). Checking
     // first means that network/store effect never happens at all, not just
-    // that the command never runs afterward.
-    deps.stderr.write(`${noExplicitCredentialMessage()}\n`);
+    // that the command never runs afterward. An active key (checked above,
+    // never for `mcp`) satisfies this gate for content commands: a human
+    // approved exactly that key for this machine in a browser.
+    deps.stderr.write(
+      `${resolution.route.handler === mcpHandler ? mcpNoExplicitCredentialMessage() : noExplicitCredentialMessage()}\n`,
+    );
     return EXIT_RUNTIME_ERROR;
   }
 

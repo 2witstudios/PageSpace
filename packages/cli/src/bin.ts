@@ -6,6 +6,7 @@
  */
 import process from 'node:process';
 import * as readline from 'node:readline/promises';
+import { FileActiveKeyStore } from './credentials/active-key.js';
 import { createCredentialStore } from './credentials/store.js';
 import type { OutputSink } from './handler-context.js';
 import { isLongRunningCommand, run } from './run.js';
@@ -50,6 +51,7 @@ run({
   stdout,
   stderr,
   credentialStore: createCredentialStore({ stderr }),
+  activeKeyStore: new FileActiveKeyStore(),
   isTTY: process.stdin.isTTY === true,
   prompt,
 })

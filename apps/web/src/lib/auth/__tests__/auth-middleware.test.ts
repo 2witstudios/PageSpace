@@ -352,7 +352,7 @@ describe('Auth Middleware', () => {
         tokenVersion: 0,
         adminRoleVersion: 0,
         tokenId: 'oauth-token-id',
-        scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null },
+        scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null, activateKeyId: null },
         driveScopes: [],
         allowedDriveIds: [],
       });
@@ -1179,7 +1179,7 @@ describe('Auth Middleware', () => {
           adminRoleVersion: 0,
           tokenType: 'oauth' as const,
           tokenId: 'oauth-token-id',
-          scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null },
+          scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null, activateKeyId: null },
           driveScopes: [],
           allowedDriveIds: [],
         };

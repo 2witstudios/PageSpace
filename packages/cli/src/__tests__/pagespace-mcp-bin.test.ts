@@ -32,7 +32,7 @@ describe('runPagespaceMcpBin — the first-class npx entry point, resolved as a 
     const [aliasCode, directCode] = await Promise.all([runPagespaceMcpBin(aliasDeps), run(directDeps)]);
 
     expect(aliasCode).toBe(directCode);
-    expect(aliasDeps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
+    expect(aliasDeps.stderr.lines.join('')).toMatch(/--key|--token/);
     expect(aliasDeps.stderr.lines.join('')).toEqual(expect.stringContaining(directDeps.stderr.lines.join('')));
   });
 
@@ -48,11 +48,11 @@ describe('runPagespaceMcpBin — the first-class npx entry point, resolved as a 
   it('honors the legacy PAGESPACE_API_URL env var end to end (resolved host reaches the auth-failure message)', async () => {
     // Zero credentials alone now fails closed on the host-agnostic, Phase 8
     // task 4 "no explicit credential" gate before the host is ever
-    // consulted (see run.test.ts). `--profile agent` makes the credential
-    // explicit (an unresolvable named profile, not the ambient default) so
+    // consulted (see run.test.ts). `--key agent` makes the credential
+    // explicit (an unresolvable named key, not the ambient default) so
     // the flow reaches past that gate into the same host-bearing
     // `missingCredentialsMessage` path this test originally targeted.
-    const deps = makeDeps(['--profile', 'agent'], { PAGESPACE_API_URL: 'https://legacy.example.com' });
+    const deps = makeDeps(['--key', 'agent'], { PAGESPACE_API_URL: 'https://legacy.example.com' });
     await runPagespaceMcpBin(deps);
     expect(deps.stderr.lines.join('')).toContain('https://legacy.example.com');
   });

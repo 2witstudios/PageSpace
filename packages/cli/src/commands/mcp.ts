@@ -29,7 +29,7 @@
  */
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { hasExplicitCredential, noExplicitCredentialMessage } from '../auth/resolve.js';
+import { hasExplicitCredential, mcpNoExplicitCredentialMessage } from '../auth/resolve.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 import { buildOperationRegistry, createMcpServer } from '../mcp/serve.js';
@@ -40,8 +40,12 @@ export interface McpHandlerDeps {
 
 export function createMcpHandler(deps: McpHandlerDeps): CommandHandler {
   return async (ctx, intent) => {
-    if (!hasExplicitCredential({ token: intent.flags.token, profile: intent.flags.profile }, ctx.env)) {
-      ctx.stderr.write(`${noExplicitCredentialMessage()}\n`);
+    // The mcp variant of the refusal message: the active key (`pagespace
+    // keys use`) deliberately does NOT apply to `pagespace mcp` — an MCP
+    // config must name its credential explicitly (--key/PAGESPACE_KEY or
+    // --token), never ride the human's per-machine activation.
+    if (!hasExplicitCredential({ token: intent.flags.token, key: intent.flags.key }, ctx.env)) {
+      ctx.stderr.write(`${mcpNoExplicitCredentialMessage()}\n`);
       return EXIT_RUNTIME_ERROR;
     }
 

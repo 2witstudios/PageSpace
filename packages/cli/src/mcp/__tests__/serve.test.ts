@@ -13,6 +13,7 @@ import {
   type OperationRegistry,
 } from '@pagespace/sdk';
 import { z } from 'zod';
+import { CLI_VERSION } from '../../commands/version.js';
 import { buildOperationRegistry, createMcpServer } from '../serve.js';
 
 function fakeSdk(invoke: (op: Operation, input: unknown) => Promise<unknown>) {
@@ -26,6 +27,17 @@ async function connectedClient(registry: OperationRegistry, invoke: (op: Operati
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   return client;
 }
+
+describe('createMcpServer — initialize handshake identity', () => {
+  it('reports the real CLI release version, never a hand-maintained copy (the 0.1.0-drift class the 1.5.0 guards kill)', async () => {
+    const registry = createRegistry([]);
+    const server = createMcpServer({ registry, sdk: fakeSdk(async () => ({})) });
+    const client = new Client({ name: 'test-client', version: '0.0.0' });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    expect(client.getServerVersion()).toEqual(expect.objectContaining({ name: 'pagespace', version: CLI_VERSION }));
+  });
+});
 
 describe('buildOperationRegistry — the full operation surface', () => {
   it('contains every operation exported by the SDK, with no duplicates', () => {

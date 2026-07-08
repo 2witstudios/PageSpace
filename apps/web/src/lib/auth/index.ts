@@ -226,16 +226,16 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
       return null;
     }
 
-    // Fail closed at the mechanism level: an `update_key:<id>` grant is a
-    // one-shot consent to re-scope an existing key, never a bearer scope —
-    // the authorization-code exchange intercepts it before any token family
-    // is minted (`oauth-repository.ts`'s ok_mcp_update branch), so no access
-    // token should ever carry it. If one somehow does (a future issuance
-    // path persisting scopes verbatim, a reordered exchange branch), honoring
-    // its drive:* entries would grant live drive access from an update
-    // consent. Reject the token outright rather than trusting every mint
-    // door to remember the interception.
-    if (parsed.scopes.updateKeyId !== null) {
+    // Fail closed at the mechanism level: `update_key:<id>`/`activate_key:<id>`
+    // grants are one-shot consent ceremonies, never bearer scopes — the
+    // authorization-code exchange intercepts them before any token family is
+    // minted (`oauth-repository.ts`'s ok_mcp_update/ok_mcp_activate
+    // branches), so no access token should ever carry either. If one somehow
+    // does (a future issuance path persisting scopes verbatim, a reordered
+    // exchange branch), honoring it would turn a consent ceremony into live
+    // access. Reject the token outright rather than trusting every mint door
+    // to remember the interception.
+    if (parsed.scopes.updateKeyId !== null || parsed.scopes.activateKeyId !== null) {
       return null;
     }
 

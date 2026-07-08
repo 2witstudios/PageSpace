@@ -39,14 +39,14 @@ pagespace keys
 Or, flag-driven (same thing, no interactive wizard prompts — for scripting the *setup* step itself, run once by a human):
 
 \`\`\`bash
-pagespace keys create --name "Claude Desktop" --drive <driveId> --role member --save-as-profile agent
+pagespace keys create --drive <driveId> --role member --name agent
 \`\`\`
 
-Either way opens a browser for a one-time consent screen (minting is always a deliberate, human-approved step, never a silent agent-runnable call) and stores the result locally under a named profile — there's no raw token to copy-paste from the CLI, so this only works for an agent running on *this same machine*. **Agents, CI, and service accounts without a browser-driven human at the keyboard** — or anywhere you need a portable token to hand to a *different* machine — can't use \`pagespace keys create\` at all; mint a token from **Settings > MCP** instead: it prints an \`mcp_...\` token **once** — only a SHA3-256 hash is stored server-side. Either way, scoping to specific drives joins those drives as an **app** on the member list, governed by the role you give it there; scoped credentials cannot create new drives.
+Either way opens a browser for a one-time consent screen (minting is always a deliberate, human-approved step, never a silent agent-runnable call) and stores the result locally under the key name you chose. Need a portable \`mcp_...\` token for a *different* machine, CI, or a service account? Add \`--show-token\` to the mint — it prints the token **exactly once** (never again; only a SHA3-256 hash is stored server-side) — or mint one from **Settings > MCP** in the app. Either way, scoping to specific drives joins those drives as an **app** on the member list, governed by the role you give it there; scoped credentials cannot create new drives.
 
 ## Step 2: Configure your AI tool
 
-Minted a key with the CLI on *this* machine? Point the config at its profile with \`PAGESPACE_PROFILE\`, not a token:
+Minted a key with the CLI on *this* machine? Point the config at it by name with \`PAGESPACE_KEY\` — no secret ever appears in the config file:
 
 \`\`\`json
 {
@@ -55,7 +55,7 @@ Minted a key with the CLI on *this* machine? Point the config at its profile wit
       "command": "pagespace",
       "args": ["mcp"],
       "env": {
-        "PAGESPACE_PROFILE": "agent"
+        "PAGESPACE_KEY": "agent"
       }
     }
   }
@@ -153,7 +153,7 @@ The agent replies with its own system prompt and tools, and runs those tools ser
 
 **Permission denied**: MCP inherits the caller's permissions. If you lost access to a drive, the key or token stops seeing it too.
 
-**Server fails to start**: \`pagespace mcp\` refuses to start unless the invocation names an explicit credential — \`PAGESPACE_PROFILE\`/\`--profile\` (a key minted by \`pagespace keys\`) or \`PAGESPACE_TOKEN\`/\`--token\` (a portable token from **Settings > MCP**). A bare \`pagespace login\` is never enough. Run \`pagespace whoami\` to confirm you're authenticated, and \`pagespace --version\` to confirm the CLI installed correctly.
+**Server fails to start**: \`pagespace mcp\` refuses to start unless the invocation names an explicit credential — \`PAGESPACE_KEY\`/\`--key\` (a key minted by \`pagespace keys\`) or \`PAGESPACE_TOKEN\`/\`--token\` (a portable token). A bare \`pagespace login\` is never enough, and the machine's *active* key (\`pagespace keys use\`) deliberately does not apply to MCP configs — name the credential explicitly so the config is portable and self-describing. Run \`pagespace whoami\` to confirm you're authenticated, and \`pagespace --version\` to confirm the CLI installed correctly.
 
 ## Using the older \`pagespace-mcp\` package?
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createWhoamiHandler, credentialSecret, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, parseArgv } from '@pagespace/cli';
 import type { HostCredential, CredentialStore, OAuthHostCredential } from '@pagespace/cli';
 import type { OAuthTokens } from '@pagespace/sdk';
-import { createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
+import { createFakeActiveKeyStore, createFakeContext, createRecordingSink } from '../../__tests__/fake-context.js';
 
 const CREDENTIAL: OAuthHostCredential = {
   kind: 'oauth',
@@ -85,7 +85,45 @@ describe('createWhoamiHandler', () => {
       name: 'Ada Lovelace',
       email: 'ada@example.com',
       scopes: ['account', 'offline_access'],
+      activeKey: null,
     });
+  });
+
+  it('shows the active key when one is set for the resolved host — human line and --json field', async () => {
+    const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
+    const handler = createWhoamiHandler(baseDeps(store));
+
+    const humanStdout = createRecordingSink();
+    const humanCtx = createFakeContext({
+      stdout: humanStdout,
+      env: {},
+      activeKeyStore: createFakeActiveKeyStore({ 'https://pagespace.ai': 'agent' }),
+    });
+    expect(await handler(humanCtx, commandIntent(['whoami']))).toBe(EXIT_SUCCESS);
+    expect(humanStdout.lines.join('')).toContain('Active key: agent');
+
+    const jsonStdout = createRecordingSink();
+    const jsonCtx = createFakeContext({
+      stdout: jsonStdout,
+      env: {},
+      activeKeyStore: createFakeActiveKeyStore({ 'https://pagespace.ai': 'agent' }),
+    });
+    expect(await handler(jsonCtx, commandIntent(['whoami', '--json']))).toBe(EXIT_SUCCESS);
+    expect(JSON.parse(jsonStdout.lines.join('')).activeKey).toBe('agent');
+  });
+
+  it('never prints an Active key line when none is set (or it is set for a different host)', async () => {
+    const store = fakeStore(new Map([['https://pagespace.ai', CREDENTIAL]]));
+    const handler = createWhoamiHandler(baseDeps(store));
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({
+      stdout,
+      env: {},
+      activeKeyStore: createFakeActiveKeyStore({ 'https://other.example': 'agent' }),
+    });
+    expect(await handler(ctx, commandIntent(['whoami']))).toBe(EXIT_SUCCESS);
+    expect(stdout.lines.join('')).not.toContain('Active key:');
   });
 
   it('exits 1 with "not logged in" and does not prompt when no credential is stored', async () => {
@@ -184,7 +222,7 @@ describe('createWhoamiHandler', () => {
     expect(parsed.scopes).toEqual(CREDENTIAL.scopes);
   });
 
-  it('resolves the profile from --profile and reads/writes that profile, not "default"', async () => {
+  it('resolves the key from --key and reads/writes that slot, not "default"', async () => {
     const hosts = new Map<string, Map<string, HostCredential>>();
     hosts.set('https://pagespace.ai', new Map([['work', CREDENTIAL]]));
     const store: CredentialStore = {
@@ -201,7 +239,7 @@ describe('createWhoamiHandler', () => {
 
     const stdout = createRecordingSink();
     const ctx = createFakeContext({ stdout, env: {} });
-    const code = await handler(ctx, commandIntent(['whoami', '--profile', 'work', '--json']));
+    const code = await handler(ctx, commandIntent(['whoami', '--key', 'work', '--json']));
 
     expect(code).toBe(EXIT_SUCCESS);
     const parsed = JSON.parse(stdout.lines.join(''));
@@ -209,7 +247,7 @@ describe('createWhoamiHandler', () => {
     expect(credentialSecret((await store.get('https://pagespace.ai', 'work'))!)).toBe(REFRESHED.refreshToken);
   });
 
-  it('exits 1 "not logged in" when only a different profile is stored for the host', async () => {
+  it('exits 1 "not logged in" when only a different key is stored for the host', async () => {
     const hosts = new Map<string, Map<string, HostCredential>>();
     hosts.set('https://pagespace.ai', new Map([['default', CREDENTIAL]]));
     const store: CredentialStore = {
@@ -222,7 +260,7 @@ describe('createWhoamiHandler', () => {
 
     const stderr = createRecordingSink();
     const ctx = createFakeContext({ stderr, env: {} });
-    const code = await handler(ctx, commandIntent(['whoami', '--profile', 'work']));
+    const code = await handler(ctx, commandIntent(['whoami', '--key', 'work']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/not logged in/i);

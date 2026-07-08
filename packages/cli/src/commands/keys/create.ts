@@ -13,11 +13,10 @@
  * a human in an authenticated browser tab clicking a button — this command
  * now requires the same trust level instead of routing around it.
  *
- * The resulting refresh token is persisted under a named profile
- * (`--save-as-profile`, falling back to the single drive's id), never the
- * `"default"` profile `pagespace login` uses — so minting a scoped token
- * can't silently overwrite (or be overwritten by) a personal login
- * credential for the same host.
+ * The resulting credential is persisted under the key's name (`--name`,
+ * falling back to the single drive's id), never the `"default"` slot
+ * `pagespace login` uses — so minting a scoped key can't silently overwrite
+ * (or be overwritten by) a personal login credential for the same host.
  */
 import { randomBytes } from 'node:crypto';
 import { PAGESPACE_CLI_CLIENT_ID } from '../../auth/client.js';
@@ -139,31 +138,46 @@ export function buildKeyUpdateScope(tokenId: string, drives: readonly DriveScope
   return { ok: true, scope: `update_key:${tokenId} ${driveScope}`, driveScope };
 }
 
-export type ResolveTokenProfileNameResult = { readonly ok: true; readonly name: string } | { readonly ok: false; readonly message: string };
+export type BuildKeyActivateScopeResult =
+  | { readonly ok: true; readonly scope: string }
+  | { readonly ok: false; readonly message: string };
 
 /**
- * `--save-as-profile` if given, else the sole drive's id — ambiguous for
- * multiple drives. Whichever branch resolves the name, `"default"` is
- * refused outright: that slot holds the personal credential `pagespace
- * login` stores, and letting a scoped token land there (whether named
- * explicitly or auto-derived from a drive literally named "default") would
- * let either credential silently clobber the other.
+ * The activation-ceremony scope (`pagespace keys use`): `activate_key:<tokenId>`
+ * as the SOLE scope token — the grant verifies ownership of an existing key
+ * and changes nothing server-side (`ok_mcp_activate`), so there is nothing
+ * else to grant alongside it. Same reimplemented-grammar reasoning as
+ * `buildTokenScope` above.
  */
-export function resolveTokenProfileName({
-  saveAsProfile,
-  drives,
-}: Pick<CreateTokenArgs, 'saveAsProfile' | 'drives'>): ResolveTokenProfileNameResult {
-  if (saveAsProfile === undefined && drives.length !== 1) {
+export function buildKeyActivateScope(tokenId: string): BuildKeyActivateScopeResult {
+  if (!isResourceId(tokenId)) {
+    return { ok: false, message: `Invalid key id "${tokenId}": key ids are 1-32 lowercase letters/digits.` };
+  }
+  return { ok: true, scope: `activate_key:${tokenId}` };
+}
+
+export type ResolveNewKeyNameResult = { readonly ok: true; readonly name: string } | { readonly ok: false; readonly message: string };
+
+/**
+ * `--name` if given, else the sole drive's id — ambiguous for multiple
+ * drives. Whichever branch resolves the name, `"default"` is refused
+ * outright: that slot holds your login credential (stored by `pagespace
+ * login`), and letting a scoped key land there (whether named explicitly or
+ * auto-derived from a drive literally named "default") would let either
+ * credential silently clobber the other.
+ */
+export function resolveNewKeyName({ name, drives }: Pick<CreateTokenArgs, 'name' | 'drives'>): ResolveNewKeyNameResult {
+  if (name === undefined && drives.length !== 1) {
     return {
       ok: false,
-      message: '--save-as-profile <name> is required when scoping a token to more than one drive.',
+      message: '--name <name> is required when scoping a key to more than one drive.',
     };
   }
-  const resolvedName = saveAsProfile ?? drives[0].id;
+  const resolvedName = name ?? drives[0].id;
   if (resolvedName === DEFAULT_PROFILE_NAME) {
     return {
       ok: false,
-      message: `--save-as-profile "${DEFAULT_PROFILE_NAME}" is reserved for the personal credential stored by "pagespace login". Choose another profile name.`,
+      message: `--name "${DEFAULT_PROFILE_NAME}" is reserved for the personal credential stored by "pagespace login". Choose another key name.`,
     };
   }
   return { ok: true, name: resolvedName };
@@ -197,24 +211,24 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
       return EXIT_USAGE_ERROR;
     }
 
-    const profileResult = resolveTokenProfileName(parsedArgs.args);
-    if (!profileResult.ok) {
-      ctx.stderr.write(`${profileResult.message}\n`);
+    const nameResult = resolveNewKeyName(parsedArgs.args);
+    if (!nameResult.ok) {
+      ctx.stderr.write(`${nameResult.message}\n`);
       return EXIT_USAGE_ERROR;
     }
-    const profileName = profileResult.name;
+    const keyName = nameResult.name;
 
     const { host } = resolveConfig({
       flags: { host: intent.flags.host },
       env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
-      profile: null,
+      credential: null,
     });
 
     const store = deps.createCredentialStore();
-    const existing = await store.get(host, profileName);
+    const existing = await store.get(host, keyName);
     if (existing && !intent.flags.yes) {
       ctx.stderr.write(
-        `A stored credential for ${host} (profile "${profileName}") already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host} --profile ${profileName}" first.\n`,
+        `A stored credential for ${host} (key "${keyName}") already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host} --key ${keyName}" first.\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }
@@ -227,7 +241,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
     // ordinary informational role.
     const info: OutputSink = parsedArgs.args.showToken ? ctx.stderr : ctx.stdout;
 
-    info.write(`Opening your browser to approve access for profile "${profileName}" on ${host}...\n`);
+    info.write(`Opening your browser to approve access for key "${keyName}" on ${host}...\n`);
 
     // Captured, never printed inline: the callback fires mid-flow, and the
     // token must only ever surface behind the explicit --show-token opt-in.
@@ -251,7 +265,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
       confirmIdentity: deps.confirmIdentity,
       credentialStore: store,
       now: deps.now,
-      profile: profileName,
+      profile: keyName,
       onMintedStaticToken: (token) => {
         mintedToken = token;
       },
@@ -259,7 +273,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
 
     switch (result.outcome) {
       case 'success':
-        info.write(`Created profile "${profileName}" on ${host}, scoped to: ${scopeResult.scope}.\n`);
+        info.write(`Created key "${keyName}" on ${host}, scoped to: ${scopeResult.scope}.\n`);
         if (parsedArgs.args.showToken) {
           if (mintedToken !== null) {
             // The ONLY stdout line in --show-token mode (see `info` above).
@@ -269,7 +283,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
             ctx.stderr.write('--show-token: no raw token to show — the server returned a refresh credential instead of a static token.\n');
           }
         }
-        info.write(`${renderAgentWiringGuidance({ profileName, host }).join('\n')}\n`);
+        info.write(`${renderAgentWiringGuidance({ keyName, host }).join('\n')}\n`);
         return EXIT_SUCCESS;
       case 'timeout':
         ctx.stderr.write('Consent timed out waiting for the browser redirect. Run "pagespace keys create" again.\n');

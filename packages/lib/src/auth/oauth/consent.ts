@@ -29,6 +29,10 @@ export function describeScopeForConsent(scope: ParsedScope, ctx: ConsentNarratio
       const keyName = ctx.keyName ?? scope.tokenId;
       return `Update the drive access of your existing key "${keyName}" — the key itself and its secret stay the same; its access becomes exactly the list below.`;
     }
+    case 'activate_key': {
+      const keyName = ctx.keyName ?? scope.tokenId;
+      return `Make "${keyName}" the active key on the device that sent you here — commands there run with this key's existing access until you switch or deactivate it. Nothing about the key or its access changes.`;
+    }
     case 'drive': {
       const driveName = ctx.driveName ?? scope.driveId;
       switch (scope.role.kind) {

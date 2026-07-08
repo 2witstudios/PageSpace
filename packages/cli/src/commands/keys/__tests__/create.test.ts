@@ -7,7 +7,7 @@ import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../../exi
 import { credentialSecret } from '../../../credentials/serialize.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
 import type { DriveScopeArg } from '../args.js';
-import { buildKeyUpdateScope, buildTokenScope, createTokensCreateHandler, resolveTokenProfileName } from '../create.js';
+import { buildKeyActivateScope, buildKeyUpdateScope, buildTokenScope, createTokensCreateHandler, resolveNewKeyName } from '../create.js';
 
 function commandIntent(argv: string[]): CommandIntent {
   const parsed = parseArgv(argv);
@@ -156,16 +156,16 @@ describe('buildKeyUpdateScope', () => {
   });
 });
 
-describe('resolveTokenProfileName', () => {
-  it('uses the explicit --save-as-profile name when given', () => {
-    expect(resolveTokenProfileName({ saveAsProfile: 'ci', drives: [{ id: 'drv1', role: null }] })).toEqual({
+describe('resolveNewKeyName', () => {
+  it('uses the explicit --name when given', () => {
+    expect(resolveNewKeyName({ name: 'ci', drives: [{ id: 'drv1', role: null }] })).toEqual({
       ok: true,
       name: 'ci',
     });
   });
 
-  it('defaults to the single drive id when --save-as-profile is omitted', () => {
-    expect(resolveTokenProfileName({ saveAsProfile: undefined, drives: [{ id: 'drv1', role: null }] })).toEqual({
+  it('defaults to the single drive id when --name is omitted', () => {
+    expect(resolveNewKeyName({ name: undefined, drives: [{ id: 'drv1', role: null }] })).toEqual({
       ok: true,
       name: 'drv1',
     });
@@ -173,8 +173,8 @@ describe('resolveTokenProfileName', () => {
 
   it('requires an explicit name when scoping more than one drive', () => {
     expect(
-      resolveTokenProfileName({
-        saveAsProfile: undefined,
+      resolveNewKeyName({
+        name: undefined,
         drives: [
           { id: 'drv1', role: null },
           { id: 'drv2', role: null },
@@ -182,27 +182,44 @@ describe('resolveTokenProfileName', () => {
       }),
     ).toEqual({
       ok: false,
-      message: '--save-as-profile <name> is required when scoping a token to more than one drive.',
+      message: '--name <name> is required when scoping a key to more than one drive.',
     });
   });
 
-  it('rejects "default" as an explicit --save-as-profile name — that slot is reserved for "pagespace login"', () => {
-    const result = resolveTokenProfileName({ saveAsProfile: 'default', drives: [{ id: 'drv1', role: null }] });
+  it('rejects "default" as an explicit --name — that slot is reserved for "pagespace login", and says so in key vocabulary', () => {
+    const result = resolveNewKeyName({ name: 'default', drives: [{ id: 'drv1', role: null }] });
     expect(result.ok).toBe(false);
-    expect(result.ok === false && result.message).toContain('"default"');
-    expect(result.ok === false && result.message).toContain('pagespace login');
+    expect(result.ok === false && result.message).toBe(
+      '--name "default" is reserved for the personal credential stored by "pagespace login". Choose another key name.',
+    );
   });
 
-  it('rejects the single-drive auto-derived name when it equals "default" (e.g. --drive default, no --save-as-profile)', () => {
-    const result = resolveTokenProfileName({ saveAsProfile: undefined, drives: [{ id: 'default', role: null }] });
+  it('rejects the single-drive auto-derived name when it equals "default" (e.g. --drive default, no --name)', () => {
+    const result = resolveNewKeyName({ name: undefined, drives: [{ id: 'default', role: null }] });
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.message).toContain('"default"');
     expect(result.ok === false && result.message).toContain('pagespace login');
   });
 
   it('is a pure function: identical input produces a deep-equal result', () => {
-    const input = { saveAsProfile: undefined, drives: [{ id: 'drv1', role: null }] as DriveScopeArg[] };
-    expect(resolveTokenProfileName(input)).toEqual(resolveTokenProfileName(input));
+    const input = { name: undefined, drives: [{ id: 'drv1', role: null }] as DriveScopeArg[] };
+    expect(resolveNewKeyName(input)).toEqual(resolveNewKeyName(input));
+  });
+});
+
+describe('buildKeyActivateScope', () => {
+  it('builds activate_key:<id> as the SOLE scope token', () => {
+    expect(buildKeyActivateScope('tok123')).toEqual({ ok: true, scope: 'activate_key:tok123' });
+  });
+
+  it('rejects a key id outside the resource-id grammar', () => {
+    const result = buildKeyActivateScope('Not Valid!');
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain('Not Valid!');
+  });
+
+  it('rejects an empty id', () => {
+    expect(buildKeyActivateScope('').ok).toBe(false);
   });
 });
 
@@ -304,7 +321,7 @@ describe('createTokensCreateHandler', () => {
     expect(stderr.lines.join('')).toContain('--drive');
   });
 
-  it('rejects more than one drive with no --save-as-profile as a usage error', async () => {
+  it('rejects more than one drive with no --name as a usage error', async () => {
     const store = fakeStore();
     const handler = createTokensCreateHandler(baseHandlerDeps(store));
     const stderr = createRecordingSink();
@@ -316,10 +333,10 @@ describe('createTokensCreateHandler', () => {
     );
 
     expect(code).toBe(EXIT_USAGE_ERROR);
-    expect(stderr.lines.join('')).toContain('--save-as-profile');
+    expect(stderr.lines.join('')).toContain('--name');
   });
 
-  it('rejects --save-as-profile default as a usage error without opening a browser', async () => {
+  it('rejects --name default as a usage error without opening a browser', async () => {
     const store = fakeStore();
     let browserOpened = false;
     const handler = createTokensCreateHandler({
@@ -334,7 +351,7 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       ctx,
-      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'default']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--name', 'default']),
     );
 
     expect(code).toBe(EXIT_USAGE_ERROR);
@@ -342,7 +359,7 @@ describe('createTokensCreateHandler', () => {
     expect(browserOpened).toBe(false);
   });
 
-  it('rejects a single --drive default with no --save-as-profile as a usage error without opening a browser', async () => {
+  it('rejects a single --drive default with no --name as a usage error without opening a browser', async () => {
     const store = fakeStore();
     let browserOpened = false;
     const handler = createTokensCreateHandler({
@@ -362,7 +379,7 @@ describe('createTokensCreateHandler', () => {
     expect(browserOpened).toBe(false);
   });
 
-  it('opens the browser with a correctly built scope and stores the refresh token under the named profile', async () => {
+  it('opens the browser with a correctly built scope and stores the refresh token under the key name', async () => {
     const store = fakeStore();
     const fake = fakeServer();
     let requestedScope: string | undefined;
@@ -409,7 +426,7 @@ describe('createTokensCreateHandler', () => {
     expect(allOutput).toContain('drv1');
   });
 
-  it('always prints the agent-wiring guidance (MCP config with PAGESPACE_PROFILE) on success', async () => {
+  it('always prints the agent-wiring guidance (MCP config with PAGESPACE_KEY) on success', async () => {
     const store = fakeStore();
     const fake = fakeServer();
     const handler = createTokensCreateHandler({
@@ -425,7 +442,7 @@ describe('createTokensCreateHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     const output = stdout.lines.join('');
-    expect(output).toContain('"PAGESPACE_PROFILE": "drv1"');
+    expect(output).toContain('"PAGESPACE_KEY": "drv1"');
     expect(output).toContain('"args": [');
     expect(output).toMatch(/keychain/i);
   });
@@ -496,7 +513,7 @@ describe('createTokensCreateHandler', () => {
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
   });
 
-  it('uses --save-as-profile as the storage profile when given', async () => {
+  it('uses --name as the storage name when given', async () => {
     const store = fakeStore();
     const fake = fakeServer();
     const handler = createTokensCreateHandler({
@@ -507,7 +524,7 @@ describe('createTokensCreateHandler', () => {
 
     const code = await handler(
       createFakeContext({ env: {} }),
-      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--save-as-profile', 'ci-bot']),
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--name', 'ci-bot']),
     );
 
     expect(code).toBe(EXIT_SUCCESS);
@@ -515,7 +532,7 @@ describe('createTokensCreateHandler', () => {
     expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
   });
 
-  it('refuses to overwrite an existing stored profile without --yes', async () => {
+  it('refuses to overwrite an existing stored key without --yes', async () => {
     const store = fakeStore();
     await store.set(
       'https://pagespace.ai',
@@ -534,7 +551,7 @@ describe('createTokensCreateHandler', () => {
     expect(stderr.lines.join('')).not.toContain('ps_rt_existing');
   });
 
-  it('overwrites an existing stored profile when --yes is passed', async () => {
+  it('overwrites an existing stored key when --yes is passed', async () => {
     const store = fakeStore();
     await store.set(
       'https://pagespace.ai',

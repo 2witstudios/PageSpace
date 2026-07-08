@@ -18,7 +18,7 @@
  * method usable only via one would reopen the silent, agent-runnable
  * key-minting affordance Phase 8 closed. Key MINTING happens via the OAuth
  * authorize/consent flow (`pagespace keys create`) or the web UI. Both
- * remaining operations require an `oauth_`-class access token (from
+ * remaining operations require a `ps_at_` OAuth access token (from
  * `pagespace login` / the OAuth flow) or a web session — the routes reject
  * `mcp_` tokens.
  *

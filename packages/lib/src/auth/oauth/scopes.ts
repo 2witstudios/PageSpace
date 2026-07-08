@@ -16,6 +16,7 @@ export type ParsedScope =
   | { kind: 'offline_access' }
   | { kind: 'manage_keys' }
   | { kind: 'update_key'; tokenId: string }
+  | { kind: 'activate_key'; tokenId: string }
   | {
       kind: 'drive';
       driveId: string;
@@ -42,6 +43,15 @@ export type ScopeSet = {
   // credential is minted by this grant); requires ≥1 drive:* scope (an
   // empty re-scope is what revocation is for).
   updateKeyId: string | null;
+  // `activate_key:<tokenId>` — this authorization request grants NOTHING and
+  // changes NOTHING server-side; it is a human-in-a-browser approval that the
+  // requesting device may set the caller's EXISTING key as its ambient
+  // default (`pagespace keys use`). Same in-scope-string rationale as
+  // update_key above. Must be the ONLY scope in the request: it carries no
+  // drives (the key's scope is untouched), mints nothing refreshable, and
+  // combining it with any grant would let an "activate" consent screen
+  // smuggle a real grant.
+  activateKeyId: string | null;
 };
 
 export type ScopeError =
@@ -54,7 +64,9 @@ export type ScopeError =
   | { code: 'offline_access_alone' }
   | { code: 'duplicate_update_key' }
   | { code: 'update_key_conflict' }
-  | { code: 'update_key_without_drive' };
+  | { code: 'update_key_without_drive' }
+  | { code: 'duplicate_activate_key' }
+  | { code: 'activate_key_not_alone' };
 
 export type DriveScopeRow = { driveId: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null };
 
@@ -110,6 +122,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   let offlineAccess = false;
   let manageKeys = false;
   let updateKeyId: string | null = null;
+  let activateKeyId: string | null = null;
   const drives = new Map<string, ParsedScope & { kind: 'drive' }>();
 
   for (const token of tokens) {
@@ -136,6 +149,17 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
       updateKeyId = tokenId;
       continue;
     }
+    if (token.startsWith('activate_key:')) {
+      const tokenId = token.slice('activate_key:'.length);
+      if (!RESOURCE_ID_RE.test(tokenId)) {
+        return { ok: false, error: { code: 'malformed_scope', scope: token } };
+      }
+      if (activateKeyId !== null) {
+        return { ok: false, error: { code: 'duplicate_activate_key' } };
+      }
+      activateKeyId = tokenId;
+      continue;
+    }
     if (token.startsWith('drive:')) {
       const parsed = parseDriveScope(token);
       if (!parsed) {
@@ -159,6 +183,15 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   // mirroring the account/drive exclusion above.
   if (manageKeys && (account || drives.size > 0)) {
     return { ok: false, error: { code: 'manage_keys_conflict' } };
+  }
+
+  // activate_key is a pure approval ceremony — it grants nothing, so ANY
+  // other scope alongside it (including update_key or another grant) would
+  // let a consent screen narrating "activate" carry a real grant. Sole-scope
+  // or rejected, checked before the update_key/offline_access rules so its
+  // error shape is its own.
+  if (activateKeyId !== null && (account || manageKeys || offlineAccess || updateKeyId !== null || drives.size > 0)) {
+    return { ok: false, error: { code: 'activate_key_not_alone' } };
   }
 
   // Ordered BEFORE the offline_access_alone check below so update_key error
@@ -189,7 +222,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     return { ok: false, error: { code: 'offline_access_alone' } };
   }
 
-  return { ok: true, scopes: { account, offlineAccess, drives, manageKeys, updateKeyId } };
+  return { ok: true, scopes: { account, offlineAccess, drives, manageKeys, updateKeyId, activateKeyId } };
 }
 
 function formatDriveScope(scope: ParsedScope & { kind: 'drive' }): string {
@@ -208,6 +241,7 @@ function formatDriveScope(scope: ParsedScope & { kind: 'drive' }): string {
 /** Canonical serialization; parse(format(s)) deep-equals s (rule 9). */
 export function formatScopeSet(scopes: ScopeSet): string {
   const tokens: string[] = [];
+  if (scopes.activateKeyId !== null) tokens.push(`activate_key:${scopes.activateKeyId}`);
   if (scopes.updateKeyId !== null) tokens.push(`update_key:${scopes.updateKeyId}`);
   if (scopes.account) tokens.push('account');
   if (scopes.manageKeys) tokens.push('manage_keys');
@@ -245,11 +279,13 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
   // granted-bit check is the whole story.
   if (requested.manageKeys && !granted.manageKeys) return false;
 
-  // update_key never survives narrowing: it exists only inside a single
-  // consent-bound authorization code, so any request carrying one against a
-  // grant that doesn't carry the identical one (e.g. a refresh-token grant
-  // trying to smuggle a key re-scope in) is escalation, rejected outright.
+  // update_key/activate_key never survive narrowing: each exists only inside
+  // a single consent-bound authorization code, so any request carrying one
+  // against a grant that doesn't carry the identical one (e.g. a
+  // refresh-token grant trying to smuggle a key re-scope or activation in)
+  // is escalation, rejected outright.
   if (requested.updateKeyId !== null && requested.updateKeyId !== granted.updateKeyId) return false;
+  if (requested.activateKeyId !== null && requested.activateKeyId !== granted.activateKeyId) return false;
 
   if (requested.account) {
     return granted.account;
@@ -276,7 +312,7 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
  * this shape specifically).
  */
 export function isPureDriveGrant(scopes: ScopeSet): boolean {
-  return !scopes.account && !scopes.manageKeys && scopes.drives.size > 0 && scopes.updateKeyId === null;
+  return !scopes.account && !scopes.manageKeys && scopes.drives.size > 0 && scopes.updateKeyId === null && scopes.activateKeyId === null;
 }
 
 /**
@@ -290,6 +326,18 @@ export function isPureDriveGrant(scopes: ScopeSet): boolean {
  */
 export function isKeyUpdateGrant(scopes: ScopeSet): scopes is ScopeSet & { updateKeyId: string } {
   return scopes.updateKeyId !== null;
+}
+
+/**
+ * True iff this grant is a pure activation ceremony (`activate_key:<id>`
+ * alone, the only shape parse admits for `activateKeyId`). Grants nothing
+ * and changes nothing server-side: token issuance verifies ownership and
+ * returns a PKCE-verified success signal so the requesting device may set
+ * the key as its ambient default (`pagespace keys use`). A type predicate,
+ * mirroring `isKeyUpdateGrant`.
+ */
+export function isKeyActivationGrant(scopes: ScopeSet): scopes is ScopeSet & { activateKeyId: string } {
+  return scopes.activateKeyId !== null;
 }
 
 /** Bridge to the capability model: rows in mcp_token_drives shape (Decision 2). */

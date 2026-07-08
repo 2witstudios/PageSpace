@@ -1,6 +1,6 @@
 import { PageSpaceClient, StaticTokenProvider } from '@pagespace/sdk';
 import { credentialSecret } from '@pagespace/cli';
-import type { HandlerContext, OutputSink } from '@pagespace/cli';
+import type { ActiveKeyStore, HandlerContext, OutputSink } from '@pagespace/cli';
 import type { CredentialStore, HostCredential } from '@pagespace/cli';
 
 export function createRecordingSink(): OutputSink & { readonly lines: string[] } {
@@ -32,6 +32,23 @@ export function createFakeCredentialStore(): CredentialStore {
   };
 }
 
+/** In-memory host → active-key-name map — no real fs I/O. */
+export function createFakeActiveKeyStore(initial: Record<string, string> = {}): ActiveKeyStore & { readonly entries: Map<string, string> } {
+  const entries = new Map<string, string>(Object.entries(initial));
+  return {
+    entries,
+    async getActiveKey(host: string) {
+      return entries.get(host) ?? null;
+    },
+    async setActiveKey(host: string, name: string) {
+      entries.set(host, name);
+    },
+    async clearActiveKey(host: string) {
+      entries.delete(host);
+    },
+  };
+}
+
 export function createFakeContext(overrides: Partial<HandlerContext> = {}): HandlerContext {
   return {
     sdk: new PageSpaceClient({ baseUrl: 'https://pagespace.ai', auth: new StaticTokenProvider('test-token') }),
@@ -39,6 +56,7 @@ export function createFakeContext(overrides: Partial<HandlerContext> = {}): Hand
     stderr: createRecordingSink(),
     env: {},
     credentialStore: createFakeCredentialStore(),
+    activeKeyStore: createFakeActiveKeyStore(),
     isTTY: false,
     prompt: async () => '',
     ...overrides,

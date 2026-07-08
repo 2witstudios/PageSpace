@@ -157,10 +157,10 @@ describe('createKeysHandler — non-interactive', () => {
 });
 
 describe('createKeysHandler — Create flow', () => {
-  it('wires drive multiselect -> role select -> profile name -> mint, storing the credential under the chosen profile', async () => {
+  it('wires drive multiselect -> role select -> key name -> mint, storing the credential under the chosen name', async () => {
     selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce({ kind: 'member' }).mockResolvedValueOnce('exit');
     multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
-    textMock.mockReset().mockResolvedValueOnce('my-profile');
+    textMock.mockReset().mockResolvedValueOnce('my-key');
     confirmMock.mockReset().mockResolvedValueOnce(true);
 
     const { createKeysHandler } = await import('../wizard.js');
@@ -178,7 +178,7 @@ describe('createKeysHandler — Create flow', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(drivesList).toHaveBeenCalledWith({ tokenScopable: true });
-    const stored = await store.get('https://pagespace.ai', 'my-profile');
+    const stored = await store.get('https://pagespace.ai', 'my-key');
     expect(stored && credentialSecret(stored)).toBe(FIXED_TOKENS.refreshToken);
     expect(introMock).toHaveBeenCalled();
     expect(outroMock).toHaveBeenCalledWith('Bye.');
@@ -209,7 +209,7 @@ describe('createKeysHandler — Create flow, mcp-kind mint (the production shape
   it('offers the show-once token note when accepted, then always prints the agent-wiring guidance', async () => {
     selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce({ kind: 'member' }).mockResolvedValueOnce('exit');
     multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
-    textMock.mockReset().mockResolvedValueOnce('my-profile');
+    textMock.mockReset().mockResolvedValueOnce('my-key');
     // 1st confirm: proceed with the mint; 2nd confirm: show the token.
     confirmMock.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     noteMock.mockReset();
@@ -224,13 +224,13 @@ describe('createKeysHandler — Create flow, mcp-kind mint (the production shape
     expect(code).toBe(EXIT_SUCCESS);
     const notes = noteMock.mock.calls.map((call) => `${String(call[0])}\n${String(call[1] ?? '')}`);
     expect(notes.some((note) => note.includes('PAGESPACE_TOKEN=mcp_wizard_tok'))).toBe(true);
-    expect(notes.some((note) => note.includes('PAGESPACE_PROFILE') && note.includes('"pagespace"'))).toBe(true);
+    expect(notes.some((note) => note.includes('PAGESPACE_KEY') && note.includes('"pagespace"'))).toBe(true);
   });
 
   it('never surfaces the raw token anywhere when the show-once confirm is declined, but still prints guidance', async () => {
     selectMock.mockReset().mockResolvedValueOnce('create').mockResolvedValueOnce({ kind: 'member' }).mockResolvedValueOnce('exit');
     multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
-    textMock.mockReset().mockResolvedValueOnce('my-profile');
+    textMock.mockReset().mockResolvedValueOnce('my-key');
     confirmMock.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     noteMock.mockReset();
 
@@ -252,7 +252,7 @@ describe('createKeysHandler — Create flow, mcp-kind mint (the production shape
     ].join('\n');
     expect(everything).not.toContain('mcp_wizard_tok');
     const notes = noteMock.mock.calls.map((call) => `${String(call[0])}`);
-    expect(notes.some((note) => note.includes('PAGESPACE_PROFILE'))).toBe(true);
+    expect(notes.some((note) => note.includes('PAGESPACE_KEY'))).toBe(true);
   });
 });
 
@@ -309,7 +309,7 @@ describe('createKeysHandler — Edit flow re-scopes the key IN PLACE (update_key
     expect(requestedScope).toBe('update_key:tok1 drive:drv1:member');
     // The drive multiselect starts pre-selected on the key's current scopes.
     expect(multiselectMock).toHaveBeenCalledWith(expect.objectContaining({ initialValues: ['drv1'] }));
-    // In-place semantics: no replacement profile is named, nothing is stored
+    // In-place semantics: no replacement key is named, nothing is stored
     // locally, and the old key is never revoked.
     expect(textMock).not.toHaveBeenCalled();
     expect(tokensRevoke).not.toHaveBeenCalled();
@@ -387,6 +387,132 @@ describe('createKeysHandler — unknown "keys" subcommand', () => {
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(stderr.lines.join('')).toContain('lsit');
     expect(introMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('createKeysHandler — Set active key flow (menu choice "use")', () => {
+  const SERVER_KEY = {
+    id: 'tok1',
+    name: 'pagespace CLI',
+    tokenPrefix: 'mcp_abcdefghijk',
+    lastUsed: null,
+    createdAt: '2026-07-01T00:00:00.000Z',
+    isScoped: true,
+    driveScopes: [{ id: 'drv1', name: 'Engineering', role: 'MEMBER', customRoleId: null, customRoleName: null }],
+  };
+
+  /** The wizard's fakeStore plus the listCredentialNames enumeration the Set-active flow needs for its reverse lookup. */
+  function enumerableStore(): CredentialStore {
+    const base = fakeStore();
+    const names = new Set<string>();
+    return {
+      ...base,
+      set: async (host, credential, profile = 'default') => {
+        names.add(profile);
+        return base.set(host, credential, profile);
+      },
+      listCredentialNames: async () => [...names].sort(),
+    };
+  }
+
+  it('key select -> activate_key consent -> records the LOCAL credential name as active, storing nothing', async () => {
+    selectMock.mockReset().mockResolvedValueOnce('use').mockResolvedValueOnce('tok1').mockResolvedValueOnce('exit');
+    spinnerHandle.stop.mockReset();
+    logMock.info.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const { createFakeActiveKeyStore } = await import('../../../__tests__/fake-context.js');
+    const store = enumerableStore();
+    await store.set(
+      'https://pagespace.ai',
+      { kind: 'static', token: 'mcp_abcdefghijk_full_secret', scopes: ['drive:drv1:member'], createdAt: '2026-07-01T00:00:00.000Z' },
+      'my-agent',
+    );
+
+    const fake = fakeLoopbackServer();
+    let requestedScope: string | undefined;
+    const setSpy = vi.fn(store.set);
+    const deps = {
+      ...baseMintDeps({ ...store, set: setSpy }),
+      startServer: async () => fake.server,
+      openBrowser: async (url: string) => {
+        requestedScope = new URL(url).searchParams.get('scope') ?? undefined;
+        return autoApprove(fake)(url);
+      },
+      exchangeCode: async () => ({ kind: 'mcp_activate' as const, tokenId: 'tok1', scope: 'activate_key:tok1' }),
+    };
+    const handler = createKeysHandler(deps);
+
+    const activeKeyStore = createFakeActiveKeyStore();
+    const sdk = fakeSdk({ tokensList: vi.fn(async () => [SERVER_KEY]) });
+    const ctx = createFakeContext({ sdk, activeKeyStore, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(requestedScope).toBe('activate_key:tok1');
+    expect(activeKeyStore.entries.get('https://pagespace.ai')).toBe('my-agent');
+    // Nothing was written to the credential store by the ceremony itself.
+    expect(setSpy).not.toHaveBeenCalled();
+    const stopMessages = spinnerHandle.stop.mock.calls.flat().map(String).join('\n');
+    expect(stopMessages).toContain('"my-agent" is now the active key');
+  });
+
+  it('a key with no locally stored credential cannot be activated from the wizard', async () => {
+    selectMock.mockReset().mockResolvedValueOnce('use').mockResolvedValueOnce('tok1').mockResolvedValueOnce('exit');
+    logMock.error.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const { createFakeActiveKeyStore } = await import('../../../__tests__/fake-context.js');
+    const store = enumerableStore();
+    let browserOpened = false;
+    const deps = {
+      ...baseMintDeps(store),
+      openBrowser: async () => {
+        browserOpened = true;
+        return true;
+      },
+    };
+    const handler = createKeysHandler(deps);
+
+    const activeKeyStore = createFakeActiveKeyStore();
+    const sdk = fakeSdk({ tokensList: vi.fn(async () => [SERVER_KEY]) });
+    const ctx = createFakeContext({ sdk, activeKeyStore, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(browserOpened).toBe(false);
+    expect(activeKeyStore.entries.size).toBe(0);
+    expect(logMock.error).toHaveBeenCalledWith(expect.stringContaining('No locally stored credential'));
+  });
+
+  it('hints the currently active key in the picker options', async () => {
+    selectMock.mockReset().mockResolvedValueOnce('use').mockResolvedValueOnce(CANCEL_SENTINEL).mockResolvedValueOnce('exit');
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const { createFakeActiveKeyStore } = await import('../../../__tests__/fake-context.js');
+    const store = enumerableStore();
+    await store.set(
+      'https://pagespace.ai',
+      { kind: 'static', token: 'mcp_abcdefghijk_full_secret', scopes: ['drive:drv1:member'], createdAt: '2026-07-01T00:00:00.000Z' },
+      'my-agent',
+    );
+    const handler = createKeysHandler(baseMintDeps(store));
+
+    const activeKeyStore = createFakeActiveKeyStore({ 'https://pagespace.ai': 'my-agent' });
+    const sdk = fakeSdk({ tokensList: vi.fn(async () => [SERVER_KEY]) });
+    const ctx = createFakeContext({ sdk, activeKeyStore, isTTY: true, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    const pickerCall = selectMock.mock.calls.find((call) =>
+      String((call[0] as { message?: unknown }).message).includes('active on this machine'),
+    );
+    expect(pickerCall).toBeDefined();
+    const options = (pickerCall![0] as { options: Array<{ value: string; hint?: string }> }).options;
+    expect(options.find((option) => option.value === 'tok1')?.hint).toContain('active');
   });
 });
 

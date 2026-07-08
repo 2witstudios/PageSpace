@@ -14,8 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the desktop/mobile apps' Bearer session tokens) and are not an SDK-supported credential, so
   the operation had no supported caller. Key minting happens via the OAuth authorize/consent
   flow (`pagespace keys create`) or the web UI. `tokens.list` and `tokens.revoke` remain, and
-  require an `oauth_` access token (from `pagespace login` / the OAuth flow) — not an `mcp_`
-  token.
+  require a `ps_at_` OAuth access token (from `pagespace login` / the OAuth flow) — not an
+  `mcp_` token.
 
 ### Fixed
 

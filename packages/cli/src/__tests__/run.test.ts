@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CLI_VERSION, credentialSecret, EXIT_SUCCESS, EXIT_USAGE_ERROR, isLongRunningCommand, run } from '@pagespace/cli';
 import type { HostCredential, RunDependencies } from '@pagespace/cli';
-import { createFakeCredentialStore, createRecordingSink } from './fake-context.js';
+import { createFakeActiveKeyStore, createFakeCredentialStore, createRecordingSink } from './fake-context.js';
 
 function makeDeps(argv: string[], env: Record<string, string | undefined> = {}): RunDependencies & {
   stdout: ReturnType<typeof createRecordingSink>;
@@ -95,7 +95,9 @@ describe('run', () => {
     const deps = makeDeps(['mcp']);
     const code = await run(deps);
     expect(code).not.toBe(EXIT_SUCCESS);
-    expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
+    expect(deps.stderr.lines.join('')).toMatch(/--key|--token/);
+    // The mcp-specific refusal: the active key must be called out as deliberately inapplicable.
+    expect(deps.stderr.lines.join('')).toContain('deliberately does not apply to "pagespace mcp"');
   });
 
   describe('"mcp" with a stored default profile but no explicit credential (Phase 8 task 4)', () => {
@@ -139,7 +141,9 @@ describe('run', () => {
     const deps = makeDeps(['drives', 'list']);
     const code = await run(deps);
     expect(code).not.toBe(EXIT_SUCCESS);
-    expect(deps.stderr.lines.join('')).toMatch(/pagespace login|PAGESPACE_TOKEN/);
+    expect(deps.stderr.lines.join('')).toContain(
+      'Pass --key <name> (or set PAGESPACE_KEY), pass --token, or activate a key for this machine with "pagespace keys use <name>".',
+    );
   });
 
   describe('"drives list" with a stored default profile but no explicit credential (Phase 9 task 4 — generalized from Phase 8 task 4)', () => {
@@ -285,6 +289,14 @@ describe('run', () => {
       await run(keysRevokeDeps);
       expect(keysRevokeDeps.stderr.lines.join('')).not.toContain('No explicit credential found');
     });
+
+    it('"keys use" is auth-exempt too: zero credentials reaches its own argument validation, never the gate', async () => {
+      const deps = makeDeps(['keys', 'use']);
+      const code = await run(deps);
+      expect(code).toBe(EXIT_USAGE_ERROR);
+      expect(deps.stderr.lines.join('')).toContain('keys use <name>');
+      expect(deps.stderr.lines.join('')).not.toContain('No explicit credential found');
+    });
   });
 
   it('"pagespace tokens create" (and any other "tokens *" invocation) is an unrecognized command, not a working alias — the old tokens command family was folded into keys', async () => {
@@ -294,46 +306,93 @@ describe('run', () => {
     expect(deps.stderr.lines.join('')).toContain('Unknown command: tokens create');
   });
 
-  it('resolves the profile from --profile and looks up the credential store under that profile name', async () => {
-    const profilesSeen: Array<string | undefined> = [];
+  it('resolves the key from --key and looks up the credential store under that key name', async () => {
+    const namesSeen: Array<string | undefined> = [];
     const store = {
       ...createFakeCredentialStore(),
-      async get(host: string, profile?: string) {
-        profilesSeen.push(profile);
+      async get(host: string, name?: string) {
+        namesSeen.push(name);
         return null;
       },
     };
-    const deps = { ...makeDeps(['whoami', '--profile', 'work']), credentialStore: store };
+    const deps = { ...makeDeps(['whoami', '--key', 'work']), credentialStore: store };
     await run(deps);
-    expect(profilesSeen).toEqual(['work']);
+    expect(namesSeen).toEqual(['work']);
   });
 
-  it('PAGESPACE_PROFILE env selects the profile when --profile is absent', async () => {
-    const profilesSeen: Array<string | undefined> = [];
+  it('rejects the renamed --profile flag with the 1.5.0 rename error, never dispatching', async () => {
+    const deps = makeDeps(['whoami', '--profile', 'work']);
+    const code = await run(deps);
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(deps.stderr.lines.join('')).toContain('--profile was renamed to --key in 1.5.0.');
+  });
+
+  it('PAGESPACE_KEY env selects the key when --key is absent', async () => {
+    const namesSeen: Array<string | undefined> = [];
     const store = {
       ...createFakeCredentialStore(),
-      async get(host: string, profile?: string) {
-        profilesSeen.push(profile);
+      async get(host: string, name?: string) {
+        namesSeen.push(name);
         return null;
       },
     };
-    const deps = { ...makeDeps(['whoami'], { PAGESPACE_PROFILE: 'work' }), credentialStore: store };
+    const deps = { ...makeDeps(['whoami'], { PAGESPACE_KEY: 'work' }), credentialStore: store };
     await run(deps);
-    expect(profilesSeen).toEqual(['work']);
+    expect(namesSeen).toEqual(['work']);
   });
 
-  it('defaults to the "default" profile when neither --profile nor PAGESPACE_PROFILE is given', async () => {
-    const profilesSeen: Array<string | undefined> = [];
+  it('defaults to the "default" slot when neither --key nor PAGESPACE_KEY is given', async () => {
+    const namesSeen: Array<string | undefined> = [];
     const store = {
       ...createFakeCredentialStore(),
-      async get(host: string, profile?: string) {
-        profilesSeen.push(profile);
+      async get(host: string, name?: string) {
+        namesSeen.push(name);
         return null;
       },
     };
     const deps = { ...makeDeps(['whoami']), credentialStore: store };
     await run(deps);
-    expect(profilesSeen).toEqual(['default']);
+    expect(namesSeen).toEqual(['default']);
+  });
+
+  describe('legacy PAGESPACE_PROFILE env alias (renamed to PAGESPACE_KEY in 1.5.0)', () => {
+    it('fills the PAGESPACE_KEY slot when PAGESPACE_KEY is unset, with a one-line stderr deprecation notice', async () => {
+      const namesSeen: Array<string | undefined> = [];
+      const store = {
+        ...createFakeCredentialStore(),
+        async get(host: string, name?: string) {
+          namesSeen.push(name);
+          return null;
+        },
+      };
+      const deps = { ...makeDeps(['whoami'], { PAGESPACE_PROFILE: 'work' }), credentialStore: store };
+      await run(deps);
+      expect(namesSeen).toEqual(['work']);
+      const stderrText = deps.stderr.lines.join('');
+      expect(stderrText).toContain('PAGESPACE_PROFILE is deprecated');
+      expect(stderrText).toContain('PAGESPACE_KEY');
+    });
+
+    it('PAGESPACE_KEY wins over a simultaneously-set PAGESPACE_PROFILE, with no deprecation notice', async () => {
+      const namesSeen: Array<string | undefined> = [];
+      const store = {
+        ...createFakeCredentialStore(),
+        async get(host: string, name?: string) {
+          namesSeen.push(name);
+          return null;
+        },
+      };
+      const deps = { ...makeDeps(['whoami'], { PAGESPACE_KEY: 'current', PAGESPACE_PROFILE: 'legacy' }), credentialStore: store };
+      await run(deps);
+      expect(namesSeen).toEqual(['current']);
+      expect(deps.stderr.lines.join('')).not.toContain('deprecated');
+    });
+
+    it('PAGESPACE_PROFILE alone still counts as an explicit credential for the gate (pre-rename configs keep working)', async () => {
+      const deps = makeDeps(['drives', 'list'], { PAGESPACE_PROFILE: 'agent' });
+      await run(deps);
+      expect(deps.stderr.lines.join('')).not.toContain('No explicit credential found');
+    });
   });
 
   it('folds the legacy PAGESPACE_AUTH_TOKEN env var into the single auth-resolution path with a deprecation notice, never echoing the token', async () => {
@@ -346,11 +405,144 @@ describe('run', () => {
   });
 });
 
+describe('the active key (`pagespace keys use`) as the lowest-priority credential source', () => {
+  const HOST = 'https://pagespace.ai';
+  const ACTIVE_CREDENTIAL: HostCredential = {
+    kind: 'static',
+    token: 'mcp_active_key_secret_token',
+    scopes: ['drive:drv1:member'],
+    createdAt: new Date(0).toISOString(),
+  };
+
+  function recordingFetch(authHeaders: string[]): typeof fetch {
+    return (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      authHeaders.push(headers.get('authorization') ?? '');
+      throw new Error('network-sentinel');
+    }) as unknown as typeof fetch;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('a gated content command with ONLY an active key passes the explicit-credential gate and authenticates as that key', async () => {
+    const authHeaders: string[] = [];
+    vi.stubGlobal('fetch', recordingFetch(authHeaders));
+
+    const store = createFakeCredentialStore();
+    await store.set(HOST, ACTIVE_CREDENTIAL, 'agent');
+    const deps = { ...makeDeps(['drives', 'list']), credentialStore: store, activeKeyStore: createFakeActiveKeyStore({ [HOST]: 'agent' }) };
+
+    await run(deps);
+
+    expect(deps.stderr.lines.join('')).not.toContain('No explicit credential found');
+    expect(authHeaders.some((header) => header.includes('mcp_active_key_secret_token'))).toBe(true);
+  });
+
+  it('an explicit PAGESPACE_TOKEN env beats the active key', async () => {
+    const authHeaders: string[] = [];
+    vi.stubGlobal('fetch', recordingFetch(authHeaders));
+
+    const store = createFakeCredentialStore();
+    await store.set(HOST, ACTIVE_CREDENTIAL, 'agent');
+    const deps = {
+      ...makeDeps(['drives', 'list'], { PAGESPACE_TOKEN: 'mcp_env_token_wins' }),
+      credentialStore: store,
+      activeKeyStore: createFakeActiveKeyStore({ [HOST]: 'agent' }),
+    };
+
+    await run(deps);
+
+    expect(authHeaders.some((header) => header.includes('mcp_env_token_wins'))).toBe(true);
+    expect(authHeaders.some((header) => header.includes('mcp_active_key_secret_token'))).toBe(false);
+  });
+
+  it('an explicit --token flag beats the active key', async () => {
+    const authHeaders: string[] = [];
+    vi.stubGlobal('fetch', recordingFetch(authHeaders));
+
+    const store = createFakeCredentialStore();
+    await store.set(HOST, ACTIVE_CREDENTIAL, 'agent');
+    const deps = {
+      ...makeDeps(['drives', 'list', '--token', 'mcp_flag_token_wins']),
+      credentialStore: store,
+      activeKeyStore: createFakeActiveKeyStore({ [HOST]: 'agent' }),
+    };
+
+    await run(deps);
+
+    expect(authHeaders.some((header) => header.includes('mcp_flag_token_wins'))).toBe(true);
+    expect(authHeaders.some((header) => header.includes('mcp_active_key_secret_token'))).toBe(false);
+  });
+
+  it('an explicit --key naming a DIFFERENT stored key beats the active key', async () => {
+    const authHeaders: string[] = [];
+    vi.stubGlobal('fetch', recordingFetch(authHeaders));
+
+    const store = createFakeCredentialStore();
+    await store.set(HOST, ACTIVE_CREDENTIAL, 'agent');
+    await store.set(HOST, { ...ACTIVE_CREDENTIAL, token: 'mcp_other_key_token' }, 'other');
+    const deps = {
+      ...makeDeps(['drives', 'list', '--key', 'other']),
+      credentialStore: store,
+      activeKeyStore: createFakeActiveKeyStore({ [HOST]: 'agent' }),
+    };
+
+    await run(deps);
+
+    expect(authHeaders.some((header) => header.includes('mcp_other_key_token'))).toBe(true);
+    expect(authHeaders.some((header) => header.includes('mcp_active_key_secret_token'))).toBe(false);
+  });
+
+  it('an active key naming a MISSING credential does not satisfy the gate', async () => {
+    const deps = { ...makeDeps(['drives', 'list']), activeKeyStore: createFakeActiveKeyStore({ [HOST]: 'ghost' }) };
+    const code = await run(deps);
+    expect(code).not.toBe(EXIT_SUCCESS);
+    expect(deps.stderr.lines.join('')).toContain('No explicit credential found');
+  });
+
+  it('"mcp" still refuses with only an active key — zero network, active credential untouched', async () => {
+    let networkCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      (async () => {
+        networkCalls += 1;
+        throw new Error('mcp must never touch the active key');
+      }) as unknown as typeof fetch,
+    );
+
+    const store = createFakeCredentialStore();
+    await store.set(HOST, ACTIVE_CREDENTIAL, 'agent');
+    const deps = { ...makeDeps(['mcp']), credentialStore: store, activeKeyStore: createFakeActiveKeyStore({ [HOST]: 'agent' }) };
+
+    const code = await run(deps);
+
+    expect(code).not.toBe(EXIT_SUCCESS);
+    expect(deps.stderr.lines.join('')).toContain('deliberately does not apply to "pagespace mcp"');
+    expect(networkCalls).toBe(0);
+  });
+
+  it('auth-exempt commands (whoami) keep their ambient default credential — the active key never swaps their slot', async () => {
+    const namesSeen: Array<string | undefined> = [];
+    const store = {
+      ...createFakeCredentialStore(),
+      async get(host: string, name?: string) {
+        namesSeen.push(name);
+        return null;
+      },
+    };
+    const deps = { ...makeDeps(['whoami']), credentialStore: store, activeKeyStore: createFakeActiveKeyStore({ [HOST]: 'agent' }) };
+    await run(deps);
+    expect(namesSeen).toEqual(['default']);
+  });
+});
+
 describe('isLongRunningCommand', () => {
   it('is true for the mcp stdio server route, whatever flags accompany it', () => {
     expect(isLongRunningCommand(['mcp'])).toBe(true);
     expect(isLongRunningCommand(['mcp', '--token', 'x'])).toBe(true);
-    expect(isLongRunningCommand(['mcp', '--profile', 'agent'])).toBe(true);
+    expect(isLongRunningCommand(['mcp', '--key', 'agent'])).toBe(true);
   });
 
   it('is false for every one-shot invocation — bin.ts force-exits those after run() settles', () => {

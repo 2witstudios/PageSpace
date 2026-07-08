@@ -28,6 +28,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Approve a device's active key in the browser** — the `pagespace` CLI's new
+  `pagespace keys use <name>` sets one of your access keys as a machine's ambient default, gated
+  by the same browser consent screen that mints keys. The consent page now narrates this
+  activation ceremony explicitly ("make *key* the active key on the device that sent you here");
+  nothing about the key or its access changes, and no secret is issued.
 - **Custom 404 pages for published Canvas sites** — pick any Canvas page in a drive's Domains &
   Publishing settings to serve as the site's 404 page, instead of the generic branded fallback.
 - **Drive-wide favicon setting** — set a favicon for a published site (previously only settable by

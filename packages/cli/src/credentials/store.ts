@@ -27,6 +27,12 @@ export interface CredentialStore {
   set(host: string, credential: HostCredential, profile?: string): Promise<void>;
   delete(host: string, profile?: string): Promise<void>;
   list(profile?: string): Promise<readonly CredentialSummary[]>;
+  /**
+   * Every credential NAME stored for `host` — names only, no secrets.
+   * Optional so long-standing test fakes (and any minimal store) stay valid
+   * implementations; callers that need it must tolerate its absence.
+   */
+  listCredentialNames?(host: string): Promise<readonly string[]>;
 }
 
 const KEYCHAIN_UNAVAILABLE_NOTICE =
@@ -69,7 +75,7 @@ export class CompositeCredentialStore implements CredentialStore {
       return parseHostCredential(secret);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      throw new CredentialsFileFormatError(`Keychain entry for ${host} (profile "${profile}") is malformed: ${reason}`);
+      throw new CredentialsFileFormatError(`Keychain entry for ${host} (key "${profile}") is malformed: ${reason}`);
     }
   }
 
@@ -119,12 +125,34 @@ export class CompositeCredentialStore implements CredentialStore {
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         this.stderr.write(
-          `pagespace: skipping malformed keychain entry for ${account.host} (profile "${account.profile}"): ${reason}\n`,
+          `pagespace: skipping malformed keychain entry for ${account.host} (key "${account.profile}"): ${reason}\n`,
         );
       }
     }
 
     return summaries.sort((a, b) => a.host.localeCompare(b.host));
+  }
+
+  /** Same skip-don't-throw posture as `list()`: enumerating names never requires parsing any secret, so nothing can be malformed here. */
+  async listCredentialNames(host: string): Promise<readonly string[]> {
+    const fromFile = async () => (await this.fileStore.listCredentialNames?.(host)) ?? [];
+    if (this.degraded) {
+      return fromFile();
+    }
+
+    let secrets: readonly KeychainCredential[];
+    try {
+      secrets = await this.keychain.listSecrets();
+    } catch (error) {
+      this.degrade(error);
+      return fromFile();
+    }
+
+    return secrets
+      .map((entry) => parseKeychainAccountKey(entry.account))
+      .filter((account) => account.host === host)
+      .map((account) => account.profile)
+      .sort((a, b) => a.localeCompare(b));
   }
 
   private async withFallback<T>(useKeychain: () => Promise<T>, useFile: () => Promise<T>): Promise<T> {

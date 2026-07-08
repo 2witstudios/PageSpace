@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseScopeList,
   formatScopeSet,
+  isKeyActivationGrant,
   isKeyUpdateGrant,
   isPureDriveGrant,
   isScopeSubset,
@@ -15,7 +16,7 @@ function drives(...entries: Array<[string, ScopeSet['drives'] extends ReadonlyMa
 }
 
 function emptySet(overrides: Partial<ScopeSet> = {}): ScopeSet {
-  return { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null, ...overrides };
+  return { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null, activateKeyId: null, ...overrides };
 }
 
 describe('parseScopeList', () => {
@@ -578,6 +579,64 @@ describe('update_key:<tokenId> (in-place key re-scope grant)', () => {
     expect(isScopeSubset(requested, grantedWithout)).toBe(false);
     expect(isScopeSubset(requested, grantedOther)).toBe(false);
     expect(isScopeSubset(requested, emptySet({ updateKeyId: 'tok123', drives: driveEntry }))).toBe(true);
+  });
+});
+
+describe('activate_key:<tokenId> (device activation approval ceremony)', () => {
+  it('parses activate_key:<id> alone', () => {
+    expect(parseScopeList('activate_key:tok123')).toEqual({
+      ok: true,
+      scopes: emptySet({ activateKeyId: 'tok123' }),
+    });
+  });
+
+  it('round-trips through formatScopeSet', () => {
+    const scopes = emptySet({ activateKeyId: 'tok123' });
+    const formatted = formatScopeSet(scopes);
+    expect(formatted).toBe('activate_key:tok123');
+    expect(parseScopeList(formatted)).toEqual({ ok: true, scopes });
+  });
+
+  it('rejects a malformed token id (uppercase, too long, empty)', () => {
+    expect(parseScopeList('activate_key:TOK')).toEqual({
+      ok: false,
+      error: { code: 'malformed_scope', scope: 'activate_key:TOK' },
+    });
+    expect(parseScopeList(`activate_key:${'a'.repeat(33)}`).ok).toBe(false);
+    expect(parseScopeList('activate_key:').ok).toBe(false);
+  });
+
+  it('rejects a duplicate activate_key token', () => {
+    expect(parseScopeList('activate_key:aaa activate_key:bbb')).toEqual({
+      ok: false,
+      error: { code: 'duplicate_activate_key' },
+    });
+  });
+
+  it.each(['account', 'manage_keys', 'offline_access', 'drive:abc123:member', 'update_key:tok999 drive:abc123:member'])(
+    'rejects activate_key combined with %s — an "activate" consent must never carry a grant',
+    (extra) => {
+      expect(parseScopeList(`activate_key:tok123 ${extra}`)).toEqual({
+        ok: false,
+        error: { code: 'activate_key_not_alone' },
+      });
+    },
+  );
+
+  it('isKeyActivationGrant discriminates the activation shape', () => {
+    expect(isKeyActivationGrant(emptySet({ activateKeyId: 'tok123' }))).toBe(true);
+    expect(isKeyActivationGrant(emptySet())).toBe(false);
+  });
+
+  it('isPureDriveGrant is false for an activation (nothing to mint)', () => {
+    expect(isPureDriveGrant(emptySet({ activateKeyId: 'tok123' }))).toBe(false);
+  });
+
+  it('isScopeSubset rejects a requested activate_key the grant does not carry — refresh grants can never smuggle an activation in', () => {
+    const requested = emptySet({ activateKeyId: 'tok123' });
+    expect(isScopeSubset(requested, emptySet())).toBe(false);
+    expect(isScopeSubset(requested, emptySet({ activateKeyId: 'tok999' }))).toBe(false);
+    expect(isScopeSubset(requested, emptySet({ activateKeyId: 'tok123' }))).toBe(true);
   });
 });
 

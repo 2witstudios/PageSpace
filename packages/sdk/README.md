@@ -97,7 +97,7 @@ hand-written wrappers, no second-class tier. One example per namespace:
 ### The `tokens` namespace needs an OAuth credential
 
 `client.tokens.list` / `client.tokens.revoke` manage `mcp_` API keys, but the server only
-accepts an **`oauth_`-class access token** (what `pagespace login` / the OAuth authorize flow
+accepts a **`ps_at_` OAuth access token** (what `pagespace login` / the OAuth authorize flow
 issues) — or a web session — on those routes. An `mcp_` token in a `StaticTokenProvider` works
 for every other namespace yet gets a 401 here. There is deliberately no `client.tokens.create`:
 key **minting** is session-only server-side, so new keys come only from the OAuth

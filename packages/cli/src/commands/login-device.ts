@@ -21,7 +21,8 @@ import { confirmIdentity } from '../auth/confirm-identity.js';
 import { createDiscoverMetadata } from '../auth/discover.js';
 import { createPollDeviceToken } from '../auth/poll-device-token.js';
 import { createRequestDeviceAuthorization } from '../auth/request-device-authorization.js';
-import { resolveProfileName } from '../auth/resolve.js';
+import { resolveEnvKeyName } from '../auth/legacy-token-env.js';
+import { resolveKeyName } from '../auth/resolve.js';
 import { waitMs } from '../auth/wait.js';
 import { runDeviceLogin } from '../auth/device-flow.js';
 import type { DeviceAuthorization, PollDeviceToken, RequestDeviceAuthorization } from '../auth/device-flow.js';
@@ -45,19 +46,21 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
     const { host } = resolveConfig({
       flags: { host: intent.flags.host },
       env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
-      profile: null,
+      credential: null,
     });
-    const profileName = resolveProfileName(
-      { profile: intent.flags.profile },
-      { PAGESPACE_PROFILE: ctx.env.PAGESPACE_PROFILE },
+    const keyName = resolveKeyName(
+      { key: intent.flags.key },
+      // The deprecated PAGESPACE_PROFILE alias folds in here (run.ts already
+      // printed its one-line notice before dispatch).
+      { PAGESPACE_KEY: resolveEnvKeyName(ctx.env).name },
     );
 
     const store = deps.createCredentialStore();
-    const existing = await store.get(host, profileName);
+    const existing = await store.get(host, keyName);
     if (existing && !intent.flags.yes) {
-      const profileNote = profileName === DEFAULT_PROFILE_NAME ? '' : ` (profile "${profileName}")`;
+      const keyNote = keyName === DEFAULT_PROFILE_NAME ? '' : ` (key "${keyName}")`;
       ctx.stderr.write(
-        `A stored credential for ${host}${profileNote} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host}" first.\n`,
+        `A stored credential for ${host}${keyNote} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host}" first.\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }
@@ -75,7 +78,7 @@ export function createLoginDeviceHandler(deps: LoginDeviceHandlerDeps): CommandH
       timeoutMs: deps.timeoutMs,
       credentialStore: store,
       confirmIdentity: deps.confirmIdentity,
-      profile: profileName,
+      profile: keyName,
       onDeviceCode: (authorization: DeviceAuthorization) => {
         ctx.stdout.write(`To finish signing in, visit:\n  ${authorization.verificationUri}\n`);
         ctx.stdout.write(`And enter this code: ${authorization.userCode}\n`);

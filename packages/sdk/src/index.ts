@@ -126,8 +126,8 @@ export type { ConfirmMismatch, Result } from './operations/drives.js';
 export { listDriveMembers } from './operations/members.js';
 
 // MCP tokens (Phase 4 task 6) — CLI `pagespace keys list/revoke`. These require
-// an `oauth_` access token (or web session); there is no `tokens.create` — key
-// minting is session-only server-side (OAuth consent flow or web UI).
+// a `ps_at_` OAuth access token (or web session); there is no `tokens.create` —
+// key minting is session-only server-side (OAuth consent flow or web UI).
 export { listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
 
 // Pages (Phase 3 task 2) — full pagespace-mcp page.js parity.

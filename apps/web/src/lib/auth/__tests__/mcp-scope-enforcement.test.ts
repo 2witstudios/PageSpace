@@ -134,7 +134,7 @@ describe('MCP Scope Enforcement', () => {
     tokenVersion: 1,
     adminRoleVersion: 0,
     tokenId: 'oauth-token-abc',
-    scopes: { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null },
+    scopes: { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null, activateKeyId: null },
     driveScopes: allowedDriveIds.map((driveId) => ({ driveId, role: null, customRoleId: null })),
     allowedDriveIds,
   });
@@ -146,7 +146,7 @@ describe('MCP Scope Enforcement', () => {
     tokenVersion: 1,
     adminRoleVersion: 0,
     tokenId: 'oauth-token-abc',
-    scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null },
+    scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, updateKeyId: null, activateKeyId: null },
     driveScopes: [],
     allowedDriveIds: [],
   });

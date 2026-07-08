@@ -16,7 +16,7 @@
  * top-level menu rather than mid-flow (`abortSubflow`), except at the menu
  * `select` itself, where it ends the wizard.
  *
- * Minting (Create) reuses `buildTokenScope`/`resolveTokenProfileName` and
+ * Minting (Create) reuses `buildTokenScope`/`resolveNewKeyName` and
  * `runLoopbackLogin` exactly as `keys create` (`./create.js`) does — same
  * deps shape (`TokensCreateHandlerDeps`), same effect adapters wired at the
  * bottom of this file. Edit no longer mints at all: it re-scopes the
@@ -37,6 +37,7 @@ import { unrefWaitMs } from '../../auth/wait.js';
 import { runLoopbackLogin } from '../../auth/loopback-flow.js';
 import type { LoopbackLoginResult } from '../../auth/loopback-flow.js';
 import { resolveConfig } from '../../config/resolve.js';
+import { credentialSecret } from '../../credentials/serialize.js';
 import { createCredentialStore } from '../../credentials/store.js';
 import type { CredentialStore } from '../../credentials/store.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR, type ExitCode } from '../../exit-codes.js';
@@ -44,7 +45,8 @@ import type { HandlerContext } from '../../handler-context.js';
 import type { CommandHandler } from '../../router/router.js';
 import { DEFAULT_LOGIN_TIMEOUT_MS, DEFAULT_MAX_PORT_ATTEMPTS } from '../login.js';
 import type { DriveScopeArg } from './args.js';
-import { buildKeyUpdateScope, resolveTokenProfileName, type TokensCreateHandlerDeps } from './create.js';
+import { buildKeyUpdateScope, resolveNewKeyName, type TokensCreateHandlerDeps } from './create.js';
+import { findServerTokenId, runActivateCeremony } from './use.js';
 import { renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from './guidance.js';
 import {
   availableMenuChoices,
@@ -157,28 +159,28 @@ async function selectDriveRoleScopes(
   return selections;
 }
 
-async function promptProfileName(driveScopeArgs: readonly DriveScopeArg[], message: string): Promise<string | null> {
+async function promptKeyName(driveScopeArgs: readonly DriveScopeArg[], message: string): Promise<string | null> {
   const name = await clack.text({
     message,
     placeholder: driveScopeArgs.length === 1 ? driveScopeArgs[0].id : undefined,
     validate: (value) => {
       const trimmed = (value ?? '').trim();
-      const result = resolveTokenProfileName({ saveAsProfile: trimmed.length > 0 ? trimmed : undefined, drives: driveScopeArgs });
+      const result = resolveNewKeyName({ name: trimmed.length > 0 ? trimmed : undefined, drives: driveScopeArgs });
       return result.ok ? undefined : result.message;
     },
   });
   if (clack.isCancel(name)) return null;
   const trimmed = name.trim();
-  const result = resolveTokenProfileName({ saveAsProfile: trimmed.length > 0 ? trimmed : undefined, drives: driveScopeArgs });
+  const result = resolveNewKeyName({ name: trimmed.length > 0 ? trimmed : undefined, drives: driveScopeArgs });
   return result.ok ? result.name : null;
 }
 
-/** Whether it's safe to write the profile: either nothing is stored there yet, or the user explicitly confirmed overwriting it. */
-async function isProfileWriteConfirmed(store: CredentialStore, host: string, profileName: string): Promise<boolean> {
-  const existing = await store.get(host, profileName);
+/** Whether it's safe to write the named credential: either nothing is stored there yet, or the user explicitly confirmed overwriting it. */
+async function isKeyWriteConfirmed(store: CredentialStore, host: string, keyName: string): Promise<boolean> {
+  const existing = await store.get(host, keyName);
   if (!existing) return true;
   const overwrite = await clack.confirm({
-    message: `A stored credential for ${host} (profile "${profileName}") already exists. Overwrite it?`,
+    message: `A stored credential for ${host} (key "${keyName}") already exists. Overwrite it?`,
     initialValue: false,
   });
   return !clack.isCancel(overwrite) && overwrite;
@@ -211,10 +213,10 @@ function consentFlowDeps(deps: TokensCreateHandlerDeps, s: ReturnType<typeof cla
 async function mintScopedKey(
   deps: TokensCreateHandlerDeps,
   store: CredentialStore,
-  params: { readonly host: string; readonly scope: string; readonly profileName: string },
+  params: { readonly host: string; readonly scope: string; readonly keyName: string },
 ): Promise<LoopbackLoginResult> {
   const s = clack.spinner();
-  s.start(`Opening your browser to approve access for profile "${params.profileName}" on ${params.host}...`);
+  s.start(`Opening your browser to approve access for key "${params.keyName}" on ${params.host}...`);
 
   // Captured, never printed while the spinner is live — only surfaced behind
   // the explicit show-once confirm below.
@@ -225,21 +227,21 @@ async function mintScopedKey(
     host: params.host,
     scope: params.scope,
     credentialStore: store,
-    profile: params.profileName,
+    profile: params.keyName,
     onMintedStaticToken: (token) => {
       mintedToken = token;
     },
   });
 
   if (result.outcome === 'success') {
-    s.stop(`Created profile "${params.profileName}" on ${params.host}, scoped to: ${params.scope}.`);
+    s.stop(`Created key "${params.keyName}" on ${params.host}, scoped to: ${params.scope}.`);
     if (mintedToken !== null) {
       const show = await clack.confirm({ message: SHOW_TOKEN_PROMPT, initialValue: false });
       if (!clack.isCancel(show) && show) {
         clack.note(`${TOKEN_ENV_VAR_NAME}=${mintedToken}`, 'Copy it now — shown once');
       }
     }
-    clack.note(renderAgentWiringGuidance({ profileName: params.profileName, host: params.host }).join('\n'), 'Wire up an agent');
+    clack.note(renderAgentWiringGuidance({ keyName: params.keyName, host: params.host }).join('\n'), 'Wire up an agent');
   } else {
     s.error(describeMintFailure(result));
   }
@@ -248,12 +250,12 @@ async function mintScopedKey(
 
 interface ScopeAndMintMessages {
   readonly selectDrives: string;
-  readonly profileName: string;
+  readonly keyName: string;
   readonly confirmMint: (scope: string) => string;
 }
 
 /**
- * Create's "pick drives/roles, name a profile, confirm, mint" flow (Edit
+ * Create's "pick drives/roles, name the key, confirm, mint" flow (Edit
  * used to share it back when editing meant minting a replacement — it now
  * re-scopes in place, see `runEdit`). Constructs the credential store exactly ONCE and
  * threads that single instance through both the overwrite check and the mint
@@ -284,14 +286,14 @@ async function selectScopeAndMint(
   }
   const driveScopeArgs = selections.map((selection) => driveRoleChoiceToScopeArg(selection.driveId, selection.choice));
 
-  const profileName = await promptProfileName(driveScopeArgs, messages.profileName);
-  if (profileName === null) {
+  const keyName = await promptKeyName(driveScopeArgs, messages.keyName);
+  if (keyName === null) {
     abortSubflow();
     return null;
   }
 
   const store = deps.createCredentialStore();
-  if (!(await isProfileWriteConfirmed(store, host, profileName))) {
+  if (!(await isKeyWriteConfirmed(store, host, keyName))) {
     abortSubflow();
     return null;
   }
@@ -302,7 +304,7 @@ async function selectScopeAndMint(
     return null;
   }
 
-  return mintScopedKey(deps, store, { host, scope: scopeResult.scope, profileName });
+  return mintScopedKey(deps, store, { host, scope: scopeResult.scope, keyName });
 }
 
 async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: string): Promise<FlowOutcome> {
@@ -315,7 +317,7 @@ async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, hos
 
   await selectScopeAndMint(ctx, deps, host, drives, [], {
     selectDrives: 'Select drives to grant access to',
-    profileName: 'Name this credential (used as its local profile name)',
+    keyName: 'Name this key (agents on this machine reference it by this name)',
     confirmMint: (scope) => `Mint a new key scoped to: ${scope}?`,
   });
   return null;
@@ -326,7 +328,7 @@ async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, hos
  * secret — the `update_key:<id>` grant (`buildKeyUpdateScope`) rides the
  * same browser-consent step-up as a mint, but the server updates the
  * existing token's drive scopes (`ok_mcp_update`) and returns no secret, so
- * nothing is persisted locally and there is no replacement profile to name
+ * nothing is persisted locally and there is no replacement key to name
  * or old key to revoke. A hostile or pre-`update_key` server answering this
  * request with a real mint is rejected by `runLoopbackLogin` itself (its
  * update-request guard fails the flow before anything is persisted); the
@@ -389,7 +391,7 @@ async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host:
 
   s.stop(`Updated "${key.name}". Its secret is unchanged — existing configurations keep working.`);
   clack.log.info(
-    'If this key is saved as a local profile, the profile\'s stored scope list may still show the old scopes — the server-side scopes above are what\'s enforced.',
+    "If this key is stored locally, its locally cached scope list may still show the old scopes — the server-side scopes above are what's enforced.",
   );
   return null;
 }
@@ -417,6 +419,71 @@ async function runList(keys: readonly KeySummary[]): Promise<FlowOutcome> {
   return null;
 }
 
+/**
+ * Set active key — the wizard form of `pagespace keys use <name>`, sharing
+ * `runActivateCeremony` (`./use.js`) so the two surfaces cannot drift. The
+ * picker lists the same server-side keys Edit/Revoke use (the currently
+ * active one hinted), but the activation records a LOCAL credential name —
+ * so the picked key is reverse-mapped to the locally stored credential whose
+ * token it prefixes; a key with no local credential on this machine cannot
+ * be activated here.
+ */
+async function runUse(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: string, keys: readonly KeySummary[]): Promise<FlowOutcome> {
+  const store = deps.createCredentialStore();
+
+  const activeName = await ctx.activeKeyStore.getActiveKey(host);
+  const activeCredential = activeName === null ? null : await store.get(host, activeName);
+  const activeKeyId = activeCredential === null ? null : findServerTokenId(keys, activeCredential);
+
+  const keyId = await clack.select({
+    message: 'Which key should be active on this machine?',
+    options: [...keySelectOptions(keys, activeKeyId)],
+  });
+  if (clack.isCancel(keyId)) return abortSubflow();
+  const key = keys.find((candidate) => candidate.id === keyId);
+  if (!key) return abortSubflow();
+
+  const localNames = (await store.listCredentialNames?.(host)) ?? [];
+  let localName: string | null = null;
+  for (const name of localNames) {
+    const credential = await store.get(host, name);
+    if (credential !== null && credential.kind !== 'oauth' && credentialSecret(credential).startsWith(key.tokenPrefix)) {
+      localName = name;
+      break;
+    }
+  }
+  if (localName === null) {
+    clack.log.error(
+      `No locally stored credential matches "${key.name}" — a key can only be activated on a machine that stores it. Create one here with "Create a new key".`,
+    );
+    return null;
+  }
+
+  const s = clack.spinner();
+  s.start(`Opening your browser to approve activating "${key.name}" on ${host}...`);
+
+  const result = await runActivateCeremony(ctx, deps, {
+    host,
+    name: localName,
+    tokenId: key.id,
+    store,
+    onBrowserOpenFailed: (url) => {
+      s.message(`Could not open a browser automatically. Open this URL to continue: ${url}`);
+    },
+  });
+
+  if (!result.ok) {
+    s.error(result.message);
+    return null;
+  }
+
+  s.stop(`"${localName}" is now the active key for ${host}.`);
+  clack.log.info(
+    'Commands on this machine will use it unless --key/PAGESPACE_KEY/--token override it. Run "pagespace keys use --off" to deactivate.',
+  );
+  return null;
+}
+
 export function createKeysHandler(deps: TokensCreateHandlerDeps): CommandHandler {
   return async (ctx, intent) => {
     // The router's longest-prefix match only tries `['keys','create'|'list'|'revoke']`
@@ -426,7 +493,7 @@ export function createKeysHandler(deps: TokensCreateHandlerDeps): CommandHandler
     // reporting the unrecognized subcommand.
     if (intent.args.length > 0) {
       ctx.stderr.write(
-        `Unknown "keys" subcommand: ${intent.args.join(' ')}. Did you mean "pagespace keys create", "pagespace keys list", or "pagespace keys revoke"?\n`,
+        `Unknown "keys" subcommand: ${intent.args.join(' ')}. Did you mean "pagespace keys create", "pagespace keys list", "pagespace keys revoke", or "pagespace keys use"?\n`,
       );
       return EXIT_USAGE_ERROR;
     }
@@ -439,7 +506,7 @@ export function createKeysHandler(deps: TokensCreateHandlerDeps): CommandHandler
     const { host } = resolveConfig({
       flags: { host: intent.flags.host },
       env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL },
-      profile: null,
+      credential: null,
     });
 
     clack.intro('pagespace keys');
@@ -469,7 +536,9 @@ export function createKeysHandler(deps: TokensCreateHandlerDeps): CommandHandler
             ? await runList(keys)
             : choice === 'edit'
               ? await runEdit(ctx, deps, host, keys)
-              : await runRevoke(ctx, keys);
+              : choice === 'use'
+                ? await runUse(ctx, deps, host, keys)
+                : await runRevoke(ctx, keys);
 
       if (outcome !== null) return outcome;
     }

@@ -13,6 +13,7 @@ import {
   emptyCredentialsFile,
   getHost,
   isSecureMode,
+  listCredentialNames,
   listSummaries,
   parseCredentialsFile,
   permissionFixItMessage,
@@ -65,6 +66,10 @@ export class FileCredentialStore {
 
   async list(profile: string = DEFAULT_PROFILE_NAME): Promise<readonly CredentialSummary[]> {
     return listSummaries(await this.readFile(), profile);
+  }
+
+  async listCredentialNames(host: string): Promise<readonly string[]> {
+    return listCredentialNames(await this.readFile(), host);
   }
 
   private async readFile(): Promise<CredentialsFile> {

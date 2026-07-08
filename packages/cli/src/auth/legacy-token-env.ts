@@ -41,3 +41,38 @@ export function resolveEnvToken(env: Readonly<Record<string, string | undefined>
 
   return { token: undefined, deprecationNotice: null };
 }
+
+/**
+ * Legacy key-name env var support (the 1.5.0 "profile" → "key" rename).
+ * `PAGESPACE_PROFILE` was the pre-1.5.0 name for `PAGESPACE_KEY`; it fills
+ * `PAGESPACE_KEY`'s precedence slot only when the new var is itself absent
+ * (or blank), exactly mirroring `resolveEnvToken` above — same one-line
+ * stderr deprecation notice contract (emitted by `run.ts`, never here), same
+ * "the value itself is never echoed" rule.
+ */
+const LEGACY_KEY_ENV_VAR = 'PAGESPACE_PROFILE';
+const KEY_ENV_VAR = 'PAGESPACE_KEY';
+
+export interface ResolvedEnvKeyName {
+  readonly name: string | undefined;
+  readonly deprecationNotice: string | null;
+}
+
+export function resolveEnvKeyName(env: Readonly<Record<string, string | undefined>>): ResolvedEnvKeyName {
+  const name = present(env[KEY_ENV_VAR]);
+  if (name !== undefined) {
+    return { name, deprecationNotice: null };
+  }
+
+  const legacy = present(env[LEGACY_KEY_ENV_VAR]);
+  if (legacy !== undefined) {
+    return {
+      name: legacy,
+      deprecationNotice:
+        `${LEGACY_KEY_ENV_VAR} is deprecated and will be removed in a future release. ` +
+        `Set ${KEY_ENV_VAR} instead.`,
+    };
+  }
+
+  return { name: undefined, deprecationNotice: null };
+}

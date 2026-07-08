@@ -54,6 +54,12 @@ const mcpUpdateResponseSchema = z.object({
   scope: z.string(),
 });
 
+const mcpActivateResponseSchema = z.object({
+  token_type: z.literal('mcp_activate'),
+  token_id: z.string(),
+  scope: z.string(),
+});
+
 function extractErrorCode(json: unknown, status: number): string {
   if (json !== null && typeof json === 'object' && 'error' in json && typeof (json as Record<string, unknown>).error === 'string') {
     return (json as Record<string, unknown>).error as string;
@@ -96,6 +102,11 @@ export function createExchangeCode(fetchImpl: typeof fetch = fetch): ExchangeCod
     const mcpUpdateParsed = mcpUpdateResponseSchema.safeParse(json);
     if (mcpUpdateParsed.success) {
       return { kind: 'mcp_update', tokenId: mcpUpdateParsed.data.token_id, scope: mcpUpdateParsed.data.scope };
+    }
+
+    const mcpActivateParsed = mcpActivateResponseSchema.safeParse(json);
+    if (mcpActivateParsed.success) {
+      return { kind: 'mcp_activate', tokenId: mcpActivateParsed.data.token_id, scope: mcpActivateParsed.data.scope };
     }
 
     const oauthParsed = oauthTokenResponseSchema.safeParse(json);

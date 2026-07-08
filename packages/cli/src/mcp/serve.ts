@@ -95,6 +95,7 @@ import {
   operationToMcpTool,
   validateToolInput,
 } from './tool-convert.js';
+import { CLI_VERSION } from '../commands/version.js';
 
 /**
  * Every operation the SDK exports, across every domain (drives, pages,
@@ -202,7 +203,10 @@ export interface CreateMcpServerOptions {
   readonly serverInfo?: { readonly name: string; readonly version: string };
 }
 
-const DEFAULT_SERVER_INFO = { name: 'pagespace', version: '0.1.0' } as const;
+// CLI_VERSION (drift-guarded against package.json by commands/__tests__/
+// version.test.ts) so the MCP initialize handshake reports the real release
+// — a hand-maintained copy here is exactly the drift the 1.5.0 guards kill.
+const DEFAULT_SERVER_INFO = { name: 'pagespace', version: CLI_VERSION } as const;
 
 /**
  * Wires `tools/list` and `tools/call` to `registry`. The only I/O this
