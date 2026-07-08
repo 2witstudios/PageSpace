@@ -47,6 +47,33 @@ describe('pages.read (documents) — response contract: generic text page', () =
     expect(result).toEqual(genericFixture);
   });
 
+  /**
+   * Regression test for a real production outage: `genericReadResultSchema`
+   * previously declared `pageType: z.undefined()` (bare, non-optional).
+   * JSON has no way to encode "key present with value undefined" —
+   * `JSON.stringify` always drops such keys — so every real server response
+   * for this branch has `pageType` genuinely ABSENT, never present-as-
+   * undefined. Confirmed live against production: zod 4.3.6 (this repo's
+   * lockfile-pinned version) treats a missing key as satisfying a bare
+   * `z.undefined()` field, but zod 4.4.3 (what `npm install` resolves fresh
+   * today under the SDK's `^4.1.8` range) does not — it requires the key to
+   * literally exist. That silent behavior drift between zod patch versions
+   * meant this repo's own test suite never caught the bug (it runs against
+   * the older pinned zod), while every real `pages.read`/`read_page` call
+   * against a plain page failed for anyone installing the package fresh.
+   * Fixed via `.optional()`, verified stable across both zod versions.
+   * `JSON.parse(JSON.stringify(...))` here (not a bare object literal) is
+   * deliberate — it's the only way to reproduce "key genuinely absent" as
+   * opposed to "key present with an `undefined` value", which behave
+   * differently under strict zod versions.
+   */
+  it('parses a real JSON-round-tripped response (pageType key genuinely absent, not undefined-valued)', () => {
+    const roundTripped = JSON.parse(JSON.stringify(genericFixture));
+    expect(Object.prototype.hasOwnProperty.call(roundTripped, 'pageType')).toBe(false);
+    const result = parseResponse(readDocument, 200, new Headers(), JSON.stringify(roundTripped));
+    expect(result).toEqual(genericFixture);
+  });
+
   it('parses a FILE page with fileMetadata attached', () => {
     const withFile = {
       ...genericFixture,

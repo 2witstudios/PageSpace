@@ -5,7 +5,7 @@ import type { CompatibilityResult } from './errors.js';
  * guarded by `__tests__/version.test.ts`, which reads package.json directly,
  * so bumping one without the other fails the suite.
  */
-export const SDK_VERSION = '1.5.0';
+export const SDK_VERSION = '1.5.1';
 
 /**
  * The SDK's compiled-in floor for the server's API_CONTRACT_VERSION (ADR 0001
