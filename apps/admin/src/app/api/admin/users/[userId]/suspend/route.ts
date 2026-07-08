@@ -64,11 +64,11 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
     // Kill every live session so the suspension takes effect immediately.
     const revokedSessions = await sessionService.revokeAllUserSessions(targetUserId, 'admin_suspension');
 
+    // Free-text reason stays in the audit event only — not in general API logs.
     loggers.api.info('Admin suspended user', {
       adminId: adminUser.id,
       targetUserId,
       revokedSessions,
-      reason,
     });
 
     auditRequest(request, {
@@ -132,7 +132,6 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
     loggers.api.info('Admin unsuspended user', {
       adminId: adminUser.id,
       targetUserId,
-      reason,
     });
 
     auditRequest(request, {

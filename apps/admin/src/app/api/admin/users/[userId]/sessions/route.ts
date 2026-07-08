@@ -50,11 +50,11 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
 
     const revokedSessions = await sessionService.revokeAllUserSessions(targetUserId, 'admin_force_logout');
 
+    // Free-text reason stays in the audit event only — not in general API logs.
     loggers.api.info('Admin revoked all user sessions', {
       adminId: adminUser.id,
       targetUserId,
       revokedSessions,
-      reason,
     });
 
     auditRequest(request, {

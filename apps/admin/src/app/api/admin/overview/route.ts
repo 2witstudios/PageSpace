@@ -56,8 +56,10 @@ export const GET = withAdminAuth(async () => {
       marginPct: economics.marginPct,
     };
 
+    // Authenticated admin data — never shared-cacheable (s-maxage would let a
+    // proxy/CDN serve this JSON to later requests before withAdminAuth runs).
     return NextResponse.json(summary, {
-      headers: { 'Cache-Control': 's-maxage=60, stale-while-revalidate=30' },
+      headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=30' },
     });
   } catch (error) {
     loggers.api.error('Error fetching admin overview:', error as Error);

@@ -2,7 +2,7 @@ import { withAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { conversationCompactions } from '@pagespace/db/schema/ai-compaction';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
-import { and, desc, eq, gte, sql } from '@pagespace/db/operators';
+import { and, desc, eq, gte, isNotNull, sql } from '@pagespace/db/operators';
 
 // Every summary aggregate shares this ONE window and is computed with SQL
 // aggregates over ALL rows in the window — never from a row-limited list.
@@ -34,9 +34,11 @@ export const GET = withAdminAuth(async () => {
       .where(gte(conversationCompactions.lastCompactedAt, since7d)),
 
     // Display only: latest compacted-conversation state rows (all time).
+    // lastCompactedAt is nullable — never-compacted rows don't belong here.
     db
       .select()
       .from(conversationCompactions)
+      .where(isNotNull(conversationCompactions.lastCompactedAt))
       .orderBy(desc(conversationCompactions.lastCompactedAt))
       .limit(RECENT_STATE_LIMIT),
 

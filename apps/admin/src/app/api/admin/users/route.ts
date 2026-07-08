@@ -145,9 +145,12 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
             .groupBy(messages.userId),
         ]);
 
-    const subscriptionsByUserId = new Map(
-      activeSubscriptions.map(sub => [sub.userId, sub])
-    );
+    // Rows are ordered newest-first; keep the FIRST row per user (Map
+    // construction would let later, older duplicates overwrite it).
+    const subscriptionsByUserId = new Map<string, typeof activeSubscriptions[number]>();
+    for (const sub of activeSubscriptions) {
+      if (!subscriptionsByUserId.has(sub.userId)) subscriptionsByUserId.set(sub.userId, sub);
+    }
 
     const toCountMap = (rows: Array<{ userId: string | null; count: unknown }>) => {
       const map = new Map<string, number>();

@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   async redirects() {
     return [
+      { source: "/dashboard", destination: "/overview", permanent: true },
       { source: "/unit-economics", destination: "/billing", permanent: true },
       { source: "/ai-billing", destination: "/billing", permanent: true },
     ];

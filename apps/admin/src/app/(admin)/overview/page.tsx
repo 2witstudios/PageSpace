@@ -87,7 +87,7 @@ export default function OverviewPage() {
           />
         </div>
 
-        {s !== null && s.openSupport > 0 && (
+        {s && s.openSupport > 0 && (
           <div className="mt-4">
             <StatCard
               label="Open support requests"

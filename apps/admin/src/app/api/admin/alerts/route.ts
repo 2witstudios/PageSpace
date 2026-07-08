@@ -30,7 +30,8 @@ export const GET = withAdminAuth(async () => {
         negativeMarginCount: negativeMargin.length,
         liveHoldsCount: holds.holdCount,
       },
-      { headers: { 'Cache-Control': 's-maxage=60, stale-while-revalidate=30' } }
+      // Authenticated admin data — private, never shared-cacheable.
+      { headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=30' } }
     );
   } catch (error) {
     loggers.api.error('Error fetching admin alerts:', error as Error);

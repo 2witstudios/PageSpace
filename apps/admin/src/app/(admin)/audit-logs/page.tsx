@@ -258,7 +258,9 @@ export default function AdminAuditLogsPage() {
     setExporting(true);
     setExportError(null);
     try {
-      const params = buildFilterParams(filters);
+      // Use the live search input, not the debounced copy — exporting within
+      // the debounce window must match what the admin sees in the box.
+      const params = buildFilterParams({ ...filters, search: searchInput });
       const response = await fetchWithAuth(`/api/admin/audit-logs/export?${params.toString()}`);
 
       if (!response.ok) {

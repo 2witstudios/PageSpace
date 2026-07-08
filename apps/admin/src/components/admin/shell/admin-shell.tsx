@@ -173,6 +173,8 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     setSigningOut(true);
     try {
       await fetchWithAuth('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Redirect regardless — the login page re-checks the session anyway.
     } finally {
       router.push('/login');
       router.refresh();
