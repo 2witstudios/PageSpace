@@ -5,35 +5,25 @@ import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
 import { withAdminAuth } from '@/lib/auth';
+import { csvField } from '@/lib/csv';
 import { format } from 'date-fns';
 
 /**
- * Escapes a value for CSV format
- * - Wraps in quotes if contains comma, quote, or newline
- * - Escapes quotes by doubling them
+ * Normalizes a log value (Date, JSON column, null) to a string and escapes it
+ * via the shared csvField helper, which also applies the spreadsheet
+ * formula-injection guard.
  */
 function escapeCSVValue(value: unknown): string {
   if (value === null || value === undefined) {
-    return '';
+    return csvField(null);
   }
-
-  let stringValue: string;
-
   if (value instanceof Date) {
-    stringValue = format(value, "yyyy-MM-dd'T'HH:mm:ss.SSSxxx");
-  } else if (typeof value === 'object') {
-    stringValue = JSON.stringify(value);
-  } else {
-    stringValue = String(value);
+    return csvField(format(value, "yyyy-MM-dd'T'HH:mm:ss.SSSxxx"));
   }
-
-  // Check if escaping is needed
-  if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n') || stringValue.includes('\r')) {
-    // Escape quotes by doubling them and wrap in quotes
-    return `"${stringValue.replace(/"/g, '""')}"`;
+  if (typeof value === 'object') {
+    return csvField(JSON.stringify(value));
   }
-
-  return stringValue;
+  return csvField(typeof value === 'number' ? value : String(value));
 }
 
 /**

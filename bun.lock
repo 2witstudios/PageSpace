@@ -43,8 +43,6 @@
         "@radix-ui/react-alert-dialog": "^1.1.14",
         "@radix-ui/react-avatar": "^1.1.10",
         "@radix-ui/react-collapsible": "^1.1.12",
-        "@radix-ui/react-dialog": "^1.1.15",
-        "@radix-ui/react-dropdown-menu": "^2.1.16",
         "@radix-ui/react-label": "^2.1.7",
         "@radix-ui/react-popover": "^1.1.14",
         "@radix-ui/react-scroll-area": "^1.2.10",
@@ -52,13 +50,13 @@
         "@radix-ui/react-separator": "^1.1.7",
         "@radix-ui/react-slot": "^1.2.3",
         "@radix-ui/react-tabs": "^1.1.12",
-        "@radix-ui/react-tooltip": "^1.2.8",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "cookie": "1.0.2",
         "date-fns": "^4.1.0",
         "lucide-react": "^0.525.0",
         "next": "15.3.9",
+        "next-themes": "^0.4.6",
         "react": "^19.1.2",
         "react-day-picker": "^9.11.3",
         "react-dom": "^19.1.2",
@@ -461,7 +459,7 @@
     },
     "packages/cli": {
       "name": "@pagespace/cli",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "bin": {
         "pagespace": "./dist/bin.js",
         "pagespace-mcp": "./dist/bin-pagespace-mcp.js",
@@ -535,7 +533,7 @@
     },
     "packages/sdk": {
       "name": "@pagespace/sdk",
-      "version": "1.5.2",
+      "version": "2.0.0",
       "dependencies": {
         "zod": "^4.1.8",
       },

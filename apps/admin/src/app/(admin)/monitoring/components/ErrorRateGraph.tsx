@@ -3,40 +3,38 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { AlertCircle, AlertTriangle } from 'lucide-react';
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import { format } from 'date-fns';
-import type { ErrorAnalyticsData, DetailedWidgetProps } from '@/lib/monitoring';
+import type { ErrorAnalyticsData } from '@/lib/monitoring';
 
-type ErrorRateGraphProps = DetailedWidgetProps<ErrorAnalyticsData>;
+interface ErrorRateGraphProps {
+  data: ErrorAnalyticsData;
+  detailed?: boolean;
+}
 
-export default function ErrorRateGraph({ data, isLoading, detailed = false }: ErrorRateGraphProps) {
-  if (isLoading) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Error Analysis</CardTitle>
-          <CardDescription>Loading...</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="h-64 flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+interface ErrorTrendRow {
+  hour: string;
+  auth: number;
+  api: number;
+  ai: number;
+  database: number;
+  [category: string]: string | number;
+}
 
+export default function ErrorRateGraph({ data, detailed = false }: ErrorRateGraphProps) {
   // Process error trends data
-  const errorTrendsMap = new Map();
-  data?.errorTrends?.forEach((item) => {
+  const errorTrendsMap = new Map<string, ErrorTrendRow>();
+  data.errorTrends.forEach((item) => {
     const hour = item.hour;
     if (!errorTrendsMap.has(hour)) {
       errorTrendsMap.set(hour, { hour, auth: 0, api: 0, ai: 0, database: 0 });
     }
     const hourData = errorTrendsMap.get(hour);
-    hourData[item.category || 'other'] = parseInt(item.count) || 0;
+    if (hourData) {
+      hourData[item.category || 'other'] = parseInt(item.count) || 0;
+    }
   });
 
   const errorTrendsData = Array.from(errorTrendsMap.values())
@@ -52,25 +50,28 @@ export default function ErrorRateGraph({ data, isLoading, detailed = false }: Er
         <CardHeader>
           <CardTitle>Error Rate Trends</CardTitle>
           <CardDescription>
-            {data?.errorPatterns?.length || 0} unique error patterns detected
+            {data.errorPatterns.length} unique error patterns detected
           </CardDescription>
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={errorTrendsData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis 
-                dataKey="time" 
+              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+              <XAxis
+                dataKey="time"
                 tick={{ fontSize: 12 }}
                 interval="preserveStartEnd"
               />
               <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip />
+              <Tooltip
+                contentStyle={{ backgroundColor: "var(--popover)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--popover-foreground)" }}
+                labelStyle={{ color: "var(--popover-foreground)" }}
+              />
               <Legend />
-              <Line type="monotone" dataKey="auth" stroke="#FF6B6B" name="Auth" strokeWidth={2} />
-              <Line type="monotone" dataKey="api" stroke="#FFA500" name="API" strokeWidth={2} />
-              <Line type="monotone" dataKey="ai" stroke="#8884d8" name="AI" strokeWidth={2} />
-              <Line type="monotone" dataKey="database" stroke="#82ca9d" name="Database" strokeWidth={2} />
+              <Line type="monotone" dataKey="auth" stroke="var(--destructive)" name="Auth" strokeWidth={2} />
+              <Line type="monotone" dataKey="api" stroke="var(--chart-1)" name="API" strokeWidth={2} />
+              <Line type="monotone" dataKey="ai" stroke="var(--chart-5)" name="AI" strokeWidth={2} />
+              <Line type="monotone" dataKey="database" stroke="var(--chart-3)" name="Database" strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
         </CardContent>
@@ -85,34 +86,37 @@ export default function ErrorRateGraph({ data, isLoading, detailed = false }: Er
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart 
-                  data={data?.errorPatterns?.slice(0, 10) || []}
+                <BarChart
+                  data={data.errorPatterns.slice(0, 10)}
                   layout="horizontal"
                 >
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis type="number" />
-                  <YAxis 
-                    dataKey="name" 
-                    type="category" 
+                  <YAxis
+                    dataKey="name"
+                    type="category"
                     width={150}
                     tick={{ fontSize: 10 }}
                   />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="#FF6B6B" name="Error Count" />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "var(--popover)", border: "1px solid var(--border)", borderRadius: "var(--radius)", color: "var(--popover-foreground)" }}
+                    labelStyle={{ color: "var(--popover-foreground)" }}
+                  />
+                  <Bar dataKey="count" fill="var(--destructive)" name="Error Count" />
                 </BarChart>
               </ResponsiveContainer>
-              
+
               <div className="mt-4 space-y-2">
                 <h4 className="text-sm font-medium">Error Details</h4>
-                {data?.errorPatterns?.slice(0, 5).map((pattern, i) => (
-                  <div key={i} className="flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle className="h-3 w-3 text-yellow-500" />
-                      <span className="text-sm text-muted-foreground">
+                {data.errorPatterns.slice(0, 5).map((pattern, i) => (
+                  <div key={i} className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <AlertTriangle className="h-3 w-3 shrink-0 text-warning" />
+                      <span className="truncate text-sm text-muted-foreground">
                         {pattern.name}
                       </span>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex shrink-0 gap-2">
                       <Badge variant="outline">{pattern.category}</Badge>
                       <Badge variant="destructive">{pattern.count} errors</Badge>
                     </div>
@@ -130,12 +134,12 @@ export default function ErrorRateGraph({ data, isLoading, detailed = false }: Er
             <CardContent>
               <ScrollArea className="h-64">
                 <div className="space-y-2">
-                  {(data?.failedLogins?.length || 0) > 0 ? (
-                    data?.failedLogins?.map((login, i) => (
+                  {data.failedLogins.length > 0 ? (
+                    data.failedLogins.map((login, i) => (
                       <div key={i} className="border rounded p-2 space-y-1">
                         <div className="flex items-start justify-between">
                           <div className="flex items-center gap-1">
-                            <AlertCircle className="h-3 w-3 text-red-500 mt-0.5" />
+                            <AlertCircle className="h-3 w-3 text-destructive mt-0.5" />
                             <span className="text-xs font-medium">Failed Login</span>
                           </div>
                           <span className="text-xs text-muted-foreground">

@@ -28,6 +28,8 @@ import {
   CheckCircle2,
   Circle,
 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { DataState } from "@/components/admin/kit";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 
 interface RegisteredUser {
@@ -62,6 +64,10 @@ interface ContactSubmissionsTableProps {
   onStatusFilter: (status: 'all' | 'open' | 'closed') => void;
   statusFilter: 'all' | 'open' | 'closed';
   isLoading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
+  /** True when a stale response is still renderable behind an error. */
+  hasData?: boolean;
 }
 
 function formatDate(dateString: string) {
@@ -79,9 +85,9 @@ function truncateText(text: string, maxLength: number = 100) {
 
 function tierColor(tier: string | null): string {
   switch (tier) {
-    case 'pro': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
-    case 'founder': return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300';
-    case 'business': return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300';
+    case 'pro': return 'bg-info/15 text-info';
+    case 'founder': return 'bg-primary/15 text-primary';
+    case 'business': return 'bg-success/15 text-success';
     default: return 'bg-muted text-muted-foreground';
   }
 }
@@ -94,7 +100,10 @@ export function ContactSubmissionsTable({
   onSort,
   onStatusFilter,
   statusFilter,
-  isLoading = false
+  isLoading = false,
+  error = null,
+  onRetry,
+  hasData,
 }: ContactSubmissionsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedSubmissions, setExpandedSubmissions] = useState<Record<string, boolean>>({});
@@ -157,21 +166,6 @@ export function ContactSubmissionsTable({
       ? localResolved[submission.id]
       : submission.resolvedAt !== null;
 
-  if (isLoading) {
-    return (
-      <Card>
-        <CardContent className="p-6">
-          <div className="space-y-4">
-            <div className="h-10 bg-muted rounded animate-pulse" />
-            {[...Array(5)].map((_, i) => (
-              <div key={i} className="h-16 bg-muted rounded animate-pulse" />
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
   return (
     <div className="space-y-4">
       {resolveError && (
@@ -186,7 +180,7 @@ export function ContactSubmissionsTable({
             placeholder="Search by name, email, subject, or message…"
             value={searchTerm}
             onChange={(e) => handleSearch(e.target.value)}
-            className="pl-10"
+            className="h-10 pl-10"
           />
         </div>
         <div className="flex gap-1">
@@ -196,7 +190,7 @@ export function ContactSubmissionsTable({
               variant={statusFilter === s ? 'default' : 'outline'}
               size="sm"
               onClick={() => onStatusFilter(s)}
-              className="capitalize"
+              className="h-10 capitalize"
             >
               {s}
             </Button>
@@ -217,11 +211,25 @@ export function ContactSubmissionsTable({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {submissions.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              {searchTerm ? 'No submissions found matching your search.' : 'No contact submissions yet.'}
-            </div>
-          ) : (
+          <DataState
+            isLoading={isLoading}
+            error={error}
+            isEmpty={submissions.length === 0}
+            emptyMessage={
+              searchTerm
+                ? 'No submissions found matching your search.'
+                : 'When users submit the contact form on your website, their messages will appear here.'
+            }
+            onRetry={onRetry}
+            hasData={hasData}
+            skeleton={
+              <div className="space-y-3">
+                {[...Array(6)].map((_, i) => (
+                  <Skeleton key={i} className="h-12 w-full" />
+                ))}
+              </div>
+            }
+          >
             <>
               <Table>
                 <TableHeader>
@@ -276,7 +284,7 @@ export function ContactSubmissionsTable({
                         <TableRow className="group">
                           <TableCell>
                             <CollapsibleTrigger asChild>
-                              <Button variant="ghost" size="sm" className="p-1">
+                              <Button variant="ghost" size="icon" className="h-10 w-10">
                                 {expandedSubmissions[submission.id] ? (
                                   <ChevronDown className="h-4 w-4" />
                                 ) : (
@@ -288,14 +296,14 @@ export function ContactSubmissionsTable({
                           <TableCell>
                             <Button
                               variant="ghost"
-                              size="sm"
-                              className="p-1 h-auto"
+                              size="icon"
+                              className="h-10 w-10"
                               onClick={(e) => { e.stopPropagation(); handleToggleResolved(submission); }}
                               disabled={resolvingId === submission.id}
                               title={isResolved(submission) ? 'Mark open' : 'Mark resolved'}
                             >
                               {isResolved(submission)
-                                ? <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                                ? <CheckCircle2 className="h-4 w-4 text-success" />
                                 : <Circle className="h-4 w-4 text-muted-foreground" />
                               }
                             </Button>
@@ -388,7 +396,7 @@ export function ContactSubmissionsTable({
                                       {isResolved(submission) && (
                                         <div>
                                           <span className="text-muted-foreground">Resolved:</span>
-                                          <span className="ml-2 text-green-600 dark:text-green-400">Yes</span>
+                                          <span className="ml-2 text-success">Yes</span>
                                         </div>
                                       )}
                                     </div>
@@ -419,7 +427,7 @@ export function ContactSubmissionsTable({
                                   >
                                     {isResolved(submission)
                                       ? <><Circle className="h-4 w-4" />Mark open</>
-                                      : <><CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />Mark resolved</>
+                                      : <><CheckCircle2 className="h-4 w-4 text-success" />Mark resolved</>
                                     }
                                   </Button>
                                   <Button asChild size="sm">
@@ -441,7 +449,7 @@ export function ContactSubmissionsTable({
 
               {/* Pagination */}
               {pagination.totalPages > 1 && (
-                <div className="flex items-center justify-between mt-4">
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="text-sm text-muted-foreground">
                     Showing {((pagination.page - 1) * pagination.pageSize) + 1} to {Math.min(pagination.page * pagination.pageSize, pagination.total)} of {pagination.total} submissions
                   </div>
@@ -449,6 +457,7 @@ export function ContactSubmissionsTable({
                     <Button
                       variant="outline"
                       size="sm"
+                      className="h-10"
                       onClick={() => onPageChange(pagination.page - 1)}
                       disabled={!pagination.hasPrevPage}
                     >
@@ -465,7 +474,7 @@ export function ContactSubmissionsTable({
                             variant={pageNum === pagination.page ? "default" : "outline"}
                             size="sm"
                             onClick={() => onPageChange(pageNum)}
-                            className="w-8 h-8 p-0"
+                            className="h-10 w-10 p-0"
                           >
                             {pageNum}
                           </Button>
@@ -475,6 +484,7 @@ export function ContactSubmissionsTable({
                     <Button
                       variant="outline"
                       size="sm"
+                      className="h-10"
                       onClick={() => onPageChange(pagination.page + 1)}
                       disabled={!pagination.hasNextPage}
                     >
@@ -485,7 +495,7 @@ export function ContactSubmissionsTable({
                 </div>
               )}
             </>
-          )}
+          </DataState>
         </CardContent>
       </Card>
     </div>

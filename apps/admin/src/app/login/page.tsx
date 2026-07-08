@@ -1,7 +1,19 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { Shield, Loader2 } from "lucide-react";
+import Image from "next/image";
+import { Loader2, AlertCircle, MailCheck } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_token: "This sign-in link is invalid. Please request a new one.",
@@ -52,63 +64,64 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="text-center space-y-2">
-          <div className="flex justify-center">
-            <div className="rounded-full bg-primary/10 p-3">
-              <Shield className="h-6 w-6 text-primary" />
-            </div>
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <Card className="w-full max-w-sm shadow-[var(--shadow-elevated)]">
+        <CardHeader className="text-center">
+          <div className="mb-2 flex justify-center">
+            <Image src="/pagespace-mark.png" alt="PageSpace" width={44} height={44} className="rounded-xl shadow-[var(--shadow-ambient)]" priority />
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">Admin Console</h1>
-          <p className="text-sm text-muted-foreground">
-            Sign in with your admin email address
-          </p>
-        </div>
+          <CardTitle className="text-2xl tracking-tight">
+            PageSpace <span className="font-normal text-muted-foreground">Admin</span>
+          </CardTitle>
+          <CardDescription>Sign in with your admin email address</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {(errorMessage || error) && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{errorMessage ?? error}</AlertDescription>
+            </Alert>
+          )}
 
-        {(errorMessage || error) && (
-          <div className="rounded-md bg-destructive/10 border border-destructive/20 px-4 py-3 text-sm text-destructive">
-            {errorMessage ?? error}
-          </div>
-        )}
-
-        {status === "sent" ? (
-          <div className="rounded-md bg-muted px-4 py-6 text-center space-y-2">
-            <p className="font-medium text-sm">Check your email</p>
-            <p className="text-sm text-muted-foreground">
-              If an admin account exists for <strong>{email}</strong>, you will
-              receive a sign-in link shortly.
-            </p>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label htmlFor="email" className="text-sm font-medium">
-                Email address
-              </label>
-              <input
-                id="email"
-                type="email"
-                required
-                autoFocus
-                autoComplete="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="admin@example.com"
-                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
+          {status === "sent" ? (
+            <div className="space-y-2 rounded-md bg-muted px-4 py-6 text-center">
+              <div className="flex justify-center">
+                <MailCheck className="h-5 w-5 text-muted-foreground" />
+              </div>
+              <p className="text-sm font-medium">Check your email</p>
+              <p className="text-sm text-muted-foreground">
+                If an admin account exists for <strong>{email}</strong>, you will
+                receive a sign-in link shortly.
+              </p>
             </div>
-            <button
-              type="submit"
-              disabled={status === "loading" || !email}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-            >
-              {status === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
-              Send sign-in link
-            </button>
-          </form>
-        )}
-      </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="email">Email address</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  required
+                  autoFocus
+                  autoComplete="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="admin@example.com"
+                  className="h-10"
+                />
+              </div>
+              <Button
+                type="submit"
+                className="h-10 w-full"
+                disabled={status === "loading" || !email}
+              >
+                {status === "loading" && <Loader2 className="h-4 w-4 animate-spin" />}
+                Send sign-in link
+              </Button>
+            </form>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
