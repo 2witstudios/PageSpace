@@ -64,7 +64,10 @@ async function mapWithConcurrencyLimit<T, R>(
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+  // Guard against a zero/negative limit spawning no workers and silently
+  // returning an array of holes instead of running anything.
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
     while (cursor < items.length) {
       const index = cursor++;
       results[index] = await fn(items[index], index);
