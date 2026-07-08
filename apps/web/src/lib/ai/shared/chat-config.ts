@@ -14,6 +14,7 @@
  */
 
 import type { DefaultChatTransport, UIMessage } from 'ai';
+import { askUserAnswersComplete } from '@/lib/ai/shared/ask-user-client';
 
 /**
  * Stable chat IDs per surface. These never change across conversation switches
@@ -52,12 +53,16 @@ export function buildChatConfig(params: ChatConfigParams): {
   transport: DefaultChatTransport<UIMessage>;
   experimental_throttle: number;
   onError: (error: Error) => void;
+  sendAutomaticallyWhen: (options: { messages: UIMessage[] }) => boolean;
 } {
   return {
     id: params.id,
     transport: params.transport,
     experimental_throttle: params.throttleMs ?? 100,
     onError: params.onError ?? defaultOnError,
+    // Auto-resume the agent once a pending ask_user question is answered.
+    // See ask-user-client.ts for why this can't be the SDK's stock helper.
+    sendAutomaticallyWhen: askUserAnswersComplete,
   };
 }
 

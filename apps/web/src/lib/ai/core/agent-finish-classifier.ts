@@ -17,6 +17,7 @@ export type TerminalReason =
   | 'content-filter'
   | 'step-budget'
   | 'tool-calls-no-finish'
+  | 'awaiting-user-input'
   | 'aborted'
   | 'provider-error'
   | 'ambiguous';
@@ -41,6 +42,12 @@ export interface ClassifyAttemptArgs {
   finishToolName: string;
   /** Whether the user explicitly aborted (abortSignal fired). Never retry an abort. */
   aborted: boolean;
+  /**
+   * Client-side (execute-less) tools that deliberately pause the turn awaiting
+   * user input (e.g. ask_user). A `tool-calls` finish that called one of these
+   * is a clean pause, never a retry — a retry would re-ask the question.
+   */
+  pauseToolNames?: string[];
   /**
    * Whether this attempt already streamed visible content (text/tool/reasoning parts) to
    * the client. The UI message stream is append-only: a from-scratch retry would duplicate
@@ -102,6 +109,13 @@ export function classifyAttempt(args: ClassifyAttemptArgs): AttemptOutcome {
     case 'tool-calls': {
       if (calledFinishTool(args.responseMessages, args.finishToolName)) {
         return { kind: 'clean' };
+      }
+      // A pause tool (execute-less, awaiting user input) halts the loop with a
+      // 'tool-calls' finish by design. Terminal so nothing retries and re-asks;
+      // the distinct reason keeps observability from conflating it with a
+      // broken tool-calls-no-finish turn.
+      if (args.pauseToolNames?.some((name) => calledFinishTool(args.responseMessages, name))) {
+        return { kind: 'terminal', reason: 'awaiting-user-input' };
       }
       // A multi-step loop with stopWhen [hasToolCall(finish), stepCountIs(N)] only
       // surfaces a top-level 'tool-calls' finish when stopWhen matched — i.e. the finish

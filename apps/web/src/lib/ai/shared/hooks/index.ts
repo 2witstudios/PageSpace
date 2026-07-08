@@ -12,6 +12,7 @@ export { useStreamingRegistration } from './useStreamingRegistration';
 export { useChatStop } from './useChatStop';
 export { useSendHandoff } from './useSendHandoff';
 export { useStreamRecovery } from './useStreamRecovery';
+export { useAskUserAnswering } from './useAskUserAnswering';
 
 // Pure functions (no hooks, no side effects)
 export {

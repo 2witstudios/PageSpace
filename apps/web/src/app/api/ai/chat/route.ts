@@ -14,6 +14,13 @@ import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
+import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
+import {
+  extractClientAskUserResults,
+  applyAskUserResultsToPageMessage,
+  dismissPendingAskUserForPageConversation,
+} from '@/lib/ai/core/ask-user-resume';
 import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -440,6 +447,10 @@ export async function POST(request: Request) {
 
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
+    // Set below (fire-early/await-late — see the ask_user branches ~30 lines down)
+    // and joined right before the history load, so its DB round trip overlaps
+    // with the independent setup in between instead of blocking it.
+    let askUserSyncPromise: Promise<unknown> | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = userMessage.id || createId();
@@ -525,8 +536,37 @@ export async function POST(request: Request) {
           userMessage: userMessage // Preserve user input for retry
         }, { status: 500 });
       }
+
+      // A typed message was sent instead of answering a pending ask_user
+      // question — dismiss it so the model doesn't re-ask. Kicked off here
+      // (not awaited) and joined via askUserSyncPromise just before the
+      // history load below, so its DB round trip overlaps with the
+      // independent setup in between instead of blocking it — same pattern
+      // as userProfilePromise a few lines down.
+      askUserSyncPromise = dismissPendingAskUserForPageConversation({
+        pageId: chatId as string,
+        conversationId,
+      }).catch((error) => {
+        loggers.ai.error('AI Chat API: Failed to dismiss pending ask_user question', error as Error);
+      });
+    } else if (userMessage?.role === 'assistant') {
+      // Resume request: the client answered a pending ask_user question via
+      // addToolResult (no new user message). Merge the answer into the
+      // persisted assistant row so history load below picks it up. Same
+      // fire-early/await-late pattern as the dismissal branch above.
+      const clientResults = extractClientAskUserResults(userMessage);
+      if (clientResults.length > 0) {
+        askUserSyncPromise = applyAskUserResultsToPageMessage({
+          messageId: userMessage.id,
+          pageId: chatId as string,
+          conversationId,
+          results: clientResults,
+        }).catch((error) => {
+          loggers.ai.error('AI Chat API: Failed to merge ask_user answer', error as Error);
+        });
+      }
     }
-    
+
     // Get user's current AI provider settings (user was loaded above for the gate)
     const currentProvider = selectedProvider || user?.currentAiProvider || DEFAULT_PROVIDER;
     const currentModel = selectedModel || user?.currentAiModel || DEFAULT_MODEL;
@@ -835,6 +875,16 @@ export async function POST(request: Request) {
     // Always inject the finish tool so the model can signal task completion
     filteredTools = { ...filteredTools, ...finishTool } as ToolSet;
 
+    // Interactive ask_user tool (execute-less, pauses the turn for user input).
+    // Injected after allowlist/exposure transforms, like finish, so it is always
+    // directly callable and never routed through tool_search/execute_tool.
+    // allowedToolNames was captured pre-exposure; push so the inline-instructions
+    // ASK_USER section is emitted.
+    if (canUseAskUser(user)) {
+      filteredTools = { ...filteredTools, ...askUserTools } as ToolSet;
+      allowedToolNames.push(ASK_USER_TOOL_NAME);
+    }
+
     // Guard against a stale read_page tool-result (image bytes delivered on an
     // earlier turn when the model had vision) being re-embedded as an image when
     // convertToModelMessages re-converts history for a model that no longer has
@@ -949,6 +999,11 @@ export async function POST(request: Request) {
       pageId: chatId
     });
 
+    // Join the ask_user resume/dismiss write (if any) before loading history,
+    // so this turn's model context reflects it — fired early above to
+    // overlap with the independent setup between there and here.
+    if (askUserSyncPromise) await askUserSyncPromise;
+
     const pageId = chatId as string;
     const dbMessages = await db
       .select()
@@ -1034,6 +1089,14 @@ export async function POST(request: Request) {
           triggeredBy: { userId: userId!, displayName, browserSessionId },
         }).catch(() => {});
       }
+    } else if (userMessage?.role === 'assistant') {
+      // ask_user resume turn: no new user message to broadcast, but
+      // isConversationShared still gates the mention-notify call below for
+      // the agent's reply — must still be computed here, or it silently
+      // stays at its initial `false` and mention notifications are dropped
+      // for every turn that follows an answered ask_user question.
+      const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
+      isConversationShared = convRow?.isShared === true;
     }
 
     lifecycle = await createStreamLifecycle({
@@ -1077,6 +1140,7 @@ export async function POST(request: Request) {
             abortSignal,
             baseMessages: modelMessages,
             finishToolName: FINISH_TOOL_NAME,
+            pauseToolNames: [ASK_USER_TOOL_NAME],
             maxSteps: AGENT_MAX_STEPS,
             startTimeMs: startTime,
             logger: loggers.ai,
@@ -1104,7 +1168,9 @@ export async function POST(request: Request) {
               system: systemPrompt + pageTreePrompt + agentMemoryPrompt + toolDiscoveryPrompt,
               messages: cachedMessages,
               tools: filteredTools,
-              stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
+              // hasToolCall(ASK_USER_TOOL_NAME) is documentation: ask_user has no
+              // execute, so v6 halts the loop on it anyway (finishReason 'tool-calls').
+              stopWhen: [hasToolCall(FINISH_TOOL_NAME), hasToolCall(ASK_USER_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
               // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
               // creditAbortController fires when mid-stream credit check determines balance is exhausted
               abortSignal: creditAbortController

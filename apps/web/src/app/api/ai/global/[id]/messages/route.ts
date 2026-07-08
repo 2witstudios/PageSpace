@@ -2,6 +2,14 @@ import { NextResponse } from 'next/server';
 import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream, createUIMessageStreamResponse, type ToolSet } from 'ai';
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
+import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
+import { ASK_USER_SECTION } from '@/lib/ai/core/inline-instructions';
+import {
+  extractClientAskUserResults,
+  applyAskUserResultsToGlobalMessage,
+  dismissPendingAskUserForGlobalConversation,
+} from '@/lib/ai/core/ask-user-resume';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { requiresProSubscription, createSubscriptionRequiredResponse, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import { ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
@@ -394,6 +402,10 @@ export async function POST(
 
     // Save user's message immediately to database
     const userMessage = requestMessages[requestMessages.length - 1];
+    // Set below (fire-early/await-late — see the ask_user branches ~90 lines
+    // down) and joined right before the history load, so its DB round trip
+    // overlaps with the independent setup in between instead of blocking it.
+    let askUserSyncPromise: Promise<unknown> | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = userMessage.id || createId();
@@ -480,8 +492,32 @@ export async function POST(
           userMessage: userMessage // Preserve user input for retry
         }, { status: 500 });
       }
+
+      // A typed message was sent instead of answering a pending ask_user
+      // question — dismiss it so the model doesn't re-ask. Kicked off here
+      // (not awaited) and joined via askUserSyncPromise just before the
+      // history load below, so its DB round trip overlaps with the
+      // independent setup in between instead of blocking it.
+      askUserSyncPromise = dismissPendingAskUserForGlobalConversation({ conversationId }).catch((error) => {
+        loggers.api.error('Global Assistant Chat API: Failed to dismiss pending ask_user question', error as Error);
+      });
+    } else if (userMessage?.role === 'assistant') {
+      // Resume request: the client answered a pending ask_user question via
+      // addToolResult (no new user message). Merge the answer into the
+      // persisted assistant row so history load below picks it up. Same
+      // fire-early/await-late pattern as the dismissal branch above.
+      const clientResults = extractClientAskUserResults(userMessage);
+      if (clientResults.length > 0) {
+        askUserSyncPromise = applyAskUserResultsToGlobalMessage({
+          messageId: userMessage.id,
+          conversationId,
+          results: clientResults,
+        }).catch((error) => {
+          loggers.api.error('Global Assistant Chat API: Failed to merge ask_user answer', error as Error);
+        });
+      }
     }
-    
+
     // Create AI provider using factory service
     const providerRequest: ProviderRequest = {
       selectedProvider,
@@ -523,6 +559,11 @@ export async function POST(
     loggers.api.debug('Global Assistant Chat API: Loading conversation history from database', {
       conversationId
     });
+
+    // Join the ask_user resume/dismiss write (if any) before loading history,
+    // so this turn's model context reflects it — fired early above to
+    // overlap with the independent setup between there and here.
+    if (askUserSyncPromise) await askUserSyncPromise;
 
     // Read ALL active messages from database (source of truth)
     const dbMessages = await db
@@ -723,7 +764,9 @@ MENTION PROCESSING:
 • When users @mention documents using @[Label](id:type) format, you MUST read those documents first
 • Use the read_page tool for each mentioned document before providing your main response
 • Let mentioned document content inform and enrich your response
-• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation` + drivePromptSection;
+• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation` +
+      (canUseAskUser({ role: auth.role }) ? `\n\n${ASK_USER_SECTION}` : '') +
+      drivePromptSection;
 
     // Build agent awareness prompt - lists visible AI agents for consultation
     const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId);
@@ -904,6 +947,15 @@ MENTION PROCESSING:
     // Always inject the finish tool so the model can signal task completion
     finalTools = { ...finalTools, ...finishTool } as ToolSet;
 
+    // Interactive ask_user tool (execute-less, pauses the turn for user input).
+    // Injected here like finish — deliberately NOT in filteredAllTools/nonCoreTools,
+    // so it never enters the tool_search catalog or the execute_tool dispatch map
+    // (execute_tool would crash on an execute-less tool, and the catalog is
+    // visible to non-admins).
+    if (canUseAskUser({ role: auth.role })) {
+      finalTools = { ...finalTools, ...askUserTools } as ToolSet;
+    }
+
     // Sanitize, compact, and elide via the unified seam.
     // finalSystemPrompt + finalTools are now known — pass for accurate token budgeting.
     // IIFE keeps the outputs const (each is assigned exactly once).
@@ -1060,6 +1112,7 @@ MENTION PROCESSING:
           abortSignal,
           baseMessages: modelMessages,
           finishToolName: FINISH_TOOL_NAME,
+          pauseToolNames: [ASK_USER_TOOL_NAME],
           maxSteps: AGENT_MAX_STEPS,
           startTimeMs: startTime,
           logger: loggers.api,
@@ -1082,7 +1135,9 @@ MENTION PROCESSING:
             system: finalSystemPrompt,
             messages: cachedMessages,
             tools: finalTools,
-            stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
+            // hasToolCall(ASK_USER_TOOL_NAME) is documentation: ask_user has no
+            // execute, so v6 halts the loop on it anyway (finishReason 'tool-calls').
+            stopWhen: [hasToolCall(FINISH_TOOL_NAME), hasToolCall(ASK_USER_TOOL_NAME), stepCountIs(AGENT_MAX_STEPS)],
             // abortSignal from the abort registry — only fires on explicit user stop, never on client disconnect
             abortSignal,
             experimental_context: {

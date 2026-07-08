@@ -45,6 +45,8 @@ export interface RunAgentWithRetryParams {
   buildStreamText: (messages: ModelMessage[]) => AgentStreamResult;
   /** The finish-tool name (FINISH_TOOL_NAME). */
   finishToolName: string;
+  /** Execute-less tools that pause the turn awaiting user input (e.g. ask_user). */
+  pauseToolNames?: string[];
   /** The `stepCountIs(...)` cap configured on the loop (must match the route). */
   maxSteps: number;
   /** Max transparent retries after the first attempt. Default 2 (conservative). */
@@ -126,6 +128,7 @@ export async function runAgentWithRetry(
     baseMessages,
     buildStreamText,
     finishToolName,
+    pauseToolNames,
     maxSteps,
     maxRetries = 2,
     startTimeMs,
@@ -203,6 +206,7 @@ export async function runAgentWithRetry(
       stepCount: steps.length,
       maxSteps,
       finishToolName,
+      pauseToolNames,
       aborted: abortSignal.aborted,
       emittedContent,
     });

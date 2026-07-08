@@ -63,5 +63,23 @@ describe('chat-config pure functions', () => {
       expect(a.transport).toBe(b.transport);
       expect(a.experimental_throttle).toBe(b.experimental_throttle);
     });
+
+    it('given no explicit predicate, should wire sendAutomaticallyWhen to askUserAnswersComplete', () => {
+      const config = buildChatConfig({ id: GLOBAL_CHAT_ID, transport: mockTransport });
+      expect(typeof config.sendAutomaticallyWhen).toBe('function');
+      // A normal turn ending in the executed `finish` tool must NEVER auto-resubmit —
+      // this is the guard against the infinite-loop failure mode the stock SDK helper has.
+      expect(
+        config.sendAutomaticallyWhen({
+          messages: [
+            {
+              id: '1',
+              role: 'assistant',
+              parts: [{ type: 'tool-finish', toolCallId: 'x', state: 'output-available', output: { done: true } }],
+            } as unknown as UIMessage,
+          ],
+        })
+      ).toBe(false);
+    });
   });
 });
