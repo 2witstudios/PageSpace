@@ -100,6 +100,24 @@ export class CompositeCredentialStore implements CredentialStore {
    * problem, not proof the keychain backend itself is unreachable, so it's
    * skipped with a warning rather than throwing (which would lose every
    * other, well-formed entry) or degrading the whole store.
+   *
+   * KNOWN ISSUE (unfixed, tracked here rather than routed around): at least
+   * one real `@napi-rs/keyring` native binding has been observed truncating
+   * every `entry.account` returned by `listSecrets()` at the embedded NUL
+   * byte `keychainAccountKey` uses to separate host/profile (confirmed via a
+   * direct call to `findCredentialsAsync` — every non-default-profile
+   * account round-tripped as the bare host string). `parseKeychainAccountKey`
+   * then reads every one of those as `{ profile: DEFAULT_PROFILE_NAME }`, so
+   * `list(profile)` for any non-default `profile` silently returns nothing
+   * for entries that are genuinely stored, and `list(DEFAULT_PROFILE_NAME)`
+   * over-includes entries whose real profile isn't "default" at all. Unlike
+   * `runUse`'s "Set active key" lookup (wizard.ts), this can't be routed
+   * around with a direct `get()` — the whole point of `list()` is
+   * discovering which HOSTS have a given profile, which requires enumeration.
+   * A real fix needs either a `listSecrets()` that doesn't lose the account
+   * string, or a keychain layout that doesn't require reading it back at
+   * all — out of scope here. Affects `pagespace logout --all --key <name>`
+   * (logout.ts) for any non-default key name.
    */
   async list(profile: string = DEFAULT_PROFILE_NAME): Promise<readonly CredentialSummary[]> {
     if (this.degraded) {

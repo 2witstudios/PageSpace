@@ -38,6 +38,7 @@ import { runLoopbackLogin } from '../../auth/loopback-flow.js';
 import type { LoopbackLoginResult } from '../../auth/loopback-flow.js';
 import { resolveConfig } from '../../config/resolve.js';
 import { credentialSecret } from '../../credentials/serialize.js';
+import type { HostCredential } from '../../credentials/serialize.js';
 import { createCredentialStore } from '../../credentials/store.js';
 import type { CredentialStore } from '../../credentials/store.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR, type ExitCode } from '../../exit-codes.js';
@@ -484,6 +485,11 @@ async function runList(keys: readonly KeySummary[]): Promise<FlowOutcome> {
   return null;
 }
 
+/** Whether a locally stored credential is the one a server-side key summary describes. */
+function matchesServerKey(credential: HostCredential, key: KeySummary): boolean {
+  return credential.kind !== 'oauth' && credentialSecret(credential).startsWith(key.tokenPrefix);
+}
+
 /**
  * Set active key — the wizard form of `pagespace keys use <name>`, sharing
  * `runActivateCeremony` (`./use.js`) so the two surfaces cannot drift. The
@@ -508,13 +514,35 @@ async function runUse(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: 
   const key = keys.find((candidate) => candidate.id === keyId);
   if (!key) return abortSubflow();
 
-  const localNames = (await store.listCredentialNames?.(host)) ?? [];
+  // Try the exact name match FIRST: the local profile a key is stored under
+  // is always the server-side key's own name (create.ts's resolveNewKeyName
+  // writes it verbatim, and the mint embeds that same string as the scope's
+  // name:<...> token), so this is an instant, exact hit in the overwhelmingly
+  // common "create, then immediately activate" case. This isn't just an
+  // optimization — real OS keychain backends (`@napi-rs/keyring`'s
+  // `findCredentialsAsync`, `credentials/keychain.ts`) have been observed
+  // truncating every returned account name at the embedded NUL byte
+  // `keychainAccountKey` uses to separate host/profile, collapsing every
+  // non-default-profile credential to the same bare host string and making
+  // the enumeration below unable to distinguish any of them. `store.get`
+  // takes the account string as an explicit parameter rather than depending
+  // on the native binding to correctly return it, so it's unaffected.
   let localName: string | null = null;
-  for (const name of localNames) {
-    const credential = await store.get(host, name);
-    if (credential !== null && credential.kind !== 'oauth' && credentialSecret(credential).startsWith(key.tokenPrefix)) {
-      localName = name;
-      break;
+  const exactCredential = await store.get(host, key.name);
+  if (exactCredential !== null && matchesServerKey(exactCredential, key)) {
+    localName = key.name;
+  } else {
+    // Fallback for the case an exact name won't catch: the key was renamed
+    // server-side (or the local profile predates a rename) so the stored
+    // credential lives under a different name than the key's current one.
+    // Best-effort only — subject to the same enumeration bug noted above.
+    const localNames = (await store.listCredentialNames?.(host)) ?? [];
+    for (const name of localNames) {
+      const credential = await store.get(host, name);
+      if (credential !== null && matchesServerKey(credential, key)) {
+        localName = name;
+        break;
+      }
     }
   }
   if (localName === null) {
