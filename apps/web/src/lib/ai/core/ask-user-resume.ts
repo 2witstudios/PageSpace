@@ -98,6 +98,17 @@ function pendingAskUserToolCallIds(parts: UIMessage['parts']): string[] {
  * `persist` closure already bound to that specific row (id, and for the
  * global backend, its non-null userId) — so the shared orchestration below
  * never needs to know the row's shape or carry state between fetch and save.
+ *
+ * KNOWN LIMITATION: fetch → merge → persist is an unlocked read-modify-write,
+ * not a transaction. Two requests racing on the SAME pending toolCallId (a
+ * double-submit, or answering in one tab while a dismiss-triggering message
+ * arrives from another) can interleave and the later write wins, silently
+ * dropping the earlier one. Not fixed here: doing so correctly requires
+ * threading a transaction/row-lock through `saveMessageToDatabase` /
+ * `saveGlobalAssistantMessageToDatabase` in message-utils.ts, which are
+ * shared by many unrelated AI features — broader blast radius than this
+ * narrow, low-probability, self-healing race (the user can just answer
+ * again) justifies in isolation.
  */
 interface FetchedAssistantMessage {
   message: UIMessage;
