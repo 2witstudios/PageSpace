@@ -81,4 +81,11 @@ describe('describeScopeForConsent', () => {
     const text = describeScopeForConsent({ kind: 'update_key', tokenId: 'tok123' }, {});
     expect(text).toMatch(/tok123/);
   });
+
+  it('describes name as the key label shown in `pagespace keys list`', () => {
+    const scope: ParsedScope = { kind: 'name', name: 'My Laptop' };
+    const text = describeScopeForConsent(scope, {});
+    expect(text).toMatch(/My Laptop/);
+    expect(text).toMatch(/pagespace keys list/);
+  });
 });

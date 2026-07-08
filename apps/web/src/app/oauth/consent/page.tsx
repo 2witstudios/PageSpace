@@ -112,6 +112,11 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   const roleById = new Map(roleRows.filter((r): r is NonNullable<typeof r> => !!r).map((r) => [r.id, r]));
 
   const scopeDescriptions: string[] = [];
+  // Named first so the user reads "this creates a key named X" before the
+  // capability list that follows.
+  if (result.scopes.newKeyName !== null) {
+    scopeDescriptions.push(describeScopeForConsent({ kind: 'name', name: result.scopes.newKeyName }, {}));
+  }
   if (result.scopes.updateKeyId !== null) {
     scopeDescriptions.push(
       describeScopeForConsent(

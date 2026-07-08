@@ -25,6 +25,8 @@ export function describeScopeForConsent(scope: ParsedScope, ctx: ConsentNarratio
       return 'Stay connected until you revoke access (issues a long-lived refresh credential).';
     case 'manage_keys':
       return 'Create and manage access keys on your behalf — cannot read or write any of your content directly.';
+    case 'name':
+      return `Name this key "${scope.name}" — shown in \`pagespace keys list\` and to anyone else with access to this account's key list.`;
     case 'all_drives':
       return 'Access to all your drives, including any created later — the maximum grant for a drive-scoped key.';
     case 'update_key': {

@@ -83,7 +83,15 @@ export async function POST(req: NextRequest) {
     // Rejecting at the device door means a bearer token in this ambiguous
     // shape can never be minted in the first place, sidestepping the
     // ambiguity rather than resolving it.
-    if (parsed.scopes.updateKeyId !== null || parsed.scopes.activateKeyId !== null || parsed.scopes.allDrives) {
+    // newKeyName is rejected for the identical reason: a name can never be
+    // honored on a flow with no mint branch, so it must fail closed rather
+    // than be silently ignored.
+    if (
+      parsed.scopes.updateKeyId !== null ||
+      parsed.scopes.activateKeyId !== null ||
+      parsed.scopes.allDrives ||
+      parsed.scopes.newKeyName !== null
+    ) {
       return noStoreJson({ error: 'invalid_scope' }, 400);
     }
     scopes = formatScopeSet(parsed.scopes).split(' ').filter(Boolean);

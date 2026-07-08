@@ -10,6 +10,7 @@
  */
 
 const RESOURCE_ID_RE = /^[a-z0-9]{1,32}$/;
+const NAME_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 
 export type ParsedScope =
   | { kind: 'account' }
@@ -18,6 +19,7 @@ export type ParsedScope =
   | { kind: 'all_drives' }
   | { kind: 'update_key'; tokenId: string }
   | { kind: 'activate_key'; tokenId: string }
+  | { kind: 'name'; name: string }
   | {
       kind: 'drive';
       driveId: string;
@@ -62,6 +64,21 @@ export type ScopeSet = {
   // combining it with any grant would let an "activate" consent screen
   // smuggle a real grant.
   activateKeyId: string | null;
+  // `name:<percent-encoded-utf8>` — the user-chosen name for the `mcp_tokens`
+  // row this grant mints. Carries no capability itself; FORBIDDEN on any
+  // grant shape that doesn't mint a NEW `mcp_tokens` row (`account`/
+  // `manage_keys`/`update_key`/`activate_key` — attaching a name there would
+  // either be meaningless, since no row is minted, or spoof a "creating a
+  // key" consent line when no key is actually being created), enforced by
+  // this parser's `name_without_mint_grant` rule below. Deliberately NOT
+  // enforced as *required* on a mint-shaped grant (pure `drive:*`/
+  // `all_drives`) at this layer — this parser is reused by flows (e.g.
+  // device-authorization's plain OAuth token pairs) that never mint an
+  // `mcp_tokens` row and legitimately carry no name. The "mint-shaped grant
+  // requires a name" half is enforced at `validateAuthorizeRequest`
+  // (`authorize-request.ts`), the one call site whose result actually reaches
+  // a real mint.
+  newKeyName: string | null;
 };
 
 export type ScopeError =
@@ -77,7 +94,10 @@ export type ScopeError =
   | { code: 'update_key_conflict' }
   | { code: 'update_key_without_drive' }
   | { code: 'duplicate_activate_key' }
-  | { code: 'activate_key_not_alone' };
+  | { code: 'activate_key_not_alone' }
+  | { code: 'duplicate_name' }
+  | { code: 'malformed_name' }
+  | { code: 'name_without_mint_grant' };
 
 export type DriveScopeRow = { driveId: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null };
 
@@ -135,6 +155,7 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
   let allDrives = false;
   let updateKeyId: string | null = null;
   let activateKeyId: string | null = null;
+  let newKeyName: string | null = null;
   const drives = new Map<string, ParsedScope & { kind: 'drive' }>();
 
   for (const token of tokens) {
@@ -174,6 +195,23 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
         return { ok: false, error: { code: 'duplicate_activate_key' } };
       }
       activateKeyId = tokenId;
+      continue;
+    }
+    if (token.startsWith('name:')) {
+      if (newKeyName !== null) {
+        return { ok: false, error: { code: 'duplicate_name' } };
+      }
+      const encoded = token.slice('name:'.length);
+      let decoded: string;
+      try {
+        decoded = decodeURIComponent(encoded);
+      } catch {
+        return { ok: false, error: { code: 'malformed_name' } };
+      }
+      if (decoded.length === 0 || decoded.length > 100 || NAME_CONTROL_CHAR_RE.test(decoded)) {
+        return { ok: false, error: { code: 'malformed_name' } };
+      }
+      newKeyName = decoded;
       continue;
     }
     if (token.startsWith('drive:')) {
@@ -250,7 +288,28 @@ export function parseScopeList(raw: string): { ok: true; scopes: ScopeSet } | { 
     return { ok: false, error: { code: 'offline_access_alone' } };
   }
 
-  return { ok: true, scopes: { account, offlineAccess, drives, manageKeys, allDrives, updateKeyId, activateKeyId } };
+  // name_without_mint_grant: `name:*` only means something on a grant that mints a NEW
+  // mcp_tokens row (a pure drive:* set or all_drives). Every other shape either has no row
+  // to name (account/manage_keys) or explicitly changes nothing (update_key/activate_key).
+  // Reject rather than silently drop it or let a consent line imply a new key when none is minted.
+  //
+  // Deliberately NOT enforcing "a mint-shaped grant REQUIRES a name" here, even though that's
+  // the actual CLI bug this field exists to fix — this parser is reused far beyond the CLI's
+  // mint path (the device-authorization flow's plain drive:*/all_drives grants never mint an
+  // mcp_tokens row at all — they resolve to an ordinary OAuth access/refresh pair — and stored
+  // `oauth_access_tokens` rows from that flow are re-parsed here on every authenticated request
+  // for schema validation). A name-required rule at this level would incorrectly reject those.
+  // The requirement is enforced instead at the one call site that actually mints from this shape:
+  // `POST /api/oauth/authorize`'s consent decision (`hasNewKeyName` check, mirroring its
+  // update_key/activate_key ownership gates) — see that route for the real enforcement.
+  if (newKeyName !== null && !((allDrives || drives.size > 0) && updateKeyId === null && activateKeyId === null)) {
+    return { ok: false, error: { code: 'name_without_mint_grant' } };
+  }
+
+  return {
+    ok: true,
+    scopes: { account, offlineAccess, drives, manageKeys, allDrives, updateKeyId, activateKeyId, newKeyName },
+  };
 }
 
 function formatDriveScope(scope: ParsedScope & { kind: 'drive' }): string {
@@ -271,6 +330,7 @@ export function formatScopeSet(scopes: ScopeSet): string {
   const tokens: string[] = [];
   if (scopes.activateKeyId !== null) tokens.push(`activate_key:${scopes.activateKeyId}`);
   if (scopes.updateKeyId !== null) tokens.push(`update_key:${scopes.updateKeyId}`);
+  if (scopes.newKeyName !== null) tokens.push(`name:${encodeURIComponent(scopes.newKeyName)}`);
   if (scopes.account) tokens.push('account');
   if (scopes.allDrives) tokens.push('all_drives');
   if (scopes.manageKeys) tokens.push('manage_keys');
@@ -322,6 +382,11 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
   // is escalation, rejected outright.
   if (requested.updateKeyId !== null && requested.updateKeyId !== granted.updateKeyId) return false;
   if (requested.activateKeyId !== null && requested.activateKeyId !== granted.activateKeyId) return false;
+
+  // Effectively dead code today (mint-shaped grants never reach a persisted refresh/access
+  // token that gets subset-checked later), but kept for the invariant that every ScopeSet
+  // field is compared here, never silently ignored.
+  if (requested.newKeyName !== granted.newKeyName) return false;
 
   if (requested.account) {
     return granted.account;
@@ -399,6 +464,14 @@ export function isKeyUpdateGrant(scopes: ScopeSet): scopes is ScopeSet & { updat
  */
 export function isKeyActivationGrant(scopes: ScopeSet): scopes is ScopeSet & { activateKeyId: string } {
   return scopes.activateKeyId !== null;
+}
+
+/**
+ * True iff this grant carries a user-chosen name for the `mcp_tokens` row it
+ * mints. A type predicate, mirroring `isKeyUpdateGrant`/`isKeyActivationGrant`.
+ */
+export function hasNewKeyName(scopes: ScopeSet): scopes is ScopeSet & { newKeyName: string } {
+  return scopes.newKeyName !== null;
 }
 
 /** Bridge to the capability model: rows in mcp_token_drives shape (Decision 2). */

@@ -132,7 +132,7 @@ describe('GET /api/drives — OAuth credentials', () => {
       manageKeysScopedAuthResult({
         userId: 'user-account',
         tokenId: 'oauth-token-account',
-        scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, allDrives: false, updateKeyId: null, activateKeyId: null },
+        scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, allDrives: false, updateKeyId: null, activateKeyId: null, newKeyName: null },
       }),
     );
     vi.mocked(listAccessibleDrives).mockResolvedValue(drives);
@@ -166,7 +166,7 @@ describe('GET /api/drives — OAuth credentials', () => {
   it('returns no drives for an empty drive-scoped OAuth credential instead of falling back to the full list', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
       driveScopedOAuthAuthResult({
-        scopes: { account: false, offlineAccess: false, manageKeys: false, allDrives: false, drives: new Map(), updateKeyId: null, activateKeyId: null },
+        scopes: { account: false, offlineAccess: false, manageKeys: false, allDrives: false, drives: new Map(), updateKeyId: null, activateKeyId: null, newKeyName: null },
         driveScopes: [],
         allowedDriveIds: [],
       }),

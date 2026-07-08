@@ -22,7 +22,7 @@ import {
 } from '@pagespace/lib/auth/oauth/code-lifecycle';
 import { issueInitialTokenPair, issueRotatedTokenPair, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import { decideRefreshRotation } from '@pagespace/lib/auth/oauth/refresh-rotation';
-import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, isScopeSubset, formatScopeSet, isAllDrivesGrant, isKeyActivationGrant, isKeyUpdateGrant, isPureDriveGrant, hasNewKeyName, scopeSetToDriveScopes } from '@pagespace/lib/auth/oauth/scopes';
 import { sessionRepository } from './session-repository';
 
 /**
@@ -323,7 +323,16 @@ export async function exchangeAuthorizationCode(
           userId: row.userId,
           tokenHash,
           tokenPrefix,
-          name: 'pagespace CLI',
+          // Fallback is unreachable in practice: a mint-shaped grant with no
+          // name never gets this far — POST /api/oauth/authorize's
+          // validateAuthorizeRequest (packages/lib/src/auth/oauth/authorize-request.ts)
+          // rejects it before an authorization code is ever minted, and this
+          // function only runs against an already-consented, already-persisted
+          // code's scopes. NOT enforced by parseScopeList itself (that parser
+          // stays flow-agnostic — see its name_without_mint_grant rule and the
+          // doc comment on ScopeSet.newKeyName for why). Kept as defense in
+          // depth only, never meant to actually fire.
+          name: hasNewKeyName(parsedGrantedScope.scopes) ? parsedGrantedScope.scopes.newKeyName : 'pagespace CLI',
           isScoped: !allDrives,
           drives: allDrives ? [] : toSessionRepoDrives(parsedGrantedScope.scopes),
         },
@@ -333,6 +342,14 @@ export async function exchangeAuthorizationCode(
       return { outcome: 'ok_mcp_token', userId: row.userId, scopes: row.scopes, mcpToken };
     }
 
+    // NOTE: every mint/update/activate branch above is gated on
+    // `parsedGrantedScope.ok`. If parseScopeList ever rejects the persisted
+    // `row.scopes` for any reason (including some future unrelated bug), we
+    // fall through to here and mint a plain OAuth access/refresh pair
+    // carrying the raw (rejected) scope array as its granted scopes — a
+    // pre-existing fail-open risk, unrelated to and out of scope for this
+    // change. Flagged for a future hardening pass.
+    //
     // F1 (ADR 0003, OIDC-standard): a refresh token is only minted when the
     // granted scope set includes offline_access — otherwise this is an
     // access-only grant.

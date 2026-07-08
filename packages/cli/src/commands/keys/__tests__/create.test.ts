@@ -17,99 +17,130 @@ function commandIntent(argv: string[]): CommandIntent {
 
 describe('buildTokenScope', () => {
   it('rejects zero drives', () => {
-    expect(buildTokenScope([])).toEqual({
+    expect(buildTokenScope([], { name: 'ci' })).toEqual({
       ok: false,
       message: 'At least one --drive is required to create a scoped token.',
     });
   });
 
-  it('builds drive:<id> offline_access for an inherited role', () => {
-    expect(buildTokenScope([{ id: 'drv1', role: null }])).toEqual({
+  it('builds drive:<id> name:<name> offline_access for an inherited role', () => {
+    expect(buildTokenScope([{ id: 'drv1', role: null }], { name: 'ci' })).toEqual({
       ok: true,
-      scope: 'drive:drv1 offline_access',
+      scope: 'drive:drv1 name:ci offline_access',
+      driveScope: 'drive:drv1',
     });
   });
 
-  it('builds drive:<id>:member offline_access', () => {
-    expect(buildTokenScope([{ id: 'drv1', role: 'MEMBER' }])).toEqual({
+  it('builds drive:<id>:member name:<name> offline_access', () => {
+    expect(buildTokenScope([{ id: 'drv1', role: 'MEMBER' }], { name: 'ci' })).toEqual({
       ok: true,
-      scope: 'drive:drv1:member offline_access',
+      scope: 'drive:drv1:member name:ci offline_access',
+      driveScope: 'drive:drv1:member',
     });
   });
 
-  it('builds drive:<id>:admin offline_access', () => {
-    expect(buildTokenScope([{ id: 'drv1', role: 'ADMIN' }])).toEqual({
+  it('builds drive:<id>:admin name:<name> offline_access', () => {
+    expect(buildTokenScope([{ id: 'drv1', role: 'ADMIN' }], { name: 'ci' })).toEqual({
       ok: true,
-      scope: 'drive:drv1:admin offline_access',
+      scope: 'drive:drv1:admin name:ci offline_access',
+      driveScope: 'drive:drv1:admin',
     });
   });
 
-  it('builds drive:<id>:role:<customRoleId> offline_access', () => {
-    expect(buildTokenScope([{ id: 'drv1', role: null, customRoleId: 'rolexyz' }])).toEqual({
+  it('builds drive:<id>:role:<customRoleId> name:<name> offline_access', () => {
+    expect(buildTokenScope([{ id: 'drv1', role: null, customRoleId: 'rolexyz' }], { name: 'ci' })).toEqual({
       ok: true,
-      scope: 'drive:drv1:role:rolexyz offline_access',
+      scope: 'drive:drv1:role:rolexyz name:ci offline_access',
+      driveScope: 'drive:drv1:role:rolexyz',
     });
   });
 
   it('sorts multiple drives by id and joins with a single offline_access', () => {
     expect(
-      buildTokenScope([
-        { id: 'zzz', role: 'MEMBER' },
-        { id: 'aaa', role: 'ADMIN' },
-      ]),
-    ).toEqual({ ok: true, scope: 'drive:aaa:admin drive:zzz:member offline_access' });
+      buildTokenScope(
+        [
+          { id: 'zzz', role: 'MEMBER' },
+          { id: 'aaa', role: 'ADMIN' },
+        ],
+        { name: 'ci' },
+      ),
+    ).toEqual({
+      ok: true,
+      scope: 'drive:aaa:admin drive:zzz:member name:ci offline_access',
+      driveScope: 'drive:aaa:admin drive:zzz:member',
+    });
+  });
+
+  it('percent-encodes the name in the wire token', () => {
+    expect(buildTokenScope([{ id: 'drv1', role: null }], { name: 'My Laptop' })).toEqual({
+      ok: true,
+      scope: 'drive:drv1 name:My%20Laptop offline_access',
+      driveScope: 'drive:drv1',
+    });
+  });
+
+  it('omits the name: token entirely when no name is given (the buildKeyUpdateScope reuse path)', () => {
+    expect(buildTokenScope([{ id: 'drv1', role: null }])).toEqual({
+      ok: true,
+      scope: 'drive:drv1 offline_access',
+      driveScope: 'drive:drv1',
+    });
   });
 
   it('rejects a drive id outside the resource-id grammar', () => {
-    const result = buildTokenScope([{ id: 'Not Valid!', role: null }]);
+    const result = buildTokenScope([{ id: 'Not Valid!', role: null }], { name: 'ci' });
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.message).toContain('Not Valid!');
   });
 
   it('rejects a customRoleId outside the resource-id grammar', () => {
-    const result = buildTokenScope([{ id: 'drv1', role: null, customRoleId: 'Not Valid!' }]);
+    const result = buildTokenScope([{ id: 'drv1', role: null, customRoleId: 'Not Valid!' }], { name: 'ci' });
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.message).toContain('Not Valid!');
   });
 
   it('rejects a duplicate drive id', () => {
-    const result = buildTokenScope([
-      { id: 'drv1', role: 'MEMBER' },
-      { id: 'drv1', role: 'ADMIN' },
-    ]);
+    const result = buildTokenScope(
+      [
+        { id: 'drv1', role: 'MEMBER' },
+        { id: 'drv1', role: 'ADMIN' },
+      ],
+      { name: 'ci' },
+    );
     expect(result).toEqual({ ok: false, message: 'Duplicate --drive "drv1": each drive may only be scoped once.' });
   });
 
   it('is a pure function: identical input produces a deep-equal result', () => {
     const drives: DriveScopeArg[] = [{ id: 'drv1', role: 'MEMBER' }];
-    expect(buildTokenScope(drives)).toEqual(buildTokenScope(drives));
+    expect(buildTokenScope(drives, { name: 'ci' })).toEqual(buildTokenScope(drives, { name: 'ci' }));
   });
 });
 
 describe('buildTokenScope — --all-drives', () => {
-  it('builds "all_drives offline_access" when allDrives is true and no drives are given', () => {
-    expect(buildTokenScope([], { allDrives: true })).toEqual({
+  it('builds "all_drives name:<name> offline_access" when allDrives is true and no drives are given', () => {
+    expect(buildTokenScope([], { allDrives: true, name: 'god-key' })).toEqual({
       ok: true,
-      scope: 'all_drives offline_access',
+      scope: 'all_drives name:god-key offline_access',
+      driveScope: 'all drives',
     });
   });
 
   it('rejects --all-drives combined with --drive', () => {
-    expect(buildTokenScope([{ id: 'drv1', role: null }], { allDrives: true })).toEqual({
+    expect(buildTokenScope([{ id: 'drv1', role: null }], { allDrives: true, name: 'god-key' })).toEqual({
       ok: false,
       message: '--all-drives cannot be combined with --drive.',
     });
   });
 
   it('never infers all_drives from an empty drives array without the explicit option — the zero-drive usage error stays a usage error', () => {
-    expect(buildTokenScope([])).toEqual({
+    expect(buildTokenScope([], { name: 'ci' })).toEqual({
       ok: false,
       message: 'At least one --drive is required to create a scoped token.',
     });
   });
 
-  it('drift guard: the canonical parser accepts "all_drives offline_access" as an all_drives grant', () => {
-    const result = buildTokenScope([], { allDrives: true });
+  it('drift guard: the canonical parser accepts "all_drives name:<name> offline_access" as an all_drives grant', () => {
+    const result = buildTokenScope([], { allDrives: true, name: 'god-key' });
     if (!result.ok) throw new Error('expected buildTokenScope to succeed');
 
     const parsed = parseScopeList(result.scope);
@@ -118,18 +149,22 @@ describe('buildTokenScope — --all-drives', () => {
     expect(parsed.scopes.allDrives).toBe(true);
     expect(parsed.scopes.offlineAccess).toBe(true);
     expect(parsed.scopes.drives.size).toBe(0);
+    expect(parsed.scopes.newKeyName).toBe('god-key');
     expect(parseScopeList(formatScopeSet(parsed.scopes))).toEqual(parsed);
   });
 });
 
 describe('buildTokenScope — drift guard vs @pagespace/lib canonical grammar', () => {
   it('produces a scope string the canonical parser accepts as the intended drive/role/offline_access set', () => {
-    const result = buildTokenScope([
-      { id: 'drv1', role: 'MEMBER' },
-      { id: 'drv2', role: 'ADMIN' },
-      { id: 'drv3', role: null, customRoleId: 'rolexyz' },
-      { id: 'drv4', role: null },
-    ]);
+    const result = buildTokenScope(
+      [
+        { id: 'drv1', role: 'MEMBER' },
+        { id: 'drv2', role: 'ADMIN' },
+        { id: 'drv3', role: null, customRoleId: 'rolexyz' },
+        { id: 'drv4', role: null },
+      ],
+      { name: 'ci' },
+    );
     if (!result.ok) throw new Error('expected buildTokenScope to succeed');
 
     const parsed = parseScopeList(result.scope);
@@ -137,6 +172,7 @@ describe('buildTokenScope — drift guard vs @pagespace/lib canonical grammar', 
 
     expect(parsed.scopes.account).toBe(false);
     expect(parsed.scopes.offlineAccess).toBe(true);
+    expect(parsed.scopes.newKeyName).toBe('ci');
     expect([...parsed.scopes.drives.values()]).toEqual([
       { kind: 'drive', driveId: 'drv1', role: { kind: 'member' } },
       { kind: 'drive', driveId: 'drv2', role: { kind: 'admin' } },
@@ -204,6 +240,13 @@ describe('resolveNewKeyName', () => {
     expect(resolveNewKeyName({ name: undefined, drives: [{ id: 'drv1', role: null }] })).toEqual({
       ok: true,
       name: 'drv1',
+    });
+  });
+
+  it('rejects zero drives (not the ambiguous "more than one drive" message) when --all-drives is not given', () => {
+    expect(resolveNewKeyName({ name: undefined, drives: [] })).toEqual({
+      ok: false,
+      message: 'At least one --drive is required to create a scoped token.',
     });
   });
 
@@ -454,7 +497,7 @@ describe('createTokensCreateHandler', () => {
     );
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect(requestedScope).toBe('drive:drv1:member offline_access');
+    expect(requestedScope).toBe('drive:drv1:member name:drv1 offline_access');
     const stored = await store.get('https://pagespace.ai', 'drv1');
     expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
     expect(await store.get('https://pagespace.ai', 'default')).toBeNull();
@@ -781,7 +824,7 @@ describe('createTokensCreateHandler', () => {
     );
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect(requestedScope).toBe('all_drives offline_access');
+    expect(requestedScope).toBe('all_drives name:god-key offline_access');
     const stored = await store.get('https://pagespace.ai', 'god-key');
     expect((stored && credentialSecret(stored))).toBe(FIXED_TOKENS.refreshToken);
   });
