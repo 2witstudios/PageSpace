@@ -83,6 +83,40 @@ const buildCSPString = (directives: CSPDirectives): string =>
 
 const IS_CLOUD = process.env.DEPLOYMENT_MODE !== 'onprem' && process.env.DEPLOYMENT_MODE !== 'tenant';
 
+/**
+ * Allowlist the configured S3-compatible object-storage endpoint for
+ * `connect-src`, so direct-to-storage presigned uploads/downloads (browser
+ * PUT/GET straight to Tigris, or another S3-compatible host in onprem/tenant
+ * deployments) aren't blocked by the app-wide CSP.
+ *
+ * Derived from `AWS_ENDPOINT_URL_S3` at policy-build time — never hardcode a
+ * literal host (e.g. `fly.storage.tigris.dev`), since onprem/tenant
+ * deployments (`deployment-mode.ts`) may point this at a different
+ * S3-compatible endpoint entirely.
+ *
+ * Emits BOTH the literal endpoint origin and a wildcard one level up: the AWS
+ * SDK v3 client (`presigned-url.ts`) has no `forcePathStyle`, so it defaults
+ * to virtual-hosted-style addressing — the bucket name is prefixed as a
+ * subdomain of the endpoint host (e.g. `https://<bucket>.fly.storage.tigris.dev`)
+ * — but CSP-build time doesn't know which style is in effect, so both forms
+ * are allowlisted.
+ *
+ * Also reused verbatim for `media-src`: `/api/files/[id]/view` 307-redirects
+ * `<video>`/`<audio>` element requests straight to this same presigned storage
+ * URL, and CSP fetch directives are re-evaluated against the final redirected
+ * URL — so media playback needs the identical host list, not just fetch/XHR.
+ */
+const buildStorageConnectSrcEntries = (): string[] => {
+  const endpoint = process.env.AWS_ENDPOINT_URL_S3;
+  if (!endpoint) return [];
+  try {
+    const { protocol, host } = new URL(endpoint);
+    return [`${protocol}//${host}`, `${protocol}//*.${host}`];
+  } catch {
+    return [];
+  }
+};
+
 export const buildCSPPolicy = (nonce: string): string => {
   const scriptSrc = [
     "'self'",
@@ -102,7 +136,7 @@ export const buildCSPPolicy = (nonce: string): string => {
     frameSrc.push('https://accounts.google.com', 'https://js.stripe.com', 'https://hooks.stripe.com', 'https://m.stripe.network');
   }
 
-  const connectSrc = ["'self'", 'ws:', 'wss:'];
+  const connectSrc = ["'self'", 'ws:', 'wss:', ...buildStorageConnectSrcEntries()];
 
   // Cloud mode: allow Stripe client SDK and Google One Tap connections
   if (IS_CLOUD) {
@@ -116,6 +150,10 @@ export const buildCSPPolicy = (nonce: string): string => {
     'style-src': styleSrc,
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': connectSrc,
+    // <video>/<audio> loading falls back to default-src when this is absent —
+    // /api/files/[id]/view redirects media requests straight to the storage
+    // host, so it needs the same allowlist as connect-src (see comment above).
+    'media-src': ["'self'", ...buildStorageConnectSrcEntries()],
     'font-src': ["'self'", 'data:'],
     // Monaco and other browser tooling may initialize workers from blob URLs.
     'worker-src': ["'self'", 'blob:'],

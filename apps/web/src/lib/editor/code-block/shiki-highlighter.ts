@@ -5,6 +5,7 @@ import {
   type BundledLanguage,
   type BundledTheme,
 } from 'shiki';
+import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 import { sudolangGrammar } from './sudolang-grammar';
 
 export type ShikiTheme = 'one-light' | 'one-dark-pro';
@@ -16,6 +17,11 @@ function getHighlighter(): Promise<Highlighter> {
     highlighterPromise = createHighlighter({
       themes: ['one-light', 'one-dark-pro'],
       langs: [sudolangGrammar],
+      // The default oniguruma engine instantiates a WASM module client-side,
+      // which requires 'wasm-unsafe-eval' in script-src (CSP Level 3) — a
+      // capability the app-wide CSP deliberately doesn't grant. The pure-JS
+      // regex engine needs no eval-gated CSP capability at all.
+      engine: createJavaScriptRegexEngine(),
     }).catch((err) => {
       highlighterPromise = null;
       throw err;

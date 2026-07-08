@@ -2,7 +2,7 @@
  * Tests for security headers middleware
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextResponse } from 'next/server';
 import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
 import {
@@ -190,6 +190,76 @@ describe('Security Headers', () => {
       const csp = buildCSPPolicy('test-nonce');
 
       expect(csp).toContain("object-src 'none'");
+    });
+  });
+
+  describe('buildCSPPolicy — object-storage connect-src (direct-to-storage uploads/downloads)', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('allowlists both the literal and wildcard-subdomain form of the configured S3 endpoint host', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+
+      expect(connectSrc).toContain('https://fly.storage.tigris.dev');
+      expect(connectSrc).toContain('https://*.fly.storage.tigris.dev');
+    });
+
+    it('given no AWS_ENDPOINT_URL_S3 configured, adds no extra or malformed connect-src entry', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+
+      expect(connectSrc).not.toContain('undefined');
+      expect(connectSrc).not.toContain('tigris');
+      expect(() => buildCSPPolicy('test-nonce')).not.toThrow();
+    });
+
+    it('given a malformed AWS_ENDPOINT_URL_S3 value, does not throw and omits the entry', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'not-a-valid-url');
+
+      expect(() => buildCSPPolicy('test-nonce')).not.toThrow();
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+      expect(connectSrc).not.toContain('not-a-valid-url');
+    });
+  });
+
+  describe('buildCSPPolicy — media-src (video/audio playback redirected to storage)', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('includes a media-src directive (absent previously fell back to default-src)', () => {
+      const csp = buildCSPPolicy('test-nonce');
+      const mediaSrc = csp.split(';').find((d: string) => d.trim().startsWith('media-src'));
+
+      expect(mediaSrc).toBeDefined();
+      expect(mediaSrc).toContain("'self'");
+    });
+
+    it('allowlists both the literal and wildcard-subdomain form of the configured S3 endpoint host in media-src, same as connect-src', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const mediaSrc = csp.split(';').find((d: string) => d.trim().startsWith('media-src'));
+
+      expect(mediaSrc).toContain('https://fly.storage.tigris.dev');
+      expect(mediaSrc).toContain('https://*.fly.storage.tigris.dev');
+    });
+
+    it('given no AWS_ENDPOINT_URL_S3 configured, media-src has no extra or malformed entry', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const mediaSrc = csp.split(';').find((d: string) => d.trim().startsWith('media-src'));
+
+      expect(mediaSrc).not.toContain('undefined');
+      expect(mediaSrc).not.toContain('tigris');
     });
   });
 
