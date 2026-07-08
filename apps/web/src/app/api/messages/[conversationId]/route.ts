@@ -17,9 +17,9 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * Shared error mapping for the two attachment-validation call sites (the
- * thread-reply pre-check and the top-level insert's discriminated result) —
- * both surface the same three rejection kinds against the same fileId/
- * conversationId pair, just from different call shapes.
+ * thread-reply and top-level insert discriminated results) — both surface
+ * the same three rejection kinds against the same fileId/conversationId
+ * pair, just from different call shapes.
  */
 function attachmentValidationErrorResponse(
   request: Request,
