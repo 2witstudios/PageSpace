@@ -3,6 +3,7 @@ import { eq, and, desc, gte, lte, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
 import { withAdminAuth } from '@/lib/auth';
 import { format } from 'date-fns';
 
@@ -211,9 +212,17 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
               .limit(BATCH_SIZE)
               .offset(offset);
 
+            // users.name/email are encrypted at rest; decrypt the joined columns before writing.
+            const decryptUserName = await decryptFieldValuesOnce(logs.map((log) => log.userName));
+            const decryptUserEmail = await decryptFieldValuesOnce(logs.map((log) => log.userEmail));
+
             // Write each log as a CSV row
             for (const log of logs) {
-              const row = logToCSVRow(log as Record<string, unknown>);
+              const row = logToCSVRow({
+                ...log,
+                userName: decryptUserName(log.userName),
+                userEmail: decryptUserEmail(log.userEmail),
+              } as Record<string, unknown>);
               controller.enqueue(encoder.encode(row + '\n'));
             }
 

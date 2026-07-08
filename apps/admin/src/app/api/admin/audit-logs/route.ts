@@ -4,6 +4,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
 import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
@@ -141,6 +142,15 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       .limit(limit)
       .offset(offset);
 
+    // users.name/email are encrypted at rest; decrypt the joined columns for display.
+    const decryptUserName = await decryptFieldValuesOnce(logs.map((log) => log.userName));
+    const decryptUserEmail = await decryptFieldValuesOnce(logs.map((log) => log.userEmail));
+    const decryptedLogs = logs.map((log) => ({
+      ...log,
+      userName: decryptUserName(log.userName),
+      userEmail: decryptUserEmail(log.userEmail),
+    }));
+
     auditRequest(request, { eventType: 'data.read', userId: _adminUser.id, resourceType: 'audit_log', resourceId: '*', details: {
       source: 'admin',
       resultCount: logs.length,
@@ -148,7 +158,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
     } });
 
     return Response.json({
-      logs,
+      logs: decryptedLogs,
       pagination: {
         page,
         limit,
