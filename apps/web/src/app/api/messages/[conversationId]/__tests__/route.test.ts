@@ -26,7 +26,6 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
 
 // --- DM repository seam (the boundary the route must delegate to) --------------
 const mockFindConversationForParticipant = vi.fn();
-const mockValidateAttachmentForDm = vi.fn();
 const mockInsertDmMessageWithAttachment = vi.fn();
 const mockUpdateConversationLastMessage = vi.fn();
 const mockListActiveMessages = vi.fn();
@@ -40,8 +39,6 @@ vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
   dmMessageRepository: {
     findConversationForParticipant: (...args: unknown[]) =>
       mockFindConversationForParticipant(...args),
-    validateAttachmentForDm: (...args: unknown[]) =>
-      mockValidateAttachmentForDm(...args),
     insertDmMessageWithAttachment: (...args: unknown[]) =>
       mockInsertDmMessageWithAttachment(...args),
     updateConversationLastMessage: (...args: unknown[]) =>
@@ -181,7 +178,6 @@ function setupHappyPath() {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
   vi.mocked(isEmailVerified).mockResolvedValue(true);
   mockFindConversationForParticipant.mockResolvedValue(mockConversation());
-  mockValidateAttachmentForDm.mockResolvedValue({ kind: 'ok' });
   mockInsertDmMessageWithAttachment.mockImplementation(async (input) => ({
     kind: 'ok',
     message: mockInsertedRow(input),
@@ -941,6 +937,63 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     const res = await callRoute({ content: 'x', parentId: 'reply-as-parent' });
 
     expect(res.status).toBe(400);
+  });
+
+  // insertDmThreadReply now validates+locks the attachment inside its own
+  // transaction (issue #1865) instead of a separate pre-check — these mirror
+  // the top-level "ownership and conversation linkage" tests.
+  it('returns 404 when the reply fileId does not exist', async () => {
+    mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'not_found' });
+
+    const res = await callRoute({
+      content: 'x',
+      parentId: PARENT_ID,
+      fileId: FILE_ID,
+      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toMatch(/file not found/i);
+  });
+
+  it('returns 403 + authz.access.denied audit when the reply fileId is not owned by the sender', async () => {
+    mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'wrong_owner' });
+
+    const res = await callRoute({
+      content: 'x',
+      parentId: PARENT_ID,
+      fileId: FILE_ID,
+      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+    });
+
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toMatch(/do not own this file/i);
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'authz.access.denied',
+        userId: SENDER_ID,
+        resourceType: 'dm_message',
+        resourceId: FILE_ID,
+      })
+    );
+  });
+
+  it('returns 403 + authz.access.denied audit when the reply fileId is not linked to this conversation', async () => {
+    mockInsertDmThreadReply.mockResolvedValueOnce({ kind: 'not_linked' });
+
+    const res = await callRoute({
+      content: 'x',
+      parentId: PARENT_ID,
+      fileId: FILE_ID,
+      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+    });
+
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toMatch(/not linked to this conversation/i);
   });
 
   it('does NOT emit dm_updated to a mentioned non-participant (sender-controlled IDs cannot leak into other users\' inboxes)', async () => {

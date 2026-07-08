@@ -149,25 +149,6 @@ async function loadChannelMessageWithRelations(id: string) {
   return row;
 }
 
-/**
- * Standalone pre-check used only by the thread-reply path — `insertChannelThreadReply`
- * has its own parent-locking transaction, so attachment validation stays outside
- * it here. The top-level send path uses `insertChannelMessageWithAttachment`
- * instead, which validates and inserts inside a single transaction.
- *
- * This pre-check takes no lock on `files`, so unlike the top-level path it is
- * NOT race-safe against a concurrent file delete — a delete landing between
- * this check and the reply's (or its mirror's) insert can still turn into a
- * DB error instead of a clean rejection. Accepted, tracked gap: see issue #1865.
- */
-async function fileExists(fileId: string): Promise<boolean> {
-  const row = await db.query.files.findFirst({
-    where: eq(files.id, fileId),
-    columns: { id: true },
-  });
-  return row !== undefined;
-}
-
 export interface InsertChannelMessageInput {
   pageId: string;
   userId: string;
@@ -181,6 +162,39 @@ export type InsertChannelMessageResult =
   | { kind: 'ok'; message: ChannelMessageRow }
   | { kind: 'not_found' };
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+type ChannelAttachmentLockResult = { kind: 'ok' } | { kind: 'not_found' };
+
+/**
+ * Lock the file row with SELECT ... FOR UPDATE. Shared by
+ * insertChannelMessageWithAttachment and insertChannelThreadReply (the
+ * top-level and thread-reply attachment paths) so the two call sites can't
+ * drift out of sync with each other — mirrors the `lockDriveRolesInOrder`
+ * shared-lock-helper pattern in drive-role-service.ts. Channels have no
+ * `fileConversations`-equivalent link table, so this only locks `files`,
+ * unlike the DM side's `lockAndValidateDmAttachment`.
+ *
+ * Callers without a fileId should skip calling this entirely — it always
+ * locks, so it must stay conditional on `input.fileId` at the call site.
+ */
+async function lockAndValidateChannelAttachment(
+  tx: Tx,
+  fileId: string
+): Promise<ChannelAttachmentLockResult> {
+  const [file] = await tx
+    .select({ id: files.id })
+    .from(files)
+    .where(eq(files.id, fileId))
+    .for('update');
+
+  if (!file) {
+    return { kind: 'not_found' };
+  }
+
+  return { kind: 'ok' };
+}
+
 /**
  * Validates the attachment (if any) and inserts the top-level channel
  * message in one transaction. The SELECT ... FOR UPDATE lock on `files`
@@ -192,14 +206,9 @@ async function insertChannelMessageWithAttachment(
 ): Promise<InsertChannelMessageResult> {
   return db.transaction(async (tx) => {
     if (input.fileId) {
-      const [file] = await tx
-        .select({ id: files.id })
-        .from(files)
-        .where(eq(files.id, input.fileId))
-        .for('update');
-
-      if (!file) {
-        return { kind: 'not_found' };
+      const check = await lockAndValidateChannelAttachment(tx, input.fileId);
+      if (check.kind !== 'ok') {
+        return check;
       }
     }
 
@@ -414,8 +423,19 @@ export type InsertChannelThreadReplyResult =
     }
   | { kind: 'parent_not_found' }
   | { kind: 'parent_wrong_page' }
-  | { kind: 'parent_not_top_level' };
+  | { kind: 'parent_not_top_level' }
+  | { kind: 'not_found' };
 
+/**
+ * Locks the parent row, then (if a fileId is attached) the file row via
+ * `lockAndValidateChannelAttachment`, before inserting the reply and its
+ * optional `alsoSendToParent` mirror — all inside one transaction. Mirrors
+ * `insertDmThreadReply`'s lock ordering (parent -> files); channels have no
+ * `fileConversations`-equivalent link table, so there's nothing to lock
+ * beyond the file itself. The lock is taken once and covers both the reply
+ * and the mirror row, since both reference the same input.fileId inside this
+ * same transaction.
+ */
 async function insertChannelThreadReply(
   input: InsertChannelThreadReplyInput
 ): Promise<InsertChannelThreadReplyResult> {
@@ -445,6 +465,13 @@ async function insertChannelThreadReply(
     }
     if (parent.parentId !== null) {
       return { kind: 'parent_not_top_level' };
+    }
+
+    if (input.fileId) {
+      const check = await lockAndValidateChannelAttachment(tx, input.fileId);
+      if (check.kind !== 'ok') {
+        return check;
+      }
     }
 
     const [reply] = await tx
@@ -591,7 +618,6 @@ export const channelMessageRepository = {
   listChannelMessages,
   findChannelMessageInPage,
   loadChannelMessageWithRelations,
-  fileExists,
   insertChannelMessageWithAttachment,
   upsertChannelReadStatus,
   updateChannelMessageContent,

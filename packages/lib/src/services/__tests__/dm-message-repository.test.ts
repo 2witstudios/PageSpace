@@ -447,6 +447,128 @@ describe('dmMessageRepository.insertDmThreadReply', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Attachment locking (issue #1865 — mirrors insertDmMessageWithAttachment's
+  // top-level lock coverage, which the thread-reply path lacked)
+  // -------------------------------------------------------------------------
+
+  it('locks the file and link rows (FOR UPDATE) once each when the reply carries a fileId, inside the same transaction as the parent lock', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-replier' }]);
+    testDbState.seed('fileConversations', [{ fileId: 'file-1', conversationId: 'conv-1' }]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      fileId: 'file-1',
+      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+    });
+
+    assert({
+      given: 'a thread reply with a fileId owned by the replier and linked to the conversation',
+      should: 'lock files and fileConversations exactly once each, insert successfully, all inside one db.transaction',
+      actual: {
+        kind: result.kind,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: { kind: 'ok', fileLocks: 1, linkLocks: 1, transactionCalls: 1 },
+    });
+  });
+
+  it('takes only one file/link lock even when alsoSendToParent writes a second row referencing the same fileId', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-replier' }]);
+    testDbState.seed('fileConversations', [{ fileId: 'file-1', conversationId: 'conv-1' }]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      fileId: 'file-1',
+      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+      alsoSendToParent: true,
+    });
+
+    const messages = testDbState.rows('directMessages');
+    assert({
+      given: 'an alsoSendToParent thread reply with a fileId, so the reply AND the mirror both reference file-1',
+      should: 'lock files/fileConversations exactly once each — one lock covers both inserts in this transaction',
+      actual: {
+        kind: result.kind,
+        rowCount: messages.length,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+      },
+      expected: { kind: 'ok', rowCount: 3, fileLocks: 1, linkLocks: 1 },
+    });
+  });
+
+  it('inserts without touching files/fileConversations when the reply has no fileId', async () => {
+    seedActiveParent();
+
+    const result = await dmMessageRepository.insertDmThreadReply(baseInput);
+
+    assert({
+      given: 'a text-only thread reply',
+      should: 'return kind ok and never lock files or fileConversations',
+      actual: {
+        kind: result.kind,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        linkLocks: testDbState.selectsForUpdate('fileConversations').length,
+      },
+      expected: { kind: 'ok', fileLocks: 0, linkLocks: 0 },
+    });
+  });
+
+  it('rejects with not_found and inserts no reply when the fileId does not exist', async () => {
+    seedActiveParent();
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      fileId: 'missing-file',
+    });
+
+    assert({
+      given: 'a thread reply whose fileId has no matching file row',
+      should: 'return not_found without inserting a reply — only the seeded parent remains',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'not_found', rowCount: 1 },
+    });
+  });
+
+  it('rejects with wrong_owner and inserts no reply when the fileId belongs to another user', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'someone-else' }]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      fileId: 'file-1',
+    });
+
+    assert({
+      given: 'a fileId owned by a different user than the replier',
+      should: 'return wrong_owner without inserting a reply',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'wrong_owner', rowCount: 1 },
+    });
+  });
+
+  it('rejects with not_linked and inserts no reply when the fileId is not linked to the conversation', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1', createdBy: 'user-replier' }]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      ...baseInput,
+      fileId: 'file-1',
+    });
+
+    assert({
+      given: 'a fileId owned by the replier but not linked to this conversation',
+      should: 'return not_linked without inserting a reply',
+      actual: { kind: result.kind, rowCount: testDbState.count('directMessages') },
+      expected: { kind: 'not_linked', rowCount: 1 },
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Edge cases (PR 6b — added per audit findings)
   // -------------------------------------------------------------------------
 

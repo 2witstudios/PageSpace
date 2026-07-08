@@ -17,9 +17,9 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 /**
  * Shared error mapping for the two attachment-validation call sites (the
- * thread-reply pre-check and the top-level insert's discriminated result) —
- * both surface the same three rejection kinds against the same fileId/
- * conversationId pair, just from different call shapes.
+ * thread-reply and top-level insert discriminated results) — both surface
+ * the same three rejection kinds against the same fileId/conversationId
+ * pair, just from different call shapes.
  */
 function attachmentValidationErrorResponse(
   request: Request,
@@ -337,22 +337,6 @@ export async function POST(
     // transactional helper that bumps replyCount + lastReplyAt and upserts
     // followers. Mirror copy (alsoSendToParent) writes a second top-level row.
     if (parentId) {
-      if (fileId) {
-        const validation = await dmMessageRepository.validateAttachmentForDm({
-          fileId,
-          conversationId,
-          senderId: userId,
-        });
-
-        if (validation.kind !== 'ok') {
-          return attachmentValidationErrorResponse(request, validation.kind, {
-            userId,
-            fileId,
-            conversationId,
-          });
-        }
-      }
-
       const result = await dmMessageRepository.insertDmThreadReply({
         parentId,
         conversationId,
@@ -363,6 +347,17 @@ export async function POST(
         alsoSendToParent,
       });
 
+      if (
+        result.kind === 'not_found' ||
+        result.kind === 'wrong_owner' ||
+        result.kind === 'not_linked'
+      ) {
+        return attachmentValidationErrorResponse(request, result.kind, {
+          userId,
+          fileId,
+          conversationId,
+        });
+      }
       if (result.kind === 'parent_not_found') {
         return NextResponse.json({ error: 'Parent message not found' }, { status: 404 });
       }

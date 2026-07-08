@@ -201,32 +201,6 @@ describe('channelMessageRepository.loadChannelMessageWithRelations', () => {
   });
 });
 
-describe('channelMessageRepository.fileExists', () => {
-  it('returns true when the file row is present', async () => {
-    testDbState.seed('files', [{ id: 'file-1', mimeType: 'image/png' }]);
-
-    const result = await channelMessageRepository.fileExists('file-1');
-
-    assert({
-      given: 'an attachment id that resolves to a file row',
-      should: 'return true so the route accepts the upload',
-      actual: result,
-      expected: true,
-    });
-  });
-
-  it('returns false when the file row is missing', async () => {
-    const result = await channelMessageRepository.fileExists('missing-file');
-
-    assert({
-      given: 'an attachment id with no matching file row',
-      should: 'return false so the route returns a 400 instead of orphaning the message',
-      actual: result,
-      expected: false,
-    });
-  });
-});
-
 describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
   const baseInput = {
     pageId: 'page-1',
@@ -710,6 +684,86 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Attachment locking (issue #1865 — mirrors insertChannelMessageWithAttachment's
+  // top-level lock coverage, which the thread-reply path lacked)
+  // -------------------------------------------------------------------------
+
+  it('locks the file row (FOR UPDATE) once when the reply carries a fileId, inside the same transaction as the parent lock', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    const result = await channelMessageRepository.insertChannelThreadReply({
+      ...baseInput,
+      fileId: 'file-1',
+      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+    });
+
+    assert({
+      given: 'a thread reply with a fileId that resolves to an existing file',
+      should: 'lock files exactly once, insert successfully, all inside one db.transaction',
+      actual: {
+        kind: result.kind,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: { kind: 'ok', fileLocks: 1, transactionCalls: 1 },
+    });
+  });
+
+  it('takes only one file lock even when alsoSendToParent writes a second row referencing the same fileId', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    const result = await channelMessageRepository.insertChannelThreadReply({
+      ...baseInput,
+      fileId: 'file-1',
+      attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+      alsoSendToParent: true,
+    });
+
+    const messages = testDbState.rows('channelMessages');
+    assert({
+      given: 'an alsoSendToParent thread reply with a fileId, so the reply AND the mirror both reference file-1',
+      should: 'lock files exactly once — one lock covers both inserts in this transaction',
+      actual: {
+        kind: result.kind,
+        rowCount: messages.length,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+      },
+      expected: { kind: 'ok', rowCount: 3, fileLocks: 1 },
+    });
+  });
+
+  it('inserts without touching files when the reply has no fileId', async () => {
+    seedActiveParent();
+
+    const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a text-only thread reply',
+      should: 'return kind ok and never lock files',
+      actual: { kind: result.kind, fileLocks: testDbState.selectsForUpdate('files').length },
+      expected: { kind: 'ok', fileLocks: 0 },
+    });
+  });
+
+  it('rejects with not_found and inserts no reply when the fileId does not exist', async () => {
+    seedActiveParent();
+
+    const result = await channelMessageRepository.insertChannelThreadReply({
+      ...baseInput,
+      fileId: 'missing-file',
+    });
+
+    assert({
+      given: 'a thread reply whose fileId has no matching file row',
+      should: 'return not_found without inserting a reply — only the seeded parent remains',
+      actual: { kind: result.kind, rowCount: testDbState.count('channelMessages') },
+      expected: { kind: 'not_found', rowCount: 1 },
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Edge cases (PR 6b — added per audit findings)
   // -------------------------------------------------------------------------
 
@@ -1066,7 +1120,6 @@ describe('channelMessageRepository surface', () => {
       expected: [
         'addChannelReaction',
         'addChannelThreadFollower',
-        'fileExists',
         'findChannelMessageInPage',
         'insertChannelMessageWithAttachment',
         'insertChannelThreadReply',

@@ -41,7 +41,6 @@ const mockInsertChannelMessageWithAttachment = vi.fn();
 const mockInsertChannelThreadReply = vi.fn();
 const mockUpsertChannelReadStatus = vi.fn();
 const mockLoadChannelMessageWithRelations = vi.fn();
-const mockFileExists = vi.fn();
 const mockListChannelThreadFollowers = vi.fn();
 vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
   channelMessageRepository: {
@@ -52,7 +51,6 @@ vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
     insertChannelThreadReply: (...args: unknown[]) => mockInsertChannelThreadReply(...args),
     upsertChannelReadStatus: (...args: unknown[]) => mockUpsertChannelReadStatus(...args),
     loadChannelMessageWithRelations: (...args: unknown[]) => mockLoadChannelMessageWithRelations(...args),
-    fileExists: (...args: unknown[]) => mockFileExists(...args),
     listChannelThreadFollowers: (...args: unknown[]) => mockListChannelThreadFollowers(...args),
   },
 }));
@@ -397,6 +395,19 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     const res = await callPost({ content: 'x', parentId: 'reply-as-parent' });
 
     expect(res.status).toBe(400);
+  });
+
+  // insertChannelThreadReply now validates+locks the fileId inside its own
+  // transaction (issue #1865) instead of a separate pre-check — mirrors the
+  // top-level path's "rejects with not_found" coverage.
+  it('returns 400 when the reply fileId does not exist', async () => {
+    mockInsertChannelThreadReply.mockResolvedValueOnce({ kind: 'not_found' });
+
+    const res = await callPost({ content: 'x', parentId: PARENT_ID, fileId: 'file-1' });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/file not found/i);
   });
 
   it('fans out thread_updated to followers but EXCLUDES the reply author', async () => {

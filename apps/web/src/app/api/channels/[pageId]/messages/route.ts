@@ -295,15 +295,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // followers in one shot. Mirror copy (alsoSendToParent) writes a second
   // top-level row so the parent stream sees it too.
   if (parentId.length > 0) {
-    // If fileId is provided, verify it exists. insertChannelThreadReply has
-    // its own parent-locking transaction, so this pre-check stays outside it.
-    if (fileId) {
-      const exists = await channelMessageRepository.fileExists(fileId);
-      if (!exists) {
-        return NextResponse.json({ error: 'File not found' }, { status: 400 });
-      }
-    }
-
     const result = await channelMessageRepository.insertChannelThreadReply({
       parentId,
       pageId,
@@ -314,6 +305,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       alsoSendToParent: alsoSendToParent === true,
     });
 
+    if (result.kind === 'not_found') {
+      return NextResponse.json({ error: 'File not found' }, { status: 400 });
+    }
     if (result.kind === 'parent_not_found') {
       return NextResponse.json({ error: 'Parent message not found' }, { status: 404 });
     }
