@@ -450,14 +450,37 @@ describe('renderCanvasDocument — CSP nonce for inherited outer policy', () => 
     expect(out).not.toContain('nonce=');
   });
 
-  it('given an author script that already declares its own nonce attribute, should not duplicate or overwrite it', () => {
+  it('given an author script that already declares its own (foreign/stale) nonce attribute, should REPLACE it with the current nonce, not leave it alone', () => {
+    // A foreign nonce (e.g. HTML pasted from a different nonce-protected site)
+    // can never match the inherited outer CSP's nonce-source — leaving it in
+    // place would still get the script blocked, defeating the whole point of
+    // this function. Replace it (not duplicate) so the tag stays valid HTML
+    // with exactly one nonce attribute that actually matches.
     const out = renderCanvasDocument({
       html: '<script nonce="author-nonce">console.log("hi");</script>',
       nonce: 'app-nonce==',
     });
-    expect(out).toContain('<script nonce="author-nonce">console.log("hi");</script>');
-    expect(out).not.toContain('app-nonce==');
-    expect((out.match(/nonce=/g) ?? []).length).toBe(1);
+    expect(out).toContain('<script nonce="app-nonce==">console.log("hi");</script>');
+    expect(out).not.toContain('author-nonce');
+    // nonce="app-nonce==" itself contains the substring "nonce=", so count by
+    // the quoted attribute form (`nonce="`) to avoid matching inside the value.
+    expect((out.match(/nonce="/g) ?? []).length).toBe(1);
+  });
+
+  it('given a script with a data-nonce (or aria-nonce) attribute, should NOT mistake it for a real nonce attribute — it stamps a real one alongside', () => {
+    // A bare `\b` word-boundary regex matches right after a hyphen too, so
+    // `data-nonce="foo"` was previously (incorrectly) treated as "already has
+    // a nonce" and skipped — leaving the script with no real nonce attribute
+    // at all, still blocked by the inherited CSP.
+    const out = renderCanvasDocument({
+      html: '<script data-nonce="foo" aria-nonce="bar">console.log("hi");</script>',
+      nonce: 'app-nonce==',
+    });
+    expect(out).toContain('<script nonce="app-nonce==" data-nonce="foo" aria-nonce="bar">console.log("hi");</script>');
+    // data-nonce/aria-nonce values are untouched — only a real nonce attribute was added.
+    expect(out).toContain('data-nonce="foo"');
+    expect(out).toContain('aria-nonce="bar"');
+    expect((out.match(/ nonce="app-nonce=="/g) ?? []).length).toBe(1);
   });
 
   it('given a nonce with HTML-significant characters, should escape it in the stamped attribute', () => {

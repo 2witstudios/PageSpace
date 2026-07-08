@@ -201,15 +201,28 @@ function unwrapFullDocument(html: string): string {
  * Stamp `nonce="…"` onto a preserved `<script ...>` block's opening tag, so it
  * satisfies an embedder's inherited nonce-based CSP (see `nonce` on
  * `RenderCanvasDocumentInput`). Only the opening tag is touched — content and
- * closing tag pass through unchanged. If the author already declared their
- * own `nonce` attribute, it is left alone (not duplicated or overwritten).
+ * closing tag pass through unchanged.
+ *
+ * If the author already declared their OWN `nonce` attribute (e.g. HTML
+ * pasted from a different nonce-protected site), its value is REPLACED with
+ * the current per-request nonce rather than left alone: a foreign/stale nonce
+ * can never match the inherited outer CSP's nonce-source (browsers do exact
+ * string matching), so leaving it in place would still get the script
+ * blocked — defeating the whole point of this function. Replacing (not
+ * duplicating) also keeps the tag valid HTML with exactly one `nonce`
+ * attribute. The match requires a preceding whitespace before `nonce`, so
+ * `data-nonce="…"` / `aria-nonce="…"` are never mistaken for the real
+ * attribute (a bare `\b` word boundary also matches right after a hyphen).
  */
 function stampScriptNonce(scriptBlock: string, nonce: string): string {
   const openTagMatch = scriptBlock.match(/^<script(?=[\s/>])[^>]*>/i);
   if (!openTagMatch) return scriptBlock;
   const openTag = openTagMatch[0];
-  if (/\bnonce\s*=/i.test(openTag)) return scriptBlock;
-  const stampedOpenTag = openTag.replace(/^<script/i, `<script nonce="${escapeHtml(nonce)}"`);
+  const safeNonce = escapeHtml(nonce);
+  const existingNonceAttr = /(\s)nonce\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/i;
+  const stampedOpenTag = existingNonceAttr.test(openTag)
+    ? openTag.replace(existingNonceAttr, `$1nonce="${safeNonce}"`)
+    : openTag.replace(/^<script/i, `<script nonce="${safeNonce}"`);
   return stampedOpenTag + scriptBlock.slice(openTag.length);
 }
 
