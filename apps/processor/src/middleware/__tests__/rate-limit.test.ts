@@ -13,13 +13,15 @@ afterEach(() => {
 function createMockReq(overrides: {
   userId?: string;
   forwardedFor?: string;
+  flyClientIp?: string;
   ip?: string;
 } = {}): Request {
+  const headers: Record<string, string> = {};
+  if (overrides.forwardedFor) headers['x-forwarded-for'] = overrides.forwardedFor;
+  if (overrides.flyClientIp) headers['fly-client-ip'] = overrides.flyClientIp;
   return {
     auth: overrides.userId ? { userId: overrides.userId } : undefined,
-    headers: overrides.forwardedFor
-      ? { 'x-forwarded-for': overrides.forwardedFor }
-      : {},
+    headers,
     ip: overrides.ip || '127.0.0.1',
   } as unknown as Request;
 }
@@ -316,5 +318,98 @@ describe('rateLimitRead (createRateLimiter)', () => {
     expect(next2).toHaveBeenCalledTimes(1);
 
     vi.useRealTimers();
+  });
+});
+
+// getClientIP (this file's internal helper, not exported) is only observable
+// through the rate-limit bucket key it feeds into getBucketKey — these tests
+// exercise it that way: two requests that land in the SAME bucket collide
+// (second is blocked at limit=1); two requests that land in DIFFERENT
+// buckets don't. See packages/lib/src/security/__tests__/client-ip.test.ts
+// for the same trust-gate logic tested directly against the shared helper.
+describe('Fly-Client-IP trust gate (FLY_APP_NAME)', () => {
+  const ORIGINAL_FLY_APP_NAME = process.env.FLY_APP_NAME;
+
+  afterEach(() => {
+    if (ORIGINAL_FLY_APP_NAME === undefined) {
+      delete process.env.FLY_APP_NAME;
+    } else {
+      process.env.FLY_APP_NAME = ORIGINAL_FLY_APP_NAME;
+    }
+  });
+
+  it('when running on Fly, distinct fly-client-ip values get distinct buckets even with the same x-forwarded-for', async () => {
+    process.env.FLY_APP_NAME = 'pagespace-processor';
+    process.env.PROCESSOR_READ_RATE_LIMIT = '1';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
+    const { rateLimitRead } = await import('../rate-limit');
+
+    const req1 = createMockReq({ flyClientIp: '9.9.9.9', forwardedFor: '1.2.3.4' });
+    const { res: res1 } = createMockRes();
+    rateLimitRead(req1, res1, createMockNext());
+
+    // Different fly-client-ip, same x-forwarded-for — must be a separate bucket
+    // (not blocked), proving fly-client-ip is the key, not x-forwarded-for.
+    const req2 = createMockReq({ flyClientIp: '8.8.8.8', forwardedFor: '1.2.3.4' });
+    const { res: res2 } = createMockRes();
+    const next2 = createMockNext();
+    rateLimitRead(req2, res2, next2);
+    expect(next2).toHaveBeenCalledTimes(1);
+  });
+
+  it('when running on Fly, the same fly-client-ip collides into one bucket regardless of x-forwarded-for', async () => {
+    process.env.FLY_APP_NAME = 'pagespace-processor';
+    process.env.PROCESSOR_READ_RATE_LIMIT = '1';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
+    const { rateLimitRead } = await import('../rate-limit');
+
+    const req1 = createMockReq({ flyClientIp: '9.9.9.9', forwardedFor: '1.2.3.4' });
+    const { res: res1 } = createMockRes();
+    rateLimitRead(req1, res1, createMockNext());
+
+    const req2 = createMockReq({ flyClientIp: '9.9.9.9', forwardedFor: '5.6.7.8' });
+    const { res: res2, status: status2 } = createMockRes();
+    const next2 = createMockNext();
+    rateLimitRead(req2, res2, next2);
+    expect(next2).not.toHaveBeenCalled();
+    expect(status2).toHaveBeenCalledWith(429);
+  });
+
+  it('when NOT running on Fly, a forged fly-client-ip is ignored — distinct requests sharing x-forwarded-for collide into one bucket', async () => {
+    delete process.env.FLY_APP_NAME;
+    process.env.PROCESSOR_READ_RATE_LIMIT = '1';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
+    const { rateLimitRead } = await import('../rate-limit');
+
+    const req1 = createMockReq({ flyClientIp: '9.9.9.9', forwardedFor: '1.2.3.4' });
+    const { res: res1 } = createMockRes();
+    rateLimitRead(req1, res1, createMockNext());
+
+    // Different (forged) fly-client-ip but the SAME x-forwarded-for — must
+    // collide into the same bucket as req1, proving fly-client-ip is fully
+    // ignored off-Fly and cannot be used to evade the rate limit.
+    const req2 = createMockReq({ flyClientIp: '8.8.8.8', forwardedFor: '1.2.3.4' });
+    const { res: res2, status: status2 } = createMockRes();
+    const next2 = createMockNext();
+    rateLimitRead(req2, res2, next2);
+    expect(next2).not.toHaveBeenCalled();
+    expect(status2).toHaveBeenCalledWith(429);
+  });
+
+  it('when NOT running on Fly, distinct x-forwarded-for values still get distinct buckets', async () => {
+    delete process.env.FLY_APP_NAME;
+    process.env.PROCESSOR_READ_RATE_LIMIT = '1';
+    process.env.PROCESSOR_READ_RATE_WINDOW = '3600';
+    const { rateLimitRead } = await import('../rate-limit');
+
+    const req1 = createMockReq({ forwardedFor: '1.2.3.4' });
+    const { res: res1 } = createMockRes();
+    rateLimitRead(req1, res1, createMockNext());
+
+    const req2 = createMockReq({ forwardedFor: '5.6.7.8' });
+    const { res: res2 } = createMockRes();
+    const next2 = createMockNext();
+    rateLimitRead(req2, res2, next2);
+    expect(next2).toHaveBeenCalledTimes(1);
   });
 });

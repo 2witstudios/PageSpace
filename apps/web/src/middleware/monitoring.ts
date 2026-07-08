@@ -23,6 +23,7 @@ import {
   REQUEST_ID_HEADER,
 } from '@/lib/request-id/request-id';
 import { sanitizeEndpoint } from '@/lib/monitoring/ingest-sanitizer';
+import { getClientIP } from '@/lib/security/edge-client-ip';
 
 const systemLogger = createEdgeLogger('system');
 const performanceLogger = createEdgeLogger('performance');
@@ -44,10 +45,7 @@ function extractRequestContext(request: NextRequest): RequestContext {
   return {
     endpoint: request.nextUrl.pathname,
     method: request.method,
-    ip:
-      request.headers.get('x-forwarded-for')?.split(',')[0] ||
-      request.headers.get('x-real-ip') ||
-      'unknown',
+    ip: getClientIP(request),
     userAgent: request.headers.get('user-agent') || undefined,
   };
 }

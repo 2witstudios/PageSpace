@@ -132,6 +132,7 @@ const eslintConfig = [
       "src/lib/request-id/request-id.ts",
       "src/lib/monitoring/ingest-sanitizer.ts",
       "src/lib/well-known/rewrites.ts",
+      "src/lib/security/edge-client-ip.ts",
     ],
     rules: {
       "no-restricted-imports": [

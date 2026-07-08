@@ -8,6 +8,7 @@ import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserDeviceTokens, revokeAllUserDeviceTokens, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/auth/device-auth-utils';
 import { isValidTokenFormat, getTokenType } from '@pagespace/lib/auth/opaque-tokens';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -160,7 +161,7 @@ export async function DELETE(req: Request) {
         {
           deviceName: currentDeviceInfo.deviceName || undefined,
           userAgent: req.headers.get('user-agent') ?? undefined,
-          ipAddress: req.headers.get('x-forwarded-for')?.split(',')[0] || req.headers.get('x-real-ip') || undefined,
+          ipAddress: getClientIP(req),
         }
       );
 

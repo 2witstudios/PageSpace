@@ -9,6 +9,7 @@
 import { securityAudit, type AuditEvent } from './security-audit';
 import { loggers } from '../logging/logger-config';
 import { sanitizeAuditDetails } from './sanitize-audit-details';
+import { getClientIP } from '../security/client-ip';
 
 /**
  * Dual-write an audit event to the structured logger and audit DB.
@@ -42,15 +43,9 @@ export function audit(event: AuditEvent): void {
  * already provided on the event.
  */
 export function auditRequest(request: Request, event: AuditEvent): void {
-  const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  const realIp = request.headers.get('x-real-ip')?.trim();
   const headerUserAgent = request.headers.get('user-agent')?.trim();
 
-  const ipAddress =
-    event.ipAddress ??
-    (forwardedFor || undefined) ??
-    (realIp || undefined) ??
-    'unknown';
+  const ipAddress = event.ipAddress ?? getClientIP(request);
 
   const userAgent =
     event.userAgent ??

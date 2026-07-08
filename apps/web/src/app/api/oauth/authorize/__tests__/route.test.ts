@@ -5,7 +5,7 @@
  * never redirect), error-redirect-after-validated-uri, session gate, CSRF on
  * the consent POST, single-use code hashed at rest, state echoed verbatim.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
 vi.mock('@/lib/auth', () => ({
@@ -91,6 +91,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
   vi.mocked(consumeStepUpGrant).mockResolvedValue({ ok: true });
+  // appOrigin() (issue #1908 hardening) only trusts this configured value —
+  // never x-forwarded-host/x-forwarded-proto. Matches the real deployment,
+  // where NEXT_PUBLIC_APP_URL is baked into the build image.
+  process.env.WEB_APP_URL = 'https://pagespace.ai';
+});
+
+afterEach(() => {
+  delete process.env.WEB_APP_URL;
 });
 
 describe('GET /api/oauth/authorize — per-IP rate limiting', () => {
@@ -193,7 +201,7 @@ describe('GET /api/oauth/authorize — session gate', () => {
     expect(decodeURIComponent(next)).toContain('state=xyz123');
   });
 
-  it('uses forwarded public origin for signin redirects instead of internal standalone bind host', async () => {
+  it('uses the configured app origin for signin redirects, ignoring x-forwarded-host/bind host (issue #1908)', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
       error: new Response(null, { status: 401 }),
     } as never);
@@ -201,7 +209,7 @@ describe('GET /api/oauth/authorize — session gate', () => {
     const res = await GET(new NextRequest(authorizeUrl(), {
       headers: {
         host: '[::]:3000',
-        'x-forwarded-host': 'pagespace.ai',
+        'x-forwarded-host': 'evil.example.com',
         'x-forwarded-proto': 'https',
       },
     }));
@@ -211,6 +219,7 @@ describe('GET /api/oauth/authorize — session gate', () => {
     expect(location.origin).toBe('https://pagespace.ai');
     expect(location.pathname).toBe('/auth/signin');
     expect(location.href).not.toContain('[::]');
+    expect(location.href).not.toContain('evil.example.com');
   });
 
   it('redirects to the consent screen, preserving the full authorize request, when authenticated', async () => {
@@ -231,7 +240,7 @@ describe('GET /api/oauth/authorize — session gate', () => {
     expect(location.searchParams.get('state')).toBe('xyz123');
   });
 
-  it('uses forwarded public origin for consent redirects instead of internal standalone bind host', async () => {
+  it('uses the configured app origin for consent redirects, ignoring x-forwarded-host/bind host (issue #1908)', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
       tokenType: 'session',
       userId: 'user-1',
@@ -244,7 +253,7 @@ describe('GET /api/oauth/authorize — session gate', () => {
     const res = await GET(new NextRequest(authorizeUrl(), {
       headers: {
         host: '[::]:3000',
-        'x-forwarded-host': 'pagespace.ai',
+        'x-forwarded-host': 'evil.example.com',
         'x-forwarded-proto': 'https',
       },
     }));
@@ -254,6 +263,21 @@ describe('GET /api/oauth/authorize — session gate', () => {
     expect(location.origin).toBe('https://pagespace.ai');
     expect(location.pathname).toBe('/oauth/consent');
     expect(location.href).not.toContain('[::]');
+    expect(location.href).not.toContain('evil.example.com');
+  });
+
+  it('fails closed (never redirects) when the app origin is not configured, even with a forged x-forwarded-host', async () => {
+    delete process.env.WEB_APP_URL;
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      error: new Response(null, { status: 401 }),
+    } as never);
+
+    const res = await GET(new NextRequest(authorizeUrl(), {
+      headers: { 'x-forwarded-host': 'evil.example.com', 'x-forwarded-proto': 'https' },
+    }));
+
+    expect(res.status).not.toBe(302);
+    expect(res.headers.get('location')).toBeNull();
   });
 });
 
