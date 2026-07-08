@@ -15,6 +15,9 @@
  */
 
 import type { SubscriptionTier } from '../services/subscription-utils';
+// Type-only import (erased at compile time, zero runtime cost) — usage-source.ts
+// is itself a pure, zero-I/O module, so this doesn't break the invariant above.
+import type { AIUsageSource } from '../monitoring/usage-source';
 
 export interface Balance {
   monthlyCents: number;
@@ -412,13 +415,16 @@ export interface OrphanUsageRow {
   userId: string;
   costDollars: number;
   /**
-   * The usage row's recorded `source` (aiUsageLogs.source), used to reconstruct
-   * which markup this call should recover at — an orphan never went through
-   * `consumeCredits` the first time, so there is no ledger row to read a stored
-   * markup back from. Absent/unrecognized sources fall back to the shared
-   * global markup (see `computeBackfillActions`).
+   * The usage row's recorded `source` (aiUsageLogs.source — the canonical
+   * `AIUsageSource` closed set from monitoring/usage-source.ts, though the raw
+   * DB column is untyped `text`, so a legacy/malformed value is possible), used
+   * to reconstruct which markup this call should recover at — an orphan never
+   * went through `consumeCredits` the first time, so there is no ledger row to
+   * read a stored markup back from. A source with no entry in
+   * `markupBpsOverridesBySource` falls back to the shared global markup (see
+   * `computeBackfillActions`).
    */
-  source?: string | null;
+  source?: AIUsageSource | string | null;
 }
 
 export type BackfillAction =
@@ -431,27 +437,35 @@ export type BackfillAction =
  * DB query is responsible for selection (status/age/orphan); this just maps the
  * already-filtered rows into actions so the cron shell stays dumb.
  *
- * `terminalMarkupBps` is injected (not imported — this module has zero I/O, see
- * the module doc) so a `source: 'terminal'` orphan recovers at terminal's own
- * floor instead of silently falling back to the shared global markup: a
- * terminal usage row can reach `aiUsageLogs` (via `writeAiUsage`) and then crash
- * before `consumeCredits` ever claims a ledger row, in which case this sweep —
- * not the original call — is what actually bills it.
+ * `markupBpsOverridesBySource` is injected (not imported — this module has
+ * zero I/O, see the module doc) as a source -> markup-bps lookup, so e.g. a
+ * `source: 'terminal'` orphan recovers at terminal's own floor instead of
+ * silently falling back to the shared global markup: a terminal usage row can
+ * reach `aiUsageLogs` (via `writeAiUsage`) and then crash before
+ * `consumeCredits` ever claims a ledger row, in which case this sweep — not the
+ * original call — is what actually bills it. A lookup (rather than a single
+ * hardcoded source check) means adding a second per-source floor later is a
+ * one-line addition at the call site, not a change to this function.
  */
 export function computeBackfillActions(
   pending: PendingLedgerRow[],
   orphans: OrphanUsageRow[],
-  terminalMarkupBps: number,
+  markupBpsOverridesBySource: Partial<Record<AIUsageSource, number>>,
 ): BackfillAction[] {
   return [
     ...pending.map((row): BackfillAction => ({ kind: 'retry_pending', ledgerId: row.id })),
-    ...orphans.map((row): BackfillAction => ({
-      kind: 'apply_orphan',
-      aiUsageLogId: row.aiUsageLogId,
-      userId: row.userId,
-      costDollars: row.costDollars,
-      ...(row.source === 'terminal' ? { markupBpsOverride: terminalMarkupBps } : {}),
-    })),
+    ...orphans.map((row): BackfillAction => {
+      const markupBpsOverride = row.source
+        ? markupBpsOverridesBySource[row.source as AIUsageSource]
+        : undefined;
+      return {
+        kind: 'apply_orphan',
+        aiUsageLogId: row.aiUsageLogId,
+        userId: row.userId,
+        costDollars: row.costDollars,
+        ...(markupBpsOverride !== undefined ? { markupBpsOverride } : {}),
+      };
+    }),
   ];
 }
 

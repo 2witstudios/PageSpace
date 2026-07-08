@@ -17,6 +17,14 @@ import { TERMINAL_MARKUP_BPS } from './credit-pricing';
 import { consumeCredits, settlePendingLedgerRow } from './credit-consume';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
+import type { AIUsageSource } from '../monitoring/usage-source';
+
+// Per-source markup floor for orphan recovery (see computeBackfillActions):
+// adding a second per-source floor is a one-line addition here, not a change
+// to the pure planning function.
+const MARKUP_BPS_OVERRIDES_BY_SOURCE: Partial<Record<AIUsageSource, number>> = {
+  terminal: TERMINAL_MARKUP_BPS,
+};
 
 const BATCH = 200;
 // Providers whose usage is metering-exempt (no credit_ledger row is ever created for them).
@@ -143,7 +151,7 @@ export async function backfillCredits(): Promise<BackfillResult> {
         costDollars: o.cost ?? 0,
         source: o.source,
       })),
-      TERMINAL_MARKUP_BPS,
+      MARKUP_BPS_OVERRIDES_BY_SOURCE,
     );
 
     for (const action of actions) {
