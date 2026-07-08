@@ -61,15 +61,22 @@ const taskItemSchema = z.object({
 
 /**
  * Non-TASK_LIST, non-CHANNEL, non-in-progress-FILE pages (the generic text
- * path, `route.ts:521-559`). `pageType` is required-absent (`z.undefined()`)
- * so a TASK_LIST/CHANNEL/FILE-status response — which all set a literal
- * `pageType` string — can never silently parse (and strip its extra fields)
- * against this branch instead of its own.
+ * path, `route.ts:521-559`) — the most common branch (plain DOCUMENT/FOLDER/
+ * CANVAS/CODE pages). `pageType` is `z.undefined().optional()`, not bare
+ * `z.undefined()`: JSON has no way to encode "key present with value
+ * undefined" (`JSON.stringify` always drops such keys), so every real server
+ * response for this branch has `pageType` entirely ABSENT, not
+ * present-as-undefined. A bare `z.undefined()` requires the key to actually
+ * exist and rejects a genuinely missing key, so it failed 100% of real
+ * responses here — `.optional()` accepts the missing-key case while still
+ * rejecting a literal `pageType` string, so a TASK_LIST/CHANNEL/FILE-status
+ * response still can't silently parse against this branch instead of its
+ * own.
  */
 const genericReadResultSchema = z.object({
   pageId: z.string(),
   pageTitle: z.string().nullable(),
-  pageType: z.undefined(),
+  pageType: z.undefined().optional(),
   totalLines: z.number(),
   numberedLines: z.array(z.string()),
   content: z.string(),

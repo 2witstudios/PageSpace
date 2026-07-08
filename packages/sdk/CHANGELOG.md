@@ -2,6 +2,33 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.1] — 2026-07-08
+
+### Fixed
+
+- **`pages.read` (`read_page`) was broken for every plain page — DOCUMENT, FOLDER, CANVAS, CODE,
+  and completed FILE pages — the single most common case.** `genericReadResultSchema` declared
+  `pageType: z.undefined()` to assert that branch's responses never carry a `pageType` field. But
+  JSON cannot encode "key present with value `undefined`" (`JSON.stringify` always drops such
+  keys), so every real server response for this branch has `pageType` genuinely *absent*, not
+  present-as-undefined — and a bare (non-optional) `z.undefined()` field requires the key to
+  actually exist. Confirmed live against production and via a comprehensive full-endpoint sweep:
+  every `pages.read` call on a non-TASK_LIST/CHANNEL/FILE page failed with
+  `RESPONSE_VALIDATION_ERROR`, including through `pagespace mcp`'s `read_page` tool (same SDK
+  invoke pipeline underneath). Fixed via `pageType: z.undefined().optional()`, which still
+  correctly rejects a real `pageType` string (so TASK_LIST/CHANNEL/FILE responses can't silently
+  parse against this branch instead of their own) while accepting the real-world missing-key case.
+  Not a regression from 1.5.0 — `documents.ts` was untouched by that release; this bug predates it
+  (present since at least 0.1.1) and was only now caught by exhaustive live-production testing.
+- **Root cause note (informational, not fixed here):** the specific failure was version-dependent
+  on *zod itself* — `z.undefined()`'s treatment of a missing key changed between zod 4.3.6 (accepts
+  it) and 4.4.3 (rejects it, requiring the key to exist). This repo's own test suite runs against
+  whatever zod its lockfile has pinned (4.3.6 at the time of the 1.5.0 release) and never caught
+  this, while a fresh `npm install` today resolves 4.4.3+ under the SDK's `"zod": "^4.1.8"` range.
+  The `.optional()` fix is verified stable across both zod versions, but the underlying dependency-
+  range fragility (CI can pass while every real consumer's resolved zod silently behaves
+  differently) is a broader hardening item worth a follow-up, not addressed in this patch.
+
 ## [1.5.0] — 2026-07-07
 
 ### Removed
