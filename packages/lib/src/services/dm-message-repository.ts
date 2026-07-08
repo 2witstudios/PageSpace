@@ -104,63 +104,6 @@ async function findConversationForParticipant(
   return row ?? null;
 }
 
-export type AttachmentValidation =
-  | { kind: 'ok' }
-  | { kind: 'not_found' }
-  | { kind: 'wrong_owner' }
-  | { kind: 'not_linked' };
-
-export interface ValidateAttachmentForDmInput {
-  fileId: string;
-  conversationId: string;
-  senderId: string;
-}
-
-/**
- * Standalone pre-check used only by the thread-reply path — `insertDmThreadReply`
- * has its own parent-locking transaction, so attachment validation stays outside
- * it here. The top-level send path uses `insertDmMessageWithAttachment` instead,
- * which validates and inserts inside a single transaction.
- *
- * This pre-check takes no lock on `files`/`fileConversations`, so unlike the
- * top-level path it is NOT race-safe against a concurrent `purgeInactiveMessages`
- * cleanup — the reply (or its `alsoSendToParent` mirror) can still commit
- * referencing a link that purge drops in the gap between this check and the
- * reply's insert. Accepted, tracked gap: see issue #1865.
- */
-async function validateAttachmentForDm(
-  input: ValidateAttachmentForDmInput
-): Promise<AttachmentValidation> {
-  const { fileId, conversationId, senderId } = input;
-
-  const file = await db.query.files.findFirst({
-    where: eq(files.id, fileId),
-    columns: { id: true, createdBy: true },
-  });
-
-  if (!file) {
-    return { kind: 'not_found' };
-  }
-
-  if (file.createdBy !== senderId) {
-    return { kind: 'wrong_owner' };
-  }
-
-  const link = await db.query.fileConversations.findFirst({
-    where: and(
-      eq(fileConversations.fileId, fileId),
-      eq(fileConversations.conversationId, conversationId)
-    ),
-    columns: { fileId: true },
-  });
-
-  if (!link) {
-    return { kind: 'not_linked' };
-  }
-
-  return { kind: 'ok' };
-}
-
 export interface InsertDmMessageInput {
   conversationId: string;
   senderId: string;
@@ -572,8 +515,25 @@ export type InsertDmThreadReplyResult =
     }
   | { kind: 'parent_not_found' }
   | { kind: 'parent_wrong_conversation' }
-  | { kind: 'parent_not_top_level' };
+  | { kind: 'parent_not_top_level' }
+  | { kind: 'not_found' }
+  | { kind: 'wrong_owner' }
+  | { kind: 'not_linked' };
 
+/**
+ * Locks the parent row, then (if a fileId is attached) the file + link rows,
+ * before inserting the reply and its optional `alsoSendToParent` mirror — all
+ * inside one transaction. Lock order is parent -> files -> fileConversations,
+ * which never conflicts with `insertDmMessageWithAttachment` (files ->
+ * fileConversations, no parent lock) or `purgeInactiveMessages` (fileConversations
+ * only, never a parent/directMessages row), so this can't introduce a deadlock.
+ *
+ * The file/link lock is taken once and covers both the reply and the mirror
+ * row: both reference the same input.fileId within this same transaction, so
+ * a single FOR UPDATE on each row is sufficient for both inserts. See
+ * `insertDmMessageWithAttachment`'s doc comment for why the lock (rather than
+ * a plain read) is required to close the race with `purgeInactiveMessages`.
+ */
 async function insertDmThreadReply(
   input: InsertDmThreadReplyInput
 ): Promise<InsertDmThreadReplyResult> {
@@ -603,6 +563,36 @@ async function insertDmThreadReply(
     }
     if (parent.parentId !== null) {
       return { kind: 'parent_not_top_level' };
+    }
+
+    if (input.fileId) {
+      const [file] = await tx
+        .select({ id: files.id, createdBy: files.createdBy })
+        .from(files)
+        .where(eq(files.id, input.fileId))
+        .for('update');
+
+      if (!file) {
+        return { kind: 'not_found' };
+      }
+      if (file.createdBy !== input.senderId) {
+        return { kind: 'wrong_owner' };
+      }
+
+      const [link] = await tx
+        .select({ fileId: fileConversations.fileId })
+        .from(fileConversations)
+        .where(
+          and(
+            eq(fileConversations.fileId, input.fileId),
+            eq(fileConversations.conversationId, input.conversationId)
+          )
+        )
+        .for('update');
+
+      if (!link) {
+        return { kind: 'not_linked' };
+      }
     }
 
     const [reply] = await tx
@@ -809,7 +799,6 @@ async function removeDmReaction(input: DmReactionInput): Promise<number> {
 
 export const dmMessageRepository = {
   findConversationForParticipant,
-  validateAttachmentForDm,
   insertDmMessageWithAttachment,
   updateConversationLastMessage,
   findActiveMessage,
