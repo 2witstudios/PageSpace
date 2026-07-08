@@ -36,7 +36,7 @@ import {
   getBatchPagePermissions,
   isUserDriveMember,
 } from '@pagespace/lib/permissions/permissions';
-import { planCommandExecution } from '../command-resolver';
+import { planCommandExecutions } from '../command-resolver';
 
 const mockCommandsFindFirst = db.query.commands.findFirst as unknown as Mock;
 const mockCommandsFindMany = db.query.commands.findMany as unknown as Mock;
@@ -91,15 +91,15 @@ beforeEach(() => {
   );
 });
 
-describe('planCommandExecution', () => {
-  it('returns null (and touches no I/O) when the message has no command token', async () => {
-    const plan = await planCommandExecution('just a plain message', SENDER);
-    expect(plan).toBeNull();
+describe('planCommandExecutions', () => {
+  it('returns an empty array (and touches no I/O) when the message has no command token', async () => {
+    const plans = await planCommandExecutions('just a plain message', SENDER);
+    expect(plans).toEqual([]);
     expect(mockCommandsFindFirst).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed command id before it reaches any DB operation', async () => {
-    const plan = await planCommandExecution("/[evil](id'; DROP TABLE--:command)", SENDER);
+    const [plan] = await planCommandExecutions("/[evil](id'; DROP TABLE--:command)", SENDER);
     expect(plan).toEqual({
       kind: 'skip',
       commandId: "id'; DROP TABLE--",
@@ -111,13 +111,13 @@ describe('planCommandExecution', () => {
 
   it('skips with not_found when the command does not exist', async () => {
     mockCommandsFindFirst.mockResolvedValue(undefined);
-    const plan = await planCommandExecution(tokenContent(), SENDER);
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toEqual({ kind: 'skip', commandId: CMD_ID, label: 'release-checklist', reason: 'not_found' });
   });
 
   it("skips with not_found (no leak) for another user's personal command", async () => {
     mockCommandsFindFirst.mockResolvedValue(personalCommandRow({ userId: 'someone-else' }));
-    const plan = await planCommandExecution(tokenContent(), SENDER);
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'not_found' });
     // Must not even evaluate page access for a command the sender can't use
     expect(mockCanUserViewPage).not.toHaveBeenCalled();
@@ -128,14 +128,14 @@ describe('planCommandExecution', () => {
     mockCommandsFindFirst.mockResolvedValue(
       personalCommandRow({ userId: null, driveId: 'drv9zmbrgj3atz4a98xxat96' })
     );
-    const plan = await planCommandExecution(tokenContent(), SENDER);
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'not_found' });
     expect(mockIsUserDriveMember).toHaveBeenCalledWith(SENDER, 'drv9zmbrgj3atz4a98xxat96');
   });
 
   it('skips with disabled for a usable but disabled command', async () => {
     mockCommandsFindFirst.mockResolvedValue(personalCommandRow({ enabled: false }));
-    const plan = await planCommandExecution(tokenContent(), SENDER);
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'disabled' });
   });
 
@@ -143,14 +143,14 @@ describe('planCommandExecution', () => {
     mockCommandsFindFirst.mockResolvedValue(
       personalCommandRow({ entryPage: { ...personalCommandRow().entryPage, isTrashed: true } })
     );
-    const plan = await planCommandExecution(tokenContent(), SENDER);
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'page_trashed' });
   });
 
   it('re-checks entry-page access at use time and skips with no_access', async () => {
     mockCanUserViewPage.mockResolvedValue(false);
     mockCommandsFindFirst.mockResolvedValue(personalCommandRow());
-    const plan = await planCommandExecution(tokenContent(), SENDER);
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'no_access' });
     expect(mockCanUserViewPage).toHaveBeenCalledWith(SENDER, ENTRY_PAGE_ID);
   });
@@ -165,7 +165,7 @@ describe('planCommandExecution', () => {
       return pageId !== 'child2aaaaaaaaaaaaaaaaaa';
     });
 
-    const plan = await planCommandExecution(tokenContent(), SENDER);
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toEqual({
       kind: 'inject',
       injection: {
@@ -189,7 +189,7 @@ describe('planCommandExecution', () => {
     mockCommandsFindFirst.mockResolvedValue(
       personalCommandRow({ userId: null, driveId: 'drv9zmbrgj3atz4a98xxat96' })
     );
-    const plan = await planCommandExecution(tokenContent(), SENDER);
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan).toMatchObject({ kind: 'inject', injection: { scope: 'drive' } });
   });
 
@@ -199,7 +199,7 @@ describe('planCommandExecution', () => {
         entryPage: { ...personalCommandRow().entryPage, type: 'TASK_LIST', contentMode: null },
       })
     );
-    const plan = await planCommandExecution(tokenContent(), SENDER);
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
     expect(plan?.kind).toBe('inject');
     if (plan?.kind === 'inject') {
       expect(plan.injection.entryPage?.serializedContent).toContain('read_page');
@@ -207,7 +207,7 @@ describe('planCommandExecution', () => {
   });
 
   it('injects a built-in command from the registry without a command-row lookup', async () => {
-    const plan = await planCommandExecution('/[help](builtin:help:command) what can I do', SENDER);
+    const [plan] = await planCommandExecutions('/[help](builtin:help:command) what can I do', SENDER);
     expect(plan).toMatchObject({
       kind: 'inject',
       injection: { scope: 'builtin', trigger: 'help', entryPage: null, children: [] },
@@ -216,7 +216,7 @@ describe('planCommandExecution', () => {
   });
 
   it('skips with not_found for an unknown built-in trigger', async () => {
-    const plan = await planCommandExecution('/[nope](builtin:nope:command) hi', SENDER);
+    const [plan] = await planCommandExecutions('/[nope](builtin:nope:command) hi', SENDER);
     expect(plan).toMatchObject({ kind: 'skip', reason: 'not_found' });
     expect(mockCommandsFindFirst).not.toHaveBeenCalled();
   });
@@ -254,7 +254,7 @@ describe('planCommandExecution', () => {
         .mockResolvedValueOnce([personalListRow('release-checklist')])
         .mockResolvedValueOnce([driveListRow('standup')]);
 
-      const plan = await planCommandExecution(HELP_TOKEN, SENDER, { driveId: DRIVE_ID });
+      const [plan] = await planCommandExecutions(HELP_TOKEN, SENDER, { driveId: DRIVE_ID });
 
       expect(plan?.kind).toBe('inject');
       if (plan?.kind !== 'inject') return;
@@ -271,7 +271,7 @@ describe('planCommandExecution', () => {
     it('lists only builtins + personal commands when there is no drive context', async () => {
       mockCommandsFindMany.mockResolvedValueOnce([personalListRow('release-checklist')]);
 
-      const plan = await planCommandExecution(HELP_TOKEN, SENDER);
+      const [plan] = await planCommandExecutions(HELP_TOKEN, SENDER);
 
       expect(plan?.kind).toBe('inject');
       if (plan?.kind !== 'inject') return;
@@ -286,7 +286,7 @@ describe('planCommandExecution', () => {
       mockIsUserDriveMember.mockResolvedValue(false);
       mockCommandsFindMany.mockResolvedValueOnce([personalListRow('mine')]);
 
-      const plan = await planCommandExecution(HELP_TOKEN, SENDER, { driveId: DRIVE_ID });
+      const [plan] = await planCommandExecutions(HELP_TOKEN, SENDER, { driveId: DRIVE_ID });
 
       expect(plan?.kind).toBe('inject');
       if (plan?.kind !== 'inject') return;
@@ -297,7 +297,7 @@ describe('planCommandExecution', () => {
     it('degrades to the static description (no dynamic section, no throw) when loading fails', async () => {
       mockCommandsFindMany.mockRejectedValue(new Error('db exploded'));
 
-      const plan = await planCommandExecution(HELP_TOKEN, SENDER, { driveId: DRIVE_ID });
+      const [plan] = await planCommandExecutions(HELP_TOKEN, SENDER, { driveId: DRIVE_ID });
 
       expect(plan).toMatchObject({
         kind: 'inject',
@@ -310,9 +310,91 @@ describe('planCommandExecution', () => {
     });
   });
 
-  it('degrades to null (no injection, no throw) on unexpected resolution errors', async () => {
+  it('omits that command\'s plan (no throw) on unexpected resolution errors', async () => {
     mockCommandsFindFirst.mockRejectedValue(new Error('db exploded'));
-    const plan = await planCommandExecution(tokenContent(), SENDER);
-    expect(plan).toBeNull();
+    const plans = await planCommandExecutions(tokenContent(), SENDER);
+    expect(plans).toEqual([]);
+  });
+
+  describe('multiple commands in one message', () => {
+    const OTHER_CMD_ID = 'ozmbrgj3atz4a98xxat96iws';
+
+    it('resolves two distinct commands independently, in document order', async () => {
+      mockCommandsFindFirst
+        .mockResolvedValueOnce(personalCommandRow())
+        .mockResolvedValueOnce(
+          personalCommandRow({
+            id: OTHER_CMD_ID,
+            trigger: 'other',
+            entryPage: { ...personalCommandRow().entryPage, title: 'Other Page' },
+          })
+        );
+
+      const plans = await planCommandExecutions(
+        `/[release-checklist](${CMD_ID}:command) then /[other](${OTHER_CMD_ID}:command)`,
+        SENDER
+      );
+
+      expect(plans).toHaveLength(2);
+      expect(plans[0]).toMatchObject({ kind: 'inject', injection: { commandId: CMD_ID } });
+      expect(plans[1]).toMatchObject({ kind: 'inject', injection: { commandId: OTHER_CMD_ID } });
+    });
+
+    it('resolves one command and skips another (nonexistent) in the same message, without one affecting the other', async () => {
+      mockCommandsFindFirst
+        .mockResolvedValueOnce(personalCommandRow())
+        .mockResolvedValueOnce(undefined);
+
+      const plans = await planCommandExecutions(
+        `/[release-checklist](${CMD_ID}:command) then /[gone](${OTHER_CMD_ID}:command)`,
+        SENDER
+      );
+
+      expect(plans).toHaveLength(2);
+      expect(plans[0]).toMatchObject({ kind: 'inject', injection: { commandId: CMD_ID } });
+      expect(plans[1]).toEqual({
+        kind: 'skip',
+        commandId: OTHER_CMD_ID,
+        label: 'gone',
+        reason: 'not_found',
+      });
+    });
+
+    it('an unexpected error resolving one command does not prevent the other from resolving', async () => {
+      mockCommandsFindFirst
+        .mockRejectedValueOnce(new Error('db exploded'))
+        .mockResolvedValueOnce(personalCommandRow({ id: OTHER_CMD_ID, trigger: 'other' }));
+
+      const plans = await planCommandExecutions(
+        `/[release-checklist](${CMD_ID}:command) then /[other](${OTHER_CMD_ID}:command)`,
+        SENDER
+      );
+
+      // The erroring command's plan is omitted entirely (same degrade
+      // philosophy as the single-command case); the other still resolves.
+      expect(plans).toHaveLength(1);
+      expect(plans[0]).toMatchObject({ kind: 'inject', injection: { commandId: OTHER_CMD_ID } });
+    });
+
+    it('preserves document order for the surviving plans when a MIDDLE command (of three) errors unexpectedly', async () => {
+      const THIRD_CMD_ID = 'thirdzmbrgj3atz4a98xxat9';
+      mockCommandsFindFirst
+        .mockResolvedValueOnce(personalCommandRow({ trigger: 'first' }))
+        .mockRejectedValueOnce(new Error('db exploded'))
+        .mockResolvedValueOnce(personalCommandRow({ id: THIRD_CMD_ID, trigger: 'third' }));
+
+      const plans = await planCommandExecutions(
+        `/[first](${CMD_ID}:command) then /[second](${OTHER_CMD_ID}:command) then /[third](${THIRD_CMD_ID}:command)`,
+        SENDER
+      );
+
+      // The middle command's plan is omitted; the first and third stay in
+      // their original relative order (Promise.all + filter preserve input
+      // order deterministically, but this pins it as an explicit contract
+      // that buildCommandPromptSection's block-ordering guarantee depends on).
+      expect(plans).toHaveLength(2);
+      expect(plans[0]).toMatchObject({ kind: 'inject', injection: { commandId: CMD_ID } });
+      expect(plans[1]).toMatchObject({ kind: 'inject', injection: { commandId: THIRD_CMD_ID } });
+    });
   });
 });

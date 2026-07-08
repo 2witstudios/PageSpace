@@ -19,7 +19,7 @@ today as named, React-free exports. **Verdict: consumable without rework.**
 | Registry (built-ins, validation, precedence) | `packages/lib/src/commands/command-core.ts` | ✅ Pure module, named exports (`BUILTIN_COMMANDS`, `resolveCommandPrecedence`, `validateCommandTrigger`, `validateCommandDescription`, `buildHelpPromptSection`), zero React/Next/DB imports. Runs anywhere — server, client, future desktop palette process. |
 | Per-viewer command list | `GET /api/commands/suggest` (`apps/web/src/app/api/commands/suggest/route.ts`) + shared loader `apps/web/src/lib/commands/available-commands.ts` (`loadAvailableCommands`) | ✅ Session-auth'd, per-viewer, `q` prefix-ranked, `driveId`-scoped with membership enforcement; returns precedence-resolved winners **and** shadowed losers with `scope`/`shadows`/`shadowedBy` — everything a palette row needs. Phase 5 extracted the query into `loadAvailableCommands`, so a server-rendered palette (or any new endpoint) can consume the same list without going through HTTP, and the picker and the AI's `/help` answer can never drift apart. |
 | Per-viewer reference resolution | `GET /api/commands/resolve` (`apps/web/src/app/api/commands/resolve/route.ts`) | ✅ Batch (≤50 ids), viewer-scoped states (`ok` / `restricted` / `deleted`), built-in ids (`builtin:{trigger}`) handled without DB. A palette rendering recents/pins resolves them exactly like transcript chips do. |
-| Invocation | Chip token `/[label](commandId:command)` at message start; resolved server-side by `planCommandExecution` (`apps/web/src/lib/ai/core/command-resolver.ts`) with **sender** permissions | ✅ Input-surface-independent by design (UX spec §11): any surface that inserts the same token into a composer gets identical execution, including built-ins (no entry page required) and the `/help` dynamic section. The execution cores (`command-processor.ts`, `command-resolver.ts`, `available-commands.ts`) import no React. |
+| Invocation | Chip token(s) `/[label](commandId:command)` anywhere in the message (mid-message and multiple per message); resolved server-side by `planCommandExecutions` (`apps/web/src/lib/ai/core/command-resolver.ts`) with **sender** permissions | ✅ Input-surface-independent by design (UX spec §11): any surface that inserts the same token into a composer gets identical execution, including built-ins (no entry page required) and the `/help` dynamic section. The execution cores (`command-processor.ts`, `command-resolver.ts`, `available-commands.ts`) import no React. |
 
 Caller obligations a palette inherits (by design, not gaps): it must supply the current
 `driveId` (drive context is the caller's knowledge, as in the chat routes), and
@@ -36,7 +36,7 @@ that ends in `POST /api/pages` and navigation to the new page. Commands don't fi
 either phase. Executing a command requires a message composer to carry the chip — the
 palette has no chat target, so "run /standup" from Alt+N would have to invent one
 (which conversation? which agent?), conflating creation with invocation and breaking
-the chip-at-message-start contract the whole execution path is built on.
+the chip-in-a-message contract the whole execution path is built on.
 
 **Recommendation: do not surface commands in Quick Create.** The only defensible entry
 would be a "New command…" item that deep-links to the command-creation settings flow

@@ -59,13 +59,14 @@ interface AiMeta {
   senderType: 'global_assistant' | 'agent';
   senderName: string;
   agentPageId?: string;
-  // Universal Commands execution feedback (UX spec §7) on agent replies
-  commandExecution?: {
+  // Universal Commands execution feedback (UX spec §7) on agent replies —
+  // one entry per resolved command in the triggering message, in order.
+  commandExecution?: Array<{
     label: string;
     status: 'used' | 'skipped';
     reason?: 'page_trashed' | 'no_access' | 'not_found' | 'disabled';
     entryPageTitle?: string;
-  };
+  }>;
 }
 
 
@@ -584,9 +585,9 @@ function ChannelView({ page }: ChannelViewProps) {
               {new Date(m.createdAt).toLocaleTimeString()}
             </span>
           </div>
-          {m.aiMeta?.commandExecution && (
-            <CommandExecutionIndicator data={m.aiMeta.commandExecution} />
-          )}
+          {m.aiMeta?.commandExecution?.map((execution, index) => (
+            <CommandExecutionIndicator key={index} data={execution} />
+          ))}
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
               <RichText
@@ -763,9 +764,9 @@ function ChannelView({ page }: ChannelViewProps) {
                                     {(m.quotedMessage || m.quotedMessageId) && (
                                       <MessageQuoteBlock quoted={m.quotedMessage ?? null} />
                                     )}
-                                    {m.aiMeta?.commandExecution && (
-                                      <CommandExecutionIndicator data={m.aiMeta.commandExecution} />
-                                    )}
+                                    {m.aiMeta?.commandExecution?.map((execution, index) => (
+                                      <CommandExecutionIndicator key={index} data={execution} />
+                                    ))}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
                                         <RichText

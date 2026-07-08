@@ -37,10 +37,12 @@ describe('preprocessCommandTokens — forged tokens', () => {
     expect(script).toBe('[command:x](/command/<script>) hi');
   });
 
-  it('handles a pathological number of command-shaped tokens without converting more than the first', () => {
+  it('handles a pathological number of command-shaped tokens, converting all without catastrophic backtracking', () => {
     const content = Array.from({ length: 500 }, () => `/[x](${CMD_ID}:command)`).join(' ');
+    const start = Date.now();
     const processed = preprocessCommandTokens(content);
-    expect(processed.match(/\/command\//g)).toHaveLength(1);
+    expect(Date.now() - start).toBeLessThan(1_000);
+    expect(processed.match(/\/command\//g)).toHaveLength(500);
   });
 });
 

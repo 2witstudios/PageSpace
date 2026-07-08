@@ -47,7 +47,7 @@ import {
   COMMAND_EXECUTION_PART_TYPE,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
-import { planCommandExecution } from '@/lib/ai/core/command-resolver';
+import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
@@ -383,10 +383,11 @@ export async function POST(request: Request) {
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
-    // Universal Commands: resolved execution plan for the leading command
-    // token, if the user message carries one. Resolution degrades, never
-    // fails — a missing/forbidden command leaves the request untouched.
-    let commandPlan: CommandExecutionPlan | null = null;
+    // Universal Commands: resolved execution plans for every command token
+    // in the user message (zero or more). Each resolves independently and
+    // degrades, never fails — a missing/forbidden command leaves the rest
+    // of the request untouched.
+    let commandPlans: CommandExecutionPlan[] = [];
     let commandSystemPrompt = '';
 
     // Load the user up front: the prepaid credit gate must run BEFORE we persist
@@ -456,18 +457,21 @@ export async function POST(request: Request) {
           });
         }
 
-        // Resolve the message's slash command (if any) with the SENDER's
-        // permissions. The token stays in the saved content — transcripts
-        // render it as a chip; only the system prompt gains the injection.
-        commandPlan = await planCommandExecution(messageContent, userId!, {
+        // Resolve every command token in the message (if any) with the
+        // SENDER's permissions. The tokens stay in the saved content —
+        // transcripts render each as a chip; only the system prompt gains
+        // the injections.
+        commandPlans = await planCommandExecutions(messageContent, userId!, {
           driveId: page.driveId,
         });
-        if (commandPlan) {
-          commandSystemPrompt = buildCommandPromptSection(commandPlan);
-          loggers.ai.info('AI Chat API: Command resolution', {
-            kind: commandPlan.kind,
-            ...(commandPlan.kind === 'skip' ? { reason: commandPlan.reason } : {}),
-          });
+        if (commandPlans.length > 0) {
+          commandSystemPrompt = buildCommandPromptSection(commandPlans);
+          for (const plan of commandPlans) {
+            loggers.ai.info('AI Chat API: Command resolution', {
+              kind: plan.kind,
+              ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
+            });
+          }
         }
 
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
@@ -1046,17 +1050,19 @@ export async function POST(request: Request) {
         originalMessages: sanitizedMessages,
         generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
-          // Execution feedback (UX spec §7): announce the command indicator
-          // ("Using /foo" / "Skipped /foo — reason") as the first part of the
-          // assistant message. Persisted with the message via onFinish so
-          // transcripts keep showing that a command informed the answer.
-          if (commandPlan) {
+          // Execution feedback (UX spec §7): announce one command indicator
+          // per resolved plan ("Using /foo" / "Skipped /foo — reason") as
+          // the first parts of the assistant message, in the same order the
+          // chips appeared in the user's message. Persisted with the message
+          // via onFinish so transcripts keep showing which commands informed
+          // the answer.
+          commandPlans.forEach((plan, index) => {
             writer.write({
               type: COMMAND_EXECUTION_PART_TYPE,
-              id: `${serverAssistantMessageId}-command`,
-              data: commandExecutionDataFromPlan(commandPlan),
+              id: `${serverAssistantMessageId}-command-${index}`,
+              data: commandExecutionDataFromPlan(plan),
             });
-          }
+          });
           // Resolve once outside the per-attempt factory (the factory is synchronous).
           // Gate tools on the CONCRETE backend model id (resolvedModelName), not the
           // PageSpace alias in currentModel — vision/tool detection pattern-matches the

@@ -22,7 +22,8 @@ export interface ChannelMessageAiMeta {
   senderType: 'global_assistant' | 'agent';
   senderName: string;
   agentPageId?: string;
-  commandExecution?: ChannelCommandExecution;
+  /** One entry per resolved command in the triggering message, in document order. */
+  commandExecution?: ChannelCommandExecution[];
 }
 
 export const channelMessages = pgTable('channel_messages', {

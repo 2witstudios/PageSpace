@@ -4,7 +4,6 @@ import {
   serializeMessageTokens,
   updateTokenPositions,
   validTokensForText,
-  COMMAND_TOKEN_TYPE,
   type TrackedToken,
 } from '@/lib/tokens/message-tokens';
 
@@ -20,8 +19,6 @@ export interface UseMessageTokensResult {
   tokens: TrackedToken[];
   /** Whether any tokens exist (drives the transparent-text overlay mode) */
   hasTokens: boolean;
-  /** One command per message: whether a command chip is currently tracked */
-  hasCommandToken: boolean;
   /**
    * Stable getter for the live token list. Event handlers that run after the
    * tracker has synchronously processed the same input event (e.g. slash
@@ -110,16 +107,10 @@ export function useMessageTokens(
     [onMarkdownChange]
   );
 
-  const hasCommandToken = useMemo(
-    () => tokens.some((t) => t.type === COMMAND_TOKEN_TYPE),
-    [tokens]
-  );
-
   return {
     displayText,
     tokens,
     hasTokens: tokens.length > 0,
-    hasCommandToken,
     getTokens,
     handleDisplayTextChange,
     registerToken,

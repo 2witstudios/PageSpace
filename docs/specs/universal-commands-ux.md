@@ -42,12 +42,13 @@ The picker **mirrors the mention picker's interaction grammar exactly** — `app
 
 ### 1.1 Trigger detection
 
-Delta from mentions: `@` triggers anywhere after whitespace (`useSuggestion.ts` `defaultTriggerPattern`); `/` triggers **only at the start of the message** (Slack/Discord convention), and **only one command per message**.
+`/` triggers with the exact same rule as `@` (`useSuggestion.ts` `defaultTriggerPattern`): valid at the start of the message or immediately after whitespace, anywhere in the message, any number of times — the only exclusion is an existing tracked token's own range (a `/` inside an already-inserted chip is never a fresh trigger). Multiple command chips per message are supported; each resolves independently (§7).
 
 - **Given** an empty input, when the user types `/`, **should** open the picker anchored to the input.
 - **Given** an input containing only whitespace (spaces/newlines), when the user types `/`, **should** open the picker (position-0-or-only-whitespace rule).
-- **Given** any non-whitespace character before the cursor's `/` (e.g. `hello /`), **should NOT** open the picker; `/` is a literal character.
-- **Given** a message that already contains a command chip, when the user types `/` anywhere (including at the start after deleting text before the chip), **should NOT** open the picker — one command per message.
+- **Given** the `/` immediately preceded by whitespace mid-message (e.g. `hello /`), **should** open the picker — the mid-message rule mirrors `@`.
+- **Given** the `/` immediately preceded by a non-whitespace character (e.g. `foo/bar`), **should NOT** open the picker; `/` is a literal character in that position.
+- **Given** a message that already contains a command chip, when the user types `/` elsewhere in the message (outside that chip's tracked range), **should** open the picker — multiple commands per message are supported. **Given** the cursor is inside an existing chip's own tracked range, **should NOT** open there.
 - **Given** the picker is open and the user keeps typing (`/rel`), **should** treat the text after `/` as the filter query (§1.4), mirroring `useSuggestion.ts`'s `textAfterTrigger` query extraction.
 - **Given** the user deletes back past the `/`, **should** close the picker (mirrors `useSuggestion.ts` close-when-no-trigger branch).
 - **Given** the user dismissed the picker with Escape and continues typing after the same `/`, **should NOT** reopen for that trigger position (mirrors `dismissedTriggerRef` in `useSuggestion.ts:100-103,222`); deleting the `/` and retyping it resets the dismissal.
@@ -318,7 +319,7 @@ The canonical enforcement lives in the shared validation lib `packages/lib/src/c
 ## 11. Forward Compatibility (Non-Goals)
 
 - **Cmd+K palette:** out of scope. The picker, chip serialization, and resolution rules are designed so a future global command palette can reuse them unchanged (commands are addressable by `commandId`, resolution is input-surface-independent). Nothing in this spec may assume `/`-typing is the *only* invocation path.
-- **Multiple commands per message, mid-message triggers, arguments (`/foo bar=baz`):** explicitly not in this spec; the serialization format leaves room (text after the chip is ordinary message text passed to the AI).
+- **Arguments (`/foo bar=baz`):** explicitly not in this spec; the serialization format leaves room (text after the chip is ordinary message text passed to the AI). (Multiple commands per message and mid-message triggers, previously listed here, are now implemented — see §1.1.)
 - **Marketplace / sharing of commands across drives:** not in scope; scope model (§0) is the contract future scopes extend.
 
 ---

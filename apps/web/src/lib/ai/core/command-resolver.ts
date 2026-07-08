@@ -1,7 +1,7 @@
 /**
- * Command resolution for AI routes (Universal Commands phase 4).
+ * Command resolution for AI routes (Universal Commands).
  *
- * Turns the command token in a user message into an execution plan. The
+ * Turns each command token in a user message into an execution plan. The
  * commandId arrives inside CLIENT-CONTROLLED message content and is treated
  * as hostile end to end:
  *
@@ -29,7 +29,7 @@ import {
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { loadAvailableCommands } from '@/lib/commands/available-commands';
 import {
-  findActiveCommandToken,
+  findActiveCommandTokens,
   type CommandExecutionPlan,
   type CommandChildResource,
   type ParsedCommandToken,
@@ -51,26 +51,36 @@ export interface CommandResolutionContext {
 }
 
 /**
- * Resolve the message's command token (if any) into an execution plan.
- * Returns null when the message carries no command, and also on unexpected
- * resolution errors — the chat request must proceed regardless.
+ * Resolve every command token in the message into execution plans,
+ * independently — one invalid, permission-denied, or erroring command never
+ * prevents the others from resolving. Returns an empty array when the
+ * message carries no command. An unexpected resolution error for one
+ * command omits just that command's plan (same degrade-to-nothing
+ * philosophy as a single command's unexpected error) without affecting the
+ * others — the chat request must proceed regardless.
  */
-export async function planCommandExecution(
+export async function planCommandExecutions(
   content: string,
   senderId: string,
   context: CommandResolutionContext = {}
-): Promise<CommandExecutionPlan | null> {
-  const token = findActiveCommandToken(content);
-  if (!token) return null;
+): Promise<CommandExecutionPlan[]> {
+  const tokens = findActiveCommandTokens(content);
+  if (tokens.length === 0) return [];
 
-  try {
-    return await resolveToken(token, senderId, context);
-  } catch (error) {
-    loggers.ai.error('Command resolution failed; proceeding without injection', error as Error, {
-      commandId: token.commandId,
-    });
-    return null;
-  }
+  const results = await Promise.all(
+    tokens.map(async (token) => {
+      try {
+        return await resolveToken(token, senderId, context);
+      } catch (error) {
+        loggers.ai.error('Command resolution failed; proceeding without injection', error as Error, {
+          commandId: token.commandId,
+        });
+        return null;
+      }
+    })
+  );
+
+  return results.filter((plan): plan is CommandExecutionPlan => plan !== null);
 }
 
 function skip(
