@@ -347,6 +347,7 @@ describe('createKeysHandler — Edit flow re-scopes the key IN PLACE (update_key
     textMock.mockReset();
     confirmMock.mockReset().mockResolvedValueOnce(true);
     spinnerHandle.stop.mockReset();
+    logMock.info.mockReset();
 
     const { createKeysHandler } = await import('../wizard.js');
     const store = fakeStore();
@@ -396,6 +397,9 @@ describe('createKeysHandler — Edit flow re-scopes the key IN PLACE (update_key
     const stopMessages = spinnerHandle.stop.mock.calls.flat().map(String).join('\n');
     expect(stopMessages).toMatch(/secret is unchanged/i);
     expect(stopMessages).toContain('CI bot');
+    // Edit can only narrow/change specific drives, never widen to all-drives —
+    // the escape hatch to `keys create --all-drives` is surfaced up front.
+    expect(logMock.info).toHaveBeenCalledWith(expect.stringContaining('keys create --all-drives'));
   });
 
   it('narrowing an all-drives key (isScoped: false) to specific drives shows a downgrade confirm before the update consent', async () => {

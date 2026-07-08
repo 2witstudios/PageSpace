@@ -391,6 +391,12 @@ async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host:
     return null;
   }
 
+  // Edit can only ever re-scope among specific drives — widening an existing
+  // key to all-drives isn't offered (see `DriveTargetChoice`'s doc comment,
+  // `logic.js`, for why). Surface the escape hatch up front rather than
+  // leaving a user who wants that stuck guessing.
+  clack.log.info('Editing narrows or changes which specific drives this key can access. To grant access to ALL drives instead, run "pagespace keys create --all-drives" to mint a new key.');
+
   const selections = await selectDriveRoleScopes(ctx, drives, `Select drives for "${key.name}"`, preselectedDriveIds(key));
   if (selections === null) return abortSubflow();
 

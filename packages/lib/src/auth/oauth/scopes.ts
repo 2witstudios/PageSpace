@@ -329,6 +329,16 @@ export function isScopeSubset(requested: ScopeSet, granted: ScopeSet): boolean {
 
   if (granted.account) return true;
 
+  // Symmetric with the `granted.account` case above: `all_drives` is
+  // documented (ADR 0002) as "the maximum grant for a drive-scoped key" — a
+  // granted `all_drives` covers any requested `drive:*` subset the exact
+  // same way a granted `account` does. (A requested `all_drives` was already
+  // resolved by the `requested.allDrives` check above and never reaches this
+  // line unless `granted.allDrives` is also true, so this only ever narrows
+  // a plain drive:* request here — not a second, redundant path for the
+  // all_drives-vs-all_drives case.)
+  if (granted.allDrives) return true;
+
   for (const [driveId, requestedScope] of requested.drives) {
     const grantedScope = granted.drives.get(driveId);
     if (!grantedScope) return false;

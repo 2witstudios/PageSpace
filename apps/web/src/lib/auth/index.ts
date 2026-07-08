@@ -239,6 +239,22 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
       return null;
     }
 
+    // Same fail-closed reasoning, same shape of guard: `all_drives` only ever
+    // resolves correctly as an unscoped (`isScoped: false`) `mcp_tokens` row
+    // (`oauth-repository.ts`'s `isAllDrivesGrant` branch) — as a bearer OAuth
+    // access token it would carry `allowedDriveIds: []` on a non-`account`
+    // token, a shape this codebase's two authorization-helper families
+    // disagree on (deny-everything via `isScopedOAuthAuth`/`getScopedAccessLevel`,
+    // or grant-everything via `getAllowedDriveIds`/`checkMCPDriveScope`,
+    // depending on which a given route calls). Today exactly two upstream
+    // gates keep `all_drives` from ever reaching a persisted access token
+    // (the authorization_code exchange's early intercept, and the
+    // device-authorization endpoint's outright rejection) — reject here too
+    // rather than trust both to remember it forever.
+    if (parsed.scopes.allDrives) {
+      return null;
+    }
+
     const driveScopes = scopeSetToDriveScopes(parsed.scopes);
     const allowedDriveIds = parsed.scopes.account ? [] : driveScopes.map((scope) => scope.driveId);
 

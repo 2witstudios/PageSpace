@@ -417,6 +417,12 @@ describe('isScopeSubset (narrowing, rule 8 / F5) — escalation must be structur
     expect(isScopeSubset(requested, granted)).toBe(true);
   });
 
+  it('a drive scope is a subset of an all_drives grant, symmetric with the account case (all_drives covers every drive too)', () => {
+    const requested = emptySet({ drives: drives(['aaa', { kind: 'drive', driveId: 'aaa', role: { kind: 'admin' } }]) });
+    const granted = emptySet({ allDrives: true });
+    expect(isScopeSubset(requested, granted)).toBe(true);
+  });
+
   it('drive:X:admin is NOT a subset of drive:X:member (escalation attempt, ADR example)', () => {
     const requested = emptySet({ drives: drives(['x', { kind: 'drive', driveId: 'x', role: { kind: 'admin' } }]) });
     const granted = emptySet({ drives: drives(['x', { kind: 'drive', driveId: 'x', role: { kind: 'member' } }]) });
