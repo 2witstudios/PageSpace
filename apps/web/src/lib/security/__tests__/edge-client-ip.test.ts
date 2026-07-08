@@ -1,7 +1,21 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getClientIP } from '../edge-client-ip';
 
 describe('getClientIP (edge)', () => {
+  const ORIGINAL_FLY_APP_NAME = process.env.FLY_APP_NAME;
+
+  beforeEach(() => {
+    process.env.FLY_APP_NAME = 'pagespace-web';
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_FLY_APP_NAME === undefined) {
+      delete process.env.FLY_APP_NAME;
+    } else {
+      process.env.FLY_APP_NAME = ORIGINAL_FLY_APP_NAME;
+    }
+  });
+
   it('prefers fly-client-ip over x-forwarded-for', () => {
     const request = new Request('http://localhost', {
       headers: { 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4, 5.6.7.8' },
@@ -54,6 +68,29 @@ describe('getClientIP (edge)', () => {
         headers: { 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4' },
       });
       expect(getClientIP(request)).toBe('9.9.9.9');
+    });
+  });
+
+  // Regression coverage: on a non-Fly host (e.g. this repo's `tenant`
+  // deployment mode — Docker/Traefik), fly-client-ip is just another
+  // ordinary, client-settable header with no trust guarantee at all.
+  describe('not running on Fly (FLY_APP_NAME unset — e.g. tenant/self-hosted)', () => {
+    beforeEach(() => {
+      delete process.env.FLY_APP_NAME;
+    });
+
+    it('ignores a forged fly-client-ip entirely and falls back to x-forwarded-for', () => {
+      const request = new Request('http://localhost', {
+        headers: { 'fly-client-ip': '9.9.9.9', 'x-forwarded-for': '1.2.3.4' },
+      });
+      expect(getClientIP(request)).toBe('1.2.3.4');
+    });
+
+    it('returns unknown when only a forged fly-client-ip is present, never trusting it', () => {
+      const request = new Request('http://localhost', {
+        headers: { 'fly-client-ip': '9.9.9.9' },
+      });
+      expect(getClientIP(request)).toBe('unknown');
     });
   });
 });

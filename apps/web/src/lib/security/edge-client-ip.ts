@@ -24,9 +24,17 @@
  * PageSpace-Deploy's `fly/Caddyfile.fly` — so it isn't attacker-appendable).
  * Trust that instead in this one case; see the `packages/lib` copy's doc for
  * the full reasoning.
+ *
+ * GATED ON ACTUALLY RUNNING ON FLY: this repo also ships a non-Fly `tenant`
+ * deployment mode (Docker/Traefik), where `Fly-Client-IP` is just another
+ * ordinary, client-settable header with no trust guarantee at all — trusting
+ * it unconditionally there would let any caller forge it to bypass IP-keyed
+ * rate limits. `FLY_APP_NAME` is a runtime env var Fly injects into every Fly
+ * Machine automatically (never client-settable); use its presence to gate
+ * trust, not `DEPLOYMENT_MODE` — see the `packages/lib` copy's doc for why.
  */
 export function getClientIP(request: Request): string {
-  const flyClientIP = request.headers.get('fly-client-ip')?.trim();
+  const flyClientIP = process.env.FLY_APP_NAME ? request.headers.get('fly-client-ip')?.trim() : undefined;
   if (flyClientIP && !flyClientIP.toLowerCase().startsWith('fdaa:')) return flyClientIP;
 
   return (

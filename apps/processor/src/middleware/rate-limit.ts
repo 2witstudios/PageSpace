@@ -11,9 +11,12 @@ const WINDOW_SECONDS = parseInt(process.env.PROCESSOR_UPLOAD_RATE_WINDOW ?? '360
 
 // Express's req.headers is a plain object, not a Fetch Headers instance, so
 // it can't use @pagespace/lib/security/client-ip directly — same trust
-// priority (Fly-Client-IP first, unspoofable), adapted to Express's shape.
+// priority (Fly-Client-IP first, unspoofable — but ONLY when actually running
+// on Fly; this repo also ships a non-Fly `tenant` deployment mode where
+// Fly-Client-IP is just another ordinary client-settable header, see the
+// packages/lib copy's doc for the full reasoning), adapted to Express's shape.
 function getClientIP(req: Request): string {
-  const flyClientIP = req.headers['fly-client-ip'];
+  const flyClientIP = process.env.FLY_APP_NAME ? req.headers['fly-client-ip'] : undefined;
   if (typeof flyClientIP === 'string' && flyClientIP.length > 0) {
     return flyClientIP.trim();
   }
