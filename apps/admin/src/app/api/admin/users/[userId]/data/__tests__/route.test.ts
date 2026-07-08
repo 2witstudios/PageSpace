@@ -161,6 +161,60 @@ describe('/api/admin/users/[userId]/data', () => {
     expect(accountRepository.deleteUser).toHaveBeenCalledWith('user-1');
   });
 
+  it('DELETE_withoutReason_returns400', async () => {
+    mockAdminAuth();
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'target@example.com',
+      image: null,
+      stripeCustomerId: null,
+    });
+
+    for (const body of [undefined, JSON.stringify({}), JSON.stringify({ reason: '   ' })]) {
+      const request = new Request('http://localhost/api/admin/users/user-1/data', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', cookie: FAKE_COOKIE },
+        body,
+      });
+
+      const context = { params: Promise.resolve({ userId: 'user-1' }) };
+      const response = await DELETE(request, context);
+      const responseBody = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(responseBody.error).toContain('reason is required');
+    }
+
+    expect(accountRepository.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it('DELETE_recordsReasonInAuditTrail', async () => {
+    mockAdminAuth();
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'target@example.com',
+      image: null,
+      stripeCustomerId: null,
+    });
+
+    const request = new Request('http://localhost/api/admin/users/user-1/data', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', cookie: FAKE_COOKIE },
+      body: JSON.stringify({ reason: 'DSAR ticket #42' }),
+    });
+
+    const context = { params: Promise.resolve({ userId: 'user-1' }) };
+    await DELETE(request, context);
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({
+        eventType: 'data.delete',
+        details: expect.objectContaining({ reason: 'DSAR ticket #42' }),
+      })
+    );
+  });
+
   it('DELETE_adminCannotDeleteSelf_returns400', async () => {
     mockAdminAuth('admin-123');
     mockFindById.mockResolvedValue({

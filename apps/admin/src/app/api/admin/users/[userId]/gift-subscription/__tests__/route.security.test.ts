@@ -388,9 +388,11 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
         {
           method: 'DELETE',
           headers: {
+            'Content-Type': 'application/json',
             'Cookie': `admin_session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
+          body: JSON.stringify({ reason: 'Test revoke' }),
         }
       );
 
@@ -412,9 +414,11 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
         {
           method: 'DELETE',
           headers: {
+            'Content-Type': 'application/json',
             'Cookie': `admin_session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
+          body: JSON.stringify({ reason: 'Test revoke' }),
         }
       );
 
@@ -454,9 +458,11 @@ describe('/api/admin/users/[userId]/gift-subscription - Security Tests', () => {
         {
           method: 'DELETE',
           headers: {
+            'Content-Type': 'application/json',
             'Cookie': `admin_session=${adminSessionToken}`,
             'X-CSRF-Token': adminCsrfToken,
           },
+          body: JSON.stringify({ reason: 'Test revoke' }),
         }
       );
 

@@ -11,10 +11,26 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { withAdminAuth } from '@/lib/auth';
+import { parseListUsersParams, matchesSearch, compareUsers, isDormant } from './list-params';
 
+/**
+ * GET /api/admin/users — paginated users list.
+ *
+ * Query params: limit, offset, q, sort (name|email|created|lastActive|tier),
+ * dir (asc|desc), dormant=true, suspended=true.
+ *
+ * Search/sort happen after decryption (name/email are ciphertext at rest —
+ * see list-params.ts); the expensive per-user enrichment (content stats,
+ * Stripe gift lookups) only runs for the requested page.
+ */
 export const GET = withAdminAuth(async (_adminUser, _request) => {
   try {
-    // Get all users
+    const params = parseListUsersParams(new URL(_request.url));
+    if (!params) {
+      return Response.json({ error: 'Invalid query parameters' }, { status: 400 });
+    }
+
+    // Light projection of every user (no content stats yet).
     const rawUsers = await db
       .select({
         id: users.id,
@@ -27,77 +43,111 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
         tokenVersion: users.tokenVersion,
         subscriptionTier: users.subscriptionTier,
         stripeCustomerId: users.stripeCustomerId,
+        role: users.role,
+        suspendedAt: users.suspendedAt,
+        suspendedReason: users.suspendedReason,
+        createdAt: users.createdAt,
       })
       .from(users);
 
-    // name/email are encrypted at rest; decrypt before any sorting/display.
-    const allUsers = (await decryptUserRows(rawUsers)).sort((a, b) =>
-      (a.name ?? '').localeCompare(b.name ?? '')
-    );
+    // name/email are encrypted at rest; decrypt before any search/sort/display.
+    const decryptedUsers = await decryptUserRows(rawUsers);
 
-    if (allUsers.length === 0) {
-      return Response.json({ users: [] });
-    }
-
-    const userIds = allUsers.map((user) => user.id);
-
-    // Get active subscriptions for all users
-    const activeSubscriptions = await db
-      .select()
-      .from(subscriptions)
-      .where(and(
-        inArray(subscriptions.status, ['active', 'trialing']),
-        inArray(subscriptions.userId, userIds)
-      ))
-      .orderBy(desc(subscriptions.updatedAt));
-
-    // Create a map of userId to subscription
-    const subscriptionsByUserId = new Map(
-      activeSubscriptions.map(sub => [sub.userId, sub])
-    );
-
-    // Batch aggregate stats instead of per-user N+1 queries
-    const [driveCounts, pageCounts, chatMessageCounts, globalMessageCounts, lastActiveDates] = await Promise.all([
-      db.select({
-        userId: drives.ownerId,
-        count: count(),
-      })
-        .from(drives)
-        .where(inArray(drives.ownerId, userIds))
-        .groupBy(drives.ownerId),
-      db.select({
-        userId: drives.ownerId,
-        count: count(),
-      })
-        .from(pages)
-        .innerJoin(drives, eq(pages.driveId, drives.id))
-        .where(inArray(drives.ownerId, userIds))
-        .groupBy(drives.ownerId),
-      db.select({
-        userId: chatMessages.userId,
-        count: count(),
-      })
-        .from(chatMessages)
-        .where(inArray(chatMessages.userId, userIds))
-        .groupBy(chatMessages.userId),
-      db.select({
-        userId: messages.userId,
-        count: count(),
-      })
-        .from(messages)
-        .where(inArray(messages.userId, userIds))
-        .groupBy(messages.userId),
-      // Last active: across ALL sessions regardless of revoked state — a user who was
-      // active yesterday and then logged out still has a recent lastActiveAt. Use
-      // COALESCE to handle sessions where lastUsedAt was never set (fall back to createdAt).
+    // Last active across ALL sessions regardless of revoked state — a user who
+    // was active yesterday and then logged out still has a recent lastActiveAt.
+    // COALESCE handles sessions where lastUsedAt was never set.
+    const [lastActiveDates, [driveTotal], [pageTotal], [chatMessageTotal], [globalMessageTotal]] = await Promise.all([
       db.select({
         userId: sessions.userId,
         lastActiveAt: sql<Date>`MAX(COALESCE(${sessions.lastUsedAt}, ${sessions.createdAt}))`,
       })
         .from(sessions)
-        .where(inArray(sessions.userId, userIds))
         .groupBy(sessions.userId),
+      db.select({ count: count() }).from(drives),
+      db.select({ count: count() }).from(pages),
+      db.select({ count: count() }).from(chatMessages),
+      db.select({ count: count() }).from(messages),
     ]);
+
+    const lastActiveMap = new Map<string, Date | null>(
+      lastActiveDates.map(row => [row.userId, row.lastActiveAt ?? null])
+    );
+
+    const allUsers = decryptedUsers.map(user => ({
+      ...user,
+      lastActiveAt: lastActiveMap.get(user.id) ?? null,
+    }));
+
+    const now = Date.now();
+    const summary = {
+      totalUsers: allUsers.length,
+      verifiedUsers: allUsers.filter(u => u.emailVerified).length,
+      dormantUsers: allUsers.filter(u => isDormant(u.lastActiveAt, now)).length,
+      suspendedUsers: allUsers.filter(u => u.suspendedAt != null).length,
+      totalDrives: Number(driveTotal?.count ?? 0),
+      totalPages: Number(pageTotal?.count ?? 0),
+      totalMessages: Number(chatMessageTotal?.count ?? 0) + Number(globalMessageTotal?.count ?? 0),
+    };
+
+    // Filter → sort → page.
+    const normalizedQuery = params.q.toLowerCase();
+    let matched = allUsers.filter(user => matchesSearch(user, normalizedQuery));
+    if (params.dormant === 'true') matched = matched.filter(u => isDormant(u.lastActiveAt, now));
+    if (params.suspended === 'true') matched = matched.filter(u => u.suspendedAt != null);
+
+    const comparator = compareUsers(params.sort);
+    matched.sort((a, b) => (params.dir === 'desc' ? -comparator(a, b) : comparator(a, b)));
+
+    const total = matched.length;
+    const pageOfUsers = matched.slice(params.offset, params.offset + params.limit);
+    const userIds = pageOfUsers.map(user => user.id);
+
+    // Enrich the current page only.
+    const [activeSubscriptions, driveCounts, pageCounts, chatMessageCounts, globalMessageCounts] =
+      userIds.length === 0
+        ? [[], [], [], [], []]
+        : await Promise.all([
+          db.select()
+            .from(subscriptions)
+            .where(and(
+              inArray(subscriptions.status, ['active', 'trialing']),
+              inArray(subscriptions.userId, userIds)
+            ))
+            .orderBy(desc(subscriptions.updatedAt)),
+          db.select({
+            userId: drives.ownerId,
+            count: count(),
+          })
+            .from(drives)
+            .where(inArray(drives.ownerId, userIds))
+            .groupBy(drives.ownerId),
+          db.select({
+            userId: drives.ownerId,
+            count: count(),
+          })
+            .from(pages)
+            .innerJoin(drives, eq(pages.driveId, drives.id))
+            .where(inArray(drives.ownerId, userIds))
+            .groupBy(drives.ownerId),
+          db.select({
+            userId: chatMessages.userId,
+            count: count(),
+          })
+            .from(chatMessages)
+            .where(inArray(chatMessages.userId, userIds))
+            .groupBy(chatMessages.userId),
+          db.select({
+            userId: messages.userId,
+            count: count(),
+          })
+            .from(messages)
+            .where(inArray(messages.userId, userIds))
+            .groupBy(messages.userId),
+        ]);
+
+    const subscriptionsByUserId = new Map(
+      activeSubscriptions.map(sub => [sub.userId, sub])
+    );
 
     const toCountMap = (rows: Array<{ userId: string | null; count: unknown }>) => {
       const map = new Map<string, number>();
@@ -113,24 +163,11 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
     const chatMessagesCountMap = toCountMap(chatMessageCounts);
     const globalMessagesCountMap = toCountMap(globalMessageCounts);
 
-    const lastActiveMap = new Map<string, Date | null>(
-      lastActiveDates.map(row => [row.userId, row.lastActiveAt ?? null])
-    );
-
-    const usersWithStats = allUsers.map((user) => ({
-      ...user,
-      drivesCount: drivesCountMap.get(user.id) ?? 0,
-      pagesCount: pagesCountMap.get(user.id) ?? 0,
-      chatMessagesCount: chatMessagesCountMap.get(user.id) ?? 0,
-      globalMessagesCount: globalMessagesCountMap.get(user.id) ?? 0,
-      lastActiveAt: lastActiveMap.get(user.id) ?? null,
-    }));
-
     // Fetch Stripe subscription details to check if gifted (skip on-prem - no Stripe)
     const stripeSubscriptionDetails = new Map<string, { isGifted: boolean; giftedBy?: string; reason?: string }>();
 
     if (!isOnPrem()) {
-      const usersWithSubscriptions = allUsers.filter(user =>
+      const usersWithSubscriptions = pageOfUsers.filter(user =>
         subscriptionsByUserId.has(user.id)
       );
 
@@ -159,19 +196,20 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
       }
     }
 
-    // Combine the data
-    const enrichedUsers = usersWithStats.map(user => {
+    const enrichedUsers = pageOfUsers.map(user => {
       const subscription = subscriptionsByUserId.get(user.id);
       const stripeDetails = stripeSubscriptionDetails.get(user.id);
+      const pageMessages = chatMessagesCountMap.get(user.id) ?? 0;
+      const globalMessages = globalMessagesCountMap.get(user.id) ?? 0;
 
       return {
         ...user,
         stats: {
-          drives: user.drivesCount,
-          pages: user.pagesCount,
-          chatMessages: user.chatMessagesCount,
-          globalMessages: user.globalMessagesCount,
-          totalMessages: user.chatMessagesCount + user.globalMessagesCount
+          drives: drivesCountMap.get(user.id) ?? 0,
+          pages: pagesCountMap.get(user.id) ?? 0,
+          chatMessages: pageMessages,
+          globalMessages,
+          totalMessages: pageMessages + globalMessages,
         },
         subscription: subscription ? {
           id: subscription.id,
@@ -186,28 +224,21 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
       };
     });
 
-    // Remove raw count fields (they live under stats); keep lastActiveAt
-    const cleanUsers = enrichedUsers.map((userData) => {
-      const {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        drivesCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        pagesCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        chatMessagesCount,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        globalMessagesCount,
-        ...user
-      } = userData;
-      return user;
-    });
-
     auditRequest(_request, { eventType: 'data.read', userId: _adminUser.id, resourceType: 'user', resourceId: '*', details: {
       source: 'admin',
-      userCount: cleanUsers.length,
+      total,
+      returned: enrichedUsers.length,
+      offset: params.offset,
+      hasSearch: params.q.length > 0,
     } });
 
-    return Response.json({ users: cleanUsers });
+    return Response.json({
+      users: enrichedUsers,
+      total,
+      limit: params.limit,
+      offset: params.offset,
+      summary,
+    });
   } catch (error) {
     loggers.api.error('Error fetching users:', error as Error);
     return Response.json(

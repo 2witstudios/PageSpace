@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ContactSubmissionsTable } from "@/components/admin/ContactSubmissionsTable";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { MessageSquare, AlertCircle, Mail, Calendar, TrendingUp, Users } from "lucide-react";
-import { fetchWithAuth } from "@/lib/auth/auth-fetch";
+import { MessageSquare, Calendar, TrendingUp, Users } from "lucide-react";
+import { StatCard, PageHeader } from "@/components/admin/kit";
+import { useAdminQuery } from "@/hooks/use-admin-query";
+import { num } from "@/lib/format";
 
 interface RegisteredUser {
   id: string;
@@ -50,161 +50,109 @@ interface ApiResponse {
   };
 }
 
+const SEARCH_DEBOUNCE_MS = 400;
+
 export default function AdminSupportPage() {
-  const [submissions, setSubmissions] = useState<ContactSubmission[]>([]);
-  const [stats, setStats] = useState<StatsData>({ todayCount: 0, weekCount: 0, uniqueEmailCount: 0 });
-  const [pagination, setPagination] = useState<PaginationData>({
-    page: 1,
-    pageSize: 25,
-    total: 0,
-    totalPages: 0,
-    hasNextPage: false,
-    hasPrevPage: false
-  });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState("createdAt");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed">("all");
+  const [page, setPage] = useState(1);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchSubmissions = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const url = useMemo(() => {
+    const params = new URLSearchParams({
+      search: searchTerm,
+      sortBy,
+      sortOrder,
+      status: statusFilter,
+      page: page.toString(),
+      pageSize: "25",
+    });
+    return `/api/admin/contact?${params}`;
+  }, [searchTerm, sortBy, sortOrder, statusFilter, page]);
 
-    try {
-      const params = new URLSearchParams({
-        search: searchTerm,
-        sortBy,
-        sortOrder,
-        status: statusFilter,
-        page: pagination.page.toString(),
-        pageSize: pagination.pageSize.toString()
-      });
-
-      const response = await fetchWithAuth(`/api/admin/contact?${params}`);
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch contact submissions');
-      }
-
-      const data: ApiResponse = await response.json();
-      setSubmissions(data.submissions);
-      setPagination(data.pagination);
-      setStats(data.stats);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
-      setLoading(false);
-    }
-  }, [searchTerm, sortBy, sortOrder, statusFilter, pagination.page, pagination.pageSize]);
-
-  useEffect(() => {
-    fetchSubmissions();
-  }, [fetchSubmissions]);
+  const { data, isLoading, error, refetch } = useAdminQuery<ApiResponse>(url);
 
   const handleSearch = (newSearchTerm: string) => {
-    setSearchTerm(newSearchTerm);
-    setPagination(prev => ({ ...prev, page: 1 }));
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      setSearchTerm(newSearchTerm);
+      setPage(1);
+    }, SEARCH_DEBOUNCE_MS);
   };
 
   const handlePageChange = (newPage: number) => {
-    setPagination(prev => ({ ...prev, page: newPage }));
+    setPage(newPage);
   };
 
   const handleSort = (newSortBy: string, newSortOrder: "asc" | "desc") => {
     setSortBy(newSortBy);
     setSortOrder(newSortOrder);
-    setPagination(prev => ({ ...prev, page: 1 }));
+    setPage(1);
   };
 
   const handleStatusFilter = (status: "all" | "open" | "closed") => {
     setStatusFilter(status);
-    setPagination(prev => ({ ...prev, page: 1 }));
+    setPage(1);
   };
 
-  const { todayCount: todaySubmissions, weekCount: weekSubmissions, uniqueEmailCount: uniqueEmails } = stats;
-
-  if (error) {
-    return (
-      <Alert variant="destructive">
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>
-          Error loading contact submissions: {error}
-        </AlertDescription>
-      </Alert>
-    );
-  }
+  const stats = data?.stats ?? null;
+  const pagination = data?.pagination ?? {
+    page: 1,
+    pageSize: 25,
+    total: 0,
+    totalPages: 0,
+    hasNextPage: false,
+    hasPrevPage: false,
+  };
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2">
-            <MessageSquare className="h-5 w-5" />
-            <span>Support Dashboard</span>
-          </CardTitle>
-          <CardDescription>
-            Monitor and respond to contact form submissions from your website.
-            {pagination.total > 0 && ` Showing ${pagination.total} total submissions.`}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-primary">{pagination.total}</div>
-              <div className="text-muted-foreground flex items-center justify-center">
-                <MessageSquare className="h-4 w-4 mr-1" />
-                Total Submissions
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600">{todaySubmissions}</div>
-              <div className="text-muted-foreground flex items-center justify-center">
-                <Calendar className="h-4 w-4 mr-1" />
-                Today
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-green-600">{weekSubmissions}</div>
-              <div className="text-muted-foreground flex items-center justify-center">
-                <TrendingUp className="h-4 w-4 mr-1" />
-                This Week
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-purple-600">{uniqueEmails}</div>
-              <div className="text-muted-foreground flex items-center justify-center">
-                <Users className="h-4 w-4 mr-1" />
-                Unique Contacts
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <PageHeader
+        title="Support"
+        description="Monitor and respond to contact form submissions from your website."
+      />
+
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <StatCard
+          label="Total submissions"
+          value={data ? num(pagination.total) : "—"}
+          icon={MessageSquare}
+          isLoading={isLoading}
+        />
+        <StatCard
+          label="Today"
+          value={stats ? num(stats.todayCount) : "—"}
+          icon={Calendar}
+          isLoading={isLoading}
+        />
+        <StatCard
+          label="This week"
+          value={stats ? num(stats.weekCount) : "—"}
+          icon={TrendingUp}
+          isLoading={isLoading}
+        />
+        <StatCard
+          label="Unique contacts"
+          value={stats ? num(stats.uniqueEmailCount) : "—"}
+          icon={Users}
+          isLoading={isLoading}
+        />
+      </div>
 
       <ContactSubmissionsTable
-        submissions={submissions}
+        submissions={data?.submissions ?? []}
         pagination={pagination}
         onSearch={handleSearch}
         onPageChange={handlePageChange}
         onSort={handleSort}
         onStatusFilter={handleStatusFilter}
         statusFilter={statusFilter}
-        isLoading={loading}
+        isLoading={isLoading}
+        error={error}
+        onRetry={refetch}
       />
-
-      {!loading && submissions.length === 0 && !searchTerm && (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <Mail className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium mb-2">No Contact Submissions Yet</h3>
-            <p className="text-muted-foreground">
-              When users submit the contact form on your website, their messages will appear here.
-            </p>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

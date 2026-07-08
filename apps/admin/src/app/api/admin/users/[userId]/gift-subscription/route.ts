@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray, desc } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -9,11 +10,23 @@ import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
 import { stripeConfig } from '@/lib/stripe-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
-
-type GiftTier = 'pro' | 'founder' | 'business';
+import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 
 type RouteContext = { params: Promise<{ userId: string }> };
+
+const giftSchema = z.object({
+  tier: z.enum(['pro', 'founder', 'business']),
+  reason: z.string().trim().min(1).max(500).default('Admin gift'),
+});
+
+const revokeSchema = z.object({
+  reason: z.string().trim().min(1, 'A reason is required to revoke a subscription').max(500),
+  // Default false preserves the historical immediate-cancel behavior for
+  // gifted subs; the UI defaults paid revokes to cancel-at-period-end.
+  cancelAtPeriodEnd: z.boolean().default(false),
+});
 
 /**
  * POST /api/admin/users/[userId]/gift-subscription
@@ -25,32 +38,30 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
     const { userId: targetUserId } = await context.params;
     const adminUserId = adminUser.id;
 
-    // Parse request body
-    const body = await request.json();
-    const { tier, reason } = body as { tier?: string; reason?: string };
-
-    // Validate tier
-    if (!tier || !['pro', 'founder', 'business'].includes(tier)) {
+    const parsed = giftSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
       return NextResponse.json(
-        { error: 'Invalid tier. Must be "pro", "founder", or "business"' },
+        { error: 'Invalid request. Tier must be "pro", "founder", or "business" and reason must be non-empty.', details: parsed.error.flatten().fieldErrors },
         { status: 400 }
       );
     }
+    const { tier: giftTier, reason } = parsed.data;
 
-    const giftTier = tier as GiftTier;
-
-    // Get target user
-    const [targetUser] = await db
+    // Get target user. name/email are AES-GCM ciphertext at rest — decrypt
+    // BEFORE any use (Stripe coupon name, response messages, masked logs).
+    const [rawTargetUser] = await db
       .select()
       .from(users)
       .where(eq(users.id, targetUserId));
 
-    if (!targetUser) {
+    if (!rawTargetUser) {
       return NextResponse.json(
         { error: 'User not found' },
         { status: 404 }
       );
     }
+
+    const targetUser = await decryptUserRow(rawTargetUser);
 
     // Check if user already has an active subscription
     const [existingSubscription] = await db
@@ -100,7 +111,7 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
       metadata: {
         giftedTo: targetUserId,
         giftedBy: adminUserId,
-        reason: reason || 'Admin gift',
+        reason,
       },
     });
 
@@ -112,7 +123,7 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
       metadata: {
         userId: targetUser.id,
         giftedBy: adminUserId,
-        reason: reason || 'Admin gift',
+        reason,
         type: 'gift_subscription',
       },
     });
@@ -124,7 +135,22 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
       tier: giftTier,
       subscriptionId: subscription.id,
       couponId: giftCoupon.id,
-      reason: reason || 'Admin gift',
+      reason,
+    });
+
+    // Record what/why in the tamper-evident audit trail (not just method+path).
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: adminUserId,
+      resourceType: 'user',
+      resourceId: targetUserId,
+      details: {
+        source: 'admin',
+        action: 'gift_subscription',
+        tier: giftTier,
+        reason,
+        subscriptionId: subscription.id,
+      },
     });
 
     return NextResponse.json({
@@ -154,26 +180,39 @@ export const POST = withAdminAuth<RouteContext>(async (adminUser, request, conte
 
 /**
  * DELETE /api/admin/users/[userId]/gift-subscription
- * Revoke a gifted subscription immediately.
- * The subscription is deleted in Stripe, and the webhook reverts the user to free tier.
+ * Revoke a user's active subscription. Requires a non-empty reason in the
+ * JSON body. `cancelAtPeriodEnd: true` schedules the cancellation instead of
+ * cutting the user off immediately (recommended for paid subscriptions).
+ * Stripe webhooks revert the user to free tier when the subscription ends.
  */
 export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, context) => {
   try {
     const { userId: targetUserId } = await context.params;
     const adminUserId = adminUser.id;
 
-    // Get target user
-    const [targetUser] = await db
+    const parsed = revokeSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'A non-empty reason is required to revoke a subscription', details: parsed.error.flatten().fieldErrors },
+        { status: 400 }
+      );
+    }
+    const { reason, cancelAtPeriodEnd } = parsed.data;
+
+    // Get target user (decrypt PII before any use — see POST).
+    const [rawTargetUser] = await db
       .select()
       .from(users)
       .where(eq(users.id, targetUserId));
 
-    if (!targetUser) {
+    if (!rawTargetUser) {
       return NextResponse.json(
         { error: 'User not found' },
         { status: 404 }
       );
     }
+
+    const targetUser = await decryptUserRow(rawTargetUser);
 
     // Get user's active subscription
     const [activeSubscription] = await db
@@ -195,9 +234,15 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
       );
     }
 
-    // Cancel the subscription immediately in Stripe
-    // This will trigger a customer.subscription.deleted webhook
-    await stripe.subscriptions.cancel(activeSubscription.stripeSubscriptionId);
+    if (cancelAtPeriodEnd) {
+      // Schedule cancellation; the user keeps access until the period ends.
+      await stripe.subscriptions.update(activeSubscription.stripeSubscriptionId, {
+        cancel_at_period_end: true,
+      });
+    } else {
+      // Cancel immediately; triggers a customer.subscription.deleted webhook.
+      await stripe.subscriptions.cancel(activeSubscription.stripeSubscriptionId);
+    }
 
     loggers.api.info('Admin revoked subscription', {
       adminId: adminUserId,
@@ -205,12 +250,34 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
       targetUserEmail: maskEmail(targetUser.email),
       subscriptionId: activeSubscription.stripeSubscriptionId,
       previousTier: targetUser.subscriptionTier,
+      cancelAtPeriodEnd,
+      reason,
     });
 
+    // Record what/why in the tamper-evident audit trail (not just method+path).
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: adminUserId,
+      resourceType: 'user',
+      resourceId: targetUserId,
+      details: {
+        source: 'admin',
+        action: 'revoke_subscription',
+        reason,
+        cancelAtPeriodEnd,
+        previousTier: targetUser.subscriptionTier,
+        subscriptionId: activeSubscription.stripeSubscriptionId,
+      },
+    });
+
+    const displayName = targetUser.name || targetUser.email;
     return NextResponse.json({
       success: true,
-      message: `Subscription revoked for ${targetUser.name || targetUser.email}. User will be downgraded to free tier.`,
+      message: cancelAtPeriodEnd
+        ? `Subscription for ${displayName} will be canceled at the end of the current billing period.`
+        : `Subscription revoked for ${displayName}. User will be downgraded to free tier.`,
       revokedSubscriptionId: activeSubscription.stripeSubscriptionId,
+      cancelAtPeriodEnd,
     });
 
   } catch (error) {
