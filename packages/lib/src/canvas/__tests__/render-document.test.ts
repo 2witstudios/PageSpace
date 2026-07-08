@@ -429,6 +429,54 @@ describe('renderCanvasDocument — <html lang>', () => {
   });
 });
 
+describe('renderCanvasDocument — CSP nonce for inherited outer policy', () => {
+  // The in-app iframe's srcDoc document unconditionally inherits the parent
+  // (embedder) document's CSP, in addition to its own <meta> CSP. When the app
+  // shell's CSP requires a nonce on script-src, author <script> tags need a
+  // matching nonce to keep running under the outer, inherited policy.
+  it('given a nonce, should stamp it onto preserved author <script> tags', () => {
+    const out = renderCanvasDocument({
+      html: '<script>console.log("hi");</script>',
+      nonce: 'abc123==',
+    });
+    expect(out).toContain('<script nonce="abc123==">console.log("hi");</script>');
+  });
+
+  it('given no nonce (e.g. the publish pipeline), should leave author <script> tags byte-for-byte unchanged', () => {
+    const out = renderCanvasDocument({
+      html: '<script>console.log("hi");</script>',
+    });
+    expect(out).toContain('<script>console.log("hi");</script>');
+    expect(out).not.toContain('nonce=');
+  });
+
+  it('given an author script that already declares its own nonce attribute, should not duplicate or overwrite it', () => {
+    const out = renderCanvasDocument({
+      html: '<script nonce="author-nonce">console.log("hi");</script>',
+      nonce: 'app-nonce==',
+    });
+    expect(out).toContain('<script nonce="author-nonce">console.log("hi");</script>');
+    expect(out).not.toContain('app-nonce==');
+    expect((out.match(/nonce=/g) ?? []).length).toBe(1);
+  });
+
+  it('given a nonce with HTML-significant characters, should escape it in the stamped attribute', () => {
+    const out = renderCanvasDocument({
+      html: '<script>x()</script>',
+      nonce: '"><script>alert(1)</script>',
+    });
+    expect(out).toContain('nonce="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"');
+  });
+
+  it('given multiple author <script> tags, should stamp the nonce onto each', () => {
+    const out = renderCanvasDocument({
+      html: '<script>a()</script><p>x</p><script>b()</script>',
+      nonce: 'n1',
+    });
+    expect((out.match(/nonce="n1"/g) ?? []).length).toBe(2);
+  });
+});
+
 describe('deriveDescription', () => {
   it('given plain text shorter than the limit, should return it unchanged', () => {
     expect(deriveDescription('Hello world')).toBe('Hello world');

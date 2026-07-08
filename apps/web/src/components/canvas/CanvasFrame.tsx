@@ -7,6 +7,7 @@ import {
   extractDashboardFileViewRefs,
   rewriteDashboardFileViewLinks,
 } from '@/lib/canvas/file-view-links';
+import { useNonce } from '@/contexts/NonceContext';
 
 interface CanvasFrameProps {
   html: string;
@@ -43,6 +44,7 @@ export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to
  * in-app view and the published artifact render identically.
  */
 export function CanvasFrame({ html, title }: CanvasFrameProps) {
+  const nonce = useNonce();
   const [previewHtml, setPreviewHtml] = useState(html);
 
   useEffect(() => {
@@ -89,8 +91,8 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
   // target) would navigate the frame itself — and many sites refuse framing —
   // so default links to a new tab (works with the iframe's allow-popups).
   const srcDoc = useMemo(
-    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank' }),
-    [previewHtml, title],
+    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', nonce }),
+    [previewHtml, title, nonce],
   );
 
   return (

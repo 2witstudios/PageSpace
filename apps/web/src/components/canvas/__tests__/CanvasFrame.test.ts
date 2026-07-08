@@ -8,6 +8,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 }));
 
 import { CANVAS_IFRAME_SANDBOX, CanvasFrame } from '../CanvasFrame';
+import { NonceProvider } from '@/contexts/NonceContext';
 
 /**
  * Security invariant guard for the in-app canvas iframe.
@@ -65,6 +66,35 @@ describe('CanvasFrame', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refs: [{ driveId: 'drive-1', pageId: 'file-1' }] }),
+    });
+  });
+});
+
+/**
+ * A srcDoc iframe unconditionally inherits the embedder (app shell) document's
+ * CSP, which is nonce-based. Author <script> tags need a matching nonce or the
+ * inherited policy blocks them, even though canvas's own <meta> CSP would
+ * allow them. This guards the fix: the nonce reaches CanvasFrame via context
+ * and lands on the rendered author script.
+ */
+describe('CanvasFrame — CSP nonce threading', () => {
+  it('given a NonceProvider with a known nonce, should stamp it onto the rendered author <script> in the iframe srcdoc', async () => {
+    fetchWithAuthMock.mockResolvedValue({ ok: true, json: async () => ({ links: [] }) });
+
+    render(
+      React.createElement(
+        NonceProvider,
+        { nonce: 'test-nonce-123' },
+        React.createElement(CanvasFrame, {
+          html: '<script>console.log("hi")</script>',
+          title: 'Canvas',
+        }),
+      ),
+    );
+
+    await waitFor(() => {
+      const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+      expect(iframe.srcdoc).toContain('<script nonce="test-nonce-123">console.log("hi")</script>');
     });
   });
 });

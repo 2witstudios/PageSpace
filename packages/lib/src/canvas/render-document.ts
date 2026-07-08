@@ -43,6 +43,20 @@ export interface RenderCanvasDocumentInput {
    */
   faviconBaseUrl?: string;
   /**
+   * CSP nonce to stamp onto preserved author `<script>` tags.
+   *
+   * Per the HTML/CSP spec, a `srcDoc` iframe unconditionally inherits its
+   * parent (embedder) document's CSP in ADDITION to this document's own
+   * `<meta>` CSP (`BASELINE_CSP` above), regardless of the iframe's `sandbox`
+   * attribute. When the embedder applies a nonce-based `script-src` (e.g. the
+   * dashboard's app-wide CSP), author scripts need a matching nonce or the
+   * inherited policy blocks them — even though `BASELINE_CSP`'s own
+   * `script-src 'unsafe-inline'` would allow them. Omit for the publish
+   * pipeline, which is never framed via `srcDoc` and so never inherits an
+   * outer CSP.
+   */
+  nonce?: string;
+  /**
    * Explicit favicon href from a `<link rel="icon" href="…">` the author placed
    * in their canvas. When set, emitted as a single `<link rel="icon">` tag
    * instead of the three-tag set generated from `faviconBaseUrl`.
@@ -183,7 +197,23 @@ function unwrapFullDocument(html: string): string {
   return headStyles + stripped;
 }
 
-function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): { css: string; body: string } {
+/**
+ * Stamp `nonce="…"` onto a preserved `<script ...>` block's opening tag, so it
+ * satisfies an embedder's inherited nonce-based CSP (see `nonce` on
+ * `RenderCanvasDocumentInput`). Only the opening tag is touched — content and
+ * closing tag pass through unchanged. If the author already declared their
+ * own `nonce` attribute, it is left alone (not duplicated or overwritten).
+ */
+function stampScriptNonce(scriptBlock: string, nonce: string): string {
+  const openTagMatch = scriptBlock.match(/^<script(?=[\s/>])[^>]*>/i);
+  if (!openTagMatch) return scriptBlock;
+  const openTag = openTagMatch[0];
+  if (/\bnonce\s*=/i.test(openTag)) return scriptBlock;
+  const stampedOpenTag = openTag.replace(/^<script/i, `<script nonce="${escapeHtml(nonce)}"`);
+  return stampedOpenTag + scriptBlock.slice(openTag.length);
+}
+
+function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], nonce?: string): { css: string; body: string } {
   // Tag names require a genuine delimiter — whitespace, `/`, or `>` — immediately
   // after the name (the `(?=[\s/>])` lookahead), mirroring the HTML tokenizer.
   // Only after that delimiter is arbitrary junk/attributes tolerated up to `>`,
@@ -200,7 +230,7 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
       cssParts.push(sanitizeCSS(styleContent, allowedHttpsHosts?.length ? { allowedHttpsHosts } : undefined));
       return '';
     }
-    return match; // <script> block — leave verbatim
+    return nonce ? stampScriptNonce(match, nonce) : match; // <script> block — leave verbatim (unless nonce is stamped)
   });
   return { css: cssParts.join('\n'), body };
 }
@@ -209,10 +239,10 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, nonce } = input;
   const csp = buildBaselineCsp(formActionOrigin);
 
-  const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts);
+  const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce);
   const rawTitle = title && title.trim() ? title : 'Untitled';
   const safeTitle = escapeHtml(rawTitle);
   const safeLang = escapeHtml(lang && lang.trim() ? lang : 'en');
