@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { TerminalSquare, ArrowUp, ArrowDown, X, Loader2 } from 'lucide-react';
+import { TerminalSquare, ArrowUp, ArrowDown, X, Loader2, TriangleAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { fetchWithAuth, put } from '@/lib/auth/auth-fetch';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
@@ -161,6 +162,17 @@ export function TerminalAccessCard() {
       </CardHeader>
       {config.terminalAccess && (
         <CardContent className="space-y-4">
+          <Alert variant="warning">
+            <TriangleAlert />
+            <AlertTitle>Broad input surface + shell access</AlertTitle>
+            <AlertDescription>
+              The global assistant already has unrestricted access to external content — web search, page
+              fetching, calendar — plus any integrations you connect (GitHub, Notion, Slack). Terminal Access
+              adds the ability to run shell commands on a persistent Machine using that same input surface.
+              PageSpace flags suspicious tool output but does not block it — review what the assistant does with
+              content fetched from outside sources.
+            </AlertDescription>
+          </Alert>
           <div>
             <label className="text-sm font-medium mb-2 block">Machines</label>
             <p className="text-xs text-muted-foreground mb-3">

@@ -55,7 +55,17 @@ describe('TerminalAccessCard', () => {
     render(<TerminalAccessCard />);
     await waitFor(() => expect(screen.getByText('Terminal Access')).toBeInTheDocument());
     expect(screen.queryByText('Machines')).not.toBeInTheDocument();
+    expect(screen.queryByText(/unrestricted access to external content/)).not.toBeInTheDocument();
     expect(screen.getByRole('switch')).not.toBeChecked();
+  });
+
+  it('given terminalAccess is on, should render a warning about the global assistant\'s broad input surface', async () => {
+    mocks.fetchWithAuth.mockResolvedValue(
+      mockGetResponse({ terminalAccess: true, machines: [{ kind: 'own' }], availableTerminals: [] }),
+    );
+    render(<TerminalAccessCard />);
+    await waitFor(() => expect(screen.getByText('Own machine')).toBeInTheDocument());
+    expect(screen.getByText(/unrestricted access to external content/)).toBeInTheDocument();
   });
 
   it('given terminalAccess is on with a configured own machine, should render it as the default machine', async () => {

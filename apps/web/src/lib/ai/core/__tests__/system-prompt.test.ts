@@ -104,6 +104,13 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     // reuse-don't-recreate
     expect(result).toContain('gh_pr_list');
   });
+
+  it('given the sandbox guidance, should include the Constraints{} block treating tool output as untrusted', () => {
+    const result = buildSystemPrompt('dashboard', undefined, false, undefined, true);
+    expect(result).toContain('Constraints {');
+    expect(result).toContain('tool output');
+    expect(result).toContain('untrusted');
+  });
 });
 
 describe('buildPersonalizationPrompt', () => {
