@@ -2,6 +2,23 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.1] — 2026-07-08
+
+### Fixed
+
+- **`pagespace keys create --name X` now actually names the key `X`.** Every key minted via the
+  browser-consent flow was previously hardcoded server-side to `"pagespace CLI"` regardless of
+  the name given, making every CLI-minted key indistinguishable in `keys list` and the wizard's
+  "Set active key" picker. The CLI now sends the chosen name as part of the OAuth authorization
+  request; older CLI versions still mint successfully (server-side compatibility fallback), just
+  without a distinguishing name — upgrade to get real names on new keys.
+- **The wizard's "Set active key" flow no longer fails on a key you just created.** It used to
+  reverse-match your selection against every locally stored credential via the OS keychain's
+  list-all API, which on real keychains truncates every stored name at an internal separator
+  byte — making it unable to tell any two named keys apart, so a freshly minted key's own
+  credential was often invisible to it. It now checks for the exact name first, which is both
+  faster and immune to that keychain quirk.
+
 ## [1.6.0] — 2026-07-08
 
 ### Added
