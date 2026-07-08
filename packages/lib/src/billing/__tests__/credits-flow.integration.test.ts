@@ -61,7 +61,7 @@ const H = vi.hoisted(() => {
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
   const subscriptions = cols('subscriptions', ['id', 'userId', 'status']);
   const aiUsageLogs = cols('aiUsageLogs', [
-    'id', 'userId', 'cost', 'timestamp', 'success', 'provider',
+    'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source',
     'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
   ]);
 
@@ -420,6 +420,7 @@ import {
   TIER_MONTHLY_ALLOWANCE_CENTS,
   RESERVE_FLOOR_CENTS,
   MARKUP_BPS,
+  TERMINAL_MARKUP_BPS,
 } from '../credit-pricing';
 
 // ── test helpers over the shared store ──────────────────────────────────────────
@@ -739,6 +740,32 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
 
     expect(result.orphans).toBe(N);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'usage')).toHaveLength(N);
+  });
+
+  it("recovers a crashed source:'terminal' usage row at TERMINAL_MARKUP_BPS end-to-end, not the shared AI markup", async () => {
+    // Whole-system proof of the PR #1955 crash-recovery fix: a terminal usage row
+    // reached aiUsageLogs (writeAiUsage completed) but the process crashed before
+    // consumeCredits ever claimed a ledger row for it — so there is NO stored markup
+    // to replay. The orphan sweep must reconstruct the terminal floor from the row's
+    // `source` field, through the REAL computeBackfillActions -> consumeCredits path
+    // (not mocked), landing a ledger row stamped with TERMINAL_MARKUP_BPS.
+    seedUser('u1', 'cus_1', 'business');
+    store.creditBalances.push({
+      userId: 'u1', monthlyRemainingCents: 5000, monthlyAllowanceCents: 5000,
+      topupRemainingCents: 0, pendingMillicents: 0,
+      monthlyPeriodStart: new Date(PERIOD_START * 1000), monthlyPeriodEnd: new Date(PERIOD_END * 1000),
+      updatedAt: new Date(),
+    });
+    store.aiUsageLogs.push({
+      id: 'log_terminal_orphan', userId: 'u1', cost: 1, timestamp: PAST(), success: true, source: 'terminal',
+    });
+
+    const result = await backfillCredits();
+
+    expect(result.orphans).toBe(1);
+    const led = ledgerOf('u1').find((r) => r.aiUsageLogId === 'log_terminal_orphan')!;
+    expect(led.markupBps).toBe(TERMINAL_MARKUP_BPS);
+    expect(led.chargeMillicents).toBe(Math.round(1 * (TERMINAL_MARKUP_BPS / 10000) * 100_000));
   });
 });
 

@@ -411,21 +411,37 @@ export interface OrphanUsageRow {
   aiUsageLogId: string;
   userId: string;
   costDollars: number;
+  /**
+   * The usage row's recorded `source` (aiUsageLogs.source), used to reconstruct
+   * which markup this call should recover at — an orphan never went through
+   * `consumeCredits` the first time, so there is no ledger row to read a stored
+   * markup back from. Absent/unrecognized sources fall back to the shared
+   * global markup (see `computeBackfillActions`).
+   */
+  source?: string | null;
 }
 
 export type BackfillAction =
   | { kind: 'retry_pending'; ledgerId: string }
-  | { kind: 'apply_orphan'; aiUsageLogId: string; userId: string; costDollars: number };
+  | { kind: 'apply_orphan'; aiUsageLogId: string; userId: string; costDollars: number; markupBpsOverride?: number };
 
 /**
  * Plan the reconcile work: retry every unsettled ('pending') ledger row, then
  * apply a decrement for every usage row that has no ledger entry at all. The
  * DB query is responsible for selection (status/age/orphan); this just maps the
  * already-filtered rows into actions so the cron shell stays dumb.
+ *
+ * `terminalMarkupBps` is injected (not imported — this module has zero I/O, see
+ * the module doc) so a `source: 'terminal'` orphan recovers at terminal's own
+ * floor instead of silently falling back to the shared global markup: a
+ * terminal usage row can reach `aiUsageLogs` (via `writeAiUsage`) and then crash
+ * before `consumeCredits` ever claims a ledger row, in which case this sweep —
+ * not the original call — is what actually bills it.
  */
 export function computeBackfillActions(
   pending: PendingLedgerRow[],
   orphans: OrphanUsageRow[],
+  terminalMarkupBps: number,
 ): BackfillAction[] {
   return [
     ...pending.map((row): BackfillAction => ({ kind: 'retry_pending', ledgerId: row.id })),
@@ -434,6 +450,7 @@ export function computeBackfillActions(
       aiUsageLogId: row.aiUsageLogId,
       userId: row.userId,
       costDollars: row.costDollars,
+      ...(row.source === 'terminal' ? { markupBpsOverride: terminalMarkupBps } : {}),
     })),
   ];
 }
