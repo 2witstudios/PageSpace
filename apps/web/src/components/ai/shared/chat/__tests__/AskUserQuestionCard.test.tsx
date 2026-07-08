@@ -107,6 +107,43 @@ describe('AskUserQuestionCard', () => {
     }).not.toThrow();
   });
 
+  it('matches answers to questions by position, not by header — duplicate headers do not collide', () => {
+    // Two questions sharing the identical header ("Approach") — headers have
+    // no uniqueness constraint. handleSubmit builds `answers` positionally
+    // (input.questions.map((q, i) => ...)), so rendering must read answers
+    // back the same way, or one question would display the other's answer.
+    const duplicateHeaderInput = {
+      questions: [
+        { header: 'Approach', question: 'Which approach for the backend?', options: [{ label: 'REST' }, { label: 'GraphQL' }] },
+        { header: 'Approach', question: 'Which approach for the frontend?', options: [{ label: 'SSR' }, { label: 'CSR' }] },
+      ],
+    };
+    const part = {
+      type: 'tool-ask_user',
+      toolCallId: 'q1',
+      state: 'output-available' as const,
+      input: duplicateHeaderInput,
+      output: {
+        answers: [
+          { header: 'Approach', question: 'Which approach for the backend?', selectedLabel: 'REST' },
+          { header: 'Approach', question: 'Which approach for the frontend?', selectedLabel: 'CSR' },
+        ],
+      },
+    };
+    const { getAllByText } = renderAnswerable(part as never);
+
+    // The chosen option renders a Check icon (svg child) inside its button;
+    // an unchosen option does not. Each question's OWN answer must mark its
+    // own option, not the other (same-header) question's.
+    const isChosen = (label: string) =>
+      (getAllByText(label)[0].closest('button') as HTMLButtonElement).querySelector('svg') !== null;
+
+    expect(isChosen('REST')).toBe(true);
+    expect(isChosen('GraphQL')).toBe(false);
+    expect(isChosen('CSR')).toBe(true);
+    expect(isChosen('SSR')).toBe(false);
+  });
+
   it('renders read-only (no interactive buttons disabled-state crash) when not answerable', () => {
     const part = answerablePart(QUESTIONS_INPUT);
     const { getByText } = render(

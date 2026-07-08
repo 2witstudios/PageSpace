@@ -401,6 +401,10 @@ export async function POST(
 
     // Save user's message immediately to database
     const userMessage = requestMessages[requestMessages.length - 1];
+    // Set below (fire-early/await-late — see the ask_user branches ~90 lines
+    // down) and joined right before the history load, so its DB round trip
+    // overlaps with the independent setup in between instead of blocking it.
+    let askUserSyncPromise: Promise<unknown> | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = userMessage.id || createId();
@@ -487,17 +491,21 @@ export async function POST(
       }
 
       // A typed message was sent instead of answering a pending ask_user
-      // question — dismiss it so the model doesn't re-ask.
-      await dismissPendingAskUserForGlobalConversation({ conversationId }).catch((error) => {
+      // question — dismiss it so the model doesn't re-ask. Kicked off here
+      // (not awaited) and joined via askUserSyncPromise just before the
+      // history load below, so its DB round trip overlaps with the
+      // independent setup in between instead of blocking it.
+      askUserSyncPromise = dismissPendingAskUserForGlobalConversation({ conversationId }).catch((error) => {
         loggers.api.error('Global Assistant Chat API: Failed to dismiss pending ask_user question', error as Error);
       });
     } else if (userMessage?.role === 'assistant') {
       // Resume request: the client answered a pending ask_user question via
       // addToolResult (no new user message). Merge the answer into the
-      // persisted assistant row so history load below picks it up.
+      // persisted assistant row so history load below picks it up. Same
+      // fire-early/await-late pattern as the dismissal branch above.
       const clientResults = extractClientAskUserResults(userMessage);
       if (clientResults.length > 0) {
-        await applyAskUserResultsToGlobalMessage({
+        askUserSyncPromise = applyAskUserResultsToGlobalMessage({
           messageId: userMessage.id,
           conversationId,
           results: clientResults,
@@ -548,6 +556,11 @@ export async function POST(
     loggers.api.debug('Global Assistant Chat API: Loading conversation history from database', {
       conversationId
     });
+
+    // Join the ask_user resume/dismiss write (if any) before loading history,
+    // so this turn's model context reflects it — fired early above to
+    // overlap with the independent setup between there and here.
+    if (askUserSyncPromise) await askUserSyncPromise;
 
     // Read ALL active messages from database (source of truth)
     const dbMessages = await db

@@ -9,10 +9,11 @@ import {
   convertGlobalAssistantMessageToUIMessage,
   saveMessageToDatabase,
   saveGlobalAssistantMessageToDatabase,
-  extractMessageContent,
-  extractToolCalls,
-  extractToolResults,
 } from '@/lib/ai/core/message-utils';
+import {
+  buildAssistantPersistencePayload,
+  type AssistantPersistencePayload,
+} from '@/lib/ai/core/persistAssistantParts';
 import { ASK_USER_TOOL_NAME, askUserOutputSchema } from '@/lib/ai/tools/ask-user-tools';
 
 const ASK_USER_PART_TYPE = `tool-${ASK_USER_TOOL_NAME}`;
@@ -92,65 +93,44 @@ function pendingAskUserToolCallIds(parts: UIMessage['parts']): string[] {
   return ids;
 }
 
-// --- Page (page-agent) conversations -------------------------------------
+/**
+ * A fetched assistant row, reconstructed into a UIMessage, paired with a
+ * `persist` closure already bound to that specific row (id, and for the
+ * global backend, its non-null userId) — so the shared orchestration below
+ * never needs to know the row's shape or carry state between fetch and save.
+ */
+interface FetchedAssistantMessage {
+  message: UIMessage;
+  persist(payload: AssistantPersistencePayload): Promise<void>;
+}
 
-export async function applyAskUserResultsToPageMessage(args: {
-  messageId: string;
-  pageId: string;
-  conversationId: string;
-  results: ClientAskUserResult[];
-}): Promise<{ merged: boolean }> {
-  if (args.results.length === 0) return { merged: false };
+/**
+ * Row-agnostic backend for the merge/dismiss orchestration below, so that
+ * logic is written once and shared by both the page-agent (chatMessages) and
+ * Global Assistant (messages) persistence tables, which differ only in
+ * table/where-clause shape and save-call field requirements.
+ */
+interface AssistantMessageAdapter {
+  /** Fetch + reconstruct the specific assistant message this resume answers, or null if not found/not assistant. */
+  fetchById(messageId: string): Promise<FetchedAssistantMessage | null>;
+  /** Fetch + reconstruct the conversation's most recent assistant message, or null if none exists. */
+  fetchLastAssistant(): Promise<FetchedAssistantMessage | null>;
+}
 
-  const [row] = await db
-    .select()
-    .from(chatMessages)
-    .where(
-      and(
-        eq(chatMessages.id, args.messageId),
-        eq(chatMessages.pageId, args.pageId),
-        eq(chatMessages.conversationId, args.conversationId),
-        eq(chatMessages.isActive, true)
-      )
-    )
-    .limit(1);
+async function applyAskUserResults(
+  adapter: AssistantMessageAdapter,
+  messageId: string,
+  results: ClientAskUserResult[]
+): Promise<{ merged: boolean }> {
+  if (results.length === 0) return { merged: false };
 
-  if (!row || row.role !== 'assistant') return { merged: false };
+  const fetched = await adapter.fetchById(messageId);
+  if (!fetched) return { merged: false };
 
-  const uiMessage = await convertDbMessageToUIMessage({
-    id: row.id,
-    pageId: row.pageId,
-    userId: row.userId,
-    role: row.role,
-    content: row.content,
-    toolCalls: row.toolCalls,
-    toolResults: row.toolResults,
-    createdAt: row.createdAt,
-    isActive: row.isActive,
-    editedAt: row.editedAt,
-    messageType: row.messageType === 'todo_list' ? 'todo_list' : 'standard',
-  });
-
-  const { parts, changed } = mergeResultsIntoParts(uiMessage.parts, args.results);
+  const { parts, changed } = mergeResultsIntoParts(fetched.message.parts, results);
   if (!changed) return { merged: false };
 
-  const merged: UIMessage = { ...uiMessage, parts };
-  const content = extractMessageContent(merged);
-  const toolCalls = extractToolCalls(merged);
-  const toolResults = extractToolResults(merged);
-
-  await saveMessageToDatabase({
-    messageId: args.messageId,
-    pageId: args.pageId,
-    conversationId: args.conversationId,
-    userId: null,
-    role: 'assistant',
-    content,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    toolResults: toolResults.length > 0 ? toolResults : undefined,
-    uiMessage: merged,
-  });
-
+  await fetched.persist(buildAssistantPersistencePayload(messageId, parts));
   return { merged: true };
 }
 
@@ -160,41 +140,11 @@ export async function applyAskUserResultsToPageMessage(args: {
  * conversation's last assistant message so the model sees its questions were
  * answered free-form in chat and does not re-ask.
  */
-export async function dismissPendingAskUserForPageConversation(args: {
-  pageId: string;
-  conversationId: string;
-}): Promise<void> {
-  const [row] = await db
-    .select()
-    .from(chatMessages)
-    .where(
-      and(
-        eq(chatMessages.pageId, args.pageId),
-        eq(chatMessages.conversationId, args.conversationId),
-        eq(chatMessages.isActive, true),
-        eq(chatMessages.role, 'assistant')
-      )
-    )
-    .orderBy(desc(chatMessages.createdAt))
-    .limit(1);
+async function dismissPendingAskUser(adapter: AssistantMessageAdapter): Promise<void> {
+  const fetched = await adapter.fetchLastAssistant();
+  if (!fetched) return;
 
-  if (!row) return;
-
-  const uiMessage = await convertDbMessageToUIMessage({
-    id: row.id,
-    pageId: row.pageId,
-    userId: row.userId,
-    role: row.role,
-    content: row.content,
-    toolCalls: row.toolCalls,
-    toolResults: row.toolResults,
-    createdAt: row.createdAt,
-    isActive: row.isActive,
-    editedAt: row.editedAt,
-    messageType: row.messageType === 'todo_list' ? 'todo_list' : 'standard',
-  });
-
-  const pendingIds = pendingAskUserToolCallIds(uiMessage.parts);
+  const pendingIds = pendingAskUserToolCallIds(fetched.message.parts);
   if (pendingIds.length === 0) return;
 
   const results: ClientAskUserResult[] = pendingIds.map((toolCallId) => ({
@@ -202,142 +152,189 @@ export async function dismissPendingAskUserForPageConversation(args: {
     output: { dismissed: true, reason: DISMISSED_REASON },
   }));
 
-  const { parts, changed } = mergeResultsIntoParts(uiMessage.parts, results);
+  const { parts, changed } = mergeResultsIntoParts(fetched.message.parts, results);
   if (!changed) return;
 
-  const merged: UIMessage = { ...uiMessage, parts };
-  const content = extractMessageContent(merged);
-  const toolCalls = extractToolCalls(merged);
-  const toolResults = extractToolResults(merged);
+  await fetched.persist(buildAssistantPersistencePayload(fetched.message.id, parts));
+}
 
-  await saveMessageToDatabase({
-    messageId: row.id,
-    pageId: args.pageId,
-    conversationId: args.conversationId,
-    userId: null,
-    role: 'assistant',
-    content,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    toolResults: toolResults.length > 0 ? toolResults : undefined,
-    uiMessage: merged,
-  });
+// --- Page (page-agent) conversations -------------------------------------
+
+function pageAdapter(args: { pageId: string; conversationId: string }): AssistantMessageAdapter {
+  const toUIMessage = (row: {
+    id: string;
+    pageId: string;
+    userId: string | null;
+    role: string;
+    content: string;
+    toolCalls: unknown;
+    toolResults: unknown;
+    createdAt: Date;
+    isActive: boolean;
+    editedAt: Date | null;
+    messageType: string | null;
+  }) =>
+    convertDbMessageToUIMessage({
+      id: row.id,
+      pageId: row.pageId,
+      userId: row.userId,
+      role: row.role,
+      content: row.content,
+      toolCalls: row.toolCalls,
+      toolResults: row.toolResults,
+      createdAt: row.createdAt,
+      isActive: row.isActive,
+      editedAt: row.editedAt,
+      messageType: row.messageType === 'todo_list' ? 'todo_list' : 'standard',
+    });
+
+  const persistFor = (messageId: string) => (payload: AssistantPersistencePayload) =>
+    saveMessageToDatabase({
+      messageId,
+      pageId: args.pageId,
+      conversationId: args.conversationId,
+      userId: null,
+      role: 'assistant',
+      ...payload,
+    });
+
+  return {
+    async fetchById(messageId) {
+      const [row] = await db
+        .select()
+        .from(chatMessages)
+        .where(
+          and(
+            eq(chatMessages.id, messageId),
+            eq(chatMessages.pageId, args.pageId),
+            eq(chatMessages.conversationId, args.conversationId),
+            eq(chatMessages.isActive, true)
+          )
+        )
+        .limit(1);
+      if (!row || row.role !== 'assistant') return null;
+      return { message: await toUIMessage(row), persist: persistFor(row.id) };
+    },
+    async fetchLastAssistant() {
+      const [row] = await db
+        .select()
+        .from(chatMessages)
+        .where(
+          and(
+            eq(chatMessages.pageId, args.pageId),
+            eq(chatMessages.conversationId, args.conversationId),
+            eq(chatMessages.isActive, true),
+            eq(chatMessages.role, 'assistant')
+          )
+        )
+        .orderBy(desc(chatMessages.createdAt))
+        .limit(1);
+      if (!row) return null;
+      return { message: await toUIMessage(row), persist: persistFor(row.id) };
+    },
+  };
+}
+
+export function applyAskUserResultsToPageMessage(args: {
+  messageId: string;
+  pageId: string;
+  conversationId: string;
+  results: ClientAskUserResult[];
+}): Promise<{ merged: boolean }> {
+  return applyAskUserResults(pageAdapter(args), args.messageId, args.results);
+}
+
+export function dismissPendingAskUserForPageConversation(args: {
+  pageId: string;
+  conversationId: string;
+}): Promise<void> {
+  return dismissPendingAskUser(pageAdapter(args));
 }
 
 // --- Global Assistant conversations --------------------------------------
 
-export async function applyAskUserResultsToGlobalMessage(args: {
+function globalAdapter(args: { conversationId: string }): AssistantMessageAdapter {
+  const toUIMessage = (row: {
+    id: string;
+    conversationId: string;
+    userId: string;
+    role: string;
+    content: string;
+    toolCalls: unknown;
+    toolResults: unknown;
+    createdAt: Date;
+    isActive: boolean;
+    editedAt: Date | null;
+    messageType: string | null;
+  }) =>
+    convertGlobalAssistantMessageToUIMessage({
+      id: row.id,
+      conversationId: row.conversationId,
+      userId: row.userId,
+      role: row.role,
+      content: row.content,
+      toolCalls: row.toolCalls,
+      toolResults: row.toolResults,
+      createdAt: row.createdAt,
+      isActive: row.isActive,
+      editedAt: row.editedAt,
+      messageType: row.messageType === 'todo_list' ? 'todo_list' : 'standard',
+    });
+
+  const persistFor = (messageId: string, userId: string) => (payload: AssistantPersistencePayload) =>
+    saveGlobalAssistantMessageToDatabase({
+      messageId,
+      conversationId: args.conversationId,
+      userId,
+      role: 'assistant',
+      ...payload,
+    });
+
+  return {
+    async fetchById(messageId) {
+      const [row] = await db
+        .select()
+        .from(globalMessages)
+        .where(
+          and(
+            eq(globalMessages.id, messageId),
+            eq(globalMessages.conversationId, args.conversationId),
+            eq(globalMessages.isActive, true)
+          )
+        )
+        .limit(1);
+      if (!row || row.role !== 'assistant') return null;
+      return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId) };
+    },
+    async fetchLastAssistant() {
+      const [row] = await db
+        .select()
+        .from(globalMessages)
+        .where(
+          and(
+            eq(globalMessages.conversationId, args.conversationId),
+            eq(globalMessages.isActive, true),
+            eq(globalMessages.role, 'assistant')
+          )
+        )
+        .orderBy(desc(globalMessages.createdAt))
+        .limit(1);
+      if (!row) return null;
+      return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId) };
+    },
+  };
+}
+
+export function applyAskUserResultsToGlobalMessage(args: {
   messageId: string;
   conversationId: string;
   results: ClientAskUserResult[];
 }): Promise<{ merged: boolean }> {
-  if (args.results.length === 0) return { merged: false };
-
-  const [row] = await db
-    .select()
-    .from(globalMessages)
-    .where(
-      and(
-        eq(globalMessages.id, args.messageId),
-        eq(globalMessages.conversationId, args.conversationId),
-        eq(globalMessages.isActive, true)
-      )
-    )
-    .limit(1);
-
-  if (!row || row.role !== 'assistant') return { merged: false };
-
-  const uiMessage = await convertGlobalAssistantMessageToUIMessage({
-    id: row.id,
-    conversationId: row.conversationId,
-    userId: row.userId,
-    role: row.role,
-    content: row.content,
-    toolCalls: row.toolCalls,
-    toolResults: row.toolResults,
-    createdAt: row.createdAt,
-    isActive: row.isActive,
-    editedAt: row.editedAt,
-    messageType: row.messageType === 'todo_list' ? 'todo_list' : 'standard',
-  });
-
-  const { parts, changed } = mergeResultsIntoParts(uiMessage.parts, args.results);
-  if (!changed) return { merged: false };
-
-  const merged: UIMessage = { ...uiMessage, parts };
-  const content = extractMessageContent(merged);
-  const toolCalls = extractToolCalls(merged);
-  const toolResults = extractToolResults(merged);
-
-  await saveGlobalAssistantMessageToDatabase({
-    messageId: args.messageId,
-    conversationId: args.conversationId,
-    userId: row.userId,
-    role: 'assistant',
-    content,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    toolResults: toolResults.length > 0 ? toolResults : undefined,
-    uiMessage: merged,
-  });
-
-  return { merged: true };
+  return applyAskUserResults(globalAdapter(args), args.messageId, args.results);
 }
 
-export async function dismissPendingAskUserForGlobalConversation(args: {
+export function dismissPendingAskUserForGlobalConversation(args: {
   conversationId: string;
 }): Promise<void> {
-  const [row] = await db
-    .select()
-    .from(globalMessages)
-    .where(
-      and(
-        eq(globalMessages.conversationId, args.conversationId),
-        eq(globalMessages.isActive, true),
-        eq(globalMessages.role, 'assistant')
-      )
-    )
-    .orderBy(desc(globalMessages.createdAt))
-    .limit(1);
-
-  if (!row) return;
-
-  const uiMessage = await convertGlobalAssistantMessageToUIMessage({
-    id: row.id,
-    conversationId: row.conversationId,
-    userId: row.userId,
-    role: row.role,
-    content: row.content,
-    toolCalls: row.toolCalls,
-    toolResults: row.toolResults,
-    createdAt: row.createdAt,
-    isActive: row.isActive,
-    editedAt: row.editedAt,
-    messageType: row.messageType === 'todo_list' ? 'todo_list' : 'standard',
-  });
-
-  const pendingIds = pendingAskUserToolCallIds(uiMessage.parts);
-  if (pendingIds.length === 0) return;
-
-  const results: ClientAskUserResult[] = pendingIds.map((toolCallId) => ({
-    toolCallId,
-    output: { dismissed: true, reason: DISMISSED_REASON },
-  }));
-
-  const { parts, changed } = mergeResultsIntoParts(uiMessage.parts, results);
-  if (!changed) return;
-
-  const merged: UIMessage = { ...uiMessage, parts };
-  const content = extractMessageContent(merged);
-  const toolCalls = extractToolCalls(merged);
-  const toolResults = extractToolResults(merged);
-
-  await saveGlobalAssistantMessageToDatabase({
-    messageId: row.id,
-    conversationId: args.conversationId,
-    userId: row.userId,
-    role: 'assistant',
-    content,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    toolResults: toolResults.length > 0 ? toolResults : undefined,
-    uiMessage: merged,
-  });
+  return dismissPendingAskUser(globalAdapter(args));
 }

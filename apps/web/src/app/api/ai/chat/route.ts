@@ -446,6 +446,10 @@ export async function POST(request: Request) {
 
     // Save user's message immediately to database (database-first approach)
     const userMessage = messages[messages.length - 1]; // Last message is the new user message
+    // Set below (fire-early/await-late — see the ask_user branches ~30 lines down)
+    // and joined right before the history load, so its DB round trip overlaps
+    // with the independent setup in between instead of blocking it.
+    let askUserSyncPromise: Promise<unknown> | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = userMessage.id || createId();
@@ -530,8 +534,12 @@ export async function POST(request: Request) {
       }
 
       // A typed message was sent instead of answering a pending ask_user
-      // question — dismiss it so the model doesn't re-ask.
-      await dismissPendingAskUserForPageConversation({
+      // question — dismiss it so the model doesn't re-ask. Kicked off here
+      // (not awaited) and joined via askUserSyncPromise just before the
+      // history load below, so its DB round trip overlaps with the
+      // independent setup in between instead of blocking it — same pattern
+      // as userProfilePromise a few lines down.
+      askUserSyncPromise = dismissPendingAskUserForPageConversation({
         pageId: chatId as string,
         conversationId,
       }).catch((error) => {
@@ -540,10 +548,11 @@ export async function POST(request: Request) {
     } else if (userMessage?.role === 'assistant') {
       // Resume request: the client answered a pending ask_user question via
       // addToolResult (no new user message). Merge the answer into the
-      // persisted assistant row so history load below picks it up.
+      // persisted assistant row so history load below picks it up. Same
+      // fire-early/await-late pattern as the dismissal branch above.
       const clientResults = extractClientAskUserResults(userMessage);
       if (clientResults.length > 0) {
-        await applyAskUserResultsToPageMessage({
+        askUserSyncPromise = applyAskUserResultsToPageMessage({
           messageId: userMessage.id,
           pageId: chatId as string,
           conversationId,
@@ -986,6 +995,11 @@ export async function POST(request: Request) {
       pageId: chatId
     });
 
+    // Join the ask_user resume/dismiss write (if any) before loading history,
+    // so this turn's model context reflects it — fired early above to
+    // overlap with the independent setup between there and here.
+    if (askUserSyncPromise) await askUserSyncPromise;
+
     const pageId = chatId as string;
     const dbMessages = await db
       .select()
@@ -1071,6 +1085,14 @@ export async function POST(request: Request) {
           triggeredBy: { userId: userId!, displayName, browserSessionId },
         }).catch(() => {});
       }
+    } else if (userMessage?.role === 'assistant') {
+      // ask_user resume turn: no new user message to broadcast, but
+      // isConversationShared still gates the mention-notify call below for
+      // the agent's reply — must still be computed here, or it silently
+      // stays at its initial `false` and mention notifications are dropped
+      // for every turn that follows an answered ask_user question.
+      const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
+      isConversationShared = convRow?.isShared === true;
     }
 
     lifecycle = await createStreamLifecycle({

@@ -95,9 +95,14 @@ export const AskUserQuestionCard: React.FC<AskUserQuestionCardProps> = ({ part }
     );
   }
 
-  const answeredByHeader = new Map(
-    output && 'answers' in output ? output.answers.map((a) => [a.header, a]) : []
-  );
+  // Answers correspond to questions by POSITION, not by header — headers are
+  // free-form model-authored text with no uniqueness constraint, so two
+  // questions in the same call can legitimately share a header (e.g. both
+  // titled "Approach"). handleSubmit below builds `answers` via
+  // `input.questions.map((q, i) => ...)`, so `answers[i]` always answers
+  // `input.questions[i]`; keying by header here would silently swap answers
+  // whenever two headers collide.
+  const answeredList = output && 'answers' in output ? output.answers : undefined;
 
   const setDraft = (index: number, patch: Partial<DraftAnswer>) => {
     setDrafts((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)));
@@ -130,7 +135,7 @@ export const AskUserQuestionCard: React.FC<AskUserQuestionCardProps> = ({ part }
       </div>
 
       {input.questions.map((q, i) => {
-        const answered = answeredByHeader.get(q.header);
+        const answered = answeredList?.[i];
         const draft = drafts[i];
 
         return (
