@@ -490,7 +490,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     expect(renderInput?.title).toBe('Author OG Title');
   });
 
-  it('prefers an explicit title override over the canvas-authored og:title', async () => {
+  it('prefers the canvas-authored og:title over an explicit title override — code wins', async () => {
     setupPage();
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
     vi.mocked(extractAndStripOgMeta).mockReturnValueOnce({
@@ -503,7 +503,7 @@ describe('publishCanvasPage — SEO overrides', () => {
     });
 
     const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
-    expect(renderInput?.title).toBe('Custom Title');
+    expect(renderInput?.title).toBe('Author OG Title');
   });
 
   it('falls back to the drive default OG image when neither override nor canvas set one', async () => {

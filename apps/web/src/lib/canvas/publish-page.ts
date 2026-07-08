@@ -252,12 +252,18 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // to text derived from the page content; robots defaults to indexable.
   const canonicalUrl = isHomePage ? rootUrl : publishedUrl;
   // Resolve the effective metadata through the pure precedence resolver:
-  // per-page override → canvas <meta> → drive default (image) / derived (text).
+  // canvas code → per-page override → drive default (image) / derived (text).
   const resolvedMeta = resolvePublishedMeta({
     override: { title: effectiveTitle, description: effectiveDescription, ogImageUrl: effectiveOgImageUrl },
     noindex: effectiveNoindex,
     pageTitle: page.title,
-    canvasMeta: { ogTitle: meta.ogTitle, ogImageUrl: meta.ogImageUrl, ogDescription: meta.ogDescription },
+    canvasMeta: {
+      ogTitle: meta.ogTitle,
+      ogImageUrl: meta.ogImageUrl,
+      ogDescription: meta.ogDescription,
+      title: meta.title,
+      description: meta.description,
+    },
     driveDefaultOgImageUrl: drive.publishDefaultOgImageUrl,
     body: bodyHtml,
   });
@@ -589,13 +595,13 @@ async function renderNotFoundPageHtml(params: {
     return renderPublishedPage({
       html: bodyHtml,
       // Same precedence as a normal publish (resolvePublishedMeta): the
-      // page's own og:title wins over its internal page title.
-      title: meta.ogTitle || page.title || 'Page not found',
+      // page's own code-authored meta wins over its internal page title.
+      title: meta.ogTitle || meta.title || page.title || 'Page not found',
       assetBaseUrl: getPublishAssetBaseUrl(),
       faviconHref: favicon.faviconHref,
       faviconBaseUrl: favicon.faviconBaseUrl,
       ogImageUrl: meta.ogImageUrl ?? publishDefaultOgImageUrl ?? undefined,
-      description: meta.ogDescription,
+      description: meta.ogDescription || meta.description,
       robots: 'noindex',
       formActionOrigin,
     });

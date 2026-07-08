@@ -35,7 +35,7 @@ export function sanitizeCSS(css: string, opts?: { allowedHttpsHosts?: string[] }
     .replace(/javascript\s*:/gi, '/* javascript blocked */')
     .replace(/vbscript\s*:/gi, '/* vbscript blocked */')
     .replace(/data\s*:\s*text\/html/gi, '/* data:text/html blocked */')
-    .replace(/behavior\s*:/gi, '/* behavior blocked */');
+    .replace(/(?<![a-zA-Z-])behavior\s*:/gi, '/* behavior blocked */');
 
   // Block external @import statements (prevent external stylesheet loading)
   sanitized = sanitized

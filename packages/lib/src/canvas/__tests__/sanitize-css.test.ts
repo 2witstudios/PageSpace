@@ -95,6 +95,18 @@ describe('sanitizeCSS', () => {
       expect(result.toLowerCase()).not.toContain('behavior:')
       expect(result).toContain('/* behavior blocked */')
     })
+
+    it('given scroll-behavior: smooth, should NOT corrupt it as a blocked behavior', () => {
+      const result = sanitizeCSS('html { scroll-behavior: smooth; }')
+      expect(result).toContain('scroll-behavior: smooth')
+      expect(result).not.toContain('/* behavior blocked */')
+    })
+
+    it('given overscroll-behavior: contain, should NOT corrupt it as a blocked behavior', () => {
+      const result = sanitizeCSS('.x { overscroll-behavior: contain; }')
+      expect(result).toContain('overscroll-behavior: contain')
+      expect(result).not.toContain('/* behavior blocked */')
+    })
   })
 
   describe('blocks external resource loading', () => {

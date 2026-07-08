@@ -674,4 +674,58 @@ describe('renderCanvasDocument — Twitter Card', () => {
     expect(head).toContain('.y');
     expect(out).not.toContain('<style>.y{color:blue}</style>');
   });
+
+  describe('given author html that is already a full standalone document', () => {
+    it('should unwrap it to a single, non-nested document (not double-wrap it)', () => {
+      const out = renderCanvasDocument({
+        html:
+          '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<title>Author Title</title>\n' +
+          '<meta name="description" content="Author description">\n</head>\n<body>\n<nav>hi</nav>\n</body>\n</html>',
+      });
+      // Exactly one doctype/html/head/body — no stray structural tags nested
+      // inside the generated <body>.
+      expect(out.match(/<!doctype html>/gi) ?? []).toHaveLength(1);
+      expect(out.match(/<html(?=[\s>])/gi) ?? []).toHaveLength(1);
+      expect(out.match(/<head(?=[\s>])/gi) ?? []).toHaveLength(1);
+      expect(out.match(/<body(?=[\s>])/gi) ?? []).toHaveLength(1);
+      expect(out.match(/<meta charset/gi) ?? []).toHaveLength(1);
+      // The author's <head> (title/description) is discarded here — it is a
+      // higher-level concern (SEO meta extraction) — but the body content survives.
+      expect(out).toContain('<nav>hi</nav>');
+      expect(out).not.toContain('Author Title');
+    });
+
+    it('given a full document with no explicit <body> tag, should still strip the wrapper', () => {
+      const out = renderCanvasDocument({
+        html: '<!DOCTYPE html><html><head><title>x</title></head><p>orphan</p></html>',
+      });
+      expect(out.match(/<!doctype html>/gi) ?? []).toHaveLength(1);
+      expect(out.match(/<html(?=[\s>])/gi) ?? []).toHaveLength(1);
+      expect(out).toContain('<p>orphan</p>');
+    });
+
+    it('given a bare fragment (the common case), should pass through unchanged', () => {
+      const out = renderCanvasDocument({ html: '<div>fragment</div>' });
+      expect(out.match(/<html(?=[\s>])/gi) ?? []).toHaveLength(1);
+      expect(out).toContain('<div>fragment</div>');
+    });
+
+    it('given a <style> block inside the <head>, should hoist it into the generated <head> (not drop it)', () => {
+      const out = renderCanvasDocument({
+        html:
+          '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n<title>Author Title</title>\n' +
+          '<style>body { color: red; }</style>\n</head>\n<body>\n<nav>hi</nav>\n</body>\n</html>',
+      });
+      // Still a single, non-nested document.
+      expect(out.match(/<!doctype html>/gi) ?? []).toHaveLength(1);
+      expect(out.match(/<html(?=[\s>])/gi) ?? []).toHaveLength(1);
+      expect(out.match(/<head(?=[\s>])/gi) ?? []).toHaveLength(1);
+      expect(out.match(/<body(?=[\s>])/gi) ?? []).toHaveLength(1);
+      // The author's head <style> rule survives, hoisted into the generated
+      // <head> (same treatment as a body-level <style>) — not silently dropped.
+      const headEnd = out.indexOf('</head>');
+      expect(out.slice(0, headEnd)).toContain('body { color: red; }');
+      expect(out).toContain('<nav>hi</nav>');
+    });
+  });
 });
