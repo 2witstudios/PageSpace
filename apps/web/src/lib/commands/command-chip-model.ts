@@ -123,27 +123,22 @@ export function isCommandInertForMessage(content: string, isAiMessage: boolean):
 }
 
 /**
- * RichText preprocessing: rewrite the LEADING command token (first in
- * document order — one command per message) into an internal markdown link
- * the custom anchor renders as a chip, parallel to preprocessMentions.
- * The id/type split is on the last colon so built-in ids (`builtin:help`)
- * survive. Any later command-shaped text stays literal — it was never a
- * chip (§2.3: only picker selection creates one).
+ * RichText preprocessing: rewrite every command token in a message (in
+ * document order) into an internal markdown link the custom anchor renders
+ * as a chip, parallel to preprocessMentions. The id/type split is on the
+ * last colon so built-in ids (`builtin:help`) survive.
  */
 export function preprocessCommandTokens(content: string): string {
   // The paren body is matched as one bounded class and split on its last
   // colon in code (mirrors message-tokens): an `id:command` group pair
-  // would backtrack polynomially on hostile input. The scan is global but
-  // only the first command-typed token converts — slash-sigil tokens with
-  // other types pass through untouched.
-  let converted = false;
+  // would backtrack polynomially on hostile input. Every command-typed
+  // token converts; slash-sigil tokens with other types pass through
+  // untouched.
   return content.replace(
     /\/\[([^\]]{1,500})\]\(([^()]{1,300})\)/g,
     (match, label: string, body: string) => {
-      if (converted) return match;
       const sep = body.lastIndexOf(':');
       if (sep < 1 || body.slice(sep + 1) !== 'command') return match;
-      converted = true;
       return `[command:${label}](/command/${body.slice(0, sep)})`;
     }
   );

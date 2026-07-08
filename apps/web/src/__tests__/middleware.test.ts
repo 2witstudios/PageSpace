@@ -10,6 +10,13 @@ vi.mock('@/middleware/monitoring', () => ({
   monitoringMiddleware: (_req: unknown, handler: () => unknown) => handler(),
 }));
 
+const MOCK_API_CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, PUT, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-PageSpace-API-Version',
+  'Access-Control-Expose-Headers': 'X-PageSpace-API-Version, Retry-After',
+};
+
 vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse: () => ({ response: NextResponse.json({ ok: true }, { status: 200 }) }),
   createSecureErrorResponse: (body: unknown, status: number) => NextResponse.json(body, { status }),
@@ -17,6 +24,12 @@ vi.mock('@/middleware/security-headers', () => ({
   isPublishedSiteHost: () => false,
   isSecureRequest: () => true,
   shouldDisableCOEP: () => false,
+  applyApiCorsHeaders: (response: NextResponse) => {
+    for (const [key, value] of Object.entries(MOCK_API_CORS_HEADERS)) {
+      response.headers.set(key, value);
+    }
+    return response;
+  },
 }));
 
 vi.mock('@/lib/logging/edge-logger', () => ({
@@ -47,8 +60,8 @@ vi.mock('@/lib/well-known/rewrites', () => ({
 
 import { middleware } from '../middleware';
 
-const buildRequest = (pathname: string, headers: Record<string, string> = {}) =>
-  new NextRequest(new URL(`http://localhost${pathname}`), { headers });
+const buildRequest = (pathname: string, headers: Record<string, string> = {}, method = 'GET') =>
+  new NextRequest(new URL(`http://localhost${pathname}`), { headers, method });
 
 describe('middleware — /api/public/forms carve-outs', () => {
   beforeEach(() => {
@@ -128,5 +141,68 @@ describe('middleware — bearer-token prefix carve-out (all three token types)',
 
     expect(mockGetSessionFromCookies).toHaveBeenCalled();
     expect(response.status).toBe(401);
+  });
+});
+
+// CORS for the Bearer-authenticated API surface (@pagespace/sdk calling
+// pagespace.ai directly from a browser — see the browser-compat plan). A
+// browser blocks a cross-origin response with no Access-Control-Allow-Origin
+// regardless of whether the server-side auth itself would have succeeded, so
+// these headers must be present on every Bearer-authed response and on the
+// preflight that precedes it.
+describe('middleware — CORS for Bearer-authenticated API routes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+  });
+
+  it('attaches CORS headers and skips origin validation for a Bearer-prefixed request to /api/*', async () => {
+    // An origin that origin-validation would normally reject in block mode —
+    // proves this path never even reaches that check.
+    mockValidateOriginForMiddleware.mockReturnValue({
+      valid: false,
+      origin: 'https://some-external-spa.example',
+      skipped: false,
+      reason: 'origin not in allowlist',
+    });
+
+    const request = buildRequest('/api/pages/xyz', {
+      authorization: 'Bearer ps_at_abc123',
+      origin: 'https://some-external-spa.example',
+    });
+    const response = await middleware(request);
+
+    expect(response.status).not.toBe(403);
+    expect(mockValidateOriginForMiddleware).not.toHaveBeenCalled();
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('Access-Control-Expose-Headers')).toContain('X-PageSpace-API-Version');
+    expect(response.headers.get('Access-Control-Expose-Headers')).toContain('Retry-After');
+  });
+
+  it('leaves session-cookie traffic to the same path fully subject to origin validation, unaffected', async () => {
+    mockValidateOriginForMiddleware.mockReturnValue({
+      valid: false,
+      origin: 'https://some-external-spa.example',
+      skipped: false,
+      reason: 'origin not in allowlist',
+    });
+
+    const request = buildRequest('/api/pages/xyz', { origin: 'https://some-external-spa.example' });
+    const response = await middleware(request);
+
+    expect(mockValidateOriginForMiddleware).toHaveBeenCalledWith(request);
+    expect(response.status).toBe(403);
+  });
+
+  it('answers a bare OPTIONS preflight to /api/* with a 204 and CORS headers, with no auth check at all', async () => {
+    const request = buildRequest('/api/pages/xyz', {}, 'OPTIONS');
+    const response = await middleware(request);
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(response.headers.get('Access-Control-Allow-Methods')).toContain('POST');
+    expect(mockValidateOriginForMiddleware).not.toHaveBeenCalled();
+    expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
   });
 });

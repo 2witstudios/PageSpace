@@ -1032,6 +1032,11 @@
       "import": "./dist/security/distributed-rate-limit.js",
       "require": "./dist/security/distributed-rate-limit.js"
     },
+    "./security/client-ip": {
+      "types": "./dist/security/client-ip.d.ts",
+      "import": "./dist/security/client-ip.js",
+      "require": "./dist/security/client-ip.js"
+    },
     "./security/auth-handoff-sweep": {
       "types": "./dist/security/auth-handoff-sweep.d.ts",
       "import": "./dist/security/auth-handoff-sweep.js",

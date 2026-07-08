@@ -25,6 +25,8 @@ export interface CreateTokenArgs {
   readonly name?: string;
   /** Print the raw minted `mcp_*` token once (for .env/CI use) after a successful mint. */
   readonly showToken: boolean;
+  /** `--all-drives`: mint an unrestricted key (every drive the user owns, including future ones) instead of a `--drive`-scoped one. Mutual exclusion with `--drive` is `create.ts`'s `buildTokenScope`'s job, not this module's — this file only shapes flags into data. */
+  readonly allDrives: boolean;
 }
 
 export type ParseTokensCreateArgsResult =
@@ -43,6 +45,7 @@ function normalizeRole(value: string): Pick<DriveScopeArg, 'role' | 'customRoleI
 export function parseTokensCreateArgs(rest: readonly string[]): ParseTokensCreateArgsResult {
   let name: string | undefined;
   let showToken = false;
+  let allDrives = false;
   const drives: DriveScopeArg[] = [];
 
   let i = 0;
@@ -94,10 +97,19 @@ export function parseTokensCreateArgs(rest: readonly string[]): ParseTokensCreat
       continue;
     }
 
+    if (token === '--all-drives') {
+      if (allDrives) {
+        return { ok: false, message: 'Flag --all-drives was given more than once.' };
+      }
+      allDrives = true;
+      i += 1;
+      continue;
+    }
+
     return { ok: false, message: `Unknown flag: ${token}` };
   }
 
-  return { ok: true, args: { drives, name, showToken } };
+  return { ok: true, args: { drives, name, showToken, allDrives } };
 }
 
 export interface RevokeTokenArgs {

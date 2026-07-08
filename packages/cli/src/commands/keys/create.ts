@@ -29,6 +29,7 @@ import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../exit-c
 import type { OutputSink } from '../../handler-context.js';
 import type { CommandHandler } from '../../router/router.js';
 import { confirmIdentity } from '../../auth/confirm-identity.js';
+import { confirmationFailureMessage, confirmDestructive } from '../../confirm.js';
 import { createDiscoverMetadata } from '../../auth/discover.js';
 import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
@@ -71,8 +72,23 @@ export type BuildTokenScopeResult = { readonly ok: true; readonly scope: string 
  * `auth/client.ts` for the same reasoning) — `parseScopeList` from that
  * package is still used, but only in this module's test file, as a
  * devDependency-only drift guard against the canonical grammar.
+ *
+ * `options.allDrives` is the ONLY way this function produces the `all_drives`
+ * grant — never inferred from `drives.length === 0`, which is exactly the
+ * ambiguity this flag exists to avoid (a bare "no --drive given" usage error
+ * must stay a usage error, not silently escalate to an unrestricted key).
  */
-export function buildTokenScope(drives: readonly DriveScopeArg[]): BuildTokenScopeResult {
+export function buildTokenScope(
+  drives: readonly DriveScopeArg[],
+  options: { readonly allDrives?: boolean } = {},
+): BuildTokenScopeResult {
+  if (options.allDrives) {
+    if (drives.length > 0) {
+      return { ok: false, message: '--all-drives cannot be combined with --drive.' };
+    }
+    return { ok: true, scope: 'all_drives offline_access' };
+  }
+
   if (drives.length === 0) {
     return { ok: false, message: 'At least one --drive is required to create a scoped token.' };
   }
@@ -160,14 +176,25 @@ export type ResolveNewKeyNameResult = { readonly ok: true; readonly name: string
 
 /**
  * `--name` if given, else the sole drive's id — ambiguous for multiple
- * drives. Whichever branch resolves the name, `"default"` is refused
- * outright: that slot holds your login credential (stored by `pagespace
- * login`), and letting a scoped key land there (whether named explicitly or
- * auto-derived from a drive literally named "default") would let either
- * credential silently clobber the other.
+ * drives, and for `--all-drives` there is no drive id to fall back on at all,
+ * so `--name` is required outright. Whichever branch resolves the name,
+ * `"default"` is refused outright: that slot holds your login credential
+ * (stored by `pagespace login`), and letting a scoped key land there (whether
+ * named explicitly or auto-derived from a drive literally named "default")
+ * would let either credential silently clobber the other.
  */
-export function resolveNewKeyName({ name, drives }: Pick<CreateTokenArgs, 'name' | 'drives'>): ResolveNewKeyNameResult {
-  if (name === undefined && drives.length !== 1) {
+export function resolveNewKeyName({
+  name,
+  drives,
+  allDrives,
+}: Pick<CreateTokenArgs, 'name' | 'drives'> & { readonly allDrives?: boolean }): ResolveNewKeyNameResult {
+  if (allDrives && name === undefined) {
+    return {
+      ok: false,
+      message: '--name <name> is required when using --all-drives.',
+    };
+  }
+  if (!allDrives && name === undefined && drives.length !== 1) {
     return {
       ok: false,
       message: '--name <name> is required when scoping a key to more than one drive.',
@@ -205,7 +232,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
       return EXIT_USAGE_ERROR;
     }
 
-    const scopeResult = buildTokenScope(parsedArgs.args.drives);
+    const scopeResult = buildTokenScope(parsedArgs.args.drives, { allDrives: parsedArgs.args.allDrives });
     if (!scopeResult.ok) {
       ctx.stderr.write(`${scopeResult.message}\n`);
       return EXIT_USAGE_ERROR;
@@ -217,6 +244,20 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
       return EXIT_USAGE_ERROR;
     }
     const keyName = nameResult.name;
+
+    // Safety gate for the "quick flag typo mints a max-privilege key" risk:
+    // --all-drives requires --yes (scriptable/CI) or an interactive TTY
+    // confirm — the same shared confirmDestructive gate `keys revoke` uses.
+    if (parsedArgs.args.allDrives) {
+      const confirmation = await confirmDestructive(
+        'This will mint a key with access to ALL your drives. Continue? [y/N] ',
+        { isTTY: ctx.isTTY, yes: intent.flags.yes, prompt: ctx.prompt },
+      );
+      if (!confirmation.ok) {
+        ctx.stderr.write(`${confirmationFailureMessage(confirmation)}\n`);
+        return EXIT_RUNTIME_ERROR;
+      }
+    }
 
     const { host } = resolveConfig({
       flags: { host: intent.flags.host },
@@ -272,8 +313,9 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
     });
 
     switch (result.outcome) {
-      case 'success':
-        info.write(`Created key "${keyName}" on ${host}, scoped to: ${scopeResult.scope}.\n`);
+      case 'success': {
+        const scopeDescription = parsedArgs.args.allDrives ? 'all drives' : scopeResult.scope;
+        info.write(`Created key "${keyName}" on ${host}, scoped to: ${scopeDescription}.\n`);
         if (parsedArgs.args.showToken) {
           if (mintedToken !== null) {
             // The ONLY stdout line in --show-token mode (see `info` above).
@@ -285,6 +327,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
         }
         info.write(`${renderAgentWiringGuidance({ keyName, host }).join('\n')}\n`);
         return EXIT_SUCCESS;
+      }
       case 'timeout':
         ctx.stderr.write('Consent timed out waiting for the browser redirect. Run "pagespace keys create" again.\n');
         return EXIT_RUNTIME_ERROR;

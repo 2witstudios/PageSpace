@@ -37,12 +37,25 @@ const channelCommandExecutionSchema = z.object({
   entryPageTitle: z.string().optional(),
 });
 
+/**
+ * Universal Commands execution feedback: one entry per resolved command in
+ * the triggering message. Rows persisted before multi-command support
+ * shipped still carry this as a single object (`ChannelMessageAiMeta`'s
+ * `commandExecution` field is a jsonb payload with no data migration), so
+ * this accepts either shape and normalizes to an array — mirroring
+ * `normalizeCommandExecutionList` in the web app (`execution-indicator-model.ts`).
+ */
+const channelCommandExecutionListSchema = z
+  .union([channelCommandExecutionSchema, z.array(channelCommandExecutionSchema)])
+  .optional()
+  .transform((value) => (value === undefined ? undefined : Array.isArray(value) ? value : [value]));
+
 /** Set when a channel message was posted by an AI tool (`channel-message-repository.ts` `ChannelMessageAiMeta`). */
 const channelMessageAiMetaSchema = z.object({
   senderType: z.enum(['global_assistant', 'agent']),
   senderName: z.string(),
   agentPageId: z.string().optional(),
-  commandExecution: channelCommandExecutionSchema.optional(),
+  commandExecution: channelCommandExecutionListSchema,
 });
 
 const channelMessageUserSchema = z.object({

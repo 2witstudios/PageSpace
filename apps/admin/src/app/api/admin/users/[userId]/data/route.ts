@@ -39,7 +39,13 @@ export const DELETE = withAdminAuth<DataRouteContext>(
 
     try {
       const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-      const reason = (typeof body.reason === 'string' ? body.reason : 'Admin DSAR deletion').substring(0, 200);
+      const reason = (typeof body.reason === 'string' ? body.reason.trim() : '').substring(0, 200);
+      if (!reason) {
+        return Response.json(
+          { error: 'A non-empty reason is required for GDPR erasure' },
+          { status: 400 }
+        );
+      }
 
       const user = await accountRepository.findById(userId);
       if (!user) {
@@ -104,6 +110,7 @@ export const DELETE = withAdminAuth<DataRouteContext>(
       auditRequest(request, { eventType: 'data.delete', userId: adminUser.id, resourceType: 'user', resourceId: userId, details: {
         source: 'admin',
         operation: 'dsar-deletion',
+        reason,
       } });
 
       return Response.json({ message: 'User data deleted and anonymized' });

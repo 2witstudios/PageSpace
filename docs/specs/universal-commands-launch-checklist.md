@@ -345,9 +345,11 @@ Settings → AI Settings → Commands.
 
 - **Phase 5 (#1606) is merged** and this branch is rebased on it: `/help`
   now executes for real (`buildHelpPromptSection` renders the sender's
-  precedence-resolved command list), and `planCommandExecution` takes an
-  optional `{driveId}` context. The Phase 6 edge-case tests pass unchanged
-  against the merged behavior — the degradation contract held.
+  precedence-resolved command list), and `planCommandExecutions` (formerly
+  singular `planCommandExecution`, since generalized to resolve every
+  command per message) takes an optional `{driveId}` context. The Phase 6
+  edge-case tests pass unchanged against the merged behavior — the
+  degradation contract held.
 - **Built-ins at flip time:** `/help` is the only registered built-in
   (`packages/lib/src/commands/command-core.ts`); the remaining Phase 5
   scope (`.skill` import/export) is deferred and is not a flip blocker

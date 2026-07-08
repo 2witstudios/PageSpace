@@ -12,9 +12,11 @@ import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
 import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
-import { getTierFromPrice } from './stripe/price-config';
+import { getTierFromPrice, STRIPE_PRICE_TO_TIER } from './stripe/price-config';
+import { stripe } from './stripe/client';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
 
 /**
  * Get system health overview
@@ -205,96 +207,34 @@ export async function getUserActivity(startDate?: Date, endDate?: Date) {
   };
 }
 
+const EMAIL_PATTERN = /[^\s@"']+@[^\s@"']+\.[^\s@"',)\]}]+/g;
+
+function maskEmailsDeep(value: unknown): unknown {
+  if (typeof value === 'string') {
+    // Replace every email occurrence, including ones embedded in longer
+    // strings ("login failed for jane@example.com").
+    return value.replace(EMAIL_PATTERN, (match) => maskEmail(match));
+  }
+  if (Array.isArray(value)) return value.map(maskEmailsDeep);
+  if (value && typeof value === 'object') {
+    const masked: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      masked[key] = maskEmailsDeep(entry);
+    }
+    return masked;
+  }
+  return value;
+}
+
 /**
- * Get AI usage metrics
+ * Mask every email occurrence in log metadata — at any nesting depth and
+ * embedded anywhere inside strings — so raw PII never reaches the monitoring
+ * UI. Some writers (e.g. account-lockout) already mask before logging;
+ * maskEmail is idempotent on masked values.
  */
-export async function getAiUsageMetrics(startDate?: Date, endDate?: Date) {
-  const conditions = [];
-  
-  if (startDate) {
-    conditions.push(gte(aiUsageLogs.timestamp, startDate));
-  }
-  if (endDate) {
-    conditions.push(lte(aiUsageLogs.timestamp, endDate));
-  }
-
-  // Get costs by provider
-  const costsByProvider = await db
-    .select({
-      provider: aiUsageLogs.provider,
-      totalCost: sql<number>`SUM(COALESCE(${aiUsageLogs.cost}, 0))`,
-      requestCount: count(),
-    })
-    .from(aiUsageLogs)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(aiUsageLogs.provider);
-
-  // Get token usage over time - using Drizzle query
-  const tokenUsageOverTime = await db
-    .select({
-      day: sql<string>`DATE_TRUNC('day', ${aiUsageLogs.timestamp})`,
-      total_tokens: sql<number>`SUM(COALESCE(${aiUsageLogs.totalTokens}, 0))`,
-      total_cost: sql<number>`SUM(COALESCE(${aiUsageLogs.cost}, 0))`,
-    })
-    .from(aiUsageLogs)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(sql`DATE_TRUNC('day', ${aiUsageLogs.timestamp})`)
-    .orderBy(desc(sql`DATE_TRUNC('day', ${aiUsageLogs.timestamp})`))
-    .limit(30);
-
-  // Get model popularity
-  const modelPopularity = await db
-    .select({
-      model: aiUsageLogs.model,
-      usageCount: count(),
-      totalTokens: sql<number>`SUM(COALESCE(${aiUsageLogs.totalTokens}, 0))`,
-    })
-    .from(aiUsageLogs)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(aiUsageLogs.model)
-    .orderBy(desc(count()))
-    .limit(10);
-
-  // Get success/failure rates
-  const successCount = await db
-    .select({ count: count() })
-    .from(aiUsageLogs)
-    .where(and(
-      eq(aiUsageLogs.success, true),
-      ...(conditions.length > 0 ? conditions : [])
-    ));
-
-  const totalCount = await db
-    .select({ count: count() })
-    .from(aiUsageLogs)
-    .where(conditions.length > 0 ? and(...conditions) : undefined);
-
-  const successRate = totalCount[0]?.count > 0
-    ? (successCount[0]?.count / totalCount[0]?.count) * 100
-    : 0;
-
-  // Get top spending users
-  const topSpenders = await db
-    .select({
-      userId: aiUsageLogs.userId,
-      userName: users.name,
-      totalCost: sql<number>`SUM(COALESCE(${aiUsageLogs.cost}, 0))`,
-      requestCount: count(),
-    })
-    .from(aiUsageLogs)
-    .innerJoin(users, eq(aiUsageLogs.userId, users.id))
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(aiUsageLogs.userId, users.name)
-    .orderBy(desc(sql`SUM(COALESCE(${aiUsageLogs.cost}, 0))`))
-    .limit(5);
-
-  return {
-    costsByProvider,
-    tokenUsageOverTime,
-    modelPopularity,
-    successRate,
-    topSpenders: await decryptUserDisplayFields(topSpenders),
-  };
+function maskEmailsInMetadata(metadata: unknown): Record<string, unknown> | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  return maskEmailsDeep(metadata) as Record<string, unknown>;
 }
 
 /**
@@ -383,70 +323,8 @@ export async function getErrorAnalytics(startDate?: Date, endDate?: Date) {
     failedLogins: failedLogins.map((login) => ({
       timestamp: login.timestamp,
       ip: login.ip,
-      metadata: login.metadata as Record<string, unknown> | null,
+      metadata: maskEmailsInMetadata(login.metadata),
     })),
-  };
-}
-
-/**
- * Get performance metrics
- */
-export async function getPerformanceMetrics(startDate?: Date, endDate?: Date) {
-  const conditions = [];
-  
-  if (startDate) {
-    conditions.push(gte(apiMetrics.timestamp, startDate));
-  }
-  if (endDate) {
-    conditions.push(lte(apiMetrics.timestamp, endDate));
-  }
-
-  // Get average response times - using Drizzle query
-  const responseTimes = await db
-    .select({
-      hour: sql<string>`DATE_TRUNC('hour', ${apiMetrics.timestamp})`,
-      avg_response_time: sql<number>`AVG(${apiMetrics.duration})`,
-      max_response_time: sql<number>`MAX(${apiMetrics.duration})`,
-      min_response_time: sql<number>`MIN(${apiMetrics.duration})`,
-    })
-    .from(apiMetrics)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(sql`DATE_TRUNC('hour', ${apiMetrics.timestamp})`)
-    .orderBy(desc(sql`DATE_TRUNC('hour', ${apiMetrics.timestamp})`))
-    .limit(48);
-
-  // Get slow queries
-  const slowQueries = await db
-    .select({
-      endpoint: apiMetrics.endpoint,
-      responseTime: apiMetrics.duration,
-      timestamp: apiMetrics.timestamp,
-      userId: apiMetrics.userId,
-    })
-    .from(apiMetrics)
-    .where(and(
-      gte(apiMetrics.duration, 5000), // > 5 seconds
-      ...(conditions.length > 0 ? conditions : [])
-    ))
-    .orderBy(desc(apiMetrics.duration))
-    .limit(20);
-
-  // Get performance by endpoint
-  const metricTypes = await db
-    .select({
-      metric: apiMetrics.endpoint,
-      avgValue: sql<number>`AVG(${apiMetrics.duration})`,
-      count: count(),
-    })
-    .from(apiMetrics)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .groupBy(apiMetrics.endpoint)
-    .orderBy(desc(count()));
-
-  return {
-    responseTimes,
-    slowQueries,
-    metricTypes,
   };
 }
 
@@ -484,6 +362,11 @@ export interface UnitEconomicsSummary {
   chargedCents: number;
   appliedCents: number;
   requestCount: number;
+  /**
+   * Total outstanding user debt as an ALL-TIME point-in-time snapshot of
+   * `credit_balances.debtCents`. Unlike the other fields, it is NOT scoped to
+   * the summary's start/end date range — debt has no time dimension.
+   */
   debtCents: number;
   marginCents: number;
   marginPct: number | null;
@@ -896,12 +779,18 @@ export interface ProviderCostRow {
   requestCount: number;
 }
 
+/**
+ * Credit inflows split by kind. Deliberately has NO total: top-ups are real
+ * cash revenue while monthly grants are plan allowances (including gifted and
+ * free-tier users) — summing them overstates revenue.
+ */
 export interface CreditRevenue {
+  /** Real cash: credits purchased via top-up. */
   topupCents: number;
   topupCount: number;
+  /** Plan allowance grants — NOT cash revenue. */
   monthlyGrantCents: number;
   monthlyGrantCount: number;
-  totalCents: number;
 }
 
 export interface SubscriptionsByTierRow {
@@ -1111,18 +1000,56 @@ export async function getCreditRevenue(
     }
   }
 
-  return { topupCents, topupCount, monthlyGrantCents, monthlyGrantCount, totalCents: topupCents + monthlyGrantCents };
+  return { topupCents, topupCount, monthlyGrantCents, monthlyGrantCount };
 }
+
+/**
+ * Paying subscribers bucketed by tier. Consistent with the `payingUsers`
+ * definition in getGrowthMetrics: status IN ('active', 'trialing') and
+ * gifted = false. Legacy/grandfathered price IDs (absent from
+ * STRIPE_PRICE_TO_TIER) are resolved by fetching their unit amount from
+ * Stripe so getTierFromPrice's LEGACY_PRICE_AMOUNTS fallback applies instead
+ * of miscounting real subscribers as 'free'.
+ */
+// Stripe prices are immutable once created, so resolved unit amounts are
+// cached for the process lifetime. Failures are NOT cached so transient
+// errors retry on the next load.
+const legacyPriceAmountCache = new Map<string, number | null>();
 
 export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTierRow[]> {
   const rows = await db
     .select({ stripePriceId: subscriptions.stripePriceId })
     .from(subscriptions)
-    .where(eq(subscriptions.status, 'active'));
+    .where(and(
+      inArray(subscriptions.status, ['active', 'trialing']),
+      eq(subscriptions.gifted, false),
+    ));
+
+  // Look up unit amounts for price IDs the static map doesn't know (one Stripe
+  // call per distinct uncached legacy price ID, not per subscription row).
+  const legacyPriceIds = [...new Set(rows.map((r) => r.stripePriceId))]
+    .filter((priceId) => !(priceId in STRIPE_PRICE_TO_TIER));
+  const amountByPriceId = new Map<string, number | null>();
+  await Promise.all(legacyPriceIds.map(async (priceId) => {
+    const cached = legacyPriceAmountCache.get(priceId);
+    if (cached !== undefined) {
+      amountByPriceId.set(priceId, cached);
+      return;
+    }
+    try {
+      const price = await stripe.prices.retrieve(priceId);
+      legacyPriceAmountCache.set(priceId, price.unit_amount);
+      amountByPriceId.set(priceId, price.unit_amount);
+    } catch {
+      // Unresolvable price (deleted in Stripe, network error) — falls back to
+      // getTierFromPrice's 'free' bucket rather than failing the whole panel.
+      amountByPriceId.set(priceId, null);
+    }
+  }));
 
   const counts: Record<SubscriptionTier, number> = { free: 0, pro: 0, founder: 0, business: 0 };
   for (const r of rows) {
-    counts[getTierFromPrice(r.stripePriceId)] += 1;
+    counts[getTierFromPrice(r.stripePriceId, amountByPriceId.get(r.stripePriceId))] += 1;
   }
 
   return (Object.keys(counts) as SubscriptionTier[]).map((tier) => ({ tier, count: counts[tier] }));
@@ -1213,23 +1140,26 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
   const [totalUsersResult] = await db.select({ count: count() }).from(users);
   const totalUsers = totalUsersResult?.count ?? 0;
 
-  // Current MAU/WAU/DAU from session activity — count ALL sessions with lastUsedAt in
-  // the window, regardless of revokedAt. A user who was active 15 days ago and then logged
-  // out still counts toward MAU; revokedAt describes current session state, not history.
+  // Current MAU/WAU/DAU from activity_logs — the ONE active-user definition for
+  // all growth metrics (headline + trends). Sessions cannot serve any window
+  // beyond ~2 weeks: they expire after 7 days and expired rows are hard-deleted
+  // 7 days later (sessionService.cleanupExpiredSessions), so a sessions-based
+  // 30d MAU or 12-month trend silently undercounts. activity_logs is retained
+  // 365 days (activity-log-archival), covering every window used here.
   const [mauResult] = await db
-    .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
-    .from(sessions)
-    .where(gte(sessions.lastUsedAt, thirtyDaysAgo));
+    .select({ count: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int` })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, thirtyDaysAgo));
 
   const [wauResult] = await db
-    .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
-    .from(sessions)
-    .where(gte(sessions.lastUsedAt, sevenDaysAgo));
+    .select({ count: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int` })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, sevenDaysAgo));
 
   const [dauResult] = await db
-    .select({ count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int` })
-    .from(sessions)
-    .where(gte(sessions.lastUsedAt, oneDayAgo));
+    .select({ count: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int` })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, oneDayAgo));
 
   const mau = mauResult?.count ?? 0;
   const wau = wauResult?.count ?? 0;
@@ -1266,14 +1196,16 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
     ));
   const payingUsers = payingResult?.count ?? 0;
 
-  // MAU trend (12 months) from activity_logs — comprehensive audit trail
+  // MAU trend (12 months). Same active-user definition as the headline
+  // mau/wau/dau above: distinct activity_logs.userId bucketed by timestamp.
+  // Trend and headline must reconcile — one definition, one durable source.
   const mauTrendRaw = await db
     .select({
       month: sql<string>`DATE_TRUNC('month', ${activityLogs.timestamp})`,
       mau: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int`,
     })
     .from(activityLogs)
-    .where(and(gte(activityLogs.timestamp, twelveMonthsAgo), isNotNull(activityLogs.userId)))
+    .where(gte(activityLogs.timestamp, twelveMonthsAgo))
     .groupBy(sql`DATE_TRUNC('month', ${activityLogs.timestamp})`)
     .orderBy(asc(sql`DATE_TRUNC('month', ${activityLogs.timestamp})`));
 
@@ -1303,14 +1235,14 @@ export async function getGrowthMetrics(): Promise<GrowthMetrics> {
     newUsers: signupsByMonth.get(key) ?? 0,
   }));
 
-  // DAU trend (last 30 days) from activity_logs
+  // DAU trend (last 30 days) — activity_logs, same definition as headline dau.
   const dauTrendRaw = await db
     .select({
       day: sql<string>`DATE_TRUNC('day', ${activityLogs.timestamp})`,
       dau: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int`,
     })
     .from(activityLogs)
-    .where(and(gte(activityLogs.timestamp, thirtyDaysAgo), isNotNull(activityLogs.userId)))
+    .where(gte(activityLogs.timestamp, thirtyDaysAgo))
     .groupBy(sql`DATE_TRUNC('day', ${activityLogs.timestamp})`)
     .orderBy(asc(sql`DATE_TRUNC('day', ${activityLogs.timestamp})`));
 

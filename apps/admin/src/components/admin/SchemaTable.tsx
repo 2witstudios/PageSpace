@@ -55,16 +55,16 @@ interface SchemaTableProps {
 
 function getTypeColor(type: string): string {
   const typeMap: Record<string, string> = {
-    'text': 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300',
-    'timestamp': 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300',
-    'boolean': 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
-    'integer': 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300',
-    'real': 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300',
-    'jsonb': 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300',
-    'USER-DEFINED': 'bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-300',
+    'text': 'bg-info/15 text-info',
+    'timestamp': 'bg-primary/15 text-primary',
+    'boolean': 'bg-success/15 text-success',
+    'integer': 'bg-warning/15 text-warning',
+    'real': 'bg-warning/15 text-warning',
+    'jsonb': 'bg-secondary text-secondary-foreground',
+    'USER-DEFINED': 'bg-destructive/10 text-destructive',
   };
-  
-  return typeMap[type] || 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300';
+
+  return typeMap[type] || 'bg-muted text-muted-foreground';
 }
 
 function getConstraintIcon(type: string) {
@@ -105,9 +105,15 @@ export function SchemaTable({ tables }: SchemaTableProps) {
           placeholder="Search tables, columns, or types..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-10"
+          className="h-10 pl-10"
         />
       </div>
+
+      {filteredTables.length === 0 && (
+        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">
+          No tables or columns match “{searchTerm}”.
+        </div>
+      )}
 
       <div className="grid gap-4">
         {filteredTables.map((table) => (

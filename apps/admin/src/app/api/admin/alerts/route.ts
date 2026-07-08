@@ -3,6 +3,14 @@ import { withAdminAuth } from '@/lib/auth';
 import { getApiMetrics, getNegativeMarginAccounts, getLiveHolds } from '@/lib/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
+// Alert thresholds. Chosen as operational tripwires, not contractual SLOs.
+// API error rate (%) over the last 24h above which the nav shows an error badge.
+const ERROR_RATE_ALERT_PCT = 5;
+// Any account with negative margin (24h window) is worth a look — alert on the first one.
+const NEGATIVE_MARGIN_ALERT_COUNT = 1;
+// Unexpired credit holds above this count suggest settle failures / stuck holds.
+const LIVE_HOLDS_ALERT_COUNT = 50;
+
 // Lightweight alert-state endpoint for nav badges. Cached 60s.
 export const GET = withAdminAuth(async () => {
   try {
@@ -15,14 +23,15 @@ export const GET = withAdminAuth(async () => {
 
     return NextResponse.json(
       {
-        errorRateAlert: metrics.errorRate > 5,
-        negativeMarginAlert: negativeMargin.length > 0,
-        liveHoldsAlert: holds.holdCount > 50,
+        errorRateAlert: metrics.errorRate > ERROR_RATE_ALERT_PCT,
+        negativeMarginAlert: negativeMargin.length >= NEGATIVE_MARGIN_ALERT_COUNT,
+        liveHoldsAlert: holds.holdCount > LIVE_HOLDS_ALERT_COUNT,
         errorRate: metrics.errorRate,
         negativeMarginCount: negativeMargin.length,
         liveHoldsCount: holds.holdCount,
       },
-      { headers: { 'Cache-Control': 's-maxage=60, stale-while-revalidate=30' } }
+      // Authenticated admin data — private, never shared-cacheable.
+      { headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=30' } }
     );
   } catch (error) {
     loggers.api.error('Error fetching admin alerts:', error as Error);

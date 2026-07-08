@@ -416,7 +416,7 @@ describe('DELETE /api/account/devices', () => {
       expect(createArgs[4]).toEqual({
         deviceName: 'My MacBook',
         userAgent: undefined,
-        ipAddress: undefined,
+        ipAddress: 'unknown',
       });
     });
 
@@ -570,7 +570,7 @@ describe('DELETE /api/account/devices', () => {
       expect(createArgs[4]).toEqual({
         deviceName: undefined,
         userAgent: undefined,
-        ipAddress: undefined,
+        ipAddress: 'unknown',
       });
     });
   });

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { buildExecutionIndicatorViewModel } from '../execution-indicator-model';
+import {
+  buildExecutionIndicatorViewModel,
+  normalizeCommandExecutionList,
+} from '../execution-indicator-model';
 
 describe('buildExecutionIndicatorViewModel', () => {
   it('renders "Using /foo" with the entry-page tooltip for a used command (spec §7.1)', () => {
@@ -51,5 +54,33 @@ describe('buildExecutionIndicatorViewModel', () => {
     expect(buildExecutionIndicatorViewModel(null)).toBeNull();
     expect(buildExecutionIndicatorViewModel({ status: 'used' })).toBeNull();
     expect(buildExecutionIndicatorViewModel('nope')).toBeNull();
+  });
+});
+
+describe('normalizeCommandExecutionList', () => {
+  it('returns an empty array for undefined or null (no execution feedback)', () => {
+    expect(normalizeCommandExecutionList(undefined)).toEqual([]);
+    expect(normalizeCommandExecutionList(null)).toEqual([]);
+  });
+
+  it('passes an array through unchanged, preserving order', () => {
+    const list = [
+      { label: 'a', status: 'used' },
+      { label: 'b', status: 'skipped', reason: 'not_found' },
+    ];
+    expect(normalizeCommandExecutionList(list)).toEqual(list);
+  });
+
+  it('returns an empty array unchanged', () => {
+    expect(normalizeCommandExecutionList([])).toEqual([]);
+  });
+
+  it('wraps a legacy single-object payload (persisted before this field became an array) in a one-element array', () => {
+    const legacy = { label: 'release-checklist', status: 'used', entryPageTitle: 'Release Checklist' };
+    expect(normalizeCommandExecutionList(legacy)).toEqual([legacy]);
+  });
+
+  it('wraps other non-array, non-nullish values too, so downstream per-item validation can reject them safely', () => {
+    expect(normalizeCommandExecutionList('nope')).toEqual(['nope']);
   });
 });

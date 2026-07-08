@@ -324,7 +324,7 @@ export class PageSpaceClient {
   constructor(options: PageSpaceClientOptions) {
     this.#config = { baseUrl: trimTrailingSlashes(options.baseUrl), apiVersion: options.apiVersion };
     this.#auth = options.auth;
-    this.#fetch = options.fetch ?? fetch;
+    this.#fetch = options.fetch ?? fetch.bind(globalThis);
     this.#timeoutMs = options.timeoutMs ?? 30_000;
     this.#retryPolicy = { ...DEFAULT_RETRY_POLICY, ...options.retryPolicy };
     this.#skipVersionCheck = options.skipVersionCheck ?? false;

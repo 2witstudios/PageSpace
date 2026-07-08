@@ -15,7 +15,6 @@ const baseInput = (overrides: Partial<SlashEvaluationInput> = {}): SlashEvaluati
   cursorPos: 1,
   inputType: 'insertText',
   isComposing: false,
-  hasCommandToken: false,
   tokenRanges: [],
   isOpen: false,
   memory: INITIAL_SLASH_MEMORY,
@@ -32,8 +31,18 @@ describe('findSlashTrigger', () => {
     expect(findSlashTrigger('\n/', 2)).toEqual({ triggerIndex: 1, query: '' });
   });
 
-  it('given non-whitespace before the /, should NOT find a trigger (slash is literal)', () => {
-    expect(findSlashTrigger('hello /', 7)).toBeNull();
+  it('given the / preceded by whitespace mid-message, should find the trigger (mid-message rule, mirrors the @ mention trigger)', () => {
+    expect(findSlashTrigger('hello /', 7)).toEqual({ triggerIndex: 6, query: '' });
+    expect(findSlashTrigger('hello /audit', 12)).toEqual({ triggerIndex: 6, query: 'audit' });
+  });
+
+  it('given the / immediately preceded by a non-whitespace character (mid-word), should NOT find a trigger', () => {
+    expect(findSlashTrigger('foo/bar', 7)).toBeNull();
+    expect(findSlashTrigger('hello/', 6)).toBeNull();
+  });
+
+  it('given a second / later in the same word as a valid leading trigger, should still find the leading trigger (not bail on the nearest slash)', () => {
+    expect(findSlashTrigger('/foo/bar', 8)).toEqual({ triggerIndex: 0, query: 'foo/bar' });
   });
 
   it('given text typed after the /, should expose it as the query', () => {
@@ -120,9 +129,16 @@ describe('evaluateSlashTrigger — opening', () => {
     expect(result).toMatchObject({ action: 'open', triggerIndex: 2 });
   });
 
-  it('given non-whitespace before the cursor slash, should not open', () => {
+  it('given the / typed mid-message after whitespace, should open (mid-message rule)', () => {
     const result = evaluateSlashTrigger(
       baseInput({ prevValue: 'hello ', value: 'hello /', cursorPos: 7 })
+    );
+    expect(result).toMatchObject({ action: 'open', triggerIndex: 6, query: '' });
+  });
+
+  it('given the / typed mid-word (no preceding whitespace), should NOT open', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({ prevValue: 'foo', value: 'foo/', cursorPos: 4 })
     );
     expect(result.action).toBe('none');
   });
@@ -272,6 +288,19 @@ describe('evaluateSlashTrigger — open-state updates and closing', () => {
     expect(result).toMatchObject({ action: 'update', triggerIndex: 0, query: 'rel' });
   });
 
+  it('given the picker is open at a mid-message trigger and the user types a stray / into the query, should keep updating (not close)', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: 'note /a',
+        value: 'note /a/',
+        cursorPos: 8,
+        isOpen: true,
+        memory: { dismissedTriggerIndex: -1, typedTriggerIndex: 5 },
+      })
+    );
+    expect(result).toMatchObject({ action: 'update', triggerIndex: 5, query: 'a/' });
+  });
+
   it('given the user deletes back past the /, should close and reset memory', () => {
     const result = evaluateSlashTrigger(
       baseInput({
@@ -316,15 +345,82 @@ describe('evaluateSlashTrigger — open-state updates and closing', () => {
   });
 });
 
-describe('evaluateSlashTrigger — one command per message', () => {
-  it('given the message already contains a command chip, should never open', () => {
-    const result = evaluateSlashTrigger(baseInput({ hasCommandToken: true }));
+describe('evaluateSlashTrigger — multiple commands per message', () => {
+  it('given an existing command chip elsewhere in the message, a new / outside its range should still open', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/audit hello ',
+        value: '/audit hello /',
+        cursorPos: 14,
+        tokenRanges: [{ start: 0, end: 6 }],
+      })
+    );
+    expect(result).toMatchObject({ action: 'open', triggerIndex: 13, query: '' });
+  });
+
+  it('given the cursor inside an existing chip\'s tracked range, should NOT open', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/aud',
+        value: '/audi',
+        cursorPos: 5,
+        tokenRanges: [{ start: 0, end: 6 }],
+      })
+    );
     expect(result.action).toBe('none');
   });
 
-  it('given the message contains a command chip while open, should close', () => {
-    const result = evaluateSlashTrigger(baseInput({ hasCommandToken: true, isOpen: true }));
-    expect(result.action).toBe('close');
+  it('given two existing command chips, a third / after them (outside both ranges) should still open', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/foo x /bar y ',
+        value: '/foo x /bar y /',
+        cursorPos: 15,
+        tokenRanges: [
+          { start: 0, end: 4 },
+          { start: 7, end: 11 },
+        ],
+      })
+    );
+    expect(result).toMatchObject({ action: 'open', triggerIndex: 14, query: '' });
+  });
+});
+
+describe('evaluateSlashTrigger — interleaved with @ mention chips', () => {
+  // "/cmd1 hello @bob /cmd2" — a command chip [0,5), a mention chip [12,16),
+  // then a fresh "/" trigger point after both. tokenRanges from the real
+  // tracker (useMessageTokens) carries every tracked token regardless of
+  // sigil in one flat array, and findSlashTrigger's exclusion check
+  // (`tokenRanges.some(...)`) is provably type-agnostic — it never inspects
+  // what kind of token a range belongs to, only its [start, end) bounds — so
+  // a mention's range excludes a "/" exactly the same way a command chip's
+  // range already does (covered by the "existing chip's tracked range"
+  // tests above). The scenario worth pinning here is the realistic one:
+  // ranges from two DIFFERENT token kinds coexisting in one tokenRanges
+  // array don't interfere with each other or with a later, valid trigger.
+  //
+  // Scope note: this only exercises the SLASH side (this diff's actual
+  // change). The mention picker's own trigger logic lives in
+  // apps/web/src/hooks/useSuggestion.ts, which this diff does not touch and
+  // which has no existing unit test coverage in this repo (it's a React
+  // hook with DOM/ref dependencies, consistent with this project's
+  // established constraint that hook-level trigger logic isn't unit-tested
+  // here — see the pure-module extraction pattern used for slash-trigger.ts
+  // itself). There is nothing to regress on the mention side since it was
+  // never modified.
+  it('given a command chip and a mention chip both present, a fresh / after both should still open', () => {
+    const result = evaluateSlashTrigger(
+      baseInput({
+        prevValue: '/cmd1 hello @bob ',
+        value: '/cmd1 hello @bob /',
+        cursorPos: 18,
+        tokenRanges: [
+          { start: 0, end: 5 }, // "/cmd1"
+          { start: 12, end: 16 }, // "@bob"
+        ],
+      })
+    );
+    expect(result).toMatchObject({ action: 'open', triggerIndex: 17, query: '' });
   });
 });
 

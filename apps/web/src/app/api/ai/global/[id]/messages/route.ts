@@ -29,7 +29,7 @@ import {
   COMMAND_EXECUTION_PART_TYPE,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
-import { planCommandExecution } from '@/lib/ai/core/command-resolver';
+import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
@@ -382,9 +382,10 @@ export async function POST(
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
-    // Universal Commands: resolved execution plan for the leading command
-    // token, if present. Resolution degrades, never fails.
-    let commandPlan: CommandExecutionPlan | null = null;
+    // Universal Commands: resolved execution plans for every command token
+    // present (zero or more). Each resolves independently and degrades,
+    // never fails.
+    let commandPlans: CommandExecutionPlan[] = [];
     let commandSystemPrompt = '';
     // Title resolved at save time (auto-generated from first user message when null).
     // Used in the broadcastGlobalConversationAdded call below so the sidebar
@@ -410,23 +411,25 @@ export async function POST(
           });
         }
 
-        // Resolve the message's slash command (if any) with the SENDER's
-        // permissions. The token stays in the saved content; only the
-        // system prompt gains the injection.
+        // Resolve every command token in the message (if any) with the
+        // SENDER's permissions. The tokens stay in the saved content; only
+        // the system prompt gains the injections.
         // The global assistant's drive context is wherever the user is
         // browsing (the same locationContext.currentDrive the suggest picker
         // uses, so the picker and /help can't drift). The id is
         // client-supplied; the resolver membership-verifies it before any
         // drive commands are included. No drive → personal + built-ins only.
-        commandPlan = await planCommandExecution(messageContent, userId, {
+        commandPlans = await planCommandExecutions(messageContent, userId, {
           driveId: locationContext?.currentDrive?.id ?? null,
         });
-        if (commandPlan) {
-          commandSystemPrompt = buildCommandPromptSection(commandPlan);
-          loggers.api.info('Global Assistant Chat API: Command resolution', {
-            kind: commandPlan.kind,
-            ...(commandPlan.kind === 'skip' ? { reason: commandPlan.reason } : {}),
-          });
+        if (commandPlans.length > 0) {
+          commandSystemPrompt = buildCommandPromptSection(commandPlans);
+          for (const plan of commandPlans) {
+            loggers.api.info('Global Assistant Chat API: Command resolution', {
+              kind: plan.kind,
+              ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
+            });
+          }
         }
 
         loggers.api.debug('Global Assistant Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
@@ -1037,15 +1040,16 @@ MENTION PROCESSING:
       originalMessages: sanitizedMessages, // full history — UI always sees all messages
       generateId: () => serverAssistantMessageId,
       execute: async ({ writer }) => {
-        // Execution feedback (UX spec §7): announce the command indicator as
-        // the first part of the assistant message; persisted via onFinish.
-        if (commandPlan) {
+        // Execution feedback (UX spec §7): announce one command indicator
+        // per resolved plan as the first parts of the assistant message, in
+        // the order the chips appeared; persisted via onFinish.
+        commandPlans.forEach((plan, index) => {
           writer.write({
             type: COMMAND_EXECUTION_PART_TYPE,
-            id: `${serverAssistantMessageId}-command`,
-            data: commandExecutionDataFromPlan(commandPlan),
+            id: `${serverAssistantMessageId}-command-${index}`,
+            data: commandExecutionDataFromPlan(plan),
           });
-        }
+        });
         // Resolve once outside the per-attempt factory (the factory is synchronous).
         const modelCapabilitiesForTools = await getModelCapabilities(currentModel, currentProvider);
         // Server-side, in-request retry: transparently re-drive the loop under one
