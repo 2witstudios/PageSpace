@@ -38,10 +38,38 @@ describe('resolvePublishedMeta — title', () => {
     expect(meta.title).toBe('Canvas Title');
   });
 
-  it('prefers the override title over the canvas og:title', () => {
+  it('prefers the canvas og:title over the override title — code wins', () => {
     const meta = resolvePublishedMeta({
       override: { title: 'Override' },
       canvasMeta: { ogTitle: 'Canvas Title' },
+      pageTitle: 'Page',
+      body: BODY,
+    });
+    expect(meta.title).toBe('Canvas Title');
+  });
+
+  it('prefers the canvas plain <title> over the override title — code wins', () => {
+    const meta = resolvePublishedMeta({
+      override: { title: 'Override' },
+      canvasMeta: { title: 'Canvas <title>' },
+      pageTitle: 'Page',
+      body: BODY,
+    });
+    expect(meta.title).toBe('Canvas <title>');
+  });
+
+  it('prefers the canvas og:title over the canvas plain <title> when both are set', () => {
+    const meta = resolvePublishedMeta({
+      canvasMeta: { ogTitle: 'OG Title', title: 'Plain Title' },
+      pageTitle: 'Page',
+      body: BODY,
+    });
+    expect(meta.title).toBe('OG Title');
+  });
+
+  it('falls back to the override title when the canvas has no title meta at all', () => {
+    const meta = resolvePublishedMeta({
+      override: { title: 'Override' },
       pageTitle: 'Page',
       body: BODY,
     });
@@ -59,18 +87,9 @@ describe('resolvePublishedMeta — title', () => {
 });
 
 describe('resolvePublishedMeta — ogImageUrl', () => {
-  it('prefers the override image over canvas + drive default', () => {
+  it('prefers the canvas image over the override — code wins', () => {
     const meta = resolvePublishedMeta({
       override: { ogImageUrl: 'https://o.example/o.png' },
-      canvasMeta: { ogImageUrl: 'https://c.example/c.png' },
-      driveDefaultOgImageUrl: 'https://d.example/d.png',
-      body: BODY,
-    });
-    expect(meta.ogImageUrl).toBe('https://o.example/o.png');
-  });
-
-  it('falls back to the canvas image when no override', () => {
-    const meta = resolvePublishedMeta({
       canvasMeta: { ogImageUrl: 'https://c.example/c.png' },
       driveDefaultOgImageUrl: 'https://d.example/d.png',
       body: BODY,
@@ -78,7 +97,16 @@ describe('resolvePublishedMeta — ogImageUrl', () => {
     expect(meta.ogImageUrl).toBe('https://c.example/c.png');
   });
 
-  it('falls back to the drive default when neither override nor canvas set one', () => {
+  it('falls back to the override image when the canvas sets none', () => {
+    const meta = resolvePublishedMeta({
+      override: { ogImageUrl: 'https://o.example/o.png' },
+      driveDefaultOgImageUrl: 'https://d.example/d.png',
+      body: BODY,
+    });
+    expect(meta.ogImageUrl).toBe('https://o.example/o.png');
+  });
+
+  it('falls back to the drive default when neither canvas nor override set one', () => {
     const meta = resolvePublishedMeta({
       driveDefaultOgImageUrl: 'https://d.example/d.png',
       body: BODY,
@@ -102,21 +130,38 @@ describe('resolvePublishedMeta — ogImageUrl', () => {
 });
 
 describe('resolvePublishedMeta — description', () => {
-  it('prefers the override description over canvas + derived', () => {
+  it('prefers the canvas og:description over the override — code wins', () => {
     const meta = resolvePublishedMeta({
       override: { description: 'Author blurb' },
       canvasMeta: { ogDescription: 'Canvas blurb' },
       body: BODY,
     });
-    expect(meta.description).toBe('Author blurb');
+    expect(meta.description).toBe('Canvas blurb');
   });
 
-  it('falls back to the canvas og:description when no override', () => {
+  it('prefers the canvas plain meta description over the override — code wins', () => {
     const meta = resolvePublishedMeta({
-      canvasMeta: { ogDescription: 'Canvas blurb' },
+      override: { description: 'Author blurb' },
+      canvasMeta: { description: 'Canvas plain description' },
       body: BODY,
     });
-    expect(meta.description).toBe('Canvas blurb');
+    expect(meta.description).toBe('Canvas plain description');
+  });
+
+  it('prefers the canvas og:description over the canvas plain description when both are set', () => {
+    const meta = resolvePublishedMeta({
+      canvasMeta: { ogDescription: 'OG blurb', description: 'Plain blurb' },
+      body: BODY,
+    });
+    expect(meta.description).toBe('OG blurb');
+  });
+
+  it('falls back to the override description when the canvas sets none', () => {
+    const meta = resolvePublishedMeta({
+      override: { description: 'Author blurb' },
+      body: BODY,
+    });
+    expect(meta.description).toBe('Author blurb');
   });
 
   it('falls back to a description derived from the body when nothing else is set', () => {

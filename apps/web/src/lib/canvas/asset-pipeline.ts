@@ -38,17 +38,28 @@ export interface OgMeta {
   ogImageUrl?: string;
   ogDescription?: string;
   faviconHref?: string;
+  /** Plain `<title>` the author wrote — a lower-priority fallback behind `ogTitle`. */
+  title?: string;
+  /** Plain `<meta name="description">` the author wrote — a lower-priority fallback behind `ogDescription`. */
+  description?: string;
 }
 
 /**
- * Extract OG/favicon meta from already-rewritten canvas HTML and strip those
- * tags from the body so they can be hoisted into <head> by renderCanvasDocument.
+ * Extract SEO/OG/favicon meta from already-rewritten canvas HTML and strip
+ * those tags from the body so they can be hoisted into <head> by
+ * renderCanvasDocument. This is how code wins: whatever the author wrote
+ * directly in their canvas — whether a small fragment with an inline
+ * `<meta property="og:*">`, or a complete standalone document with its own
+ * `<title>`/`<meta name="description">` — is read here and later takes
+ * precedence over UI-only fallbacks (see `resolvePublishedMeta`).
  *
  * Reads standard HTML semantics the author placed directly in the canvas:
  *   <meta property="og:title"       content="…">  → ogTitle
  *   <meta property="og:image"       content="…">  → ogImageUrl
  *   <meta property="og:description" content="…">  → ogDescription
  *   <link rel="icon" href="…">                    → faviconHref
+ *   <title>…</title>                              → title (fallback behind ogTitle)
+ *   <meta name="description" content="…">         → description (fallback behind ogDescription)
  *
  * After rewriteCanvasAssets has run, any file URLs in those attributes are
  * already public CDN URLs, so no further rewriting is needed here.
@@ -75,6 +86,29 @@ function stripMetaProperty(html: string, property: string, assign: (content: str
     });
 }
 
+/** Same as `stripMetaProperty`, but for `<meta name="{name}" content="…">`. */
+function stripMetaName(html: string, name: string, assign: (content: string) => void): string {
+  const nameFirst = new RegExp(`<meta\\b[^>]+name="${name}"[^>]+content="([^"]*)"[^>]*/?>`, 'gi');
+  const contentFirst = new RegExp(`<meta\\b[^>]+content="([^"]*)"[^>]+name="${name}"[^>]*/?>`, 'gi');
+  return html
+    .replace(nameFirst, (_, content: string) => {
+      assign(content);
+      return '';
+    })
+    .replace(contentFirst, (_, content: string) => {
+      assign(content);
+      return '';
+    });
+}
+
+/** Strip a `<title>…</title>` tag (only valid in `<head>`, so any occurrence is stray content), invoking `assign` with its text. */
+function stripTitle(html: string, assign: (content: string) => void): string {
+  return html.replace(/<title(?=[\s/>])[^>]*>([\s\S]*?)<\/title(?=[\s/>])[^>]*>/gi, (_, content: string) => {
+    assign(content);
+    return '';
+  });
+}
+
 export function extractAndStripOgMeta(html: string): { meta: OgMeta; html: string } {
   const meta: OgMeta = {};
 
@@ -86,6 +120,12 @@ export function extractAndStripOgMeta(html: string): { meta: OgMeta; html: strin
   });
   result = stripMetaProperty(result, 'og:description', (content) => {
     meta.ogDescription ??= content || undefined;
+  });
+  result = stripMetaName(result, 'description', (content) => {
+    meta.description ??= content || undefined;
+  });
+  result = stripTitle(result, (content) => {
+    meta.title ??= content || undefined;
   });
   result = result
     .replace(/<link\b[^>]+rel="icon"[^>]+href="([^"]*)"[^>]*\/?>/gi, (_, href: string) => {

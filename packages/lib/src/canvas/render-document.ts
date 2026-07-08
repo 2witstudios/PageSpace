@@ -145,6 +145,35 @@ export { escapeHtml };
  * source (e.g. a web-component template literal) is never mistaken for a real
  * stylesheet — the script is preserved verbatim.
  */
+/**
+ * If `html` is already a complete standalone document (its own `<html>`
+ * wrapper — e.g. author code that wrote a full page, or content pasted from
+ * elsewhere) unwrap it to just the `<body>` element's inner markup. Without
+ * this, the caller's own generated `<head>`/`<body>` shell (built below) gets
+ * assembled AROUND an existing one, doubling every structural tag (doctype,
+ * html, head, body) and failing HTML validation. Bare fragments — the common
+ * case — pass through unchanged, detected by the absence of an `<html>` tag.
+ *
+ * Regex-based so it runs identically in Node and the browser, matching the
+ * rest of this module. The discarded `<head>` (title/meta/etc.) is not lost
+ * to the pipeline overall — SEO/social meta from within it is extracted at a
+ * higher level (see `extractAndStripOgMeta` in the publish pipeline) before
+ * this function ever runs; this pure renderer only cares about structure.
+ */
+function unwrapFullDocument(html: string): string {
+  if (!/<html(?=[\s/>])/i.test(html)) return html;
+
+  const bodyMatch = html.match(/<body(?=[\s/>])[^>]*>([\s\S]*)<\/body(?=[\s/>])[^>]*>/i);
+  if (bodyMatch) return bodyMatch[1];
+
+  // No explicit <body> tag (malformed/partial document) — best-effort: strip
+  // the doctype/html/head wrapper and keep whatever's left.
+  return html
+    .replace(/<!doctype[^>]*>/gi, '')
+    .replace(/<\/?html(?=[\s/>])[^>]*>/gi, '')
+    .replace(/<head(?=[\s/>])[^>]*>[\s\S]*?<\/head(?=[\s/>])[^>]*>/gi, '');
+}
+
 function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): { css: string; body: string } {
   // Tag names require a genuine delimiter — whitespace, `/`, or `>` — immediately
   // after the name (the `(?=[\s/>])` lookahead), mirroring the HTML tokenizer.
@@ -174,7 +203,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
   const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin } = input;
   const csp = buildBaselineCsp(formActionOrigin);
 
-  const { css, body } = extractAndSanitizeStyles(html ?? '', allowedAssetHosts);
+  const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts);
   const rawTitle = title && title.trim() ? title : 'Untitled';
   const safeTitle = escapeHtml(rawTitle);
   const safeLang = escapeHtml(lang && lang.trim() ? lang : 'en');

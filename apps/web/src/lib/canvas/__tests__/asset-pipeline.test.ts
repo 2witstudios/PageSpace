@@ -562,6 +562,53 @@ describe('extractAndStripOgMeta', () => {
     expect(meta).toEqual({});
     expect(html).toBe('');
   });
+
+  it('extracts a plain <title> and removes the tag from html', () => {
+    const { meta, html } = extractAndStripOgMeta('<title>Author Title</title><p>hi</p>');
+    expect(meta.title).toBe('Author Title');
+    expect(html).not.toContain('<title>');
+    expect(html).toContain('<p>hi</p>');
+  });
+
+  it('extracts a plain <meta name="description"> and removes the tag from html', () => {
+    const { meta, html } = extractAndStripOgMeta('<meta name="description" content="Author description"><p>hi</p>');
+    expect(meta.description).toBe('Author description');
+    expect(html).not.toContain('name="description"');
+    expect(html).toContain('<p>hi</p>');
+  });
+
+  it('extracts a <meta name="description"> when content comes before name', () => {
+    const { meta } = extractAndStripOgMeta('<meta content="Author description" name="description">');
+    expect(meta.description).toBe('Author description');
+  });
+
+  it('extracts title/description from a full standalone document (author wrote a complete HTML page)', () => {
+    const fullDoc =
+      '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">' +
+      '<title>Full Doc Title</title>' +
+      '<meta name="description" content="Full doc description">' +
+      '<meta property="og:site_name" content="Acme">' +
+      '</head><body><nav>hi</nav></body></html>';
+    const { meta, html } = extractAndStripOgMeta(fullDoc);
+    expect(meta.title).toBe('Full Doc Title');
+    expect(meta.description).toBe('Full doc description');
+    expect(html).not.toContain('<title>');
+    expect(html).not.toContain('name="description"');
+    // Structural wrapper tags themselves are untouched here — unwrapping to a
+    // single document happens later, in renderCanvasDocument.
+    expect(html).toContain('<nav>hi</nav>');
+  });
+
+  it('prefers og:title/og:description over a plain <title>/<meta name=description> when both are present', () => {
+    const { meta } = extractAndStripOgMeta(
+      '<title>Plain Title</title><meta name="description" content="Plain description">' +
+        '<meta property="og:title" content="OG Title"><meta property="og:description" content="OG description">'
+    );
+    expect(meta.title).toBe('Plain Title');
+    expect(meta.ogTitle).toBe('OG Title');
+    expect(meta.description).toBe('Plain description');
+    expect(meta.ogDescription).toBe('OG description');
+  });
 });
 
 // ---------------------------------------------------------------------------
