@@ -141,7 +141,11 @@ export const buildCSPPolicy = (nonce: string): string => {
     "'strict-dynamic'",
     "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
   ];
-  const styleSrc = ["'self'", "'unsafe-inline'"];
+  // fonts.googleapis.com: in-app canvas pages render via an iframe srcDoc, which
+  // inherits this outer CSP in addition to their own baked-in <meta> CSP
+  // (packages/lib/src/canvas/csp.ts) — so author-linked Google Fonts stylesheets
+  // need to be allowed here too, not just in the canvas baseline policy.
+  const styleSrc = ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'];
   const frameSrc: string[] = [];
 
   // Cloud-only: Google and Stripe external origins
@@ -172,7 +176,7 @@ export const buildCSPPolicy = (nonce: string): string => {
     // /api/files/[id]/view redirects media requests straight to the storage
     // host, so it needs the same allowlist as connect-src (see comment above).
     'media-src': ["'self'", ...storageEntries],
-    'font-src': ["'self'", 'data:'],
+    'font-src': ["'self'", 'data:', 'https://fonts.gstatic.com'],
     // Monaco and other browser tooling may initialize workers from blob URLs.
     'worker-src': ["'self'", 'blob:'],
     ...(frameSrc.length > 0 ? { 'frame-src': frameSrc } : {}),

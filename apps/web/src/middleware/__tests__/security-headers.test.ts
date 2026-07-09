@@ -155,6 +155,13 @@ describe('Security Headers', () => {
       expect(csp).toContain('https://accounts.google.com');
     });
 
+    it('allows Google Fonts for canvas author stylesheets', () => {
+      const csp = buildCSPPolicy('test-nonce');
+
+      expect(csp).toContain('https://fonts.googleapis.com');
+      expect(csp).toContain('https://fonts.gstatic.com');
+    });
+
     it('does not allow jsDelivr CDN sources', () => {
       const csp = buildCSPPolicy('test-nonce');
 
