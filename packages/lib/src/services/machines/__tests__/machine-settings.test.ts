@@ -6,6 +6,7 @@ import {
   type MachineSettings,
   type MachineSettingsStore,
   type MachineSpriteTeardown,
+  type MachineDependentsPurge,
 } from '../machine-settings';
 
 const SETTINGS: MachineSettings = {
@@ -26,6 +27,10 @@ function makeStore(overrides: Partial<MachineSettingsStore> = {}): MachineSettin
 
 function makeSprite(overrides: Partial<MachineSpriteTeardown> = {}): MachineSpriteTeardown {
   return { teardown: vi.fn().mockResolvedValue(undefined), ...overrides };
+}
+
+function makeDependents(overrides: Partial<MachineDependentsPurge> = {}): MachineDependentsPurge {
+  return { purge: vi.fn().mockResolvedValue(undefined), ...overrides };
 }
 
 describe('getMachineSettings', () => {
@@ -56,38 +61,55 @@ describe('updateMachineSettings', () => {
 });
 
 describe('deleteMachine', () => {
-  it('returns not_found without trashing or tearing down when the machine is missing', async () => {
+  it('returns not_found without trashing, tearing down, or purging when the machine is missing', async () => {
     const store = makeStore({ getSettings: vi.fn().mockResolvedValue(null) });
     const sprite = makeSprite();
-    const result = await deleteMachine({ terminalId: 'gone', store, sprite });
+    const dependents = makeDependents();
+    const result = await deleteMachine({ terminalId: 'gone', store, sprite, dependents });
     expect(result).toEqual({ ok: false, reason: 'not_found' });
     expect(store.trashPage).not.toHaveBeenCalled();
     expect(sprite.teardown).not.toHaveBeenCalled();
+    expect(dependents.purge).not.toHaveBeenCalled();
   });
 
-  it('trashes the page BEFORE tearing down the Sprite', async () => {
+  it('trashes the page BEFORE tearing down the Sprite, then purges dependents', async () => {
     const calls: string[] = [];
     const store = makeStore({ trashPage: vi.fn().mockImplementation(async () => void calls.push('trash')) });
     const sprite = makeSprite({ teardown: vi.fn().mockImplementation(async () => void calls.push('teardown')) });
-    const result = await deleteMachine({ terminalId: 't1', store, sprite });
+    const dependents = makeDependents({ purge: vi.fn().mockImplementation(async () => void calls.push('purge')) });
+    const result = await deleteMachine({ terminalId: 't1', store, sprite, dependents });
     expect(result).toEqual({ ok: true, spriteTornDown: true });
-    expect(calls).toEqual(['trash', 'teardown']);
+    expect(calls).toEqual(['trash', 'teardown', 'purge']);
   });
 
   it('still reports success with the page trashed when Sprite teardown fails', async () => {
     const store = makeStore();
     const sprite = makeSprite({ teardown: vi.fn().mockRejectedValue(new Error('sprite gone')) });
-    const result = await deleteMachine({ terminalId: 't1', store, sprite });
+    const dependents = makeDependents();
+    const result = await deleteMachine({ terminalId: 't1', store, sprite, dependents });
     // Page trash happened; teardown failure is a recoverable orphaned-Sprite state.
     expect(store.trashPage).toHaveBeenCalledWith('t1');
+    // Dependent purge still runs even though teardown threw.
+    expect(dependents.purge).toHaveBeenCalledWith('t1');
     expect(result).toEqual({ ok: true, spriteTornDown: false });
+  });
+
+  it('still succeeds with the page trashed when dependent purge fails', async () => {
+    const store = makeStore();
+    const sprite = makeSprite();
+    const dependents = makeDependents({ purge: vi.fn().mockRejectedValue(new Error('purge failed')) });
+    const result = await deleteMachine({ terminalId: 't1', store, sprite, dependents });
+    expect(store.trashPage).toHaveBeenCalledWith('t1');
+    expect(result).toEqual({ ok: true, spriteTornDown: true });
   });
 
   it('does not swallow a page-trash failure (the non-recoverable step)', async () => {
     const store = makeStore({ trashPage: vi.fn().mockRejectedValue(new Error('db down')) });
     const sprite = makeSprite();
-    await expect(deleteMachine({ terminalId: 't1', store, sprite })).rejects.toThrow('db down');
-    // Sprite was never touched, so no live-page/dead-Sprite mismatch can arise.
+    const dependents = makeDependents();
+    await expect(deleteMachine({ terminalId: 't1', store, sprite, dependents })).rejects.toThrow('db down');
+    // Sprite/dependents were never touched, so no live-page/dead-Sprite mismatch can arise.
     expect(sprite.teardown).not.toHaveBeenCalled();
+    expect(dependents.purge).not.toHaveBeenCalled();
   });
 });

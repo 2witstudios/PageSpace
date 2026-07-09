@@ -10,6 +10,7 @@ const {
   mockCanViewMachine,
   mockCreateDbMachineSettingsStore,
   mockCreateMachineSpriteTeardown,
+  mockCreateMachineDependentsPurge,
   mockGetMachineSettings,
   mockUpdateMachineSettings,
   mockDeleteMachine,
@@ -21,6 +22,7 @@ const {
   mockCanViewMachine: vi.fn(),
   mockCreateDbMachineSettingsStore: vi.fn(),
   mockCreateMachineSpriteTeardown: vi.fn(),
+  mockCreateMachineDependentsPurge: vi.fn(),
   mockGetMachineSettings: vi.fn(),
   mockUpdateMachineSettings: vi.fn(),
   mockDeleteMachine: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock('@/lib/machines/machine-settings-runtime', () => ({
   canViewMachine: (...args: unknown[]) => mockCanViewMachine(...args),
   createDbMachineSettingsStore: (...args: unknown[]) => mockCreateDbMachineSettingsStore(...args),
   createMachineSpriteTeardown: (...args: unknown[]) => mockCreateMachineSpriteTeardown(...args),
+  createMachineDependentsPurge: (...args: unknown[]) => mockCreateMachineDependentsPurge(...args),
 }));
 
 vi.mock('@pagespace/lib/services/machines/machine-settings', () => ({
@@ -63,12 +66,14 @@ const SETTINGS = {
 
 const FAKE_STORE = {} as never;
 const FAKE_SPRITE = {} as never;
+const FAKE_DEPENDENTS = {} as never;
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_OK);
   mockCreateDbMachineSettingsStore.mockReturnValue(FAKE_STORE);
   mockCreateMachineSpriteTeardown.mockReturnValue(FAKE_SPRITE);
+  mockCreateMachineDependentsPurge.mockReturnValue(FAKE_DEPENDENTS);
 });
 
 describe('GET /api/machines/settings', () => {
@@ -215,7 +220,7 @@ describe('DELETE /api/machines/settings', () => {
     const body = await res.json();
     expect(body).toEqual({ success: true, spriteTornDown: true });
     expect(mockDeleteMachine).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', store: FAKE_STORE, sprite: FAKE_SPRITE }),
+      expect.objectContaining({ terminalId: 't1', store: FAKE_STORE, sprite: FAKE_SPRITE, dependents: FAKE_DEPENDENTS }),
     );
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),

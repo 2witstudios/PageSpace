@@ -29,6 +29,7 @@ import {
   canViewMachine,
   createDbMachineSettingsStore,
   createMachineSpriteTeardown,
+  createMachineDependentsPurge,
 } from '@/lib/machines/machine-settings-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -175,6 +176,7 @@ export async function DELETE(request: Request) {
     terminalId: terminalId.value,
     store: createDbMachineSettingsStore(),
     sprite: createMachineSpriteTeardown(),
+    dependents: createMachineDependentsPurge(),
   });
   if (!result.ok) return notFound();
 
