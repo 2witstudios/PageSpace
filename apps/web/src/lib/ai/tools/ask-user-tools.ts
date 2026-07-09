@@ -69,13 +69,13 @@ export const askUserTools = {
   ask_user: tool({
     description:
       'Ask the user 1-4 multiple-choice questions and wait for their answers before continuing. ' +
-      'Use this only when you are blocked on a decision you cannot resolve yourself: ambiguous requirements, ' +
-      'mutually exclusive approaches, or destructive/irreversible choices. Never ask something you can look up ' +
-      'with your other tools. Each question offers 2-4 concise options; the UI automatically adds a free-text ' +
-      '"Other" option, so do not include a catch-all option yourself. After calling this tool, STOP — do not call ' +
-      'finish or any other tool; your turn ends and resumes when the user responds. The result may be ' +
-      '{"dismissed": true} if the user replied in chat instead of selecting an option — treat their chat message ' +
-      'as the answer.',
+      'Use this when missing context would materially shape the result — not just because a detail would help ' +
+      'a little. Skip it if the user has signaled they want autonomous work (e.g. "just do it," running unattended). ' +
+      'Never ask something you can look up with your other tools. Each question offers 2-4 concise options; the UI ' +
+      'automatically adds a free-text "Other" option, so do not include a catch-all option yourself. After calling ' +
+      'this tool, STOP — do not call finish or any other tool; your turn ends and resumes when the user responds. ' +
+      'The result may be {"dismissed": true} if the user replied in chat instead of selecting an option — treat ' +
+      'their chat message as the answer.',
     inputSchema: askUserInputSchema,
   }),
 };
