@@ -648,14 +648,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         setMessages((prev) =>
           prev.some((m) => m.id === messageId)
             ? prev
-            : [
-                ...prev,
-                synthesizeAssistantMessage(
-                  messageId,
-                  stream.parts,
-                  stream.startedAt ? new Date(stream.startedAt) : undefined,
-                ),
-              ],
+            : [...prev, synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt)],
         );
         return;
       }
@@ -686,14 +679,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             setMessages((prev) =>
               prev.some((m) => m.id === messageId)
                 ? prev
-                : [
-                    ...prev,
-                    synthesizeAssistantMessage(
-                      messageId,
-                      parts,
-                      startedAt ? new Date(startedAt) : undefined,
-                    ),
-                  ],
+                : [...prev, synthesizeAssistantMessage(messageId, parts, startedAt)],
             );
           })
           .catch((err) => console.warn('[AiChatView] late-joiner sync failed', err));
