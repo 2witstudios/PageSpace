@@ -5,8 +5,18 @@
  * A "Machine" is its backing `PageType.TERMINAL` page. Its settings live on
  * that page row: `name` is the page title, `description`/`allowPageAgents` are
  * dedicated Machine columns, and `visibleToGlobalAssistant` reuses the existing
- * page column (an agent/Machine page opts in or out of the global assistant's
- * view the same way). This module is pure orchestration + DI — every DB / Sprite
+ * page column.
+ *
+ * NOTE ON THE TWO ACCESS TOGGLES: this route only PERSISTS `visibleToGlobalAssistant`
+ * and `allowPageAgents` for a Machine. Their ENFORCEMENT is a separate consumer,
+ * not wired yet (and not this node's scope) — for TERMINAL pages nothing reads
+ * either flag today: `visibleToGlobalAssistant` is consulted only for `AI_CHAT`
+ * agents (agent-awareness.ts), and `allowPageAgents` has no reader at all. The
+ * follow-up nodes wire `visibleToGlobalAssistant` into the global-assistant
+ * machine picker/resolution and `allowPageAgents` into the page-agent machine gate
+ * (`isMachineAccessible`, sandbox-tools-runtime.ts). The whole surface is behind
+ * `CODE_EXECUTION_ENABLED` (OFF), so no unenforced toggle is user-visible yet.
+ * This module is pure orchestration + DI — every DB / Sprite
  * touch is an injected seam (`MachineSettingsStore`, `MachineSpriteTeardown`,
  * `MachineDependentsPurge`), so the delete-ordering invariant below is
  * unit-testable without a database or a live Sprite. Route wiring lives in

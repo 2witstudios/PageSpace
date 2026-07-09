@@ -27,7 +27,7 @@
  * soft-delete window so a later restore is a clean slate.
  */
 
-import { eq } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { machineProjects } from '@pagespace/db/schema/machine-projects';
@@ -80,11 +80,32 @@ export function createDbMachineSettingsStore(): MachineSettingsStore {
       if (patch.visibleToGlobalAssistant !== undefined) set.visibleToGlobalAssistant = patch.visibleToGlobalAssistant;
       if (patch.allowPageAgents !== undefined) set.allowPageAgents = patch.allowPageAgents;
 
-      if (Object.keys(set).length > 0) {
-        set.updatedAt = new Date();
-        await db.update(pages).set(set).where(eq(pages.id, terminalId));
-      }
-      return readSettings(terminalId);
+      // Nothing to change — just report the current state.
+      if (Object.keys(set).length === 0) return readSettings(terminalId);
+
+      set.updatedAt = new Date();
+      // Guard `isTrashed = false` in the WHERE so a PATCH on a trashed Machine
+      // mutates NOTHING (canViewMachine/canAccessMachine don't exclude trashed
+      // pages) and `.returning()` yields no row → the route replies 404 without
+      // having written to a trashed page. This also folds the post-update re-read
+      // into the same statement instead of a second SELECT.
+      const [row] = await db
+        .update(pages)
+        .set(set)
+        .where(and(eq(pages.id, terminalId), eq(pages.isTrashed, false)))
+        .returning({
+          title: pages.title,
+          description: pages.description,
+          visibleToGlobalAssistant: pages.visibleToGlobalAssistant,
+          allowPageAgents: pages.allowPageAgents,
+        });
+      if (!row) return null;
+      return {
+        name: row.title,
+        description: row.description ?? null,
+        visibleToGlobalAssistant: row.visibleToGlobalAssistant,
+        allowPageAgents: row.allowPageAgents,
+      };
     },
     async trashPage(terminalId: string): Promise<void> {
       await pageRepository.trash(terminalId);
