@@ -152,7 +152,16 @@ function parseCssColorToHex(value: string): string | null {
 
   context.clearRect(0, 0, 1, 1);
   context.fillStyle = 'rgba(0, 0, 0, 0)';
+  const sentinel = context.fillStyle;
   context.fillStyle = input;
+  if (context.fillStyle === sentinel) {
+    // CSS.supports() can accept syntax the canvas 2D fillStyle parser still
+    // rejects — an invalid assignment is silently ignored, leaving fillStyle
+    // on the transparent sentinel. Without this check that read as a valid
+    // "transparent black" result instead of a failed parse, so fall through
+    // to the computed-style probe instead.
+    return null;
+  }
   context.fillRect(0, 0, 1, 1);
 
   const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
