@@ -96,27 +96,27 @@ function TreeRow({
   onRemove?(): void;
   removeTitle?: string;
 }) {
-  const clickable = Boolean(onToggleExpand || onSelect);
-  const handleClick = () => {
-    onToggleExpand?.();
-    onSelect?.();
-  };
-
   return (
     <div className="group flex items-center gap-1 rounded-sm py-1 pr-1 hover:bg-accent/50">
+      {onToggleExpand ? (
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          className="shrink-0 rounded-sm p-0.5 hover:bg-accent"
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+          data-testid="expand-chevron"
+        >
+          {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+        </button>
+      ) : (
+        <span className="size-3.5 shrink-0" aria-hidden="true" />
+      )}
       <button
         type="button"
-        onClick={clickable ? handleClick : undefined}
-        disabled={!clickable}
-        className={cn('flex flex-1 items-center gap-1 text-left', !clickable && 'cursor-default')}
+        onClick={onSelect}
+        disabled={!onSelect}
+        className={cn('flex flex-1 items-center gap-1 text-left', !onSelect && 'cursor-default')}
       >
-        {onToggleExpand ? (
-          <span data-testid="expand-chevron" aria-hidden="true">
-            {expanded ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
-          </span>
-        ) : (
-          <span className="size-3.5 shrink-0" aria-hidden="true" />
-        )}
         {icon}
         <span className={cn('truncate', labelClassName)}>{label}</span>
       </button>

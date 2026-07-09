@@ -1,5 +1,5 @@
 import { describe, test, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 import { assert } from '@/stores/__tests__/riteway';
@@ -52,6 +52,13 @@ const renderTree = (props: Partial<Parameters<typeof MachineTree>[0]> = {}) =>
     </SWRConfig>,
   );
 
+/** The row's chevron and its label live in separate buttons (see TreeRow) — find the row by its label text, then click just the chevron within it. */
+const expandRowFor = async (labelText: string) => {
+  const label = await waitFor(() => screen.getByText(labelText));
+  const row = label.closest('.group') as HTMLElement;
+  await userEvent.click(within(row).getByTestId('expand-chevron'));
+};
+
 describe('MachineTree', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -61,13 +68,11 @@ describe('MachineTree', () => {
   test('renders the same Machine -> Project -> Branch data the hooks report', async () => {
     renderTree();
 
-    const projectRow = await waitFor(() => screen.getByText('my-repo'));
-    await userEvent.click(projectRow);
-
+    await expandRowFor('my-repo');
     const branchRow = await waitFor(() => screen.getByText('main'));
 
     assert({
-      given: 'a machine with one project and that project expanded',
+      given: 'a machine with one project and that project expanded via its chevron',
       should: 'show the branch reported by useMachineBranches',
       actual: branchRow.textContent,
       expected: 'main',
@@ -90,6 +95,24 @@ describe('MachineTree', () => {
     });
   });
 
+  test('selecting a project does not also toggle its expansion', async () => {
+    const onSelectNode = vi.fn();
+    renderTree({ onSelectNode });
+
+    const projectRow = await waitFor(() => screen.getByText('my-repo'));
+    await userEvent.click(projectRow);
+
+    // Selecting must not be coupled to expand/collapse — a caller re-selecting an
+    // already-expanded row (or just selecting a collapsed one) shouldn't flip its
+    // disclosure state as a side effect.
+    assert({
+      given: 'a project row clicked to select it (not its chevron)',
+      should: 'leave the row collapsed — its branches stay hidden',
+      actual: screen.queryByText('main'),
+      expected: null,
+    });
+  });
+
   test('renderNodeChildren injects caller content under an expanded node', async () => {
     renderTree({
       renderNodeChildren: (node: MachineTreeNode) =>
@@ -108,8 +131,7 @@ describe('MachineTree', () => {
   test('a branch row has no expand chevron when renderNodeChildren is not provided', async () => {
     renderTree();
 
-    const projectRow = await waitFor(() => screen.getByText('my-repo'));
-    await userEvent.click(projectRow);
+    await expandRowFor('my-repo');
     await waitFor(() => screen.getByText('main'));
 
     // Machine and Project rows each have a chevron; a bare branch row (no renderNodeChildren) should not add a third.
