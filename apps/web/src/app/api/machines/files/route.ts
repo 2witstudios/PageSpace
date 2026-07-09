@@ -1,0 +1,97 @@
+/**
+ * Machine Files API — the Machine page's surface onto a branch checkout's
+ * WORKING TREE (Machine page rebuild, Phase 1 — file browsing).
+ *
+ * GET ?terminalId=&projectName=&branchName=[&path=][&mode=list|read]
+ *   mode=list (default) → { entries: [{ name, type }] } for the directory `path`
+ *   mode=read           → { content, encoding, truncated } for the file `path`
+ *
+ * `path` defaults to the branch checkout root (`/workspace/repo`) for a listing;
+ * it is REQUIRED for a read. Reads the live filesystem only — no git ref (that
+ * is a separate git-object service). Session-only (no MCP/agent tokens) — this
+ * is a human/UI surface, so it does NOT route through the AI agent tool
+ * orchestration; every request re-checks view access for the Machine page,
+ * same as the Branches/Agent-Terminals APIs.
+ */
+
+import { NextResponse } from 'next/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { listMachineDirectory, readMachineFile } from '@pagespace/lib/services/sandbox/machine-fs';
+import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
+import { canViewMachine, resolveBranchMachineHandle } from '@/lib/machines/machine-files-runtime';
+
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+
+/** A single file read is capped so a large blob can't flood the response. */
+const MAX_FILE_READ_BYTES = 2 * 1024 * 1024;
+
+function requireString(value: unknown, field: string): { ok: true; value: string } | { ok: false; error: NextResponse } {
+  if (typeof value !== 'string' || value.length === 0) {
+    return { ok: false, error: NextResponse.json({ error: `${field} is required` }, { status: 400 }) };
+  }
+  return { ok: true, value };
+}
+
+const LIST_DENIAL_STATUS: Record<string, number> = {
+  not_found: 404,
+  exec_failed: 502,
+};
+
+export async function GET(request: Request) {
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
+  if (isAuthError(auth)) return auth.error;
+
+  const url = new URL(request.url);
+  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
+  if (!terminalId.ok) return terminalId.error;
+  const projectName = requireString(url.searchParams.get('projectName'), 'projectName');
+  if (!projectName.ok) return projectName.error;
+  const branchName = requireString(url.searchParams.get('branchName'), 'branchName');
+  if (!branchName.ok) return branchName.error;
+
+  const mode = url.searchParams.get('mode') ?? 'list';
+  if (mode !== 'list' && mode !== 'read') {
+    return NextResponse.json({ error: "mode must be 'list' or 'read'" }, { status: 400 });
+  }
+
+  const rawPath = url.searchParams.get('path');
+  if (mode === 'read' && (rawPath === null || rawPath.length === 0)) {
+    return NextResponse.json({ error: 'path is required when mode=read' }, { status: 400 });
+  }
+  const path = rawPath !== null && rawPath.length > 0 ? rawPath : BRANCH_REPO_PATH;
+
+  if (!(await canViewMachine(auth.userId, terminalId.value))) {
+    return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
+  }
+
+  const resolved = await resolveBranchMachineHandle({
+    terminalId: terminalId.value,
+    projectName: projectName.value,
+    branchName: branchName.value,
+  });
+  if (!resolved.ok) {
+    return NextResponse.json(
+      { error: `Branch machine ${resolved.reason}`, reason: resolved.reason },
+      { status: resolved.reason === 'not_found' ? 404 : 503 },
+    );
+  }
+
+  if (mode === 'read') {
+    const result = await readMachineFile({ handle: resolved.handle, path });
+    if (!result.ok) {
+      return NextResponse.json({ error: 'File not found', reason: result.reason }, { status: 404 });
+    }
+    const truncated = result.content.length > MAX_FILE_READ_BYTES;
+    const bytes = truncated ? result.content.subarray(0, MAX_FILE_READ_BYTES) : result.content;
+    return NextResponse.json({ content: bytes.toString('utf8'), encoding: 'utf8', truncated });
+  }
+
+  const result = await listMachineDirectory({ handle: resolved.handle, path });
+  if (!result.ok) {
+    return NextResponse.json(
+      { error: result.detail ?? result.reason, reason: result.reason },
+      { status: LIST_DENIAL_STATUS[result.reason] ?? 500 },
+    );
+  }
+  return NextResponse.json({ entries: result.entries });
+}

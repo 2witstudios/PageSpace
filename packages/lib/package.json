@@ -457,6 +457,11 @@
       "import": "./dist/services/sandbox/machine-host.js",
       "require": "./dist/services/sandbox/machine-host.js"
     },
+    "./services/sandbox/machine-fs": {
+      "types": "./dist/services/sandbox/machine-fs.d.ts",
+      "import": "./dist/services/sandbox/machine-fs.js",
+      "require": "./dist/services/sandbox/machine-fs.js"
+    },
     "./services/sandbox/tool-runners": {
       "types": "./dist/services/sandbox/tool-runners.d.ts",
       "import": "./dist/services/sandbox/tool-runners.js",
@@ -1627,6 +1632,9 @@
       ],
       "services/sandbox/machine-host": [
         "./dist/services/sandbox/machine-host.d.ts"
+      ],
+      "services/sandbox/machine-fs": [
+        "./dist/services/sandbox/machine-fs.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
