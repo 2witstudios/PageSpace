@@ -221,13 +221,22 @@ function unwrapFullDocument(html: string): string {
  * looks inside an already-consumed value, so `data-nonce=`/`aria-nonce=` are
  * never mistaken for the real attribute either, and a bare/valueless `nonce`
  * (no `=`) is still recognized and replaced rather than duplicated.
+ *
+ * The leading-whitespace group is a SINGLE `\s`, not `\s+`: on a long run of
+ * whitespace with no valid attribute name following (e.g. a huge padded
+ * script tag), `\s+` forces the regex engine to retry the match at every
+ * position with a shrinking whitespace span before failing — O(n²)
+ * (CodeQL js/polynomial-redos, CWE-1333). A single `\s` fails in O(1) per
+ * position, and produces byte-identical output: any extra whitespace before
+ * the one adjacent to the attribute name is simply left untouched by
+ * `replace()` (it was never part of a match), exactly where it already was.
  */
 function stampScriptNonce(scriptBlock: string, nonce: string): string {
   const openTagMatch = scriptBlock.match(/^<script(?=[\s/>])[^>]*>/i);
   if (!openTagMatch) return scriptBlock;
   const openTag = openTagMatch[0];
   const safeNonce = escapeHtml(nonce);
-  const attr = /(\s+)([a-zA-Z_:][-\w:.]*)(\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?/g;
+  const attr = /(\s)([a-zA-Z_:][-\w:.]*)(\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?/g;
   let sawNonce = false;
   const stampedOpenTag = openTag.replace(attr, (full, whitespace: string, name: string) => {
     if (name.toLowerCase() !== 'nonce') return full;

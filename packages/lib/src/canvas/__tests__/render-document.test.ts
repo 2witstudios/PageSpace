@@ -495,6 +495,23 @@ describe('renderCanvasDocument — CSP nonce for inherited outer policy', () => 
     expect((out.match(/ nonce="app-nonce=="/g) ?? []).length).toBe(1);
   });
 
+  // Regression guard for CodeQL js/polynomial-redos (CWE-1333): the
+  // attribute-tokenizer's leading-whitespace group must stay a single `\s`,
+  // not `\s+` — the latter is O(n²) on a long whitespace run with no valid
+  // attribute name following, since the regex engine retries the match at
+  // every position with a shrinking whitespace span before giving up.
+  it('given a script tag padded with a large run of whitespace and no valid attribute name, should stamp the nonce in near-linear time (not quadratic)', () => {
+    const padding = ' '.repeat(50_000);
+    const html = `<script${padding}>console.log("hi");</script>`;
+    const start = performance.now();
+    const out = renderCanvasDocument({ html, nonce: 'n' });
+    const elapsedMs = performance.now() - start;
+    expect(out).toContain('console.log("hi")');
+    // Linear-time regex finishes in low single-digit ms even at 50k chars;
+    // a reintroduced O(n²) `\s+` blows well past 1s at this size.
+    expect(elapsedMs).toBeLessThan(1000);
+  });
+
   it('given a bare (valueless) nonce attribute, should replace it with a real one, not duplicate it', () => {
     const out = renderCanvasDocument({
       html: '<script nonce defer src="x.js"></script>',
