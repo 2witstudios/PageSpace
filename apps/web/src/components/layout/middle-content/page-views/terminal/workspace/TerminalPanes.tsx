@@ -105,7 +105,7 @@ function TerminalPane({
   return (
     <div className="group/pane relative flex h-full flex-col" onClick={onSelect}>
       <div className={`absolute inset-x-0 top-0 z-10 h-0.5 ${isActive ? 'bg-primary' : 'bg-transparent'}`} />
-      <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-border bg-card/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover/pane:opacity-100">
+      <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-border bg-card/90 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover/pane:opacity-100 group-focus-within/pane:opacity-100">
         <Button
           variant="ghost"
           size="icon"
