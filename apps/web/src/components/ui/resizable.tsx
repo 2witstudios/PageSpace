@@ -25,11 +25,13 @@ function ResizablePanel({ ...props }: ResizablePrimitive.PanelProps) {
 
 function ResizableHandle({
   className,
+  variant = "default",
   ...props
-}: ResizablePrimitive.SeparatorProps) {
+}: ResizablePrimitive.SeparatorProps & { variant?: "default" | "chrome-free" }) {
   return (
     <ResizablePrimitive.Separator
       data-slot="resizable-handle"
+      data-variant={variant}
       className={cn(
         "relative flex w-1.5 flex-shrink-0 cursor-col-resize items-center justify-center",
         "bg-transparent transition-colors duration-150",
@@ -40,7 +42,16 @@ function ResizableHandle({
       )}
       {...props}
     >
-      <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-sidebar-border opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-data-[separator=active]:opacity-100 group-data-[separator=active]:bg-primary" />
+      {/* chrome-free panes (e.g. Terminal) strip every other seam cue, so
+          their handle must stay faintly visible at rest — everywhere else
+          the resting opacity-0 default is correct because sibling
+          borders/cards already show the seam. */}
+      <div
+        className={cn(
+          "absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-sidebar-border transition-opacity duration-150 group-hover:opacity-100 group-data-[separator=active]:opacity-100 group-data-[separator=active]:bg-primary",
+          variant === "chrome-free" ? "opacity-60" : "opacity-0"
+        )}
+      />
     </ResizablePrimitive.Separator>
   )
 }
