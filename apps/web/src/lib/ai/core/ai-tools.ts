@@ -23,63 +23,66 @@ import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
 import { buildGitSandboxTools } from '../tools/sandbox-git-tools-runtime';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
-const baseTools = {
-  ...memberTools,
-  ...roleManagementTools,
-  ...driveTools,
-  ...pageReadTools,
-  ...pageWriteTools,
-  ...searchTools,
-  ...taskManagementTools,
-  ...agentTools,
-  ...agentCommunicationTools,
-  ...webSearchTools,
-  ...activityTools,
-  ...calendarReadTools,
-  ...calendarWriteTools,
-  ...channelTools,
-  ...workflowTools,
-  ...triggerTools,
-  ...modelTools,
-  ...commandTools,
-  ...formTools,
-};
+/**
+ * The canonical map of workspace tool modules, keyed by domain category. This is the
+ * SINGLE source of truth for the agent tool set: both the flat `baseTools` registry
+ * and the categorized `TOOL_REGISTRY` are derived from it, so adding a tool module is
+ * a one-line edit here — the flat registry, the category map, and the doc-enforced
+ * `WORKSPACE_TOOL_COUNT` all update together.
+ *
+ * Code-execution tools (`bash`/git/etc.) are intentionally NOT here — they are
+ * flag-gated behind `CODE_EXECUTION_ENABLED` (default OFF, see `buildPageSpaceTools`)
+ * and are not part of the public workspace-tool count.
+ */
+const TOOL_MODULES = {
+  members: memberTools,
+  roles: roleManagementTools,
+  drives: driveTools,
+  pagesRead: pageReadTools,
+  pagesWrite: pageWriteTools,
+  search: searchTools,
+  tasks: taskManagementTools,
+  agents: agentTools,
+  agentCommunication: agentCommunicationTools,
+  web: webSearchTools,
+  activity: activityTools,
+  calendarRead: calendarReadTools,
+  calendarWrite: calendarWriteTools,
+  channels: channelTools,
+  workflows: workflowTools,
+  triggers: triggerTools,
+  models: modelTools,
+  commands: commandTools,
+  forms: formTools,
+} as const;
+
+// Flatten the module map into one ToolSet, preserving each module's precise per-tool
+// type so `PageSpaceTools` keeps its exact keys. UnionToIntersection turns the union
+// of module types into their intersection — the type equivalent of spreading them all.
+type UnionToIntersection<U> = (U extends unknown ? (k: U) => void : never) extends (
+  k: infer I,
+) => void
+  ? I
+  : never;
+type BaseTools = UnionToIntersection<(typeof TOOL_MODULES)[keyof typeof TOOL_MODULES]>;
+
+const baseTools = Object.assign({}, ...Object.values(TOOL_MODULES)) as BaseTools;
 
 /**
- * Categorized enumeration of every workspace tool, keyed by domain. Each category
- * reads the keys of the same module object spread into `baseTools` above.
- *
- * This is a parallel structure rather than a derivation because `baseTools` keeps
- * an explicit spread to preserve its precise per-tool type (`PageSpaceTools`), and
- * category grouping is lost once the modules are flattened. The two lists can't
- * silently drift: `tool-registry-docs.test.ts` asserts the union of all categories
- * equals `WORKSPACE_TOOL_NAMES`, so adding a module to one without the other fails CI.
- *
- * Code-execution tools (`bash`/git/etc.) are intentionally excluded — they are
- * flag-gated behind `CODE_EXECUTION_ENABLED` (default OFF) and are not part of the
- * public workspace-tool count.
+ * Categorized enumeration of every workspace tool, keyed by domain — a projection of
+ * `TOOL_MODULES`. Gives agent-facing docs and lints a programmatic source for what
+ * tools exist and which category each belongs to (issue #1055).
  */
-export const TOOL_REGISTRY = {
-  members: Object.keys(memberTools),
-  roles: Object.keys(roleManagementTools),
-  drives: Object.keys(driveTools),
-  pagesRead: Object.keys(pageReadTools),
-  pagesWrite: Object.keys(pageWriteTools),
-  search: Object.keys(searchTools),
-  tasks: Object.keys(taskManagementTools),
-  agents: Object.keys(agentTools),
-  agentCommunication: Object.keys(agentCommunicationTools),
-  web: Object.keys(webSearchTools),
-  activity: Object.keys(activityTools),
-  calendarRead: Object.keys(calendarReadTools),
-  calendarWrite: Object.keys(calendarWriteTools),
-  channels: Object.keys(channelTools),
-  workflows: Object.keys(workflowTools),
-  triggers: Object.keys(triggerTools),
-  models: Object.keys(modelTools),
-  commands: Object.keys(commandTools),
-  forms: Object.keys(formTools),
-} as const;
+type ToolCategory = keyof typeof TOOL_MODULES;
+export const TOOL_REGISTRY: Record<ToolCategory, readonly string[]> = (
+  Object.keys(TOOL_MODULES) as ToolCategory[]
+).reduce(
+  (acc, category) => {
+    acc[category] = Object.keys(TOOL_MODULES[category]);
+    return acc;
+  },
+  {} as Record<ToolCategory, readonly string[]>,
+);
 
 /** Flat list of every workspace tool available to a default cloud agent. */
 export const WORKSPACE_TOOL_NAMES: readonly string[] = Object.keys(baseTools);
