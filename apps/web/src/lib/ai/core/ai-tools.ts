@@ -46,8 +46,14 @@ const baseTools = {
 };
 
 /**
- * Categorized enumeration of every workspace tool, keyed by domain. Derived from
- * the same objects that build `baseTools`, so it can never drift from what ships.
+ * Categorized enumeration of every workspace tool, keyed by domain. Each category
+ * reads the keys of the same module object spread into `baseTools` above.
+ *
+ * This is a parallel structure rather than a derivation because `baseTools` keeps
+ * an explicit spread to preserve its precise per-tool type (`PageSpaceTools`), and
+ * category grouping is lost once the modules are flattened. The two lists can't
+ * silently drift: `tool-registry-docs.test.ts` asserts the union of all categories
+ * equals `WORKSPACE_TOOL_NAMES`, so adding a module to one without the other fails CI.
  *
  * Code-execution tools (`bash`/git/etc.) are intentionally excluded — they are
  * flag-gated behind `CODE_EXECUTION_ENABLED` (default OFF) and are not part of the
