@@ -138,20 +138,28 @@ export function createMachineSpriteTeardown(): MachineSpriteTeardown {
 export function createMachineDependentsPurge(): MachineDependentsPurge {
   return {
     async purge(terminalId: string): Promise<void> {
-      const branchRows = await db
-        .select({ sandboxId: machineBranches.sandboxId })
-        .from(machineBranches)
-        .where(eq(machineBranches.terminalId, terminalId));
+      // Kill each branch Sprite first — but never let a host/kill failure block
+      // the row cleanup below, which is the part that keeps a later restore
+      // consistent. A branch Sprite left alive is a reconciler-reclaimable orphan.
+      try {
+        const branchRows = await db
+          .select({ sandboxId: machineBranches.sandboxId })
+          .from(machineBranches)
+          .where(eq(machineBranches.terminalId, terminalId));
 
-      if (branchRows.length > 0) {
-        const host = await getMachineHostForBranches();
-        for (const branch of branchRows) {
-          try {
-            await host.kill({ machineId: branch.sandboxId });
-          } catch {
-            // Orphaned branch Sprite — reclaimed by the idle reaper later.
+        if (branchRows.length > 0) {
+          const host = await getMachineHostForBranches();
+          for (const branch of branchRows) {
+            try {
+              await host.kill({ machineId: branch.sandboxId });
+            } catch {
+              // Orphaned branch Sprite — reclaimed by the idle reaper later.
+            }
           }
         }
+      } catch {
+        // Could not enumerate/kill branch Sprites (e.g. host unavailable);
+        // still drop the rows so restore stays consistent.
       }
 
       await db.delete(machineAgentTerminals).where(eq(machineAgentTerminals.terminalId, terminalId));
