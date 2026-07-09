@@ -1,9 +1,10 @@
 "use client";
 
 import { Fragment, useCallback, useState } from 'react';
+import type { ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import type { Socket } from 'socket.io-client';
-import { SquareSplitHorizontal, X } from 'lucide-react';
+import { SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useTerminalWorkspaceStore, selectWorkspace, type OpenTerminalScope, type TerminalPaneState } from '@/stores/terminal-workspace/useTerminalWorkspaceStore';
@@ -18,17 +19,14 @@ interface TerminalPanesProps {
   socket: Socket | null | undefined;
 }
 
-function scopeLabel(scope: OpenTerminalScope): string {
-  return [scope.projectName, scope.branchName, scope.name].filter(Boolean).join('/');
-}
-
 function paneSessionId(terminalId: string, scope: OpenTerminalScope): string {
   return `agent-terminal:${terminalId}:${scope.projectName ?? ''}:${scope.branchName ?? ''}:${scope.name}`;
 }
 
 export default function TerminalPanes({ terminalId, socket }: TerminalPanesProps) {
   const workspace = useTerminalWorkspaceStore(selectWorkspace(terminalId));
-  const split = useTerminalWorkspaceStore((state) => state.split);
+  const splitRight = useTerminalWorkspaceStore((state) => state.splitRight);
+  const splitDown = useTerminalWorkspaceStore((state) => state.splitDown);
   const closePane = useTerminalWorkspaceStore((state) => state.closePane);
   const selectPane = useTerminalWorkspaceStore((state) => state.selectPane);
 
@@ -36,35 +34,36 @@ export default function TerminalPanes({ terminalId, socket }: TerminalPanesProps
   // mounting TerminalWorkspace's ensureWorkspace effect committing.
   if (!workspace) return null;
 
-  const { panes, activePaneId } = workspace;
+  const { columns, activePaneId } = workspace;
+  const canClose = columns.reduce((sum, column) => sum + column.panes.length, 0) > 1;
 
   return (
-    <div className="flex h-full flex-col bg-black">
-      <div className="flex items-center justify-end gap-1 border-b border-white/10 px-2 py-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => split(terminalId)}
-          className="h-6 gap-1 px-2 text-xs text-white/70 hover:text-white"
-        >
-          <SquareSplitHorizontal className="size-3.5" />
-          Split
-        </Button>
-      </div>
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        {panes.map((pane, i) => (
-          <Fragment key={pane.id}>
-            {i > 0 && <ResizableHandle />}
-            <ResizablePanel defaultSize={100 / panes.length} minSize={20}>
-              <TerminalPane
-                socket={socket}
-                terminalId={terminalId}
-                pane={pane}
-                isActive={pane.id === activePaneId}
-                canClose={panes.length > 1}
-                onSelect={() => selectPane(terminalId, pane.id)}
-                onClose={() => closePane(terminalId, pane.id)}
-              />
+    <div className="h-full bg-background">
+      <ResizablePanelGroup orientation="horizontal" className="h-full">
+        {columns.map((column, columnIndex) => (
+          <Fragment key={column.id}>
+            {columnIndex > 0 && <ResizableHandle visibleAtRest />}
+            <ResizablePanel defaultSize={100 / columns.length} minSize={15}>
+              <ResizablePanelGroup orientation="vertical" className="h-full">
+                {column.panes.map((pane, paneIndex) => (
+                  <Fragment key={pane.id}>
+                    {paneIndex > 0 && <ResizableHandle visibleAtRest />}
+                    <ResizablePanel defaultSize={100 / column.panes.length} minSize={15}>
+                      <TerminalPane
+                        socket={socket}
+                        terminalId={terminalId}
+                        pane={pane}
+                        isActive={pane.id === activePaneId}
+                        canClose={canClose}
+                        onSelect={() => selectPane(terminalId, pane.id)}
+                        onSplitRight={() => splitRight(terminalId, pane.id)}
+                        onSplitDown={() => splitDown(terminalId, pane.id)}
+                        onClose={() => closePane(terminalId, pane.id)}
+                      />
+                    </ResizablePanel>
+                  </Fragment>
+                ))}
+              </ResizablePanelGroup>
             </ResizablePanel>
           </Fragment>
         ))}
@@ -73,6 +72,12 @@ export default function TerminalPanes({ terminalId, socket }: TerminalPanesProps
   );
 }
 
+/**
+ * Chrome-free: no header, ever — session identity is sidebar-only now (the
+ * Navigator). The only always-present affordance is the top accent bar on
+ * the active pane; split/close controls reveal on hover so an idle pane
+ * reads as pure terminal, not a bordered widget.
+ */
 function TerminalPane({
   socket,
   terminalId,
@@ -80,6 +85,8 @@ function TerminalPane({
   isActive,
   canClose,
   onSelect,
+  onSplitRight,
+  onSplitDown,
   onClose,
 }: {
   socket: Socket | null | undefined;
@@ -88,31 +95,26 @@ function TerminalPane({
   isActive: boolean;
   canClose: boolean;
   onSelect(): void;
+  onSplitRight(): void;
+  onSplitDown(): void;
   onClose(): void;
 }) {
   const sessionId = pane.scope ? paneSessionId(terminalId, pane.scope) : null;
 
   return (
-    <div
-      className={`flex h-full flex-col ${isActive ? 'ring-1 ring-inset ring-emerald-500/50' : ''}`}
-      onClick={onSelect}
-    >
-      <div className="flex items-center gap-1 border-b border-white/10 bg-white/5 px-1.5 py-1">
-        <span className="flex-1 truncate px-1 text-xs text-white/80">
-          {pane.scope ? scopeLabel(pane.scope) : 'No terminal open — click to make this pane active, then pick a terminal in the navigator'}
-        </span>
+    <div className="group/pane relative flex h-full flex-col" onClick={onSelect}>
+      <div className={`absolute inset-x-0 top-0 z-10 h-0.5 ${isActive ? 'bg-primary' : 'bg-transparent'}`} />
+      <div className="absolute right-1.5 top-1.5 z-10 flex gap-0.5 opacity-0 transition-opacity group-hover/pane:opacity-100">
+        <PaneControlButton title="Split right" onClick={onSplitRight}>
+          <SquareSplitHorizontal className="size-3.5" />
+        </PaneControlButton>
+        <PaneControlButton title="Split down" onClick={onSplitDown}>
+          <SquareSplitVertical className="size-3.5" />
+        </PaneControlButton>
         {canClose && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-            className="size-5 text-white/60 hover:text-white"
-          >
+          <PaneControlButton title="Close pane" onClick={onClose}>
             <X className="size-3.5" />
-          </Button>
+          </PaneControlButton>
         )}
       </div>
       <div className="relative min-h-0 flex-1">
@@ -123,6 +125,23 @@ function TerminalPane({
         )}
       </div>
     </div>
+  );
+}
+
+function PaneControlButton({ title, onClick, children }: { title: string; onClick(): void; children: ReactNode }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className="size-6 border border-border bg-card text-muted-foreground hover:text-foreground"
+    >
+      {children}
+    </Button>
   );
 }
 
@@ -162,13 +181,13 @@ function TerminalPaneStream({
         />
       )}
       {!connected && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black">
+        <div className="absolute inset-0 flex items-center justify-center bg-background">
           {error ? (
-            <span className="text-sm text-red-400">{error}</span>
+            <span className="text-sm text-destructive">{error}</span>
           ) : (
             <div className="flex items-center gap-2">
-              <div className="size-4 animate-spin rounded-full border-2 border-green-400 border-t-transparent" />
-              <span className="text-sm text-green-400">Connecting…</span>
+              <div className="size-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <span className="text-sm text-muted-foreground">Connecting…</span>
             </div>
           )}
         </div>

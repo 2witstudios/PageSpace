@@ -2,7 +2,20 @@
 
 import { useEffect, useRef } from 'react';
 import type { Socket } from 'socket.io-client';
+import type { Terminal as XtermInstance } from '@xterm/xterm';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useXtermTheme } from '@/hooks/useXtermTheme';
+import { getCssVar } from '@/lib/theme/css-color-resolution';
+
+/** Canvas `ctx.font` strings don't reliably resolve `var(...)` — resolve the
+ * design system's mono stack (next/font-generated, via `--font-mono`) to a
+ * concrete value up front, same as color resolution does for tokens. */
+const FALLBACK_FONT_FAMILY = "ui-monospace, Menlo, Monaco, Consolas, 'Courier New', monospace";
+
+function resolveTerminalFontFamily(): string {
+  if (typeof document === 'undefined') return FALLBACK_FONT_FAMILY;
+  return getCssVar('--font-mono') || FALLBACK_FONT_FAMILY;
+}
 
 export interface AgentTerminalConnectPayload {
   terminalId: string;
@@ -23,6 +36,13 @@ interface XtermTerminalProps {
 
 export default function XtermTerminal({ socket, sessionId, connectPayload, onReady, onError }: XtermTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<XtermInstance | null>(null);
+  const theme = useXtermTheme();
+  // Read inside the [socket, sessionId]-keyed effect below without adding
+  // `theme` to its deps — that effect must not re-run (and re-mount the PTY
+  // connection) just because the color scheme toggled.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -46,7 +66,16 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
 
         if (cancelled || !containerRef.current) return;
 
-        const terminal = new Terminal({ cursorBlink: true });
+        const terminal = new Terminal({
+          cursorBlink: true,
+          theme: themeRef.current,
+          fontFamily: resolveTerminalFontFamily(),
+          fontSize: 14,
+          cursorStyle: 'block',
+          letterSpacing: 0,
+          lineHeight: 1.2,
+        });
+        terminalRef.current = terminal;
         const fitAddon = new FitAddon();
         terminal.loadAddon(fitAddon);
         terminal.open(containerRef.current);
@@ -101,6 +130,7 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
           // timeout) correctly reflects "this one pane closed".
           socket.emit('agent-terminal:disconnect', { connectionId });
           terminal.dispose();
+          terminalRef.current = null;
           useEditingStore.getState().endEditing(sessionId);
         };
 
@@ -135,6 +165,15 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
   // render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, sessionId]);
+
+  // xterm supports live option updates — flip `theme` in place instead of
+  // tearing down the [socket, sessionId] connection effect above just
+  // because light/dark mode toggled.
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.options.theme = theme;
+    }
+  }, [theme]);
 
   return <div ref={containerRef} className="w-full h-full" />;
 }

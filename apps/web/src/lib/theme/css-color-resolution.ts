@@ -1,0 +1,217 @@
+/**
+ * CSS-var-to-hex resolution pipeline, shared by every hook that needs to hand
+ * a third-party editor/terminal library (Monaco, xterm) a concrete hex color
+ * derived from our design tokens (`--background`, `--primary`, etc. — always
+ * an `oklch()`/`hsl()`/whatever value at runtime, never a hex literal).
+ *
+ * Resolution order: already-hex -> rgb()/rgba() -> CSS.supports + 1x1 canvas
+ * paint -> hidden-span computed-style round trip -> fallback. The canvas and
+ * computed-style paths exist because CSS Color 4 functions (oklch, lab, etc.)
+ * can't be parsed with regex — the browser has to compute them.
+ */
+
+let colorResolveContext: CanvasRenderingContext2D | null | undefined;
+
+export function getCssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function byteToHex(value: number): string {
+  return clamp(Math.round(value), 0, 255).toString(16).padStart(2, '0');
+}
+
+function normalizeHexColor(value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+
+  if (/^#[0-9a-f]{6}$/.test(normalized) || /^#[0-9a-f]{8}$/.test(normalized)) {
+    return normalized;
+  }
+
+  if (/^#[0-9a-f]{3}$/.test(normalized)) {
+    const r = normalized[1];
+    const g = normalized[2];
+    const b = normalized[3];
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+
+  if (/^#[0-9a-f]{4}$/.test(normalized)) {
+    const r = normalized[1];
+    const g = normalized[2];
+    const b = normalized[3];
+    const a = normalized[4];
+    return `#${r}${r}${g}${g}${b}${b}${a}${a}`;
+  }
+
+  return null;
+}
+
+function parseRgbChannel(value: string): number | null {
+  const channel = value.trim();
+  if (channel.endsWith('%')) {
+    const percent = Number.parseFloat(channel.slice(0, -1));
+    if (!Number.isFinite(percent)) return null;
+    return clamp((percent / 100) * 255, 0, 255);
+  }
+
+  const numeric = Number.parseFloat(channel);
+  if (!Number.isFinite(numeric)) return null;
+  return clamp(numeric, 0, 255);
+}
+
+function parseAlphaChannel(value: string): number | null {
+  const alpha = value.trim();
+  if (alpha.endsWith('%')) {
+    const percent = Number.parseFloat(alpha.slice(0, -1));
+    if (!Number.isFinite(percent)) return null;
+    return clamp(percent / 100, 0, 1);
+  }
+
+  const numeric = Number.parseFloat(alpha);
+  if (!Number.isFinite(numeric)) return null;
+  return clamp(numeric, 0, 1);
+}
+
+function parseRgbLikeColorToHex(value: string): string | null {
+  const input = value.trim();
+  const match = input.match(/^rgba?\((.*)\)$/i);
+  if (!match) return null;
+
+  const content = match[1].trim();
+  let rgbParts: string[] = [];
+  let alphaPart: string | undefined;
+
+  if (content.includes(',')) {
+    const parts = content.split(',').map((part) => part.trim());
+    if (parts.length < 3) return null;
+    rgbParts = parts.slice(0, 3);
+    alphaPart = parts[3];
+  } else {
+    const slashParts = content.split('/');
+    const rgbTokens = slashParts[0]?.trim().split(/\s+/) ?? [];
+    if (rgbTokens.length < 3) return null;
+    rgbParts = rgbTokens.slice(0, 3);
+    alphaPart = slashParts[1]?.trim();
+  }
+
+  const r = parseRgbChannel(rgbParts[0] ?? '');
+  const g = parseRgbChannel(rgbParts[1] ?? '');
+  const b = parseRgbChannel(rgbParts[2] ?? '');
+  if (r === null || g === null || b === null) return null;
+
+  const a = alphaPart ? parseAlphaChannel(alphaPart) : 1;
+  if (a === null) return null;
+
+  const alphaHex = a < 1 ? byteToHex(a * 255) : '';
+  return `#${byteToHex(r)}${byteToHex(g)}${byteToHex(b)}${alphaHex}`;
+}
+
+function getColorResolveContext(): CanvasRenderingContext2D | null {
+  if (colorResolveContext !== undefined) {
+    return colorResolveContext;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  colorResolveContext = canvas.getContext('2d', { willReadFrequently: true });
+  return colorResolveContext;
+}
+
+function parseCssColorToHex(value: string): string | null {
+  const input = value.trim();
+  if (!input || typeof window === 'undefined') {
+    return null;
+  }
+
+  if (!('CSS' in window) || typeof window.CSS.supports !== 'function') {
+    return null;
+  }
+
+  if (!window.CSS.supports('color', input)) {
+    return null;
+  }
+
+  const context = getColorResolveContext();
+  if (!context) {
+    return null;
+  }
+
+  context.clearRect(0, 0, 1, 1);
+  context.fillStyle = 'rgba(0, 0, 0, 0)';
+  context.fillStyle = input;
+  context.fillRect(0, 0, 1, 1);
+
+  const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+  const alphaHex = a < 255 ? byteToHex(a) : '';
+  return `#${byteToHex(r)}${byteToHex(g)}${byteToHex(b)}${alphaHex}`;
+}
+
+function getComputedColorValue(cssValue: string): string | null {
+  const probe = document.createElement('span');
+  probe.style.color = '';
+  probe.style.color = cssValue;
+
+  if (!probe.style.color) {
+    return null;
+  }
+
+  probe.style.display = 'none';
+  const parent = document.body ?? document.documentElement;
+  parent.appendChild(probe);
+  const computed = getComputedStyle(probe).color.trim();
+  probe.remove();
+
+  return computed || null;
+}
+
+export function resolveColor(cssValue: string, fallback: string): string {
+  const fallbackHex = normalizeHexColor(fallback) ?? '#000000';
+
+  if (!cssValue) {
+    return fallbackHex;
+  }
+
+  const directHex = normalizeHexColor(cssValue);
+  if (directHex) {
+    return directHex;
+  }
+
+  const directRgbHex = parseRgbLikeColorToHex(cssValue);
+  if (directRgbHex) {
+    return directRgbHex;
+  }
+
+  const cssHex = parseCssColorToHex(cssValue);
+  if (cssHex) {
+    return cssHex;
+  }
+
+  const computed = getComputedColorValue(cssValue);
+  if (computed) {
+    const computedHex =
+      normalizeHexColor(computed) ??
+      parseRgbLikeColorToHex(computed) ??
+      parseCssColorToHex(computed);
+    if (computedHex) {
+      return computedHex;
+    }
+  }
+
+  return fallbackHex;
+}
+
+export function withAlpha(color: string, alpha: number, fallback: string): string {
+  const resolved = resolveColor(color, fallback);
+  const normalized = normalizeHexColor(resolved) ?? normalizeHexColor(fallback) ?? '#000000';
+
+  const r = Number.parseInt(normalized.slice(1, 3), 16);
+  const g = Number.parseInt(normalized.slice(3, 5), 16);
+  const b = Number.parseInt(normalized.slice(5, 7), 16);
+  const a = byteToHex(clamp(alpha, 0, 1) * 255);
+
+  return `#${byteToHex(r)}${byteToHex(g)}${byteToHex(b)}${a}`;
+}

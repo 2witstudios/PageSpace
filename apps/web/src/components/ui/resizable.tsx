@@ -23,10 +23,20 @@ function ResizablePanel({ ...props }: ResizablePrimitive.PanelProps) {
   return <ResizablePrimitive.Panel data-slot="resizable-panel" {...props} />
 }
 
+interface ResizableHandleProps extends ResizablePrimitive.SeparatorProps {
+  /** Keeps the center seam faintly visible at rest instead of fully
+   * transparent. Opt in per-surface (e.g. chrome-free layouts where no
+   * sibling border/card gives the seam away independently) — the global
+   * default stays hover-only so every other resizable split in the app is
+   * unaffected. */
+  visibleAtRest?: boolean;
+}
+
 function ResizableHandle({
   className,
+  visibleAtRest = false,
   ...props
-}: ResizablePrimitive.SeparatorProps) {
+}: ResizableHandleProps) {
   return (
     <ResizablePrimitive.Separator
       data-slot="resizable-handle"
@@ -40,7 +50,12 @@ function ResizableHandle({
       )}
       {...props}
     >
-      <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-sidebar-border opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-data-[separator=active]:opacity-100 group-data-[separator=active]:bg-primary" />
+      <div
+        className={cn(
+          "absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-sidebar-border transition-opacity duration-150 group-hover:opacity-100 group-data-[separator=active]:opacity-100 group-data-[separator=active]:bg-primary",
+          visibleAtRest ? "opacity-60" : "opacity-0"
+        )}
+      />
     </ResizablePrimitive.Separator>
   )
 }

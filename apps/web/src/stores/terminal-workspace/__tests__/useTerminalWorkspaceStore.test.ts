@@ -3,6 +3,11 @@ import { useTerminalWorkspaceStore, selectWorkspace } from '../useTerminalWorksp
 
 const reset = () => useTerminalWorkspaceStore.setState({ workspaces: {} });
 
+function firstPaneId(terminalId: string): string {
+  const workspace = selectWorkspace(terminalId)(useTerminalWorkspaceStore.getState());
+  return workspace!.columns[0].panes[0].id;
+}
+
 describe('useTerminalWorkspaceStore', () => {
   beforeEach(() => {
     reset();
@@ -24,21 +29,21 @@ describe('useTerminalWorkspaceStore', () => {
     });
   });
 
-  it('given ensureWorkspace is called for a new terminalId, should create a single-pane workspace', () => {
+  it('given ensureWorkspace is called for a new terminalId, should create a single-column single-pane workspace', () => {
     useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
 
     const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
     expect({
       given: 'ensureWorkspace is called for a new terminalId',
-      should: 'create a single-pane workspace',
-      actual: workspace?.panes.length,
-      expected: 1,
+      should: 'create a single-column single-pane workspace',
+      actual: { columnCount: workspace?.columns.length, paneCount: workspace?.columns[0].panes.length },
+      expected: { columnCount: 1, paneCount: 1 },
     }).toEqual({
       given: 'ensureWorkspace is called for a new terminalId',
-      should: 'create a single-pane workspace',
-      actual: 1,
-      expected: 1,
+      should: 'create a single-column single-pane workspace',
+      actual: { columnCount: 1, paneCount: 1 },
+      expected: { columnCount: 1, paneCount: 1 },
     });
   });
 
@@ -93,7 +98,7 @@ describe('useTerminalWorkspaceStore', () => {
     expect({
       given: 'two ensured workspaces',
       should: 'keep them independent',
-      actual: { w1Scope: workspace1?.panes[0].scope, w2Scope: workspace2?.panes[0].scope },
+      actual: { w1Scope: workspace1?.columns[0].panes[0].scope, w2Scope: workspace2?.columns[0].panes[0].scope },
       expected: { w1Scope: { name: 'only-in-1' }, w2Scope: null },
     }).toEqual({
       given: 'two ensured workspaces',
@@ -108,11 +113,12 @@ describe('useTerminalWorkspaceStore', () => {
     useTerminalWorkspaceStore.getState().openTerminal('terminal-1', { name: 'my-terminal' });
 
     const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
+    const activePane = workspace?.columns.flatMap((c) => c.panes).find((p) => p.id === workspace.activePaneId);
 
     expect({
       given: 'openTerminal',
       should: 'write the scope into the active pane',
-      actual: workspace?.panes.find((p) => p.id === workspace.activePaneId)?.scope,
+      actual: activePane?.scope,
       expected: { name: 'my-terminal' },
     }).toEqual({
       given: 'openTerminal',
@@ -122,22 +128,47 @@ describe('useTerminalWorkspaceStore', () => {
     });
   });
 
-  it('given split, should add a second pane and activate it', () => {
+  it('given splitRight, should add a second column and activate its pane', () => {
     useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
-    useTerminalWorkspaceStore.getState().split('terminal-1');
+    const paneId = firstPaneId('terminal-1');
+    useTerminalWorkspaceStore.getState().splitRight('terminal-1', paneId);
 
     const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
     expect({
-      given: 'split',
-      should: 'add a second pane and activate it',
-      actual: { paneCount: workspace?.panes.length, activeIsNewPane: workspace?.activePaneId !== workspace?.panes[0].id },
-      expected: { paneCount: 2, activeIsNewPane: true },
+      given: 'splitRight',
+      should: 'add a second column and activate its pane',
+      actual: { columnCount: workspace?.columns.length, activeIsNewPane: workspace?.activePaneId !== paneId },
+      expected: { columnCount: 2, activeIsNewPane: true },
     }).toEqual({
-      given: 'split',
-      should: 'add a second pane and activate it',
-      actual: { paneCount: 2, activeIsNewPane: true },
-      expected: { paneCount: 2, activeIsNewPane: true },
+      given: 'splitRight',
+      should: 'add a second column and activate its pane',
+      actual: { columnCount: 2, activeIsNewPane: true },
+      expected: { columnCount: 2, activeIsNewPane: true },
+    });
+  });
+
+  it('given splitDown, should add a second pane to the same column and activate it', () => {
+    useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
+    const paneId = firstPaneId('terminal-1');
+    useTerminalWorkspaceStore.getState().splitDown('terminal-1', paneId);
+
+    const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
+
+    expect({
+      given: 'splitDown',
+      should: 'add a second pane to the same column and activate it',
+      actual: {
+        columnCount: workspace?.columns.length,
+        paneCountInColumn: workspace?.columns[0].panes.length,
+        activeIsNewPane: workspace?.activePaneId !== paneId,
+      },
+      expected: { columnCount: 1, paneCountInColumn: 2, activeIsNewPane: true },
+    }).toEqual({
+      given: 'splitDown',
+      should: 'add a second pane to the same column and activate it',
+      actual: { columnCount: 1, paneCountInColumn: 2, activeIsNewPane: true },
+      expected: { columnCount: 1, paneCountInColumn: 2, activeIsNewPane: true },
     });
   });
 
@@ -145,7 +176,7 @@ describe('useTerminalWorkspaceStore', () => {
     useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
     const before = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
-    useTerminalWorkspaceStore.getState().closePane('terminal-1', before!.panes[0].id);
+    useTerminalWorkspaceStore.getState().closePane('terminal-1', before!.columns[0].panes[0].id);
     const after = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
     expect({
@@ -163,11 +194,10 @@ describe('useTerminalWorkspaceStore', () => {
 
   it('given selectPane, should activate the chosen pane', () => {
     useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
-    useTerminalWorkspaceStore.getState().split('terminal-1');
+    const firstId = firstPaneId('terminal-1');
+    useTerminalWorkspaceStore.getState().splitRight('terminal-1', firstId);
 
-    const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
-    const firstPaneId = workspace!.panes[0].id;
-    useTerminalWorkspaceStore.getState().selectPane('terminal-1', firstPaneId);
+    useTerminalWorkspaceStore.getState().selectPane('terminal-1', firstId);
 
     const after = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
@@ -175,18 +205,19 @@ describe('useTerminalWorkspaceStore', () => {
       given: 'selectPane',
       should: 'activate the chosen pane',
       actual: after?.activePaneId,
-      expected: firstPaneId,
+      expected: firstId,
     }).toEqual({
       given: 'selectPane',
       should: 'activate the chosen pane',
-      actual: firstPaneId,
-      expected: firstPaneId,
+      actual: firstId,
+      expected: firstId,
     });
   });
 
   it('given actions on a terminalId that was never ensured, should be a no-op', () => {
     useTerminalWorkspaceStore.getState().openTerminal('never-ensured', { name: 'ghost' });
-    useTerminalWorkspaceStore.getState().split('never-ensured');
+    useTerminalWorkspaceStore.getState().splitRight('never-ensured', 'anything');
+    useTerminalWorkspaceStore.getState().splitDown('never-ensured', 'anything');
     useTerminalWorkspaceStore.getState().closePane('never-ensured', 'anything');
     useTerminalWorkspaceStore.getState().selectPane('never-ensured', 'anything');
 
