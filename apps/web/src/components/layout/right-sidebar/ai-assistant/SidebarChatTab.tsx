@@ -149,7 +149,11 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
       {inflightRemoteStreams.map((stream) => (
         <CompactMessageRenderer
           key={stream.messageId}
-          message={synthesizeAssistantMessage(stream.messageId, stream.parts)}
+          message={synthesizeAssistantMessage(
+            stream.messageId,
+            stream.parts,
+            stream.startedAt ? new Date(stream.startedAt) : undefined,
+          )}
           isStreaming
         />
       ))}
@@ -570,7 +574,7 @@ const SidebarChatTab: React.FC = () => {
         const ownStream = Array.from(usePendingStreamsStore.getState().streams.values())
           .find((s) => s.isOwn && s.conversationId === conversationId);
         const merged = ownStream
-          ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId)
+          ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId, ownStream.startedAt)
           : serverMessages;
         setGlobalMessages(merged);
         setGlobalMessagesLoadError(null);

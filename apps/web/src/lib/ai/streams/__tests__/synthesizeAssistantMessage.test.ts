@@ -38,6 +38,19 @@ describe('synthesizeAssistantMessage', () => {
     expect(msg.parts.map((p) => p.type)).toEqual(['text', 'tool-list_pages']);
   });
 
+  it('given a createdAt, should attach it to the synthesized message', () => {
+    const createdAt = new Date('2024-01-01T00:00:00.000Z');
+    const msg = synthesizeAssistantMessage('msg-1', [{ type: 'text' as const, text: 'hi' }], createdAt);
+
+    expect(msg.createdAt).toBe(createdAt);
+  });
+
+  it('given no createdAt, should omit the field entirely (not set it to undefined)', () => {
+    const msg = synthesizeAssistantMessage('msg-1', []);
+
+    expect('createdAt' in msg).toBe(false);
+  });
+
   it('given the same input twice, should produce structurally equal messages but referentially independent parts arrays', () => {
     const parts = [{ type: 'text' as const, text: 'hi' }];
     const a = synthesizeAssistantMessage('msg-1', parts);

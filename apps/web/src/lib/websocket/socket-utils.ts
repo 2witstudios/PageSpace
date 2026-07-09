@@ -695,6 +695,8 @@ export interface AiStreamStartPayload {
   messageId: string;
   pageId: string;
   conversationId: string;
+  /** ISO timestamp of the stream's `aiStreamSessions.started_at`, so remote surfaces can stamp synthesized bubbles. */
+  startedAt: string;
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 

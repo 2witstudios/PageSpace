@@ -101,6 +101,7 @@ describe('GET /api/ai/chat/active-streams', () => {
         displayName: 'Alice',
         browserSessionId: 'session-2',
         parts,
+        startedAt: new Date('2024-01-01T00:00:00.000Z'),
       },
     ]);
 
@@ -111,6 +112,7 @@ describe('GET /api/ai/chat/active-streams', () => {
       {
         messageId: 'msg-1',
         conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
         parts,
         triggeredBy: {
           userId: 'user-2',
@@ -130,6 +132,7 @@ describe('GET /api/ai/chat/active-streams', () => {
         displayName: 'Alice',
         browserSessionId: 'session-2',
         parts: null,
+        startedAt: new Date('2024-01-01T00:00:00.000Z'),
       },
     ]);
 

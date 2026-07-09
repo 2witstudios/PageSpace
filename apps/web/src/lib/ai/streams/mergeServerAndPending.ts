@@ -16,8 +16,10 @@ export const mergeServerAndPending = (
   serverMessages: UIMessage[],
   pendingParts: readonly UIMessagePart[],
   pendingMessageId: string | undefined,
+  pendingStartedAt?: string,
 ): UIMessage[] => {
   if (pendingMessageId === undefined) return serverMessages;
   if (serverMessages.some((m) => m.id === pendingMessageId)) return serverMessages;
-  return [...serverMessages, synthesizeAssistantMessage(pendingMessageId, pendingParts)];
+  const createdAt = pendingStartedAt ? new Date(pendingStartedAt) : undefined;
+  return [...serverMessages, synthesizeAssistantMessage(pendingMessageId, pendingParts, createdAt)];
 };

@@ -8,13 +8,20 @@ type UIMessagePart = UIMessage['parts'][number];
  * real assistant message bubble (so MessageRenderer + ToolCallRenderer
  * render identically to the originator's view).
  *
+ * When `createdAt` is provided (the stream's start time), it is attached so
+ * the bubble carries a timestamp footer that matches its persisted neighbors;
+ * omitted entirely when absent, so a synthesized bubble degrades to today's
+ * timestamp-less behavior rather than an `Invalid Date`.
+ *
  * Pure — never mutates the input parts array.
  */
 export const synthesizeAssistantMessage = (
   messageId: string,
   parts: readonly UIMessagePart[],
-): UIMessage => ({
+  createdAt?: Date,
+): UIMessage & { createdAt?: Date } => ({
   id: messageId,
   role: 'assistant',
   parts: [...parts],
+  ...(createdAt ? { createdAt } : {}),
 });
