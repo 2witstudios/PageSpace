@@ -8,9 +8,11 @@
  * `agent-terminals-runtime.ts` each already do for their own operations —
  * those two are left untouched, this is for new code going forward.
  *
- * Callers first resolve a `MachineActorContext` via `resolveMachineActorContext`
- * (`./machine-branches-runtime`), then pass it to `canViewMachine`/`canEditMachine`
- * here alongside the target `terminalId`.
+ * Takes the actor's user id directly — mirroring `canAccessMachine`/
+ * `canViewMachine` in `./machine-branches-runtime`, which the same
+ * `MachineAccessDeps` pattern was extracted from — rather than a full
+ * `MachineActorContext`, so a caller never has to pay for
+ * `resolveMachineActorContext`'s DB round trip just to gate access.
  */
 
 import { eq } from '@pagespace/db/operators';
@@ -22,7 +24,6 @@ import {
   canEditMachine as canEditMachineCore,
   type MachineAccessDeps,
 } from '@pagespace/lib/services/machines/machine-access';
-import type { MachineActorContext } from '@pagespace/lib/services/machines/machine-branches';
 import type { PageType } from '@pagespace/lib/utils/enums';
 
 function buildMachineAccessDeps(): MachineAccessDeps {
@@ -37,11 +38,11 @@ function buildMachineAccessDeps(): MachineAccessDeps {
 }
 
 /** View-level access (e.g. read files/diff/settings) for a Machine page. */
-export async function canViewMachine(actor: MachineActorContext, terminalId: string): Promise<boolean> {
-  return canViewMachineCore(buildMachineAccessDeps(), actor, terminalId);
+export async function canViewMachine(actorUserId: string, terminalId: string): Promise<boolean> {
+  return canViewMachineCore(buildMachineAccessDeps(), actorUserId, terminalId);
 }
 
 /** Edit-level access (e.g. mutate settings, write files) for a Machine page — re-checked on every call, never cached. */
-export async function canEditMachine(actor: MachineActorContext, terminalId: string): Promise<boolean> {
-  return canEditMachineCore(buildMachineAccessDeps(), actor, terminalId);
+export async function canEditMachine(actorUserId: string, terminalId: string): Promise<boolean> {
+  return canEditMachineCore(buildMachineAccessDeps(), actorUserId, terminalId);
 }

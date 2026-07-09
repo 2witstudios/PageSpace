@@ -11,7 +11,6 @@
 
 import type { PageType } from '../../utils/enums';
 import { isTerminalPage } from '../../content/page-types.config';
-import type { MachineActorContext } from './machine-branches';
 
 export interface MachineAccessDeps {
   /** Looks up a page's type by id — returns null if the page doesn't exist. */
@@ -28,19 +27,19 @@ async function isMachine(deps: MachineAccessDeps, terminalId: string): Promise<b
 /** View-level access (e.g. read files/diff/settings) — looser than edit-level. */
 export async function canViewMachine(
   deps: MachineAccessDeps,
-  actor: MachineActorContext,
+  actorUserId: string,
   terminalId: string,
 ): Promise<boolean> {
   if (!(await isMachine(deps, terminalId))) return false;
-  return deps.canUserViewPage(actor.userId, terminalId);
+  return deps.canUserViewPage(actorUserId, terminalId);
 }
 
 /** Edit-level access (e.g. mutate settings, write files) — re-check on every call, never cache. */
 export async function canEditMachine(
   deps: MachineAccessDeps,
-  actor: MachineActorContext,
+  actorUserId: string,
   terminalId: string,
 ): Promise<boolean> {
   if (!(await isMachine(deps, terminalId))) return false;
-  return deps.canUserEditPage(actor.userId, terminalId);
+  return deps.canUserEditPage(actorUserId, terminalId);
 }
