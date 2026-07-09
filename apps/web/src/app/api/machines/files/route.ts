@@ -17,6 +17,7 @@
  * same as the Branches/Agent-Terminals APIs.
  */
 
+import { StringDecoder } from 'string_decoder';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { listMachineDirectory, readMachineFile } from '@pagespace/lib/services/sandbox/machine-fs';
@@ -96,7 +97,11 @@ export async function GET(request: Request) {
     }
     const truncated = result.content.length > MAX_FILE_READ_BYTES;
     const bytes = truncated ? result.content.subarray(0, MAX_FILE_READ_BYTES) : result.content;
-    return NextResponse.json({ content: bytes.toString('utf8'), encoding: 'utf8', truncated });
+    // Decode via StringDecoder so a cap landing mid-codepoint drops the trailing
+    // partial byte(s) instead of emitting U+FFFD; decoding only the capped slice
+    // (not the whole buffer) also bounds the work for a large file.
+    const content = new StringDecoder('utf8').write(bytes);
+    return NextResponse.json({ content, encoding: 'utf8', truncated });
   }
 
   const result = await listMachineDirectory({ handle: resolved.handle, path });

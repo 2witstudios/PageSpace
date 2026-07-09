@@ -102,6 +102,20 @@ describe('/api/machines/files path confinement', () => {
       expect.objectContaining({ path: '/workspace/repo/src/index.ts' }),
     );
   });
+
+  it('truncates a large file without corrupting a multi-byte char at the boundary', async () => {
+    // A >2MB buffer of only 3-byte '€' glyphs: whatever byte the 2MB cap lands
+    // on, it splits a codepoint. The response must still be clean UTF-8 (no
+    // U+FFFD) and end on a whole '€', proving the partial trailing byte was
+    // dropped rather than decoded into a replacement char.
+    readMachineFile.mockResolvedValue({ ok: true, content: Buffer.from('€'.repeat(1_000_000), 'utf8') });
+    const res = await GET(get({ mode: 'read', path: 'big.txt' }));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { content: string; truncated: boolean };
+    expect(body.truncated).toBe(true);
+    expect(body.content.includes('�')).toBe(false);
+    expect(body.content.endsWith('€')).toBe(true);
+  });
 });
 
 describe('/api/machines/files request contract', () => {
