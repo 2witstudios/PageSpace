@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle2, Copy, Check } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface CreateUserFormProps {
@@ -25,11 +25,15 @@ export function CreateUserForm({ onSuccess }: CreateUserFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [setupLink, setSetupLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setSuccess(null);
+    setSetupLink(null);
+    setCopied(false);
 
     setIsSubmitting(true);
 
@@ -48,6 +52,9 @@ export function CreateUserForm({ onSuccess }: CreateUserFormProps) {
       }
 
       setSuccess(data.message || 'User created successfully');
+      if (typeof data.setupLink === 'string') {
+        setSetupLink(data.setupLink);
+      }
       setName('');
       setEmail('');
       setRole('user');
@@ -56,6 +63,18 @@ export function CreateUserForm({ onSuccess }: CreateUserFormProps) {
       setError('Network error. Please try again.');
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleCopy() {
+    if (!setupLink) return;
+    try {
+      await navigator.clipboard.writeText(setupLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard can be unavailable (insecure context); the link is still
+      // selectable in the read-only input as a fallback.
     }
   }
 
@@ -71,6 +90,22 @@ export function CreateUserForm({ onSuccess }: CreateUserFormProps) {
         <div className="flex items-start gap-2 rounded-md border border-success/30 bg-success/10 p-3 text-sm text-success">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{success}</span>
+        </div>
+      )}
+
+      {setupLink && (
+        <div className="space-y-2 rounded-md border border-border bg-muted/40 p-3">
+          <p className="text-sm font-medium">One-time setup link</p>
+          <p className="text-xs text-muted-foreground">
+            Send this link to the user (expires in 60 minutes). On first sign-in
+            they&apos;ll register a passkey to secure their account.
+          </p>
+          <div className="flex items-center gap-2">
+            <Input readOnly value={setupLink} onFocus={(e) => e.target.select()} className="font-mono text-xs" />
+            <Button type="button" variant="outline" size="icon" onClick={handleCopy} aria-label="Copy setup link">
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
       )}
 

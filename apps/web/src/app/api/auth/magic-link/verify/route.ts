@@ -11,6 +11,8 @@ import {
   type MagicLinkMetadata,
 } from '@pagespace/lib/auth/magic-link-service';
 import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { userHasPasskey } from '@pagespace/lib/auth/passkey-service';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { resetFailedLoginAttempts } from '@pagespace/lib/auth/account-lockout';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -337,8 +339,18 @@ export async function GET(req: Request) {
               provisionedDriveId, next: safeNext, invitedDriveId,
             });
 
+    // On-prem onboarding funnel: a user who just signed in via an admin-issued
+    // setup link and has no passkey yet is sent to first-run passkey enrollment
+    // (on-prem has no password and no email delivery, so a passkey is their only
+    // durable credential). Cloud/tenant are untouched. Enrollment is skippable
+    // and forwards to `next`, so this never hard-blocks the user.
+    let effectiveRedirectPath = redirectPath;
+    if (isOnPrem() && !(await userHasPasskey(userId))) {
+      effectiveRedirectPath = `/auth/passkey-setup?next=${encodeURIComponent(redirectPath)}`;
+    }
+
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(req.url).origin;
-    const redirectUrl = new URL(redirectPath, baseUrl);
+    const redirectUrl = new URL(effectiveRedirectPath, baseUrl);
     redirectUrl.searchParams.set('auth', 'success');
     if (inviteResult?.kind === 'connection') {
       redirectUrl.searchParams.set('connection_requested', '1');

@@ -232,6 +232,11 @@
       "import": "./dist/auth/user-repository.js",
       "require": "./dist/auth/user-repository.js"
     },
+    "./auth/onprem-setup-link": {
+      "types": "./dist/auth/onprem-setup-link.d.ts",
+      "import": "./dist/auth/onprem-setup-link.js",
+      "require": "./dist/auth/onprem-setup-link.js"
+    },
     "./auth/token-lifecycle-policy": {
       "types": "./dist/auth/token-lifecycle-policy.d.ts",
       "import": "./dist/auth/token-lifecycle-policy.js",
@@ -1696,6 +1701,12 @@
       ],
       "auth/verification-utils": [
         "./dist/auth/verification-utils.d.ts"
+      ],
+      "auth/user-repository": [
+        "./dist/auth/user-repository.d.ts"
+      ],
+      "auth/onprem-setup-link": [
+        "./dist/auth/onprem-setup-link.d.ts"
       ],
       "services/email-service": [
         "./dist/services/email-service.d.ts"

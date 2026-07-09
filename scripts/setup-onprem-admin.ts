@@ -16,19 +16,9 @@ import { users } from '@pagespace/db/schema/auth';
 import { eq } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
-import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
+import { generateOnPremSetupLink } from '@pagespace/lib/auth/onprem-setup-link';
 import { userEmailMatch, prepareUserWrite } from '@pagespace/lib/auth/user-repository';
 import { parseArgs } from 'node:util';
-
-async function generateSetupLink(userId: string): Promise<string> {
-  const token = await createVerificationToken({
-    userId,
-    type: 'magic_link',
-    expiresInMinutes: 60,
-  });
-  const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || 'http://localhost:3000';
-  return `${baseUrl}/api/auth/magic-link/verify?token=${token}`;
-}
 
 async function main() {
   const { values } = parseArgs({
@@ -71,7 +61,7 @@ async function main() {
 
   if (existing) {
     if (existing.role === 'admin') {
-      const link = await generateSetupLink(existing.id);
+      const link = await generateOnPremSetupLink(existing.id);
       console.log(`Admin user ${email} already exists.`);
       console.log('');
       console.log('One-time sign-in link (expires in 60 minutes):');
@@ -82,7 +72,7 @@ async function main() {
         .set({ role: 'admin', ...getOnPremUserDefaults() })
         .where(eq(users.id, existing.id));
 
-      const link = await generateSetupLink(existing.id);
+      const link = await generateOnPremSetupLink(existing.id);
       console.log(`Existing user ${email} promoted to admin with business tier.`);
       console.log('');
       console.log('One-time sign-in link (expires in 60 minutes):');
@@ -102,7 +92,7 @@ async function main() {
     ...getOnPremUserDefaults(),
   }));
 
-  const link = await generateSetupLink(userId);
+  const link = await generateOnPremSetupLink(userId);
 
   console.log('');
   console.log('Admin user created successfully!');

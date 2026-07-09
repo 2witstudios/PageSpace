@@ -53,7 +53,31 @@ describe('AdminSeeder', () => {
       )
       expect(insertCall).toBeDefined()
       expect(insertCall![0]).not.toContain('password')
-      expect(insertCall![1]).toHaveLength(4) // id, email, role, name
+      expect(insertCall![1]).toHaveLength(6) // id, email, name, role, emailBidx, emailVerified
+    })
+
+    test('given a new user, should set emailBidx + emailVerified columns (encryption-aware, pre-verified)', async () => {
+      const db = makeMockDb(null)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'Owner@ACME.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      const insertCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('INSERT')
+      )
+      // Blind-index and email-verified columns are written so the seeded admin
+      // is findable by email and doesn't need a separate verification step.
+      expect(insertCall![0]).toContain('emailBidx')
+      expect(insertCall![0]).toContain('emailVerified')
+      // Email is normalized (lowercased) at the write, matching every other create site.
+      expect(insertCall![1][1]).toBe('owner@acme.com')
+      // emailVerified is a concrete timestamp (pre-verified on-prem/tenant admin).
+      expect(insertCall![1][5]).toBeInstanceOf(Date)
     })
 
     test('given the seeder, should connect using the tenant database URL', async () => {
@@ -101,7 +125,7 @@ describe('AdminSeeder', () => {
         (call: unknown[]) => (call[0] as string).includes('INSERT')
       )
       expect(insertCall![0]).toContain('id')
-      expect(insertCall![1]).toHaveLength(4) // id, email, role, name
+      expect(insertCall![1]).toHaveLength(6) // id, email, name, role, emailBidx, emailVerified
       expect(typeof insertCall![1][0]).toBe('string')
       expect(insertCall![1][0].length).toBeGreaterThan(0)
     })

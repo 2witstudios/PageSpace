@@ -59,6 +59,14 @@ vi.mock('@pagespace/lib/auth/account-lockout', () => ({
   resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('@pagespace/lib/deployment-mode', () => ({
+  isOnPrem: vi.fn(() => false),
+}));
+
+vi.mock('@pagespace/lib/auth/passkey-service', () => ({
+  userHasPasskey: vi.fn().mockResolvedValue(false),
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     auth: {
@@ -131,6 +139,8 @@ import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { resetFailedLoginAttempts } from '@pagespace/lib/auth/account-lockout';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { userHasPasskey } from '@pagespace/lib/auth/passkey-service';
 
 const createVerifyRequest = (token?: string) => {
   const url = token
@@ -154,6 +164,11 @@ describe('GET /api/auth/magic-link/verify', () => {
       data: { userId: 'test-user-id', isNewUser: false },
     });
     vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
+    // Default to cloud with the on-prem enrollment funnel OFF; `clearAllMocks`
+    // clears call history but not implementations, so re-assert them here to
+    // stop a per-test on-prem override from leaking into later tests.
+    vi.mocked(isOnPrem).mockReturnValue(false);
+    vi.mocked(userHasPasskey).mockResolvedValue(false);
     // @ts-expect-error - partial mock data
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -817,6 +832,45 @@ describe('GET /api/auth/magic-link/verify', () => {
         expect.any(Error),
         expect.objectContaining({ userId: 'test-user-id' }),
       );
+    });
+  });
+
+  describe('on-prem passkey enrollment funnel', () => {
+    it('on-prem + no passkey: funnels to /auth/passkey-setup carrying the dashboard as next', async () => {
+      vi.mocked(isOnPrem).mockReturnValue(true);
+      vi.mocked(userHasPasskey).mockResolvedValue(false);
+
+      const response = await GET(createVerifyRequest('valid-token'));
+
+      expect(response.status).toBe(302);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/passkey-setup');
+      expect(location).toContain(`next=${encodeURIComponent('/dashboard')}`);
+      expect(location).toContain('auth=success');
+      expect(userHasPasskey).toHaveBeenCalledWith('test-user-id');
+    });
+
+    it('on-prem + already has a passkey: lands on /dashboard, no enrollment detour', async () => {
+      vi.mocked(isOnPrem).mockReturnValue(true);
+      vi.mocked(userHasPasskey).mockResolvedValue(true);
+
+      const response = await GET(createVerifyRequest('valid-token'));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard');
+      expect(location).not.toContain('/auth/passkey-setup');
+    });
+
+    it('cloud/tenant: never funnels to enrollment even with no passkey (short-circuits before the check)', async () => {
+      vi.mocked(isOnPrem).mockReturnValue(false);
+      vi.mocked(userHasPasskey).mockResolvedValue(false);
+
+      const response = await GET(createVerifyRequest('valid-token'));
+
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/dashboard');
+      expect(location).not.toContain('/auth/passkey-setup');
+      expect(userHasPasskey).not.toHaveBeenCalled();
     });
   });
 
