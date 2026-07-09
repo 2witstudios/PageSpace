@@ -133,6 +133,34 @@ describe('AdminSeeder', () => {
   })
 
   describe('idempotent seeding', () => {
+    test('given a legacy mixed-case admin row, matches case-insensitively so no duplicate is inserted', async () => {
+      // The old seeder inserted `ownerEmail` verbatim, so a pre-normalization
+      // tenant may hold a mixed-case admin row. The existence check must match
+      // it case-insensitively, else a re-run inserts a second admin.
+      const existingUser = { id: 'legacy-1', email: 'Owner@ACME.com', role: 'admin' }
+      const db = makeMockDb(existingUser)
+      const connect = makeMockDbConnector(db)
+      const seeder = createAdminSeeder({ connect })
+
+      const result = await seeder.seed({
+        slug: 'acme',
+        ownerEmail: 'Owner@ACME.com',
+        databaseUrl: 'postgres://localhost/ps_acme',
+      })
+
+      const selectCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('SELECT')
+      )
+      expect(selectCall![0]).toContain('lower(email)')
+      // Lowercased param compared against lower(email) matches the legacy row.
+      expect(selectCall![1][0]).toBe('owner@acme.com')
+      expect(result.alreadyExisted).toBe(true)
+      const insertCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call: unknown[]) => (call[0] as string).includes('INSERT')
+      )
+      expect(insertCall).toBeUndefined()
+    })
+
     test('given an existing user with that email, should skip insert and return existing info', async () => {
       const existingUser = { id: 'existing-id', email: 'owner@acme.com', role: 'admin' }
       const db = makeMockDb(existingUser)

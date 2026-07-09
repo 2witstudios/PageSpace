@@ -40,8 +40,14 @@ export function createAdminSeeder(deps: AdminSeederDeps) {
         // it (re)computes `emailBidx`/ciphertext with the correct tenant key on
         // the next write to this user. Passwordless by design — the admin enrolls
         // a passkey or uses a magic link on first sign-in.
+        // Match case-insensitively (`lower(email)`) so re-runs stay idempotent
+        // even for tenants whose admin row was seeded before this normalization
+        // landed — the old seeder inserted `ownerEmail` verbatim, so a legacy row
+        // may hold mixed case (e.g. `Owner@ACME.com`). Postgres `text` equality is
+        // case-sensitive, so a plain `email = $1` on the lowercased value would
+        // miss that row and insert a duplicate admin.
         const existing = await db.query(
-          'SELECT id FROM users WHERE email = $1 LIMIT 1',
+          'SELECT id FROM users WHERE lower(email) = $1 LIMIT 1',
           [email]
         )
 
