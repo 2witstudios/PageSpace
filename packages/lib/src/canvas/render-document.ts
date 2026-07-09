@@ -43,6 +43,20 @@ export interface RenderCanvasDocumentInput {
    */
   faviconBaseUrl?: string;
   /**
+   * CSP nonce to stamp onto preserved author `<script>` tags.
+   *
+   * Per the HTML/CSP spec, a `srcDoc` iframe unconditionally inherits its
+   * parent (embedder) document's CSP in ADDITION to this document's own
+   * `<meta>` CSP (`BASELINE_CSP` above), regardless of the iframe's `sandbox`
+   * attribute. When the embedder applies a nonce-based `script-src` (e.g. the
+   * dashboard's app-wide CSP), author scripts need a matching nonce or the
+   * inherited policy blocks them — even though `BASELINE_CSP`'s own
+   * `script-src 'unsafe-inline'` would allow them. Omit for the publish
+   * pipeline, which is never framed via `srcDoc` and so never inherits an
+   * outer CSP.
+   */
+  nonce?: string;
+  /**
    * Explicit favicon href from a `<link rel="icon" href="…">` the author placed
    * in their canvas. When set, emitted as a single `<link rel="icon">` tag
    * instead of the three-tag set generated from `faviconBaseUrl`.
@@ -183,7 +197,57 @@ function unwrapFullDocument(html: string): string {
   return headStyles + stripped;
 }
 
-function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): { css: string; body: string } {
+/**
+ * Stamp `nonce="…"` onto a preserved `<script ...>` block's opening tag, so it
+ * satisfies an embedder's inherited nonce-based CSP (see `nonce` on
+ * `RenderCanvasDocumentInput`). Only the opening tag is touched — content and
+ * closing tag pass through unchanged.
+ *
+ * If the author already declared their OWN `nonce` attribute (e.g. HTML
+ * pasted from a different nonce-protected site), its value is REPLACED with
+ * the current per-request nonce rather than left alone: a foreign/stale nonce
+ * can never match the inherited outer CSP's nonce-source (browsers do exact
+ * string matching), so leaving it in place would still get the script
+ * blocked — defeating the whole point of this function. Replacing (not
+ * duplicating) also keeps the tag valid HTML with exactly one `nonce`
+ * attribute.
+ *
+ * Detection walks the tag ONE ATTRIBUTE AT A TIME (name, then its whole
+ * quoted-or-bare value as a single token) rather than searching for the raw
+ * substring `nonce=` anywhere in the tag. A raw substring search would also
+ * match `nonce=` sitting inside a DIFFERENT attribute's own quoted value
+ * (e.g. `<script data-log="utm_source=x nonce=stale123">`) and corrupt that
+ * unrelated attribute when "replacing" it. Attribute-at-a-time walking never
+ * looks inside an already-consumed value, so `data-nonce=`/`aria-nonce=` are
+ * never mistaken for the real attribute either, and a bare/valueless `nonce`
+ * (no `=`) is still recognized and replaced rather than duplicated.
+ *
+ * The leading-whitespace group is a SINGLE `\s`, not `\s+`: on a long run of
+ * whitespace with no valid attribute name following (e.g. a huge padded
+ * script tag), `\s+` forces the regex engine to retry the match at every
+ * position with a shrinking whitespace span before failing — O(n²)
+ * (CodeQL js/polynomial-redos, CWE-1333). A single `\s` fails in O(1) per
+ * position, and produces byte-identical output: any extra whitespace before
+ * the one adjacent to the attribute name is simply left untouched by
+ * `replace()` (it was never part of a match), exactly where it already was.
+ */
+function stampScriptNonce(scriptBlock: string, nonce: string): string {
+  const openTagMatch = scriptBlock.match(/^<script(?=[\s/>])[^>]*>/i);
+  if (!openTagMatch) return scriptBlock;
+  const openTag = openTagMatch[0];
+  const safeNonce = escapeHtml(nonce);
+  const attr = /(\s)([a-zA-Z_:][-\w:.]*)(\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?/g;
+  let sawNonce = false;
+  const stampedOpenTag = openTag.replace(attr, (full, whitespace: string, name: string) => {
+    if (name.toLowerCase() !== 'nonce') return full;
+    sawNonce = true;
+    return `${whitespace}nonce="${safeNonce}"`;
+  });
+  return (sawNonce ? stampedOpenTag : stampedOpenTag.replace(/^<script/i, `<script nonce="${safeNonce}"`))
+    + scriptBlock.slice(openTag.length);
+}
+
+function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], nonce?: string): { css: string; body: string } {
   // Tag names require a genuine delimiter — whitespace, `/`, or `>` — immediately
   // after the name (the `(?=[\s/>])` lookahead), mirroring the HTML tokenizer.
   // Only after that delimiter is arbitrary junk/attributes tolerated up to `>`,
@@ -200,7 +264,7 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
       cssParts.push(sanitizeCSS(styleContent, allowedHttpsHosts?.length ? { allowedHttpsHosts } : undefined));
       return '';
     }
-    return match; // <script> block — leave verbatim
+    return nonce ? stampScriptNonce(match, nonce) : match; // <script> block — leave verbatim (unless nonce is stamped)
   });
   return { css: cssParts.join('\n'), body };
 }
@@ -209,10 +273,10 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, nonce } = input;
   const csp = buildBaselineCsp(formActionOrigin);
 
-  const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts);
+  const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce);
   const rawTitle = title && title.trim() ? title : 'Untitled';
   const safeTitle = escapeHtml(rawTitle);
   const safeLang = escapeHtml(lang && lang.trim() ? lang : 'en');

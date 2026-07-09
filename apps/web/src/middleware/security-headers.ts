@@ -83,6 +83,57 @@ const buildCSPString = (directives: CSPDirectives): string =>
 
 const IS_CLOUD = process.env.DEPLOYMENT_MODE !== 'onprem' && process.env.DEPLOYMENT_MODE !== 'tenant';
 
+/**
+ * Bucket-name env-var precedence, mirrored from `apps/web/src/lib/presigned-url.ts`'s
+ * `getS3Bucket()`. DUPLICATED rather than imported: that module pulls in the
+ * Node-only AWS SDK (`@aws-sdk/client-s3`), which this file cannot import —
+ * `security-headers.ts` is loaded by the Edge-runtime `middleware.ts`, and a
+ * Node-only import here would risk the exact class of outage the edge-safety
+ * remediation (leaf-module contract, build-time Node-import guard in
+ * `next.config.ts`) exists to prevent.
+ */
+const getStorageBucketName = (): string =>
+  process.env.BUCKET_NAME ?? process.env.TIGRIS_BUCKET ?? process.env.S3_BUCKET ?? 'pagespace-files';
+
+/**
+ * Allowlist the configured S3-compatible object-storage endpoint for
+ * `connect-src`, so direct-to-storage presigned uploads/downloads (browser
+ * PUT/GET straight to Tigris, or another S3-compatible host in onprem/tenant
+ * deployments) aren't blocked by the app-wide CSP.
+ *
+ * Derived from `AWS_ENDPOINT_URL_S3` at policy-build time — never hardcode a
+ * literal host (e.g. `fly.storage.tigris.dev`), since onprem/tenant
+ * deployments (`deployment-mode.ts`) may point this at a different
+ * S3-compatible endpoint entirely.
+ *
+ * Emits the literal endpoint origin PLUS this app's own bucket subdomain
+ * (`<bucket>.<host>`) — never a bare `*.<host>` wildcard. The AWS SDK v3
+ * client (`presigned-url.ts`) has no `forcePathStyle`, so it defaults to
+ * virtual-hosted-style addressing (bucket-as-subdomain), which the exact
+ * bucket entry covers; the literal origin is kept as a defensive fallback for
+ * any path-style usage. A bare `*.<host>` wildcard would additionally allow
+ * connect-src/media-src to any OTHER tenant's bucket on a shared multi-tenant
+ * host like Tigris or AWS S3 — anyone can self-serve-provision a bucket on
+ * the same provider domain, so that wildcard would hand a future XSS an
+ * attacker-controlled exfiltration target this app never intended to allow.
+ *
+ * Also reused verbatim for `media-src`: `/api/files/[id]/view` 307-redirects
+ * `<video>`/`<audio>` element requests straight to this same presigned storage
+ * URL, and CSP fetch directives are re-evaluated against the final redirected
+ * URL — so media playback needs the identical host list, not just fetch/XHR.
+ */
+const buildStorageConnectSrcEntries = (): string[] => {
+  const endpoint = process.env.AWS_ENDPOINT_URL_S3;
+  if (!endpoint) return [];
+  try {
+    const { protocol, host } = new URL(endpoint);
+    const bucket = getStorageBucketName();
+    return [`${protocol}//${host}`, `${protocol}//${bucket}.${host}`];
+  } catch {
+    return [];
+  }
+};
+
 export const buildCSPPolicy = (nonce: string): string => {
   const scriptSrc = [
     "'self'",
@@ -102,7 +153,8 @@ export const buildCSPPolicy = (nonce: string): string => {
     frameSrc.push('https://accounts.google.com', 'https://js.stripe.com', 'https://hooks.stripe.com', 'https://m.stripe.network');
   }
 
-  const connectSrc = ["'self'", 'ws:', 'wss:'];
+  const storageEntries = buildStorageConnectSrcEntries();
+  const connectSrc = ["'self'", 'ws:', 'wss:', ...storageEntries];
 
   // Cloud mode: allow Stripe client SDK and Google One Tap connections
   if (IS_CLOUD) {
@@ -116,6 +168,10 @@ export const buildCSPPolicy = (nonce: string): string => {
     'style-src': styleSrc,
     'img-src': ["'self'", 'data:', 'blob:', 'https:'],
     'connect-src': connectSrc,
+    // <video>/<audio> loading falls back to default-src when this is absent —
+    // /api/files/[id]/view redirects media requests straight to the storage
+    // host, so it needs the same allowlist as connect-src (see comment above).
+    'media-src': ["'self'", ...storageEntries],
     'font-src': ["'self'", 'data:'],
     // Monaco and other browser tooling may initialize workers from blob URLs.
     'worker-src': ["'self'", 'blob:'],
