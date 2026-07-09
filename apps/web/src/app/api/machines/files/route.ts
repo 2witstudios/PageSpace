@@ -54,6 +54,12 @@ export async function GET(request: Request) {
   const branchName = requireString(url.searchParams.get('branchName'), 'branchName');
   if (!branchName.ok) return branchName.error;
 
+  // Authorize BEFORE parsing optional params, so a user without view access gets
+  // a uniform 403 and can never probe path/mode handling.
+  if (!(await canViewMachine(auth.userId, terminalId.value))) {
+    return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
+  }
+
   const mode = url.searchParams.get('mode') ?? 'list';
   if (mode !== 'list' && mode !== 'read') {
     return NextResponse.json({ error: "mode must be 'list' or 'read'" }, { status: 400 });
@@ -72,10 +78,6 @@ export async function GET(request: Request) {
   const path = resolvePathWithinSync(BRANCH_REPO_PATH, relativePath);
   if (path === null) {
     return NextResponse.json({ error: 'path escapes the branch checkout root' }, { status: 400 });
-  }
-
-  if (!(await canViewMachine(auth.userId, terminalId.value))) {
-    return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
   const resolved = await resolveBranchMachineHandle({
