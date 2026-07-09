@@ -17,9 +17,9 @@
  * (`isMachineAccessible`, sandbox-tools-runtime.ts). The whole surface is behind
  * `CODE_EXECUTION_ENABLED` (OFF), so no unenforced toggle is user-visible yet.
  * This module is pure orchestration + DI — every DB / Sprite
- * touch is an injected seam (`MachineSettingsStore`, `MachineSpriteTeardown`,
- * `MachineDependentsPurge`), so the delete-ordering invariant below is
- * unit-testable without a database or a live Sprite. Route wiring lives in
+ * touch is an injected seam (`MachineSettingsStore`, `MachineSpriteTeardown`),
+ * so the delete-ordering invariant below is unit-testable without a database or
+ * a live Sprite. Route wiring lives in
  * `apps/web/src/lib/machines/machine-settings-runtime.ts`.
  */
 
@@ -63,23 +63,10 @@ export interface MachineSpriteTeardown {
   teardown(terminalId: string): Promise<void>;
 }
 
-/**
- * Purges the Machine's dependent metadata (projects, branches, agent terminals)
- * and any Sprites those rows own. Those rows FK-cascade only on a HARD page
- * delete, so without this they would survive the soft-delete (trash) window
- * pointing at a torn-down Sprite — resurfacing stale on restore, with the unique
- * `(terminalId, name)` constraint then blocking re-adding the same project. Also
- * best-effort: a failure leaves rows that the eventual hard purge still cascades.
- */
-export interface MachineDependentsPurge {
-  purge(terminalId: string): Promise<void>;
-}
-
 export interface DeleteMachineDeps {
   terminalId: string;
   store: MachineSettingsStore;
   sprite: MachineSpriteTeardown;
-  dependents: MachineDependentsPurge;
 }
 
 export type DeleteMachineResult =
@@ -102,23 +89,28 @@ export async function updateMachineSettings(input: {
 }
 
 /**
- * Destroy a Machine: trash its page, then tear down its Sprite, then purge its
- * dependent metadata.
+ * Destroy a Machine: trash its page, then tear down its Sprite.
  *
- * The page-trash-before-Sprite-teardown ORDER is a hard requirement, not an
- * implementation detail. We trash the page FIRST because that step is reversible
- * (restore) and immediately hides the Machine from the user. Only THEN do we tear
- * down the Sprite. If teardown fails after the page is already trashed, we are
- * left with an orphaned Sprite — an acceptable, recoverable state a background
- * reconciler can reclaim (`spriteTornDown: false` reports it). The reverse order
- * is NOT acceptable: tearing the Sprite down first and then failing to trash the
- * page leaves a live page pointing at a dead Sprite, with no easy recovery path.
+ * The ORDER is a hard requirement, not an implementation detail. We trash the
+ * page FIRST because that step is reversible (restore) and immediately hides the
+ * Machine from the user. Only THEN do we tear down the Sprite. If teardown fails
+ * after the page is already trashed, we are left with an orphaned Sprite — an
+ * acceptable, recoverable state a background reconciler can reclaim
+ * (`spriteTornDown: false` reports it). The reverse order is NOT acceptable:
+ * tearing the Sprite down first and then failing to trash the page leaves a live
+ * page pointing at a dead Sprite, with no easy recovery path.
  *
- * Dependent-metadata purge runs last and is likewise best-effort: it keeps the
- * projects/branches/agent-terminals rows consistent with the now-destroyed Sprite
- * so a later restore is a clean slate rather than a list of dead pointers.
+ * DEPENDENT METADATA IS DELIBERATELY LEFT ALONE. The Machine's `machine_projects`
+ * / `machine_branches` / `machine_agent_terminals` rows FK-cascade on the page's
+ * eventual HARD purge (permanent delete after the trash-retention window), so
+ * they are cleaned up at the right time. We do NOT hard-delete them here: a soft
+ * (reversible) delete must not permanently destroy the user's configured-repo
+ * metadata — restoring the page must bring that config back. (An earlier revision
+ * purged these rows and was reverted; hard-deleting config during a reversible
+ * delete is data loss, and the task scopes teardown to the Machine's OWN Sprite,
+ * not to branch Sprites — those have their own idle-reap lifecycle.)
  */
-export async function deleteMachine({ terminalId, store, sprite, dependents }: DeleteMachineDeps): Promise<DeleteMachineResult> {
+export async function deleteMachine({ terminalId, store, sprite }: DeleteMachineDeps): Promise<DeleteMachineResult> {
   const settings = await store.getSettings(terminalId);
   if (!settings) return { ok: false, reason: 'not_found' };
 
@@ -132,15 +124,6 @@ export async function deleteMachine({ terminalId, store, sprite, dependents }: D
     await sprite.teardown(terminalId);
   } catch {
     spriteTornDown = false;
-  }
-
-  // 3. Purge dependent metadata (and branch Sprites) so a restore doesn't
-  //    resurface stale rows. Best-effort: the eventual hard purge cascades these
-  //    anyway, so a failure must not fail an already-trashed, Sprite-torn-down delete.
-  try {
-    await dependents.purge(terminalId);
-  } catch {
-    // Left for the hard-purge FK cascade to clean up.
   }
 
   return { ok: true, spriteTornDown };

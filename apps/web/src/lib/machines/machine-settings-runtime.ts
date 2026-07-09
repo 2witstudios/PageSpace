@@ -20,19 +20,15 @@
  * `deleteMachine`'s recoverable-orphan path rather than aborting the delete before
  * the page is hidden.
  *
- * `createMachineDependentsPurge` is the delete's final step: it kills each
- * branch's own Sprite and drops the Machine's dependent `machine_projects` /
- * `machine_branches` / `machine_agent_terminals` rows (which only FK-cascade on a
- * HARD page delete), keeping them consistent with the torn-down Sprite through the
- * soft-delete window so a later restore is a clean slate.
+ * The Machine's dependent metadata (`machine_projects` / `machine_branches` /
+ * `machine_agent_terminals`) is intentionally NOT touched on delete — it
+ * FK-cascades on the page's eventual HARD purge, so a reversible soft-delete
+ * never destroys the user's configured-repo metadata (see `deleteMachine`).
  */
 
 import { and, eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
-import { machineProjects } from '@pagespace/db/schema/machine-projects';
-import { machineBranches } from '@pagespace/db/schema/machine-branches';
-import { machineAgentTerminals } from '@pagespace/db/schema/machine-agent-terminals';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import {
   createDbTerminalSessionStore,
@@ -44,7 +40,6 @@ import type {
   MachineSettingsPatch,
   MachineSettingsStore,
   MachineSpriteTeardown,
-  MachineDependentsPurge,
 } from '@pagespace/lib/services/machines/machine-settings';
 import { canAccessMachine, canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
 
@@ -149,49 +144,6 @@ export function createMachineSpriteTeardown(): MachineSpriteTeardown {
       // row survives so the idle reaper (or a retry) can still reclaim the Sprite,
       // mirroring killBranch's untracked-orphan guard.
       await sessionStore.remove(sessionKey);
-    },
-  };
-}
-
-/**
- * Purges a deleted Machine's dependent metadata. Branches each own a SEPARATE
- * Sprite (unlike projects, whose checkouts live on the Machine's own Sprite that
- * the teardown above already killed), so each branch Sprite is killed first —
- * best-effort per branch, a failure leaving a reconciler-reclaimable orphan — and
- * only then are the tracking rows dropped. Agent-terminal rows are PTY bookkeeping
- * with no Sprite of their own. All three tables FK-cascade on the eventual hard
- * page purge; this brings that cleanup forward into the soft-delete window.
- */
-export function createMachineDependentsPurge(): MachineDependentsPurge {
-  return {
-    async purge(terminalId: string): Promise<void> {
-      // Kill each branch Sprite first — but never let a host/kill failure block
-      // the row cleanup below, which is the part that keeps a later restore
-      // consistent. A branch Sprite left alive is a reconciler-reclaimable orphan.
-      try {
-        const branchRows = await db
-          .select({ sandboxId: machineBranches.sandboxId })
-          .from(machineBranches)
-          .where(eq(machineBranches.terminalId, terminalId));
-
-        if (branchRows.length > 0) {
-          const host = await getMachineHostForBranches();
-          for (const branch of branchRows) {
-            try {
-              await host.kill({ machineId: branch.sandboxId });
-            } catch {
-              // Orphaned branch Sprite — reclaimed by the idle reaper later.
-            }
-          }
-        }
-      } catch {
-        // Could not enumerate/kill branch Sprites (e.g. host unavailable);
-        // still drop the rows so restore stays consistent.
-      }
-
-      await db.delete(machineAgentTerminals).where(eq(machineAgentTerminals.terminalId, terminalId));
-      await db.delete(machineBranches).where(eq(machineBranches.terminalId, terminalId));
-      await db.delete(machineProjects).where(eq(machineProjects.terminalId, terminalId));
     },
   };
 }
