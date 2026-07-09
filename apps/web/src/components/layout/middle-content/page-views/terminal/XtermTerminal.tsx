@@ -2,7 +2,12 @@
 
 import { useEffect, useRef } from 'react';
 import type { Socket } from 'socket.io-client';
+import type { Terminal as XtermTerminalInstance } from '@xterm/xterm';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useXtermTheme } from '@/hooks/useXtermTheme';
+import { getCssVar } from '@/lib/theme/css-color-resolution';
+
+const FALLBACK_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace";
 
 export interface AgentTerminalConnectPayload {
   terminalId: string;
@@ -23,6 +28,21 @@ interface XtermTerminalProps {
 
 export default function XtermTerminal({ socket, sessionId, connectPayload, onReady, onError }: XtermTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<XtermTerminalInstance | null>(null);
+  const theme = useXtermTheme();
+  // Read at creation time only — the connect effect below is intentionally
+  // NOT keyed on `theme` (see its own comment), so later theme changes are
+  // pushed live via the effect further down instead of through this ref.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+
+  // Live theme updates without tearing down the [socket, sessionId]-keyed
+  // connection effect — xterm supports assigning `options.theme` directly.
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.options.theme = theme;
+    }
+  }, [theme]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -46,7 +66,17 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
 
         if (cancelled || !containerRef.current) return;
 
-        const terminal = new Terminal({ cursorBlink: true });
+        const fontFamily = getCssVar('--font-mono') || FALLBACK_FONT_FAMILY;
+        const terminal = new Terminal({
+          cursorBlink: true,
+          theme: themeRef.current,
+          fontFamily,
+          fontSize: 13,
+          cursorStyle: 'bar',
+          letterSpacing: 0,
+          lineHeight: 1.35,
+        });
+        terminalRef.current = terminal;
         const fitAddon = new FitAddon();
         terminal.loadAddon(fitAddon);
         terminal.open(containerRef.current);
@@ -101,6 +131,9 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
           // timeout) correctly reflects "this one pane closed".
           socket.emit('agent-terminal:disconnect', { connectionId });
           terminal.dispose();
+          if (terminalRef.current === terminal) {
+            terminalRef.current = null;
+          }
           useEditingStore.getState().endEditing(sessionId);
         };
 

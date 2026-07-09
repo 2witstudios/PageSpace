@@ -9,7 +9,7 @@
  *
  * This is the single source of truth shared, by composition, between the
  * Navigator (right sidebar) and TerminalPanes (middle content) — they no
- * longer need a common parent to share `panes`/`activePaneId` local state.
+ * longer need a common parent to share `columns`/`activePaneId` local state.
  *
  * Navigation cleanup (dispose on unmount) is performed by the mounting
  * component via `useEffect`, not from inside the store — same pattern as
@@ -20,22 +20,25 @@ import { create } from 'zustand';
 import {
   initialWorkspace,
   openTerminal as openTerminalTransition,
-  split as splitTransition,
+  splitRight as splitRightTransition,
+  splitDown as splitDownTransition,
   closePane as closePaneTransition,
   selectPane as selectPaneTransition,
   type OpenTerminalScope,
+  type TerminalColumnState,
   type TerminalPaneState,
   type WorkspaceState,
 } from './workspace-reducer';
 
-export type { OpenTerminalScope, TerminalPaneState, WorkspaceState };
+export type { OpenTerminalScope, TerminalColumnState, TerminalPaneState, WorkspaceState };
 
 interface TerminalWorkspaceStoreState {
   workspaces: Record<string, WorkspaceState>;
   ensureWorkspace: (terminalId: string) => void;
   disposeWorkspace: (terminalId: string) => void;
   openTerminal: (terminalId: string, scope: OpenTerminalScope) => void;
-  split: (terminalId: string) => void;
+  splitRight: (terminalId: string, fromPaneId: string) => void;
+  splitDown: (terminalId: string, fromPaneId: string) => void;
   closePane: (terminalId: string, paneId: string) => void;
   selectPane: (terminalId: string, paneId: string) => void;
 }
@@ -81,9 +84,17 @@ export const useTerminalWorkspaceStore = create<TerminalWorkspaceStoreState>((se
     set((state) => applyTransition(state, terminalId, (workspace) => openTerminalTransition(workspace, scope)));
   },
 
-  split: (terminalId) => {
-    const newId = crypto.randomUUID();
-    set((state) => applyTransition(state, terminalId, (workspace) => splitTransition(workspace, newId)));
+  splitRight: (terminalId, fromPaneId) => {
+    const newColumnId = crypto.randomUUID();
+    const newPaneId = crypto.randomUUID();
+    set((state) =>
+      applyTransition(state, terminalId, (workspace) => splitRightTransition(workspace, fromPaneId, newColumnId, newPaneId))
+    );
+  },
+
+  splitDown: (terminalId, fromPaneId) => {
+    const newPaneId = crypto.randomUUID();
+    set((state) => applyTransition(state, terminalId, (workspace) => splitDownTransition(workspace, fromPaneId, newPaneId)));
   },
 
   closePane: (terminalId, paneId) => {
