@@ -19,6 +19,12 @@
  * runtime/host error surfaces AFTER the page has been trashed, landing in
  * `deleteMachine`'s recoverable-orphan path rather than aborting the delete before
  * the page is hidden.
+ *
+ * `createMachineDependentsPurge` is the delete's final step: it kills each
+ * branch's own Sprite and drops the Machine's dependent `machine_projects` /
+ * `machine_branches` / `machine_agent_terminals` rows (which only FK-cascade on a
+ * HARD page delete), keeping them consistent with the torn-down Sprite through the
+ * soft-delete window so a later restore is a clean slate.
  */
 
 import { eq } from '@pagespace/db/operators';

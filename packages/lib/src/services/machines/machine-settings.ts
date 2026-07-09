@@ -7,9 +7,9 @@
  * dedicated Machine columns, and `visibleToGlobalAssistant` reuses the existing
  * page column (an agent/Machine page opts in or out of the global assistant's
  * view the same way). This module is pure orchestration + DI — every DB / Sprite
- * touch is an injected seam (`MachineSettingsStore`, `MachineSpriteTeardown`),
- * so the delete-ordering invariant below is unit-testable without a database or
- * a live Sprite. Route wiring lives in
+ * touch is an injected seam (`MachineSettingsStore`, `MachineSpriteTeardown`,
+ * `MachineDependentsPurge`), so the delete-ordering invariant below is
+ * unit-testable without a database or a live Sprite. Route wiring lives in
  * `apps/web/src/lib/machines/machine-settings-runtime.ts`.
  */
 
