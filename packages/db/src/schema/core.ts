@@ -56,6 +56,8 @@ export const pages = pgTable('pages', {
   userScopedAccess: boolean('userScopedAccess').default(false).notNull(), // AI_CHAT agents only, owner-toggled: when true, actor-permission helpers fall back to the invoking user's own access instead of this agent's drive memberships
   terminalAccess: boolean('terminalAccess').default(false).notNull(), // AI_CHAT agents only: whether this agent may use terminal/machine tools
   machines: jsonb('machines'), // MachineRef[]; configured machines for this agent, machines[0] is the default active machine
+  description: text('description'), // Machine (TERMINAL) pages only: freeform description surfaced on the Machine page's Settings tab
+  allowPageAgents: boolean('allowPageAgents').default(true).notNull(), // Machine (TERMINAL) pages only: whether page-scoped agents may run their terminal tools on this machine
   // File-specific fields
   fileSize: real('fileSize'),
   mimeType: text('mimeType'),

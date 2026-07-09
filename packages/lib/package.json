@@ -502,6 +502,11 @@
       "import": "./dist/services/machines/machine-branches.js",
       "require": "./dist/services/machines/machine-branches.js"
     },
+    "./services/machines/machine-settings": {
+      "types": "./dist/services/machines/machine-settings.d.ts",
+      "import": "./dist/services/machines/machine-settings.js",
+      "require": "./dist/services/machines/machine-settings.js"
+    },
     "./services/machines/agent-terminal-types": {
       "types": "./dist/services/machines/agent-terminal-types.d.ts",
       "import": "./dist/services/machines/agent-terminal-types.js",
@@ -1603,6 +1608,9 @@
       ],
       "services/machines/machine-branches": [
         "./dist/services/machines/machine-branches.d.ts"
+      ],
+      "services/machines/machine-settings": [
+        "./dist/services/machines/machine-settings.d.ts"
       ],
       "services/machines/agent-terminal-types": [
         "./dist/services/machines/agent-terminal-types.d.ts"
