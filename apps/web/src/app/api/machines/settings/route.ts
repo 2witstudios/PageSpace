@@ -17,6 +17,7 @@
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   getMachineSettings,
   updateMachineSettings,
@@ -33,6 +34,8 @@ import {
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+const RESOURCE_TYPE = 'machine';
+
 function requireString(value: unknown, field: string): { ok: true; value: string } | { ok: false; error: NextResponse } {
   if (typeof value !== 'string' || value.length === 0) {
     return { ok: false, error: NextResponse.json({ error: `${field} is required` }, { status: 400 }) };
@@ -40,8 +43,21 @@ function requireString(value: unknown, field: string): { ok: true; value: string
   return { ok: true, value };
 }
 
-const NOT_FOUND = NextResponse.json({ error: 'Machine not found' }, { status: 404 });
-const FORBIDDEN = NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
+// Constructed per-return (never module-level singletons): a Response body can
+// only be read once, so a shared instance would fail on a second request.
+const notFound = () => NextResponse.json({ error: 'Machine not found' }, { status: 404 });
+
+/** Audit the authz denial (so SIEM can detect probing) and return a fresh 403. */
+function forbidden(request: Request, userId: string, terminalId: string): NextResponse {
+  auditRequest(request, {
+    eventType: 'authz.access.denied',
+    userId,
+    resourceType: RESOURCE_TYPE,
+    resourceId: terminalId,
+    riskScore: 0.5,
+  });
+  return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
+}
 
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
@@ -51,10 +67,10 @@ export async function GET(request: Request) {
   const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
   if (!terminalId.ok) return terminalId.error;
 
-  if (!(await canViewMachine(auth.userId, terminalId.value))) return FORBIDDEN;
+  if (!(await canViewMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
 
   const settings = await getMachineSettings({ terminalId: terminalId.value, store: createDbMachineSettingsStore() });
-  if (!settings) return NOT_FOUND;
+  if (!settings) return notFound();
   return NextResponse.json({ settings });
 }
 
@@ -125,14 +141,23 @@ export async function PATCH(request: Request) {
   const parsed = parsePatch(body);
   if (!parsed.ok) return parsed.error;
 
-  if (!(await canAccessMachine(auth.userId, terminalId.value))) return FORBIDDEN;
+  if (!(await canAccessMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
 
   const settings = await updateMachineSettings({
     terminalId: terminalId.value,
     patch: parsed.patch,
     store: createDbMachineSettingsStore(),
   });
-  if (!settings) return NOT_FOUND;
+  if (!settings) return notFound();
+
+  auditRequest(request, {
+    eventType: 'data.write',
+    userId: auth.userId,
+    resourceType: RESOURCE_TYPE,
+    resourceId: terminalId.value,
+    details: { fields: Object.keys(parsed.patch) },
+    riskScore: 0,
+  });
   return NextResponse.json({ settings });
 }
 
@@ -144,13 +169,22 @@ export async function DELETE(request: Request) {
   const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
   if (!terminalId.ok) return terminalId.error;
 
-  if (!(await canAccessMachine(auth.userId, terminalId.value))) return FORBIDDEN;
+  if (!(await canAccessMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
 
   const result = await deleteMachine({
     terminalId: terminalId.value,
     store: createDbMachineSettingsStore(),
     sprite: createMachineSpriteTeardown(),
   });
-  if (!result.ok) return NOT_FOUND;
+  if (!result.ok) return notFound();
+
+  auditRequest(request, {
+    eventType: 'data.delete',
+    userId: auth.userId,
+    resourceType: RESOURCE_TYPE,
+    resourceId: terminalId.value,
+    details: { spriteTornDown: result.spriteTornDown },
+    riskScore: 0.5,
+  });
   return NextResponse.json({ success: true, spriteTornDown: result.spriteTornDown });
 }

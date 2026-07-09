@@ -13,6 +13,7 @@ const {
   mockGetMachineSettings,
   mockUpdateMachineSettings,
   mockDeleteMachine,
+  mockAuditRequest,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
@@ -23,11 +24,16 @@ const {
   mockGetMachineSettings: vi.fn(),
   mockUpdateMachineSettings: vi.fn(),
   mockDeleteMachine: vi.fn(),
+  mockAuditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => mockIsAuthError(result),
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
 }));
 
 vi.mock('@/lib/machines/machine-settings-runtime', () => ({
@@ -78,11 +84,15 @@ describe('GET /api/machines/settings', () => {
     expect(mockCanViewMachine).not.toHaveBeenCalled();
   });
 
-  it('given no view access, returns 403 without reading settings', async () => {
+  it('given no view access, returns 403 without reading settings and audits the denial', async () => {
     mockCanViewMachine.mockResolvedValue(false);
     const res = await GET(new Request('https://x.test/api/machines/settings?terminalId=t1'));
     expect(res.status).toBe(403);
     expect(mockGetMachineSettings).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'authz.access.denied', userId: 'user-1', resourceId: 't1' }),
+    );
   });
 
   it('given view access, returns the settings', async () => {
@@ -134,14 +144,18 @@ describe('PATCH /api/machines/settings', () => {
     expect(res.status).toBe(400);
   });
 
-  it('given no edit access, returns 403 without updating', async () => {
+  it('given no edit access, returns 403 without updating and audits the denial', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
     const res = await PATCH(req({ terminalId: 't1', name: 'Renamed' }));
     expect(res.status).toBe(403);
     expect(mockUpdateMachineSettings).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'authz.access.denied', userId: 'user-1', resourceId: 't1' }),
+    );
   });
 
-  it('given edit access, updates and returns the settings', async () => {
+  it('given edit access, updates and returns the settings and audits the write', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockUpdateMachineSettings.mockResolvedValue({ ...SETTINGS, name: 'Renamed', description: null });
     const res = await PATCH(req({ terminalId: 't1', name: 'Renamed', description: null, allowPageAgents: true }));
@@ -153,6 +167,10 @@ describe('PATCH /api/machines/settings', () => {
         terminalId: 't1',
         patch: { name: 'Renamed', description: null, allowPageAgents: true },
       }),
+    );
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.write', userId: 'user-1', resourceId: 't1' }),
     );
   });
 
@@ -182,13 +200,6 @@ describe('DELETE /api/machines/settings', () => {
     expect(mockCanAccessMachine).not.toHaveBeenCalled();
   });
 
-  it('given no edit access, returns 403 without deleting', async () => {
-    mockCanAccessMachine.mockResolvedValue(false);
-    const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
-    expect(res.status).toBe(403);
-    expect(mockDeleteMachine).not.toHaveBeenCalled();
-  });
-
   it('given the machine does not exist, returns 404', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockDeleteMachine.mockResolvedValue({ ok: false, reason: 'not_found' });
@@ -196,7 +207,7 @@ describe('DELETE /api/machines/settings', () => {
     expect(res.status).toBe(404);
   });
 
-  it('given a successful delete, returns 200 with the teardown outcome', async () => {
+  it('given a successful delete, returns 200 with the teardown outcome and audits the delete', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: true });
     const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
@@ -205,6 +216,26 @@ describe('DELETE /api/machines/settings', () => {
     expect(body).toEqual({ success: true, spriteTornDown: true });
     expect(mockDeleteMachine).toHaveBeenCalledWith(
       expect.objectContaining({ terminalId: 't1', store: FAKE_STORE, sprite: FAKE_SPRITE }),
+    );
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'data.delete',
+        userId: 'user-1',
+        resourceId: 't1',
+        details: { spriteTornDown: true },
+      }),
+    );
+  });
+
+  it('given no edit access, returns 403 and audits the denial without deleting', async () => {
+    mockCanAccessMachine.mockResolvedValue(false);
+    const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
+    expect(res.status).toBe(403);
+    expect(mockDeleteMachine).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'authz.access.denied', userId: 'user-1', resourceId: 't1' }),
     );
   });
 
