@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccessRevocation } from "@/hooks/useAccessRevocation";
 import { useNotificationToasts } from "@/hooks/useNotificationToasts";
+import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
@@ -132,6 +133,9 @@ function Layout({ children }: LayoutProps) {
 
   // Show live toast popups for new notifications, anywhere in the app
   useNotificationToasts();
+
+  // Show native OS notifications for new notifications when the desktop app is unfocused
+  useDesktopNotifications();
 
   // Monitor performance
   usePerformanceMonitor();
