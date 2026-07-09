@@ -1,9 +1,4 @@
 import { createId } from '@paralleldrive/cuid2'
-import {
-  prepareUserWrite,
-  getUserIndexKey,
-  userEmailLookupTargets,
-} from '@pagespace/lib/auth/user-repository'
 
 export type TenantDbConnection = {
   query(sql: string, params?: unknown[]): Promise<unknown[]>
@@ -32,46 +27,32 @@ export function createAdminSeeder(deps: AdminSeederDeps) {
       try {
         const email = input.ownerEmail.toLowerCase().trim()
 
-        // Look up by blind index first (the canonical email key), falling back
-        // to the plaintext `email` column for the no-key / not-yet-encrypted
-        // rollout state. Mirrors `buildUserEmailMatch` in the web app so a
-        // ciphertext-stored email is still found here.
-        const lookup = userEmailLookupTargets(email, getUserIndexKey())
-        const existing = lookup.emailBidx
-          ? await db.query(
-              'SELECT id FROM users WHERE "emailBidx" = $1 OR email = $2 LIMIT 1',
-              [lookup.emailBidx, lookup.email]
-            )
-          : await db.query('SELECT id FROM users WHERE email = $1 LIMIT 1', [lookup.email])
+        // Seed PLAINTEXT deliberately, and do NOT compute `emailBidx` here.
+        //
+        // This runs in the control-plane process but writes into the *tenant*
+        // database, whose `ENCRYPTION_KEY` is generated per-tenant and lives in
+        // the tenant web service — the control-plane doesn't have it. Deriving a
+        // blind index / ciphertext from the control-plane's own env would write
+        // values keyed to the wrong key, and the tenant app could then neither
+        // match by `emailBidx` nor decrypt the email (silent admin lockout).
+        // Plaintext + NULL `emailBidx` is safe: the tenant app's dual-lookup
+        // (`buildUserEmailMatch`) falls back to the plaintext `email` column, and
+        // it (re)computes `emailBidx`/ciphertext with the correct tenant key on
+        // the next write to this user. Passwordless by design — the admin enrolls
+        // a passkey or uses a magic link on first sign-in.
+        const existing = await db.query(
+          'SELECT id FROM users WHERE email = $1 LIMIT 1',
+          [email]
+        )
 
         if (existing.length > 0) {
           return { email, alreadyExisted: true }
         }
 
-        // Route through the shared write preparer so the seeded admin gets a
-        // blind-index (`emailBidx`) and PII encryption consistent with every
-        // other user-create site. Passwordless by design — the admin enrolls a
-        // passkey or uses a magic link on first sign-in. Degrades to plaintext
-        // + no emailBidx when the encryption env is absent.
-        const values = await prepareUserWrite({
-          id: createId(),
-          email,
-          name: 'Admin',
-          role: 'admin' as const,
-          emailVerified: new Date(),
-        })
-
         await db.query(
-          `INSERT INTO users (id, email, name, role, "emailBidx", "emailVerified")
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [
-            values.id,
-            values.email,
-            values.name,
-            values.role,
-            values.emailBidx ?? null,
-            values.emailVerified,
-          ]
+          `INSERT INTO users (id, email, name, role, "emailVerified")
+           VALUES ($1, $2, $3, $4, $5)`,
+          [createId(), email, 'Admin', 'admin', new Date()]
         )
 
         return { email, alreadyExisted: false }

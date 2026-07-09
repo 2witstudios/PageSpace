@@ -53,10 +53,10 @@ describe('AdminSeeder', () => {
       )
       expect(insertCall).toBeDefined()
       expect(insertCall![0]).not.toContain('password')
-      expect(insertCall![1]).toHaveLength(6) // id, email, name, role, emailBidx, emailVerified
+      expect(insertCall![1]).toHaveLength(5) // id, email, name, role, emailVerified
     })
 
-    test('given a new user, should set emailBidx + emailVerified columns (encryption-aware, pre-verified)', async () => {
+    test('given a new user, seeds plaintext + emailVerified and does NOT write a cross-key emailBidx', async () => {
       const db = makeMockDb(null)
       const connect = makeMockDbConnector(db)
       const seeder = createAdminSeeder({ connect })
@@ -70,14 +70,15 @@ describe('AdminSeeder', () => {
       const insertCall = (db.query as ReturnType<typeof vi.fn>).mock.calls.find(
         (call: unknown[]) => (call[0] as string).includes('INSERT')
       )
-      // Blind-index and email-verified columns are written so the seeded admin
-      // is findable by email and doesn't need a separate verification step.
-      expect(insertCall![0]).toContain('emailBidx')
+      // emailBidx is deliberately NOT written: the control-plane can't compute
+      // the tenant's blind index (per-tenant key it doesn't hold). emailVerified
+      // is pre-set so the admin needs no separate verification step.
+      expect(insertCall![0]).not.toContain('emailBidx')
       expect(insertCall![0]).toContain('emailVerified')
-      // Email is normalized (lowercased) at the write, matching every other create site.
+      // Email is normalized (lowercased) at the write.
       expect(insertCall![1][1]).toBe('owner@acme.com')
-      // emailVerified is a concrete timestamp (pre-verified on-prem/tenant admin).
-      expect(insertCall![1][5]).toBeInstanceOf(Date)
+      // emailVerified is a concrete timestamp (pre-verified tenant admin).
+      expect(insertCall![1][4]).toBeInstanceOf(Date)
     })
 
     test('given the seeder, should connect using the tenant database URL', async () => {
@@ -125,7 +126,7 @@ describe('AdminSeeder', () => {
         (call: unknown[]) => (call[0] as string).includes('INSERT')
       )
       expect(insertCall![0]).toContain('id')
-      expect(insertCall![1]).toHaveLength(6) // id, email, name, role, emailBidx, emailVerified
+      expect(insertCall![1]).toHaveLength(5) // id, email, name, role, emailVerified
       expect(typeof insertCall![1][0]).toBe('string')
       expect(insertCall![1][0].length).toBeGreaterThan(0)
     })

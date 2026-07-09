@@ -344,9 +344,20 @@ export async function GET(req: Request) {
     // (on-prem has no password and no email delivery, so a passkey is their only
     // durable credential). Cloud/tenant are untouched. Enrollment is skippable
     // and forwards to `next`, so this never hard-blocks the user.
+    // Wrapped like every other post-session DB call in this handler: the session
+    // is already committed, so a transient failure on the passkey lookup must
+    // NOT fall through to the outer catch (which returns without the session
+    // cookie and bounces the user to signin — fatal on-prem, where there is no
+    // other login channel). On error, skip the funnel and use the normal redirect.
     let effectiveRedirectPath = redirectPath;
-    if (isOnPrem() && !(await userHasPasskey(userId))) {
-      effectiveRedirectPath = `/auth/passkey-setup?next=${encodeURIComponent(redirectPath)}`;
+    try {
+      if (isOnPrem() && !(await userHasPasskey(userId))) {
+        effectiveRedirectPath = `/auth/passkey-setup?next=${encodeURIComponent(redirectPath)}`;
+      }
+    } catch (error) {
+      loggers.auth.error('Passkey enrollment funnel check failed; using normal redirect', error as Error, {
+        userId,
+      });
     }
 
     const baseUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(req.url).origin;

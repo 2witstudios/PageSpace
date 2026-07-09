@@ -85,8 +85,11 @@ export const POST = withAdminAuth(async (adminUser, request) => {
           newUserId: userId,
         });
       } catch (error) {
-        // The account exists regardless; surface creation success even if the
-        // link mint fails. The admin can re-issue via `bun run setup:admin`.
+        // The account was created regardless; report success even if the link
+        // mint fails (rare — a DB error minting the token). The user simply has
+        // no first-login link yet; an admin re-issues one out-of-band. Note
+        // `setup:admin` is admin-only and would wrongly elevate a regular user,
+        // so it is NOT a valid re-issue path for role: 'user' accounts.
         loggers.api.error('Failed to mint on-prem setup link', error as Error, { userId });
       }
     }
