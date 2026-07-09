@@ -269,7 +269,7 @@ export default function NotificationsSettingsPage() {
             In-app Pop-ups
           </CardTitle>
           <CardDescription>
-            Choose how live pop-up notifications show up while you&apos;re using PageSpace. This doesn&apos;t affect the notification bell, which always shows everything.
+            Choose how live pop-up notifications show up while you&apos;re using PageSpace. On the desktop app, this also governs system notifications when PageSpace is in the background. This doesn&apos;t affect the notification bell, which always shows everything.
           </CardDescription>
         </CardHeader>
         <CardContent>
