@@ -56,17 +56,12 @@ const TOOL_MODULES = {
   forms: formTools,
 } as const;
 
-// Flatten the module map into one ToolSet, preserving each module's precise per-tool
-// type so `PageSpaceTools` keeps its exact keys. UnionToIntersection turns the union
-// of module types into their intersection — the type equivalent of spreading them all.
-type UnionToIntersection<U> = (U extends unknown ? (k: U) => void : never) extends (
-  k: infer I,
-) => void
-  ? I
-  : never;
-type BaseTools = UnionToIntersection<(typeof TOOL_MODULES)[keyof typeof TOOL_MODULES]>;
-
-const baseTools = Object.assign({}, ...Object.values(TOOL_MODULES)) as BaseTools;
+// Flatten the module map into one ToolSet. No key collisions across modules — the
+// `ai-tools.test.ts` "no key collisions" case guards that.
+const baseTools = Object.assign(
+  {},
+  ...Object.values(TOOL_MODULES),
+) as Record<string, Tool>;
 
 /**
  * Categorized enumeration of every workspace tool, keyed by domain — a projection of
