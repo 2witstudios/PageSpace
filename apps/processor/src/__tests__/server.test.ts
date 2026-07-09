@@ -202,22 +202,13 @@ vi.mock('../middleware/resource-binding', () => ({
   ),
 }));
 
-vi.mock('../services/siem-adapter', () => ({
+vi.mock('../services/siem-adapter', async (importOriginal) => ({
+  // Spread the real module so exports the health builder relies on (notably
+  // SAFE_DELIVERY_ERROR_CLASSES, used by its read-time redaction guard) stay in
+  // sync automatically; only the config accessors are stubbed. See #989.
+  ...(await importOriginal<typeof import('../services/siem-adapter')>()),
   loadSiemConfig: vi.fn(() => ({ enabled: false, type: 'webhook' })),
   validateSiemConfig: vi.fn(() => ({ valid: true, errors: [] })),
-  // Real allowlist used by siem-health-builder's read-time redaction guard.
-  // Kept in sync with DeliveryErrorClass in siem-adapter.ts (#989).
-  SAFE_DELIVERY_ERROR_CLASSES: new Set([
-    'transport_error',
-    'http_client_error',
-    'http_server_error',
-    'ssrf_blocked',
-    'invalid_config',
-    'chain_tamper',
-    'preflight_unavailable',
-    'internal_error',
-    'unclassified_error',
-  ]),
 }));
 
 vi.mock('../db', () => ({

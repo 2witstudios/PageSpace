@@ -40,24 +40,12 @@ export interface AuditLogEntry {
  * response body (stack traces, auth tokens, PII, schema) — never crosses this
  * boundary; full detail stays in the processor's stdout logs for operator
  * triage. See issue #989.
+ *
+ * This array is the single source of truth: the `DeliveryErrorClass` union and
+ * the `SAFE_DELIVERY_ERROR_CLASSES` allowlist are both derived from it, so a new
+ * class can never be added to one without the other.
  */
-export type DeliveryErrorClass =
-  | 'transport_error'
-  | 'http_client_error'
-  | 'http_server_error'
-  | 'ssrf_blocked'
-  | 'invalid_config'
-  | 'chain_tamper'
-  | 'preflight_unavailable'
-  | 'internal_error'
-  | 'unclassified_error';
-
-// Allowlist form of DeliveryErrorClass for the read-time zero-trust guard in
-// siem-health-builder. Typed as ReadonlySet<string> so an arbitrary persisted
-// value (e.g. a legacy raw body already at rest in the DB) can be membership-
-// tested; anything not in this set is replaced with 'unclassified_error' before
-// it can reach /health.
-export const SAFE_DELIVERY_ERROR_CLASSES: ReadonlySet<string> = new Set<DeliveryErrorClass>([
+export const DELIVERY_ERROR_CLASSES = [
   'transport_error',
   'http_client_error',
   'http_server_error',
@@ -67,7 +55,16 @@ export const SAFE_DELIVERY_ERROR_CLASSES: ReadonlySet<string> = new Set<Delivery
   'preflight_unavailable',
   'internal_error',
   'unclassified_error',
-]);
+] as const;
+
+export type DeliveryErrorClass = (typeof DELIVERY_ERROR_CLASSES)[number];
+
+// Allowlist form of DeliveryErrorClass for the read-time zero-trust guard in
+// siem-health-builder. Typed as ReadonlySet<string> so an arbitrary persisted
+// value (e.g. a legacy raw body already at rest in the DB) can be membership-
+// tested; anything not in this set is replaced with 'unclassified_error' before
+// it can reach /health.
+export const SAFE_DELIVERY_ERROR_CLASSES: ReadonlySet<string> = new Set(DELIVERY_ERROR_CLASSES);
 
 /**
  * Pure classifier mapping an HTTP status to a safe delivery-error class. Mirrors
