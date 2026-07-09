@@ -110,6 +110,7 @@ const START_PAYLOAD: AiStreamStartPayload = {
   messageId: 'msg-1',
   pageId: 'page-a',
   conversationId: 'conv-1',
+  startedAt: '2024-01-01T00:00:00.000Z',
   triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
 };
 
@@ -198,6 +199,7 @@ describe('useChannelStreamSocket', () => {
         conversationId: 'conv-1',
         triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
         isOwn: false,
+        startedAt: '2024-01-01T00:00:00.000Z',
       });
       expect(mockConsumeStreamJoin).toHaveBeenCalledWith(
         'msg-1',
@@ -296,6 +298,7 @@ describe('useChannelStreamSocket', () => {
       expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
         messageId: 'msg-1',
         isOwn: false,
+        startedAt: '2024-01-01T00:00:00.000Z',
       }));
     });
   });

@@ -48,6 +48,10 @@ export const createStreamLifecycle = async (
     });
   }
 
+  // Captured once so the DB row and the broadcast agree on the stream's start
+  // time — remote surfaces stamp synthesized bubbles with this value.
+  const startedAt = new Date();
+
   try {
     await db
       .insert(aiStreamSessions)
@@ -59,6 +63,7 @@ export const createStreamLifecycle = async (
         displayName,
         browserSessionId,
         status: 'streaming',
+        startedAt,
       })
       .onConflictDoUpdate({
         target: aiStreamSessions.messageId,
@@ -69,7 +74,7 @@ export const createStreamLifecycle = async (
           displayName,
           browserSessionId,
           status: 'streaming',
-          startedAt: new Date(),
+          startedAt,
           completedAt: null,
           // A re-registered messageId gets a fresh (empty) in-memory buffer
           // above — the DB snapshot must reset with it, or a bootstrap
@@ -89,6 +94,7 @@ export const createStreamLifecycle = async (
     messageId,
     pageId: channelId,
     conversationId,
+    startedAt: startedAt.toISOString(),
     triggeredBy: { userId, displayName, browserSessionId },
   }).catch(() => {});
 

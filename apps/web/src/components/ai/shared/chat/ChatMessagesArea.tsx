@@ -18,6 +18,7 @@ import { UIMessage } from 'ai';
 import { SkeletonMessageBubble } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
+import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { StreamingIndicator } from './StreamingIndicator';
 import { UndoAiChangesDialog } from './UndoAiChangesDialog';
 import { VirtualizedMessageList, VirtualizedMessageListRef } from './VirtualizedMessageList';
@@ -267,9 +268,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
             <MessageRenderer
               key={stream.messageId}
               message={{
-                id: stream.messageId,
-                role: 'assistant',
-                parts: stream.parts,
+                ...synthesizeAssistantMessage(stream.messageId, stream.parts, stream.startedAt),
                 messageType: 'standard',
               }}
               isStreaming

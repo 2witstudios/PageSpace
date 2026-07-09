@@ -648,6 +648,7 @@ describe('socket-utils', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
         triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       };
 
@@ -668,6 +669,7 @@ describe('socket-utils', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
         triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       });
 
@@ -681,6 +683,7 @@ describe('socket-utils', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
         triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       })).resolves.not.toThrow();
     });
