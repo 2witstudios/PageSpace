@@ -18,22 +18,18 @@ export function PushNotificationManager() {
 
   useEffect(() => {
     if (!isNative || !isSupported) return;
-
+    // Wait until native checkPermissions() has resolved — don't burn the guard on 'unknown'.
+    if (permissionStatus === 'unknown') return;
     // Prevent multiple attempts in strict mode dev
     if (attemptRef.current) return;
     attemptRef.current = true;
 
-    const initNotifications = async () => {
-      if (permissionStatus === 'prompt') {
-        await requestPermission();
-      } else if (permissionStatus === 'granted' && !isRegistered) {
-        await registerToken();
-      }
-    };
-
-    // Small delay to ensure Capacitor is fully ready
-    const timer = setTimeout(initNotifications, 1000);
-    return () => clearTimeout(timer);
+    if (permissionStatus === 'prompt') {
+      void requestPermission();
+    } else if (permissionStatus === 'granted' && !isRegistered) {
+      void registerToken();
+    }
+    // 'denied': burn the attempt, do nothing — user must enable in iOS Settings.
   }, [isNative, isSupported, permissionStatus, isRegistered, requestPermission, registerToken]);
 
   return null;

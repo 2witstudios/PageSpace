@@ -91,12 +91,16 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     };
   }),
   
-  markAsRead: (notificationId) => set((state) => ({
-    notifications: state.notifications.map(n => 
-      n.id === notificationId ? { ...n, isRead: true, readAt: new Date() } : n
-    ),
-    unreadCount: Math.max(0, state.unreadCount - 1),
-  })),
+  markAsRead: (notificationId) => set((state) => {
+    const existing = state.notifications.find((n) => n.id === notificationId);
+    if (!existing || existing.isRead) return state;
+    return {
+      notifications: state.notifications.map(n =>
+        n.id === notificationId ? { ...n, isRead: true, readAt: new Date() } : n
+      ),
+      unreadCount: Math.max(0, state.unreadCount - 1),
+    };
+  }),
   
   markAllAsRead: () => set((state) => ({
     notifications: state.notifications.map(n => ({ ...n, isRead: true, readAt: new Date() })),
