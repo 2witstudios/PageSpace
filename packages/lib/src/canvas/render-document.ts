@@ -210,20 +210,32 @@ function unwrapFullDocument(html: string): string {
  * string matching), so leaving it in place would still get the script
  * blocked — defeating the whole point of this function. Replacing (not
  * duplicating) also keeps the tag valid HTML with exactly one `nonce`
- * attribute. The match requires a preceding whitespace before `nonce`, so
- * `data-nonce="…"` / `aria-nonce="…"` are never mistaken for the real
- * attribute (a bare `\b` word boundary also matches right after a hyphen).
+ * attribute.
+ *
+ * Detection walks the tag ONE ATTRIBUTE AT A TIME (name, then its whole
+ * quoted-or-bare value as a single token) rather than searching for the raw
+ * substring `nonce=` anywhere in the tag. A raw substring search would also
+ * match `nonce=` sitting inside a DIFFERENT attribute's own quoted value
+ * (e.g. `<script data-log="utm_source=x nonce=stale123">`) and corrupt that
+ * unrelated attribute when "replacing" it. Attribute-at-a-time walking never
+ * looks inside an already-consumed value, so `data-nonce=`/`aria-nonce=` are
+ * never mistaken for the real attribute either, and a bare/valueless `nonce`
+ * (no `=`) is still recognized and replaced rather than duplicated.
  */
 function stampScriptNonce(scriptBlock: string, nonce: string): string {
   const openTagMatch = scriptBlock.match(/^<script(?=[\s/>])[^>]*>/i);
   if (!openTagMatch) return scriptBlock;
   const openTag = openTagMatch[0];
   const safeNonce = escapeHtml(nonce);
-  const existingNonceAttr = /(\s)nonce\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/i;
-  const stampedOpenTag = existingNonceAttr.test(openTag)
-    ? openTag.replace(existingNonceAttr, `$1nonce="${safeNonce}"`)
-    : openTag.replace(/^<script/i, `<script nonce="${safeNonce}"`);
-  return stampedOpenTag + scriptBlock.slice(openTag.length);
+  const attr = /(\s+)([a-zA-Z_:][-\w:.]*)(\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*))?/g;
+  let sawNonce = false;
+  const stampedOpenTag = openTag.replace(attr, (full, whitespace: string, name: string) => {
+    if (name.toLowerCase() !== 'nonce') return full;
+    sawNonce = true;
+    return `${whitespace}nonce="${safeNonce}"`;
+  });
+  return (sawNonce ? stampedOpenTag : stampedOpenTag.replace(/^<script/i, `<script nonce="${safeNonce}"`))
+    + scriptBlock.slice(openTag.length);
 }
 
 function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], nonce?: string): { css: string; body: string } {

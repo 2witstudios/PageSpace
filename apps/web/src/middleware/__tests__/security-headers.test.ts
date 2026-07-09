@@ -198,14 +198,38 @@ describe('Security Headers', () => {
       vi.unstubAllEnvs();
     });
 
-    it('allowlists both the literal and wildcard-subdomain form of the configured S3 endpoint host', () => {
+    it('allowlists the literal endpoint origin plus the app bucket subdomain (default bucket name)', () => {
       vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
 
       const csp = buildCSPPolicy('test-nonce');
       const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
 
       expect(connectSrc).toContain('https://fly.storage.tigris.dev');
-      expect(connectSrc).toContain('https://*.fly.storage.tigris.dev');
+      expect(connectSrc).toContain('https://pagespace-files.fly.storage.tigris.dev');
+    });
+
+    it('uses the configured BUCKET_NAME (not the default) for the bucket subdomain entry', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+      vi.stubEnv('BUCKET_NAME', 'acme-prod-bucket');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+
+      expect(connectSrc).toContain('https://acme-prod-bucket.fly.storage.tigris.dev');
+      expect(connectSrc).not.toContain('pagespace-files');
+    });
+
+    // Security regression guard: a bare `*.<host>` wildcard would allow
+    // connect-src to ANY other tenant's bucket on a shared multi-tenant
+    // storage host (Tigris, AWS S3) — self-serve-provisionable by an
+    // attacker — turning a future XSS into a CSP-permitted exfiltration path.
+    it('never emits a bare wildcard subdomain over the whole storage provider', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+
+      expect(connectSrc).not.toContain('*.fly.storage.tigris.dev');
     });
 
     it('given no AWS_ENDPOINT_URL_S3 configured, adds no extra or malformed connect-src entry', () => {
@@ -242,14 +266,24 @@ describe('Security Headers', () => {
       expect(mediaSrc).toContain("'self'");
     });
 
-    it('allowlists both the literal and wildcard-subdomain form of the configured S3 endpoint host in media-src, same as connect-src', () => {
+    it('allowlists the literal endpoint origin plus the app bucket subdomain in media-src, same as connect-src', () => {
       vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
 
       const csp = buildCSPPolicy('test-nonce');
       const mediaSrc = csp.split(';').find((d: string) => d.trim().startsWith('media-src'));
 
       expect(mediaSrc).toContain('https://fly.storage.tigris.dev');
-      expect(mediaSrc).toContain('https://*.fly.storage.tigris.dev');
+      expect(mediaSrc).toContain('https://pagespace-files.fly.storage.tigris.dev');
+    });
+
+    it('never emits a bare wildcard subdomain in media-src either', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const mediaSrc = csp.split(';').find((d: string) => d.trim().startsWith('media-src'));
+
+      expect(mediaSrc).not.toContain('*.fly.storage.tigris.dev');
+      expect(mediaSrc).not.toMatch(/https:\/\/\*\./);
     });
 
     it('given no AWS_ENDPOINT_URL_S3 configured, media-src has no extra or malformed entry', () => {

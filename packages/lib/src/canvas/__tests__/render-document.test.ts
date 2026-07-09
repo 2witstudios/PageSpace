@@ -483,6 +483,31 @@ describe('renderCanvasDocument — CSP nonce for inherited outer policy', () => 
     expect((out.match(/ nonce="app-nonce=="/g) ?? []).length).toBe(1);
   });
 
+  it('given another attribute whose OWN value contains the substring " nonce=", should NOT corrupt that attribute — it stamps a real nonce alongside, untouched', () => {
+    // A raw substring search for `nonce=` (rather than walking real,
+    // whole attributes) would match INSIDE this attribute's quoted value
+    // and truncate/re-quote it mid-string, corrupting the tag.
+    const out = renderCanvasDocument({
+      html: '<script data-log="utm_source=x nonce=stale123">console.log("hi");</script>',
+      nonce: 'app-nonce==',
+    });
+    expect(out).toContain('<script nonce="app-nonce==" data-log="utm_source=x nonce=stale123">console.log("hi");</script>');
+    expect((out.match(/ nonce="app-nonce=="/g) ?? []).length).toBe(1);
+  });
+
+  it('given a bare (valueless) nonce attribute, should replace it with a real one, not duplicate it', () => {
+    const out = renderCanvasDocument({
+      html: '<script nonce defer src="x.js"></script>',
+      nonce: 'app-nonce==',
+    });
+    expect(out).toContain('<script nonce="app-nonce==" defer src="x.js"></script>');
+    // "app-nonce==" itself contains "nonce" as a substring, and the bare
+    // attribute is a literal `nonce` token — count the quoted attribute form
+    // only, which is unambiguous.
+    expect((out.match(/nonce="/g) ?? []).length).toBe(1);
+    expect(out).not.toContain('nonce defer'); // the original bare token is gone, not left behind
+  });
+
   it('given a nonce with HTML-significant characters, should escape it in the stamped attribute', () => {
     const out = renderCanvasDocument({
       html: '<script>x()</script>',

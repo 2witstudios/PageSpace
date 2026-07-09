@@ -1,15 +1,13 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
 import DashboardLayoutClient from "./DashboardLayoutClient";
-import { NONCE_HEADER } from "@/middleware/security-headers";
+import { getRequestNonce } from "@/lib/request-nonce";
 
 export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const requestHeaders = await headers();
-  const nonce = requestHeaders.get(NONCE_HEADER) ?? undefined;
+  const nonce = await getRequestNonce();
 
   return <DashboardLayoutClient nonce={nonce}>{children}</DashboardLayoutClient>;
 }
