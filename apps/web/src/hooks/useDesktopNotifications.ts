@@ -2,10 +2,12 @@
 
 import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import { resolveDestination, type StoredNotification } from '@/lib/notifications/resolve-destination';
 import { isToastEligible } from '@/lib/notifications/toast-eligible-types';
 import { useToastPreferences } from '@/hooks/useToastPreferences';
+import { isDesktopPlatform } from '@/lib/desktop-auth';
 
 /**
  * Shows a native OS notification (Electron desktop only) whenever a new (or
@@ -25,15 +27,16 @@ export function useDesktopNotifications() {
   const notifiedRef = useRef(new Map<string, string>());
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.electron?.isDesktop) return;
+    if (!isDesktopPlatform()) return;
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
 
     const unsubscribe = useNotificationStore.subscribe((state) => {
       const top = state.notifications[0] as StoredNotification | undefined;
       if (!top) return;
-      if (new Date(top.createdAt).getTime() < mountTimeRef.current) return;
+      const createdAt = new Date(top.createdAt);
+      if (createdAt.getTime() < mountTimeRef.current) return;
 
-      const signature = `${top.message}|${new Date(top.createdAt).toISOString()}`;
+      const signature = `${top.message}|${createdAt.toISOString()}`;
       if (notifiedRef.current.get(top.id) === signature) return;
       notifiedRef.current.set(top.id, signature);
 
@@ -43,10 +46,18 @@ export function useDesktopNotifications() {
       const n = new Notification(top.title, { body: top.message, tag: top.id });
       n.onclick = () => {
         window.focus();
-        if (!top.isRead) void handleNotificationRead(top.id);
+        // Look up the live read state rather than the `top` closed over at
+        // notification-construction time — it may have been marked read via
+        // another surface (dropdown, sibling toast) in the meantime.
+        const current = useNotificationStore.getState().notifications.find((notif) => notif.id === top.id);
+        if (!current || !current.isRead) void handleNotificationRead(top.id);
         const destination = resolveDestination(top);
         if (destination) router.push(destination);
         n.close();
+        // The sibling sonner toast (useNotificationToasts) may still be showing
+        // for the same notification id — dismiss it so it doesn't linger after
+        // the user has already navigated away via the OS notification.
+        toast.dismiss(top.id);
       };
     });
 

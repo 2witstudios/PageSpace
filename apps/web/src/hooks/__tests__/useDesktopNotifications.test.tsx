@@ -2,15 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { LegacyNotification } from '@pagespace/lib/notifications/types';
 
-const { mockPush, mockHandleNotificationRead } = vi.hoisted(() => ({
+const { mockPush, mockHandleNotificationRead, mockToastDismiss } = vi.hoisted(() => ({
   mockPush: vi.fn(),
   mockHandleNotificationRead: vi.fn().mockResolvedValue(undefined),
+  mockToastDismiss: vi.fn(),
 }));
 
 let mockToastLevel: 'all' | 'mentions' | 'off' = 'all';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
+}));
+
+vi.mock('sonner', () => ({
+  toast: {
+    dismiss: mockToastDismiss,
+  },
 }));
 
 vi.mock('@/hooks/useToastPreferences', () => ({
@@ -194,7 +201,7 @@ describe('useDesktopNotifications', () => {
     expect(MockNotification.instances).toHaveLength(0);
   });
 
-  it('on click: focuses the window, marks as read, and navigates to the resolved destination', () => {
+  it('on click: focuses the window, marks as read, navigates to the resolved destination, and dismisses the sibling toast', () => {
     renderHook(() => useDesktopNotifications());
 
     act(() => {
@@ -211,5 +218,33 @@ describe('useDesktopNotifications', () => {
     expect(mockHandleNotificationRead).toHaveBeenCalledWith('notif-1');
     expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/page-1');
     expect(instance.close).toHaveBeenCalled();
+    expect(mockToastDismiss).toHaveBeenCalledWith('notif-1');
+  });
+
+  it('regression: on click, reads the LIVE store state rather than the stale closure — does not re-mark-read a notification already read via another surface (e.g. the sibling toast) before the click', () => {
+    renderHook(() => useDesktopNotifications());
+
+    act(() => {
+      useNotificationStore.getState().addNotification(build());
+    });
+
+    const instance = MockNotification.instances[0];
+
+    // Simulate the notification being marked read through another surface
+    // (e.g. the in-app dropdown, or the sibling sonner toast) before the
+    // user clicks the still-visible native OS notification.
+    act(() => {
+      useNotificationStore.setState((state) => ({
+        notifications: state.notifications.map((n) =>
+          n.id === 'notif-1' ? { ...n, isRead: true } : n
+        ),
+      }));
+    });
+
+    act(() => {
+      instance.onclick?.();
+    });
+
+    expect(mockHandleNotificationRead).not.toHaveBeenCalled();
   });
 });
