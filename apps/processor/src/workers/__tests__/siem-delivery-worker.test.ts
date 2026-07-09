@@ -589,6 +589,13 @@ describe('processSiemDelivery', () => {
       actual: errorCalls.length,
       expected: 2,
     });
+
+    assert({
+      given: 'an unexpected worker error (raw message may carry internal detail)',
+      should: 'persist only the safe internal_error class, never the raw message',
+      actual: errorCalls.map((c) => (c[1] as unknown[])[1]),
+      expected: ['internal_error', 'internal_error'],
+    });
   });
 
   it('acquires advisory lock before reading cursor', async () => {

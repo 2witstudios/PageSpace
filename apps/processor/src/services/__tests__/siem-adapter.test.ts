@@ -725,6 +725,7 @@ describe('sendSyslog', () => {
     const result = await sendSyslog(tcpConfig, [makeEntry()]);
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
+    expect(result.errorClass).toBe('ssrf_blocked');
   });
 
   it('returns failure when validation throws', async () => {
@@ -733,6 +734,7 @@ describe('sendSyslog', () => {
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
     expect(result.error).toContain('DNS error');
+    expect(result.errorClass).toBe('transport_error');
   });
 
   it('routes to TCP when protocol is tcp', async () => {
@@ -787,6 +789,7 @@ describe('deliverToSiem', () => {
     const result = await deliverToSiem(config, [makeEntry()]);
     expect(result.success).toBe(false);
     expect(result.error).toBe('Invalid SIEM configuration');
+    expect(result.errorClass).toBe('invalid_config');
   });
 
   it('calls sendWebhook when webhook type', async () => {

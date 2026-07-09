@@ -67,8 +67,10 @@ export type DeliveryErrorClass = (typeof DELIVERY_ERROR_CLASSES)[number];
 export const SAFE_DELIVERY_ERROR_CLASSES: ReadonlySet<string> = new Set(DELIVERY_ERROR_CLASSES);
 
 /**
- * Pure classifier mapping an HTTP status to a safe delivery-error class. Mirrors
- * the retryable computation (5xx + 429 are server-side/transient).
+ * Pure classifier mapping an HTTP status to a safe delivery-error class. 5xx and
+ * 429 are treated as server-side/transient (`http_server_error`), everything
+ * else 4xx as `http_client_error`. `sendWebhook` derives its `retryable` flag
+ * straight from this result, so the class and retryability can never drift.
  */
 export function classifyHttpStatus(status: number): DeliveryErrorClass {
   return status >= 500 || status === 429 ? 'http_server_error' : 'http_client_error';
@@ -375,15 +377,16 @@ export async function sendWebhook(
       };
     }
 
-    // Determine if error is retryable
-    const retryable = response.status >= 500 || response.status === 429;
+    // Classify once; retryability is derived from the class so the two can
+    // never drift (5xx + 429 → http_server_error → retryable).
+    const errorClass = classifyHttpStatus(response.status);
 
     return {
       success: false,
       entriesDelivered: 0,
       error: `HTTP ${response.status}: ${responseBody || 'Unknown error'}`,
-      errorClass: classifyHttpStatus(response.status),
-      retryable,
+      errorClass,
+      retryable: errorClass === 'http_server_error',
       deliveryId,
       webhookStatus: response.status,
       ackReceivedAt,
