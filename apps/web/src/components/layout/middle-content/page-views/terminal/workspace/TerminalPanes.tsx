@@ -72,9 +72,12 @@ export default function TerminalPanes({ terminalId, socket }: TerminalPanesProps
 }
 
 /**
- * Chrome-free by design (no per-pane header, ever) — session identity lives
- * in the Navigator sidebar instead. A top accent bar shows focus and
- * hover-revealed controls handle splitting/closing without permanent chrome.
+ * Chrome-free by design (no per-pane header, ever, verified against
+ * PurePoint's real chrome-free pane design) — a top accent bar shows focus
+ * and hover-revealed controls handle splitting/closing without permanent
+ * chrome. Known tradeoff: with 2+ panes open the Navigator sidebar does not
+ * yet indicate which open terminal is showing in which pane — that's
+ * sidebar/Navigator work, out of scope for this theming-foundation round.
  */
 function TerminalPane({
   socket,

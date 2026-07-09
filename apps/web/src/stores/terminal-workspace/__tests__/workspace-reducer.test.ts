@@ -132,6 +132,24 @@ describe('splitRight', () => {
     });
   });
 
+  it('given a pane whose id does not exist, should be a no-op', () => {
+    const state = initialWorkspace('pane-1');
+
+    const actual = splitRight(state, 'does-not-exist', 'col-2', 'pane-2');
+
+    expect({
+      given: 'a pane whose id does not exist',
+      should: 'be a no-op',
+      actual,
+      expected: state,
+    }).toEqual({
+      given: 'a pane whose id does not exist',
+      should: 'be a no-op',
+      actual: state,
+      expected: state,
+    });
+  });
+
   it('given splitting the middle column of three, should insert immediately after it', () => {
     const state: WorkspaceState = {
       columns: [

@@ -3,7 +3,7 @@
 import { useTheme } from 'next-themes';
 import { useEffect, useState } from 'react';
 import type { ITheme } from '@xterm/xterm';
-import { getCssVar, resolveColor, withAlpha } from '@/lib/theme/css-color-resolution';
+import { getCssVar, resolveColor, withAlpha, THEME_FALLBACK } from '@/lib/theme/css-color-resolution';
 
 /**
  * Curated, low-contrast ANSI palettes — no ANSI-color design tokens exist in
@@ -48,11 +48,8 @@ const MUTED_ANSI_LIGHT = {
   brightWhite: '#3a3a3a',
 } as const;
 
-const FALLBACK_DARK = { background: '#222222', foreground: '#f0f0f0', primary: '#5b8cff' };
-const FALLBACK_LIGHT = { background: '#ffffff', foreground: '#1f1f1f', primary: '#3f6dff' };
-
 function buildFallbackTheme(isDark: boolean): ITheme {
-  const fallback = isDark ? FALLBACK_DARK : FALLBACK_LIGHT;
+  const fallback = isDark ? THEME_FALLBACK.dark : THEME_FALLBACK.light;
   const ansi = isDark ? MUTED_ANSI_DARK : MUTED_ANSI_LIGHT;
   return {
     background: fallback.background,
@@ -65,7 +62,7 @@ function buildFallbackTheme(isDark: boolean): ITheme {
 }
 
 function resolveTheme(isDark: boolean): ITheme {
-  const fallback = isDark ? FALLBACK_DARK : FALLBACK_LIGHT;
+  const fallback = isDark ? THEME_FALLBACK.dark : THEME_FALLBACK.light;
   const ansi = isDark ? MUTED_ANSI_DARK : MUTED_ANSI_LIGHT;
 
   const background = resolveColor(getCssVar('--background'), fallback.background);

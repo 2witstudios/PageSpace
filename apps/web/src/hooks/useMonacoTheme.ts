@@ -3,7 +3,7 @@
 import { useTheme } from 'next-themes';
 import { useEffect, useState } from 'react';
 import type { Monaco } from '@monaco-editor/react';
-import { getCssVar, resolveColor, withAlpha } from '@/lib/theme/css-color-resolution';
+import { getCssVar, resolveColor, withAlpha, THEME_FALLBACK } from '@/lib/theme/css-color-resolution';
 
 export function useMonacoTheme(monaco: Monaco | null): string {
   const { resolvedTheme } = useTheme();
@@ -20,22 +20,18 @@ export function useMonacoTheme(monaco: Monaco | null): string {
 
     const fallbackPalette = isDark
       ? {
-          background: '#222222',
-          foreground: '#f0f0f0',
+          ...THEME_FALLBACK.dark,
           border: '#373737',
           muted: '#353535',
           mutedForeground: '#737373',
-          primary: '#5b8cff',
           card: '#2b2b2b',
           input: '#373737',
         }
       : {
-          background: '#ffffff',
-          foreground: '#1f1f1f',
+          ...THEME_FALLBACK.light,
           border: '#d9d9d9',
           muted: '#f3f3f3',
           mutedForeground: '#7a7a7a',
-          primary: '#3f6dff',
           card: '#ffffff',
           input: '#f8f8f8',
         };

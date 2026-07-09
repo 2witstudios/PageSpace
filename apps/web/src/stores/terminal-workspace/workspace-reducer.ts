@@ -67,7 +67,9 @@ export function openTerminal(state: WorkspaceState, scope: OpenTerminalScope): W
 }
 
 /** Splits `fromPaneId` rightward — a new column, with one new pane, inserted
- * immediately after `fromPaneId`'s column. */
+ * immediately after `fromPaneId`'s column. A `fromPaneId` that no longer
+ * resolves (e.g. a stale click racing a close) is a no-op, same as every
+ * other transition here. */
 export function splitRight(
   state: WorkspaceState,
   fromPaneId: string,
@@ -75,10 +77,10 @@ export function splitRight(
   newPaneId: string
 ): WorkspaceState {
   const location = findPaneLocation(state, fromPaneId);
-  const insertAt = location ? location.columnIndex + 1 : state.columns.length;
+  if (!location) return state;
 
   const columns = [...state.columns];
-  columns.splice(insertAt, 0, { id: newColumnId, panes: [{ id: newPaneId, scope: null }] });
+  columns.splice(location.columnIndex + 1, 0, { id: newColumnId, panes: [{ id: newPaneId, scope: null }] });
 
   return { columns, activePaneId: newPaneId };
 }

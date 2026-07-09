@@ -9,6 +9,17 @@
  * parse themselves (oklch, color-mix, named colors, etc.).
  */
 
+/**
+ * Shared light/dark fallback swatches — used when a CSS custom property is
+ * missing or fails to resolve (e.g. before the stylesheet loads). Kept in
+ * one place so Monaco and xterm's themes can't silently drift apart on a
+ * future rebrand.
+ */
+export const THEME_FALLBACK = {
+  dark: { background: '#222222', foreground: '#f0f0f0', primary: '#5b8cff' },
+  light: { background: '#ffffff', foreground: '#1f1f1f', primary: '#3f6dff' },
+} as const;
+
 let colorResolveContext: CanvasRenderingContext2D | null | undefined;
 
 export function getCssVar(name: string): string {

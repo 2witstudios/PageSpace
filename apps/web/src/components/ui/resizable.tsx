@@ -45,10 +45,15 @@ function ResizableHandle({
       {/* chrome-free panes (e.g. Terminal) strip every other seam cue, so
           their handle must stay faintly visible at rest — everywhere else
           the resting opacity-0 default is correct because sibling
-          borders/cards already show the seam. */}
+          borders/cards already show the seam.
+          Sized (not absolute-positioned) so the parent's flex centering
+          handles both orientations — a fixed absolute/translate line was
+          hardcoded vertical and broke for orientation="vertical" groups. */}
       <div
         className={cn(
-          "absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-sidebar-border transition-opacity duration-150 group-hover:opacity-100 group-data-[separator=active]:opacity-100 group-data-[separator=active]:bg-primary",
+          "h-full w-px bg-sidebar-border transition-opacity duration-150",
+          "group-aria-[orientation=horizontal]:h-px group-aria-[orientation=horizontal]:w-full",
+          "group-hover:opacity-100 group-data-[separator=active]:opacity-100 group-data-[separator=active]:bg-primary",
           variant === "chrome-free" ? "opacity-60" : "opacity-0"
         )}
       />
