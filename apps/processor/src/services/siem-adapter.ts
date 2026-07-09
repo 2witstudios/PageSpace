@@ -32,11 +32,60 @@ export interface AuditLogEntry {
   logHash: string | null;
 }
 
+/**
+ * Closed set of safe, non-customer-controlled classifications for a failed SIEM
+ * delivery. This is the ONLY value that may be persisted to
+ * siem_delivery_cursors.lastError and surfaced on the unauthenticated /health
+ * endpoint. The raw error string — which can contain a customer's webhook
+ * response body (stack traces, auth tokens, PII, schema) — never crosses this
+ * boundary; full detail stays in the processor's stdout logs for operator
+ * triage. See issue #989.
+ */
+export type DeliveryErrorClass =
+  | 'transport_error'
+  | 'http_client_error'
+  | 'http_server_error'
+  | 'ssrf_blocked'
+  | 'invalid_config'
+  | 'chain_tamper'
+  | 'preflight_unavailable'
+  | 'internal_error'
+  | 'unclassified_error';
+
+// Allowlist form of DeliveryErrorClass for the read-time zero-trust guard in
+// siem-health-builder. Typed as ReadonlySet<string> so an arbitrary persisted
+// value (e.g. a legacy raw body already at rest in the DB) can be membership-
+// tested; anything not in this set is replaced with 'unclassified_error' before
+// it can reach /health.
+export const SAFE_DELIVERY_ERROR_CLASSES: ReadonlySet<string> = new Set<DeliveryErrorClass>([
+  'transport_error',
+  'http_client_error',
+  'http_server_error',
+  'ssrf_blocked',
+  'invalid_config',
+  'chain_tamper',
+  'preflight_unavailable',
+  'internal_error',
+  'unclassified_error',
+]);
+
+/**
+ * Pure classifier mapping an HTTP status to a safe delivery-error class. Mirrors
+ * the retryable computation (5xx + 429 are server-side/transient).
+ */
+export function classifyHttpStatus(status: number): DeliveryErrorClass {
+  return status >= 500 || status === 429 ? 'http_server_error' : 'http_client_error';
+}
+
 // SIEM delivery result
 export interface SiemDeliveryResult {
   success: boolean;
   entriesDelivered: number;
   error?: string;
+  // Safe, non-customer-controlled classification of `error`. Persisted to
+  // siem_delivery_cursors.lastError in place of the raw `error` string, which
+  // may embed untrusted webhook response bodies. See DeliveryErrorClass / #989.
+  errorClass?: DeliveryErrorClass;
   retryable?: boolean;
   // Delivery attestation — stamped by the delivery path so the worker can
   // persist receipts without re-doing any of the work.
@@ -268,6 +317,7 @@ export async function sendWebhook(
         success: false,
         entriesDelivered: 0,
         error: `Invalid webhook URL: ${validation.error || 'SSRF protection blocked request'}`,
+        errorClass: 'ssrf_blocked',
         retryable: false, // Don't retry blocked URLs
         deliveryId,
         webhookStatus: null,
@@ -335,6 +385,7 @@ export async function sendWebhook(
       success: false,
       entriesDelivered: 0,
       error: `HTTP ${response.status}: ${responseBody || 'Unknown error'}`,
+      errorClass: classifyHttpStatus(response.status),
       retryable,
       deliveryId,
       webhookStatus: response.status,
@@ -347,6 +398,7 @@ export async function sendWebhook(
       success: false,
       entriesDelivered: 0,
       error: error instanceof Error ? error.message : 'Network error',
+      errorClass: 'transport_error',
       retryable: true,
       deliveryId,
       webhookStatus: null,
@@ -498,6 +550,7 @@ export function sendSyslogTcp(
         success: false,
         entriesDelivered,
         error: 'Connection timeout',
+        errorClass: 'transport_error',
         retryable: true,
       });
     }, 10000);
@@ -526,6 +579,7 @@ export function sendSyslogTcp(
               success: false,
               entriesDelivered,
               error: err.message,
+              errorClass: 'transport_error',
               retryable: true,
             });
             return;
@@ -545,6 +599,7 @@ export function sendSyslogTcp(
         success: false,
         entriesDelivered,
         error: err.message,
+        errorClass: 'transport_error',
         retryable: true,
       });
     });
@@ -571,6 +626,7 @@ export function sendSyslogUdp(
           success: !hasError,
           entriesDelivered,
           error: hasError ? 'UDP send error' : undefined,
+          errorClass: hasError ? 'transport_error' : undefined,
           retryable: hasError,
         });
         return;
@@ -587,6 +643,7 @@ export function sendSyslogUdp(
             success: false,
             entriesDelivered,
             error: err.message,
+            errorClass: 'transport_error',
             retryable: true,
           });
           return;
@@ -603,6 +660,7 @@ export function sendSyslogUdp(
         success: false,
         entriesDelivered,
         error: err.message,
+        errorClass: 'transport_error',
         retryable: true,
       });
     });
@@ -636,6 +694,7 @@ export async function sendSyslog(
         success: false,
         entriesDelivered: 0,
         error: `Invalid syslog host: ${validation.error || 'SSRF protection blocked connection'}`,
+        errorClass: 'ssrf_blocked',
         retryable: false, // Don't retry blocked hosts
       };
     }
@@ -649,6 +708,7 @@ export async function sendSyslog(
       success: false,
       entriesDelivered: 0,
       error: `Host validation failed: ${validationError instanceof Error ? validationError.message : 'Unknown error'}`,
+      errorClass: 'transport_error',
       retryable: false,
     };
   }
@@ -701,6 +761,7 @@ export async function deliverToSiem(
     success: false,
     entriesDelivered: 0,
     error: 'Invalid SIEM configuration',
+    errorClass: 'invalid_config',
     retryable: false,
   };
 }
@@ -739,6 +800,7 @@ export async function deliverToSiemBatched(
         success: false,
         entriesDelivered: totalDelivered,
         error: lastError,
+        errorClass: result.errorClass,
         retryable: result.retryable,
         deliveryId,
         webhookStatus: result.webhookStatus ?? null,
@@ -819,6 +881,7 @@ export async function deliverToSiemWithRetry(
         success: false,
         entriesDelivered: cumulativeDelivered,
         error: result.error,
+        errorClass: result.errorClass,
         retryable: result.retryable,
         deliveryId,
         webhookStatus: result.webhookStatus ?? null,
@@ -836,6 +899,7 @@ export async function deliverToSiemWithRetry(
     success: false,
     entriesDelivered: cumulativeDelivered,
     error: 'Max retries exceeded',
+    errorClass: lastResult?.errorClass ?? 'transport_error',
     retryable: false,
     deliveryId,
     webhookStatus: lastResult?.webhookStatus ?? null,

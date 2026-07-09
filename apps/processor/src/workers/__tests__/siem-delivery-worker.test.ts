@@ -359,6 +359,7 @@ describe('processSiemDelivery', () => {
       success: false,
       entriesDelivered: 0,
       error: 'HTTP 502: Bad Gateway',
+      errorClass: 'http_server_error',
     });
 
     // Two error upserts — one per source
@@ -402,9 +403,9 @@ describe('processSiemDelivery', () => {
 
     assert({
       given: 'failed delivery with 0 entries delivered',
-      should: 'record the error message',
+      should: 'record the safe error class (not the raw message)',
       actual: (errorCalls[0][1] as unknown[])[1],
-      expected: 'HTTP 502: Bad Gateway',
+      expected: 'http_server_error',
     });
   });
 
@@ -432,6 +433,7 @@ describe('processSiemDelivery', () => {
       success: false,
       entriesDelivered: 2,
       error: 'TCP connection reset',
+      errorClass: 'transport_error',
     });
 
     stubBegin();
@@ -469,9 +471,9 @@ describe('processSiemDelivery', () => {
     );
     assert({
       given: 'partial delivery failure',
-      should: 'record the error on both sources',
+      should: 'record the safe error class on both sources',
       actual: errorCalls.map((c) => (c[1] as unknown[])[1]),
-      expected: ['TCP connection reset', 'TCP connection reset'],
+      expected: ['transport_error', 'transport_error'],
     });
   });
 
@@ -1153,10 +1155,15 @@ describe('processSiemDelivery', () => {
     stubCursorRow('sec_prev', new Date('2026-04-10T00:00:00Z'), 0);
     stubSourceRows([makeSecurityRow('sec_1', new Date('2026-04-10T01:00:01Z'))]);
 
+    // The adapter stamps a safe errorClass alongside the raw error string. The
+    // raw string embeds a customer-controlled webhook response body here; only
+    // the class may be persisted to the /health-visible cursor. See #989.
+    const rawBody = 'HTTP 500: invalid token: sk-live-abc123 (user=42)';
     mockDeliverToSiemWithRetry.mockResolvedValue({
       success: false,
       entriesDelivered: 0,
-      error: 'webhook unreachable',
+      error: rawBody,
+      errorClass: 'http_server_error',
     });
 
     stubErrorUpsert();
@@ -1178,9 +1185,16 @@ describe('processSiemDelivery', () => {
 
     assert({
       given: 'a total delivery failure',
-      should: 'propagate the error message to every cursor',
-      actual: errorCalls.every((c) => (c[1] as unknown[])[1] === 'webhook unreachable'),
+      should: 'persist only the safe error class to every cursor',
+      actual: errorCalls.every((c) => (c[1] as unknown[])[1] === 'http_server_error'),
       expected: true,
+    });
+
+    assert({
+      given: 'a webhook response body carrying a secret',
+      should: 'never persist the raw body into the /health-visible cursor',
+      actual: errorCalls.some((c) => String((c[1] as unknown[])[1]).includes('sk-live-abc123')),
+      expected: false,
     });
 
     const advanceCalls = mockQuery.mock.calls.filter(
@@ -1541,14 +1555,21 @@ describe('processSiemDelivery', () => {
 
     assert({
       given: 'a tampered activity_logs row',
-      should: 'include the break index, reason, expected and actual hashes in the error message',
+      should: 'persist the safe chain_tamper class (forensic detail stays in logs/alert)',
+      actual: (errorCalls[0][1] as unknown[])[1],
+      expected: 'chain_tamper',
+    });
+
+    assert({
+      given: 'a tampered activity_logs row',
+      should: 'not leak break index, entry id, or hashes into the /health-visible cursor',
       actual:
         typeof (errorCalls[0][1] as unknown[])[1] === 'string' &&
-        ((errorCalls[0][1] as string[])[1] as string).includes('hash_mismatch') &&
-        ((errorCalls[0][1] as string[])[1] as string).includes('log_tampered') &&
-        ((errorCalls[0][1] as string[])[1] as string).includes('expected=expected') &&
-        ((errorCalls[0][1] as string[])[1] as string).includes('actual=tampered'),
-      expected: true,
+        (((errorCalls[0][1] as string[])[1] as string).includes('hash_mismatch') ||
+          ((errorCalls[0][1] as string[])[1] as string).includes('log_tampered') ||
+          ((errorCalls[0][1] as string[])[1] as string).includes('expected') ||
+          ((errorCalls[0][1] as string[])[1] as string).includes('tampered')),
+      expected: false,
     });
   });
 
@@ -1764,6 +1785,13 @@ describe('processSiemDelivery', () => {
       should: 'record the error on the activity_logs cursor',
       actual: errorCalls.length === 1 && (errorCalls[0][1] as unknown[])[0] === 'activity_logs',
       expected: true,
+    });
+
+    assert({
+      given: 'a preflight db_error carrying an internal message',
+      should: 'persist the safe preflight_unavailable class, not the raw DB message',
+      actual: (errorCalls[0][1] as unknown[])[1],
+      expected: 'preflight_unavailable',
     });
 
     assert({

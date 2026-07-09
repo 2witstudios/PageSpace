@@ -5,6 +5,7 @@ import {
   deliverToSiemWithRetry,
   type AuditLogEntry,
   type AuditLogSource,
+  type DeliveryErrorClass,
 } from '../services/siem-adapter';
 import {
   mapActivityLogsToSiemEntries,
@@ -170,10 +171,15 @@ async function queryRowsForSource(
   return querySecurityAuditLog(client, afterTimestamp, afterId, batchSize);
 }
 
+// The persisted `lastError` is deliberately typed as DeliveryErrorClass, not a
+// free-text string. This makes it a compile-time error to write a raw webhook
+// response body (or any customer-controlled text) into the column that the
+// unauthenticated /health endpoint surfaces. Full error detail is retained in
+// the processor's stdout logs at each call site for operator triage. See #989.
 async function recordError(
   client: PgClient,
   source: AuditLogSource,
-  message: string
+  errorClass: DeliveryErrorClass
 ): Promise<void> {
   await client.query(
     `INSERT INTO siem_delivery_cursors (id, "lastError", "lastErrorAt", "updatedAt")
@@ -182,7 +188,7 @@ async function recordError(
        "lastError" = $2,
        "lastErrorAt" = NOW(),
        "updatedAt" = NOW()`,
-    [source, message]
+    [source, errorClass]
   );
 }
 
@@ -356,20 +362,19 @@ export async function processSiemDelivery(): Promise<void> {
         // but do NOT fire the chain verification webhook — a transient DB
         // failure is not tamper, and a false tamper page erodes the
         // alert's credibility. The next poll cycle will retry naturally.
-        await recordError(
-          client,
-          preflightResult.source,
-          `Chain preflight data unavailable: ${preflightResult.message}`
-        );
+        await recordError(client, preflightResult.source, 'preflight_unavailable');
         console.warn(
           `[siem-delivery] Chain preflight data unavailable source=${preflightResult.source}: ${preflightResult.message}`
         );
         return;
       }
 
-      // Include expected/actual hashes when present so /health can
-      // distinguish hash_mismatch from chain_break from missing_hash
-      // without re-reading the cursor row. missing_hash leaves both null.
+      // /health only ever shows the safe 'chain_tamper' class. The full
+      // forensic detail (index, reason, expected/actual hashes) stays in the
+      // operator-only channels below: the structured console.error line and
+      // the notifyChainPreflightFailure alert. Hashes are internally computed,
+      // not customer-controlled, but there is no reason to widen the
+      // unauthenticated /health surface with them.
       const hashDetail = [
         preflightResult.expectedHash !== null
           ? `expected=${preflightResult.expectedHash}`
@@ -380,9 +385,8 @@ export async function processSiemDelivery(): Promise<void> {
       ]
         .filter((s): s is string => s !== null)
         .join(' ');
-      const errorMessage = `Hash chain broken at index ${preflightResult.breakAtIndex}: ${preflightResult.breakReason} (entry=${preflightResult.entryId})${hashDetail ? ` ${hashDetail}` : ''}`;
 
-      await recordError(client, preflightResult.source, errorMessage);
+      await recordError(client, preflightResult.source, 'chain_tamper');
 
       // Fire the existing chain verification webhook. notifyChainPreflightFailure
       // swallows alert-handler errors internally, but we still wrap the call
@@ -408,7 +412,7 @@ export async function processSiemDelivery(): Promise<void> {
       }
 
       console.error(
-        `[siem-delivery] CHAIN TAMPER DETECTED source=${preflightResult.source} index=${preflightResult.breakAtIndex} reason=${preflightResult.breakReason} entry=${preflightResult.entryId}`
+        `[siem-delivery] CHAIN TAMPER DETECTED source=${preflightResult.source} index=${preflightResult.breakAtIndex} reason=${preflightResult.breakReason} entry=${preflightResult.entryId}${hashDetail ? ` ${hashDetail}` : ''}`
       );
       return;
     }
@@ -510,26 +514,31 @@ export async function processSiemDelivery(): Promise<void> {
       // error write runs after the cursor advance above, so sources that made
       // partial progress still show lastError in /health.
       const errorMessage = result.error ?? 'Unknown delivery error';
+      const errorClass = result.errorClass ?? 'internal_error';
       for (const source of SIEM_SOURCES) {
-        await recordError(client, source, errorMessage);
+        await recordError(client, source, errorClass);
       }
       const partial =
         result.entriesDelivered > 0
           ? ` (${result.entriesDelivered} entries delivered before failure)`
           : '';
-      console.error(`[siem-delivery] Delivery failed: ${errorMessage}${partial}`);
+      // Raw error text (may embed the receiver's response body) stays in the
+      // operator-only log; only `errorClass` was persisted to the cursor above.
+      console.error(`[siem-delivery] Delivery failed [${errorClass}]: ${errorMessage}${partial}`);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
     try {
       for (const source of SIEM_SOURCES) {
-        await recordError(client, source, message);
+        await recordError(client, source, 'internal_error');
       }
     } catch {
       // best-effort only — don't mask the original error
     }
 
+    // Persist only the safe class; the raw message (which may include internal
+    // detail) stays in the operator-only log.
     console.error('[siem-delivery] Worker error:', message);
     throw error;
   } finally {
