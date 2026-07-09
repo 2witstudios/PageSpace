@@ -21,7 +21,7 @@ import { isDesktopPlatform } from '@/lib/desktop-auth';
 export function useDesktopNotifications() {
   const router = useRouter();
   const handleNotificationRead = useNotificationStore((state) => state.handleNotificationRead);
-  const { level } = useToastPreferences();
+  const { level, isLoading: isLoadingPreferences } = useToastPreferences();
 
   const mountTimeRef = useRef(Date.now());
   const notifiedRef = useRef(new Map<string, string>());
@@ -40,6 +40,11 @@ export function useDesktopNotifications() {
       if (notifiedRef.current.get(top.id) === signature) return;
       notifiedRef.current.set(top.id, signature);
 
+      // Default to silence, not the provisional 'all', while the real
+      // preference is still loading (e.g. on a cold start) — otherwise an
+      // opted-out user could briefly see banners before their saved 'off'/
+      // 'mentions' level has come back from the server.
+      if (isLoadingPreferences) return;
       if (!isToastEligible(top.type, level)) return;
       if (document.hasFocus()) return;
 
@@ -62,5 +67,5 @@ export function useDesktopNotifications() {
     });
 
     return unsubscribe;
-  }, [router, handleNotificationRead, level]);
+  }, [router, handleNotificationRead, level, isLoadingPreferences]);
 }

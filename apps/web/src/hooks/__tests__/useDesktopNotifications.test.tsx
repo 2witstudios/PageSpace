@@ -9,6 +9,7 @@ const { mockPush, mockHandleNotificationRead, mockToastDismiss } = vi.hoisted(()
 }));
 
 let mockToastLevel: 'all' | 'mentions' | 'off' = 'all';
+let mockIsLoadingPreferences = false;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
@@ -23,7 +24,7 @@ vi.mock('sonner', () => ({
 vi.mock('@/hooks/useToastPreferences', () => ({
   useToastPreferences: () => ({
     level: mockToastLevel,
-    isLoading: false,
+    isLoading: mockIsLoadingPreferences,
     updateLevel: vi.fn(),
   }),
 }));
@@ -69,6 +70,7 @@ describe('useDesktopNotifications', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockToastLevel = 'all';
+    mockIsLoadingPreferences = false;
     useNotificationStore.setState({
       notifications: [],
       unreadCount: 0,
@@ -187,6 +189,19 @@ describe('useDesktopNotifications', () => {
     });
 
     expect(MockNotification.instances).toHaveLength(2);
+  });
+
+  it('regression: does not construct a Notification while the toast preference is still loading, even though the provisional level defaults to all', () => {
+    mockIsLoadingPreferences = true;
+    mockToastLevel = 'all';
+
+    renderHook(() => useDesktopNotifications());
+
+    act(() => {
+      useNotificationStore.getState().addNotification(build());
+    });
+
+    expect(MockNotification.instances).toHaveLength(0);
   });
 
   it('does not construct a Notification when the preference level is off', () => {
