@@ -16,6 +16,7 @@ import {
   getPrincipalDriveIds,
   getPrincipalBatchPagePermissions,
 } from '@/lib/auth';
+import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -416,9 +417,11 @@ export async function GET(request: Request) {
       offset: params.offset,
     });
 
+    const decryptedTasks = await decryptTaskUserRelations(tasks);
+
     // Enrich tasks with drive, task list page info, and status metadata
     // Filter out orphaned tasks where parent list is not accessible
-    const enrichedTasks = tasks
+    const enrichedTasks = decryptedTasks
       .map(task => {
         const listPageId = task.page?.parentId;
         const pageInfo = listPageId ? taskListPageMap.get(listPageId) : undefined;
