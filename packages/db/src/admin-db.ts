@@ -86,6 +86,11 @@ export function createAdminDbRegistry(deps: AdminDbDeps): AdminDbRegistry {
         deps.alert(breakGlassAlert(decision.reason));
         return deps.getMainDb();
       }
+      case 'main-db':
+        // Unconfigured trust plane: audit writes use the main DB — the
+        // pre-trust-plane default. SILENT: no alert, no throw. (The break-glass
+        // path is the loud, explicit variant of the same fallback.)
+        return deps.getMainDb();
       case 'fail':
         throw new Error(`adminDb init failed: ${decision.reason}`);
     }
@@ -109,6 +114,7 @@ const registry = createAdminDbRegistry({
     ADMIN_DATABASE_SSL: process.env.ADMIN_DATABASE_SSL,
     ADMIN_DB_POOL_MAX: process.env.ADMIN_DB_POOL_MAX,
     ADMIN_DB_BREAK_GLASS: process.env.ADMIN_DB_BREAK_GLASS,
+    AUDIT_TRUST_PLANE_REQUIRED: process.env.AUDIT_TRUST_PLANE_REQUIRED,
   }),
   // Break-glass only: an admin-schema-typed client over the MAIN pool — same
   // database and connections as `db`, narrow trust-plane type, no cast.

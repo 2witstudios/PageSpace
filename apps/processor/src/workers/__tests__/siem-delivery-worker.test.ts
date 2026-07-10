@@ -2306,17 +2306,41 @@ describe('processSiemDelivery dedicated-mode pool matrix', () => {
     });
   });
 
-  it('given fail mode (no admin URL, no break-glass), should halt before touching any pool', async () => {
+  it('given fail mode (AUDIT_TRUST_PLANE_REQUIRED armed, no admin URL), should halt before touching any pool', async () => {
     const main = createTaggedStore(() => null);
+    const admin = createTaggedStore(() => null);
+
+    await processSiemDelivery({
+      mainPool: main.pool,
+      adminPool: admin.pool,
+      env: { AUDIT_TRUST_PLANE_REQUIRED: 'true' },
+    });
+
+    assert({
+      given: 'a declared-but-unconfigured trust plane',
+      should: 'never connect to either store',
+      actual: { main: main.connects, admin: admin.connects },
+      expected: { main: 0, admin: 0 },
+    });
+  });
+
+  it('given main-db mode (no admin URL, no flags), should proceed on the MAIN pool (never admin), not halt', async () => {
+    // Unconfigured default: delivery runs against main, exactly like break-glass
+    // but silent. A lock-busy run proves the worker reached the main pool and
+    // routed nothing to admin (rather than halting at resolution like fail mode).
+    const main = createTaggedStore((sql) => {
+      if (sql.includes('pg_try_advisory_lock')) return [{ acquired: false }];
+      return null;
+    });
     const admin = createTaggedStore(() => null);
 
     await processSiemDelivery({ mainPool: main.pool, adminPool: admin.pool, env: {} });
 
     assert({
-      given: 'an unconfigured trust plane',
-      should: 'never connect to either store',
-      actual: { main: main.connects, admin: admin.connects },
-      expected: { main: 0, admin: 0 },
+      given: 'an unconfigured trust plane with no enforcement flag',
+      should: 'connect to main (not halt) and never touch the admin pool',
+      actual: { main: main.connects, admin: admin.connects, mainReleased: main.released },
+      expected: { main: 1, admin: 0, mainReleased: 1 },
     });
   });
 

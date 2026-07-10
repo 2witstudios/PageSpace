@@ -52,6 +52,14 @@ export const serverEnvSchema = z
     // arm break-glass only on the exact value 'true' (fail-closed otherwise).
     ADMIN_DB_BREAK_GLASS: z.string().optional(),
 
+    // Opt-in trust-plane enforcement. When exactly 'true' AND ADMIN_DATABASE_URL
+    // is unset, the adminDb mode is 'fail' (fail closed) instead of the silent
+    // 'main-db' default. Set only in deployments that HAVE adopted the dedicated
+    // Admin PG and want a missing URL to halt rather than fall back to the main
+    // DB. Accept any string so a stray value never fails app-wide env
+    // validation; consumers arm it only on the exact value 'true'.
+    AUDIT_TRUST_PLANE_REQUIRED: z.string().optional(),
+
     // ClickHouse analytics tier (#890 Phase 3) — off by default. Only the
     // exact value CLICKHOUSE_ENABLED='true' turns it on (accept any string so
     // a stray value never fails app-wide env validation; the exact-match gate

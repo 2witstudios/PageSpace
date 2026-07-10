@@ -13,6 +13,55 @@ emits everything below.
 > It is a provisioning tool for new tenants only. Upgrades are always
 > append-only edits to the existing `.env`.
 
+## 2026-07 — Audit trust-plane mode contract (issue #890)
+
+How a deployment's `adminDb` mode is resolved from env — this governs where
+security audit writes land:
+
+| `ADMIN_DATABASE_URL` | flags | mode | behavior |
+|----------------------|-------|------|----------|
+| set, valid postgres URL | — | `dedicated` | writes to the dedicated Admin PG (trust plane) |
+| set, **invalid** URL | — | `fail` | halts (a positive misconfiguration must never silently degrade) |
+| unset | `AUDIT_TRUST_PLANE_REQUIRED=true` | `fail` | halts loudly — you declared the trust plane required but did not configure it |
+| unset | `ADMIN_DB_BREAK_GLASS=true` | `break-glass` | writes to the **main** DB + a LOUD alert on every process (explicit emergency override) |
+| unset | neither flag | `main-db` | writes to the **main** DB, **SILENTLY** — the pre-trust-plane default |
+
+Precedence when several apply: invalid-URL `fail` > `AUDIT_TRUST_PLANE_REQUIRED`
+`fail` > `break-glass` > `main-db`. Both flags are fail-closed — only the exact
+string `true` arms them.
+
+**Unconfigured deployments need no action.** If you have not adopted the
+dedicated Admin PG, leave `ADMIN_DATABASE_URL` unset and both flags unset: audit
+writes run against the main application database exactly as they did before the
+trust-plane epic, with no alert noise. Set `AUDIT_TRUST_PLANE_REQUIRED=true`
+**only** if you WANT a missing `ADMIN_DATABASE_URL` to fail closed (i.e. you have
+adopted the trust plane and a missing URL should halt rather than fall back).
+`ADMIN_DB_BREAK_GLASS` is now purely an explicit emergency override.
+
+> **Why this changed:** an earlier revision made an unset `ADMIN_DATABASE_URL`
+> resolve to `fail`. Because audit writes are fire-and-forget, every write then
+> threw and was swallowed as a warn log — security audit logging was silently
+> broken wherever the Admin PG had not been provisioned. The default is now
+> `main-db` (silent, working); loud failure is opt-in.
+
+### Post-merge prod step (Fly) — drop the break-glass alert noise
+
+The incident was mitigated live by setting `ADMIN_DB_BREAK_GLASS=true` on the
+Fly apps, which restored main-DB audit writes but fires a loud alert on every
+process. Once this change is deployed, the unconfigured→`main-db`-silent default
+takes over, so **unset the break-glass flag** on each app to stop the noise:
+
+```bash
+fly secrets unset ADMIN_DB_BREAK_GLASS -a pagespace-web
+fly secrets unset ADMIN_DB_BREAK_GLASS -a pagespace-processor
+fly secrets unset ADMIN_DB_BREAK_GLASS -a pagespace-realtime
+fly secrets unset ADMIN_DB_BREAK_GLASS -a pagespace-admin
+```
+
+Do this only AFTER the new code is deployed to each app. With the flag gone and
+`ADMIN_DATABASE_URL` still unset, each app resolves to `main-db` and audit
+writes continue against the main DB silently.
+
 ## 2026-07 — Phase 1 admin database (issue #890)
 
 The stack now runs a second PostgreSQL container, `postgres-admin` (the
@@ -74,9 +123,10 @@ ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admi
   `postgres-admin` container and the `migrate` one-shot. Runtime services
   (web/processor/realtime) hold no admin credentials in Phase 1 — per-service
   least-privilege LOGIN roles arrive with the Phase 2 audit-write cutover.
-- `ADMIN_DB_BREAK_GLASS=true` is a break-glass rollback flag only (audit
+- `ADMIN_DB_BREAK_GLASS=true` is an explicit emergency override only (audit
   writes fall back to the main DB and alert loudly). It is not a supported
-  steady state — do not set it during a normal upgrade.
+  steady state — do not set it during a normal upgrade. See the trust-plane
+  behavior section below for the full mode contract.
 
 ## 2026-07 — Phase 2 per-service admin login users (issue #890)
 
