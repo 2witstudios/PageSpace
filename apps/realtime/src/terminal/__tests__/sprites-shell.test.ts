@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { openPtyShell, planReconnect, liveShellSessionIds } from '../sprites-shell';
+import { openPtyShell, planReconnect, liveShellSessionIds, newTtySessionId } from '../sprites-shell';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest — the
 // repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
@@ -132,6 +132,39 @@ describe('liveShellSessionIds (pure)', () => {
       { id: 'shell-active', command: 'bash', isActive: true, tty: true },
     ]),
     expected: ['shell-active', 'shell-inactive'],
+  });
+});
+
+describe('newTtySessionId (pure)', () => {
+  assert({
+    given: 'a new tty session appearing after a create alongside a pre-existing one',
+    should: 'return the id absent from the before set (OUR new session, not the other terminal)',
+    actual: newTtySessionId(['sess-other'], [
+      { id: 'sess-other', command: 'bash', isActive: true, tty: true },
+      { id: 'sess-new', command: 'bash', isActive: false, tty: true },
+    ]),
+    expected: 'sess-new',
+  });
+
+  assert({
+    given: 'an empty before set and one new tty session',
+    should: 'return that session id',
+    actual: newTtySessionId([], [{ id: 'sess-new', command: 'bash', isActive: true, tty: true }]),
+    expected: 'sess-new',
+  });
+
+  assert({
+    given: 'no session appeared beyond the before set (ambiguous/empty diff)',
+    should: 'return undefined so the caller persists nothing',
+    actual: newTtySessionId(['sess-other'], [{ id: 'sess-other', command: 'bash', isActive: true, tty: true }]),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'the only new session is non-tty (a plain exec, not a shell)',
+    should: 'return undefined (a shell reattach target must be tty)',
+    actual: newTtySessionId([], [{ id: 'exec-1', command: 'ls', isActive: true, tty: false }]),
+    expected: undefined,
   });
 });
 
@@ -454,6 +487,53 @@ describe('openPtyShell', () => {
       expect(sprite.createSession).toHaveBeenCalledTimes(1);
       expect(onSessionId).toHaveBeenCalledWith('sess-fresh');
       expect(onExit).not.toHaveBeenCalled();
+    });
+
+    it('given the Sprite also hosts ANOTHER terminal tty session, the fallback reports only the NEW id (not the pre-existing one)', async () => {
+      // Multi-terminal-per-Sprite: pickShellSession over all sessions could pick
+      // the OTHER terminal's shell and persist its id — corrupting reattach. The
+      // before/after diff must isolate our freshly created session.
+      const attachCmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const otherTerminal: SpriteSessionInfo = { id: 'sess-other', command: 'bash', isActive: true, tty: true };
+      const newShell: SpriteSessionInfo = { id: 'sess-new', command: 'bash', isActive: false, tty: true };
+      const sprite = buildFakeSprite(freshCmd);
+      sprite.attachSession.mockReturnValue(attachCmd);
+      sprite.createSession.mockReturnValue(freshCmd);
+      sprite.listSessions
+        .mockResolvedValueOnce([otherTerminal])            // reconnect: our sess-dead is gone, but another terminal is live
+        .mockResolvedValueOnce([otherTerminal, newShell]); // after create: our new shell joins
+      const onSessionId = vi.fn();
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-dead', onOutput: vi.fn(), onExit, onSessionId });
+      attachCmd._emitter.emit('error', new Error('lost connection to shell'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.createSession).toHaveBeenCalledTimes(1);
+      expect(onSessionId).toHaveBeenCalledWith('sess-new');
+      expect(onSessionId).not.toHaveBeenCalledWith('sess-other');
+      expect(onExit).not.toHaveBeenCalled();
+    });
+
+    it('given the fallback diff is ambiguous (no new session appeared), reports NO id rather than a wrong one', async () => {
+      const attachCmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const otherTerminal: SpriteSessionInfo = { id: 'sess-other', command: 'bash', isActive: true, tty: true };
+      const sprite = buildFakeSprite(freshCmd);
+      sprite.attachSession.mockReturnValue(attachCmd);
+      sprite.createSession.mockReturnValue(freshCmd);
+      sprite.listSessions
+        .mockResolvedValueOnce([otherTerminal])  // reconnect snapshot (before)
+        .mockResolvedValueOnce([otherTerminal]); // after create: diff yields nothing new
+      const onSessionId = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-dead', onOutput: vi.fn(), onExit: vi.fn(), onSessionId });
+      attachCmd._emitter.emit('error', new Error('lost connection to shell'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.createSession).toHaveBeenCalledTimes(1);
+      expect(onSessionId).not.toHaveBeenCalled();
     });
 
     it('given output flows from the fresh fallback session, forwards it to onOutput', async () => {
