@@ -202,12 +202,15 @@ describe('MachineFileTree', () => {
     await waitFor(() => {
       if (listCallsFor('') < 2) throw new Error('new branch root listing not fetched yet');
     });
+    const staleChild = screen.queryByText('index.ts');
+    await expandFolder('src'); // re-expand on the new branch — the old cache must be gone
+    await waitFor(() => screen.getByText('index.ts'));
 
     assert({
       given: 'the branchName prop changed after a directory was expanded',
-      should: 'refetch the root for the new branch and reset expansion (old children gone)',
-      actual: { rootFetches: listCallsFor(''), staleChild: screen.queryByText('index.ts') },
-      expected: { rootFetches: 2, staleChild: null },
+      should: 'refetch the root, reset expansion, and refetch a re-expanded directory (cache dropped)',
+      actual: { rootFetches: listCallsFor(''), staleChild, srcFetches: listCallsFor('src') },
+      expected: { rootFetches: 2, staleChild: null, srcFetches: 2 },
     });
   });
 
