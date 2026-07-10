@@ -467,6 +467,11 @@
       "import": "./dist/services/sandbox/machine-fs.js",
       "require": "./dist/services/sandbox/machine-fs.js"
     },
+    "./services/sandbox/machine-git-blob": {
+      "types": "./dist/services/sandbox/machine-git-blob.d.ts",
+      "import": "./dist/services/sandbox/machine-git-blob.js",
+      "require": "./dist/services/sandbox/machine-git-blob.js"
+    },
     "./services/sandbox/tool-runners": {
       "types": "./dist/services/sandbox/tool-runners.d.ts",
       "import": "./dist/services/sandbox/tool-runners.js",
@@ -1656,6 +1661,9 @@
       ],
       "services/sandbox/machine-fs": [
         "./dist/services/sandbox/machine-fs.d.ts"
+      ],
+      "services/sandbox/machine-git-blob": [
+        "./dist/services/sandbox/machine-git-blob.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
