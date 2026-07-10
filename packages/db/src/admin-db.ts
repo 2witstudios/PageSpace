@@ -6,12 +6,13 @@
  * selection is pure (admin-db-mode.ts); this shell only constructs the pool
  * and wires deps. Init is lazy — importing this module opens no connection.
  *
- * Schema binding: leaf 3 builds the admin schema barrel; until then the
- * client is drizzle-bound without a schema.
+ * Schema binding: the admin schema barrel (admin-schema.ts) — EXACTLY the
+ * trust-plane tables; the query API (adminDb.query.*) is typed against it.
  */
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import { db } from './db';
+import { pool as mainPool } from './db';
+import * as adminSchema from './admin-schema';
 import { registerPool } from './pool-stats';
 import {
   resolveAdminDbMode,
@@ -29,7 +30,7 @@ export {
   type AdminPoolConfig,
 } from './admin-db-mode';
 
-export type AdminDatabase = NodePgDatabase<Record<string, never>>;
+export type AdminDatabase = NodePgDatabase<typeof adminSchema>;
 
 export const ADMIN_POOL_NAME = 'admin';
 
@@ -69,7 +70,7 @@ export function createAdminDbRegistry(deps: AdminDbDeps): AdminDbRegistry {
         // connections — same guard as the main pool in db.ts.
         pool.on('error', () => {});
         deps.registerPool(pool, ADMIN_POOL_NAME);
-        return drizzle(pool);
+        return drizzle(pool, { schema: adminSchema });
       }
       case 'break-glass': {
         deps.alert(breakGlassAlert(decision.reason));
@@ -96,9 +97,9 @@ const registry = createAdminDbRegistry({
     ADMIN_DB_POOL_MAX: process.env.ADMIN_DB_POOL_MAX,
     ADMIN_DB_BREAK_GLASS: process.env.ADMIN_DB_BREAK_GLASS,
   }),
-  // Break-glass only. Cast is transitional: leaf 3 binds the admin schema
-  // barrel and narrows AdminDatabase to it.
-  getMainDb: () => db as unknown as AdminDatabase,
+  // Break-glass only: an admin-schema-typed client over the MAIN pool — same
+  // database and connections as `db`, narrow trust-plane type, no cast.
+  getMainDb: () => drizzle(mainPool, { schema: adminSchema }),
   createPool: (config) => new Pool(config),
   registerPool,
   alert: (message) => console.error(message),

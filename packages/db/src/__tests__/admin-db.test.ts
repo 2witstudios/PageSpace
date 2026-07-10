@@ -69,6 +69,14 @@ describe('createAdminDbRegistry', () => {
       expect(typeof adminDb.execute).toBe('function');
     });
 
+    it('should bind the admin schema barrel — query API exposes the trust-plane tables', () => {
+      const { deps } = makeDeps();
+      const adminDb = createAdminDbRegistry(deps).getAdminDb();
+      expect(adminDb.query.securityAuditLog).toBeDefined();
+      expect(adminDb.query.siemDeliveryCursors).toBeDefined();
+      expect(adminDb.query.siemDeliveryReceipts).toBeDefined();
+    });
+
     it('should never touch the ambient main db or alert in the dedicated path', () => {
       const { deps } = makeDeps();
       createAdminDbRegistry(deps).getAdminDb();

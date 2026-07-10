@@ -92,3 +92,28 @@ export const resolveAdminPoolConfig = (env: AdminDbEnv): AdminPoolConfig => ({
   idleTimeoutMillis: 600000,
   connectionTimeoutMillis: 10000,
 });
+
+export type AdminMigrateDecision =
+  | { ok: true; poolConfig: AdminPoolConfig }
+  | { ok: false; reason: string };
+
+/**
+ * db:migrate:admin gate — only 'dedicated' may migrate. Break-glass degrades
+ * audit WRITES to the main DB at runtime, but running admin migrations there
+ * would plant the drizzle_admin journal inside the app plane, so it refuses.
+ */
+export const resolveAdminMigrateDecision = (env: AdminDbEnv): AdminMigrateDecision => {
+  const decision = resolveAdminDbMode(env);
+  if (decision.mode === 'break-glass') {
+    return {
+      ok: false,
+      reason:
+        'admin migrations never run under break-glass — they target only a dedicated Admin PG. ' +
+        'Set ADMIN_DATABASE_URL to the trust-plane database.',
+    };
+  }
+  if (decision.mode === 'fail') {
+    return { ok: false, reason: decision.reason };
+  }
+  return { ok: true, poolConfig: resolveAdminPoolConfig(env) };
+};
