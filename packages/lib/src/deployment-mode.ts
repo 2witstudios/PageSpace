@@ -9,7 +9,9 @@
  *                      infrastructure topology and billing path (control plane, not Stripe).
  *   onprem           — Self-hosted. Restricts cloud integrations: no Google Calendar,
  *                      no external AI providers (only ollama/lmstudio/azure_openai),
- *                      no OAuth login, no Stripe, no self-registration. Password auth only.
+ *                      no OAuth login, no Stripe, no self-registration. Sign-in is
+ *                      passkey-based, bootstrapped by admin-issued one-time setup links
+ *                      (outbound email is disabled, so magic-link email can't be sent).
  *
  * Guard selection:
  *   isOnPrem()        — gate cloud integrations (Calendar, AI providers). Tenant keeps them.

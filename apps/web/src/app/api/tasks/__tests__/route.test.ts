@@ -155,6 +155,8 @@ const createPageFixture = (overrides: Partial<{
   userScopedAccess: false,
   terminalAccess: false,
   machines: null,
+  description: null,
+  allowPageAgents: true,
   fileSize: null,
   mimeType: null,
   originalFileName: null,

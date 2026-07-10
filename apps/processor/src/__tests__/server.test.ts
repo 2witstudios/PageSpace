@@ -202,7 +202,11 @@ vi.mock('../middleware/resource-binding', () => ({
   ),
 }));
 
-vi.mock('../services/siem-adapter', () => ({
+vi.mock('../services/siem-adapter', async (importOriginal) => ({
+  // Spread the real module so exports the health builder relies on (notably
+  // SAFE_DELIVERY_ERROR_CLASSES, used by its read-time redaction guard) stay in
+  // sync automatically; only the config accessors are stubbed. See #989.
+  ...(await importOriginal<typeof import('../services/siem-adapter')>()),
   loadSiemConfig: vi.fn(() => ({ enabled: false, type: 'webhook' })),
   validateSiemConfig: vi.fn(() => ({ valid: true, errors: [] })),
 }));
@@ -842,6 +846,64 @@ describe('GET /health', () => {
     // Receipts table missing — lastReceipt must be omitted
     expect(siem.sources.activity_logs.lastReceipt).toBeUndefined();
     expect(siem.sources.security_audit_log.lastReceipt).toBeUndefined();
+  });
+
+  it('given a cursor row holding a raw webhook body, should never surface it on unauthenticated /health (redacts to unclassified_error)', async () => {
+    // Acceptance test for #989: even if a legacy cursor row still contains a
+    // raw, customer-controlled webhook response body (secrets, PII, stack
+    // traces), the unauthenticated /health endpoint must expose only the safe
+    // classification marker — never the raw string.
+    const rawBody =
+      'HTTP 500: {"error":"invalid token: sk-live-abc123","user":"u_42","stack":"at h (/srv/app.js:9)"}';
+
+    const { loadSiemConfig } = await import('../services/siem-adapter');
+    const { getPoolForWorker } = await import('../db');
+    const { refreshSiemCursorCache } = await import('../server');
+
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValue({ enabled: true, type: 'webhook' });
+
+    const mockRelease = vi.fn();
+    const mockQuery = vi.fn().mockImplementation((sql: string) => {
+      if (sql.includes('siem_delivery_cursors')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: 'activity_logs',
+              lastDeliveredId: null,
+              lastDeliveredAt: null,
+              lastError: rawBody,
+              lastErrorAt: new Date('2026-04-10T12:05:00Z'),
+              deliveryCount: 0,
+              updatedAt: new Date('2026-04-10T12:05:05Z'),
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (sql.includes('siem_delivery_receipts')) {
+        const err: Error & { code?: string } = Object.assign(
+          new Error('relation "siem_delivery_receipts" does not exist'),
+          { code: '42P01' },
+        );
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({
+      connect: vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease }),
+    });
+
+    await refreshSiemCursorCache();
+
+    const { req, res, jsonMock } = makeReqRes();
+    await getHealthHandler()(req, res);
+
+    const { siem } = jsonMock.mock.calls[0][0];
+    // Status still reflects the error…
+    expect(siem.sources.activity_logs.status).toBe('error');
+    // …but the message is the safe marker, and the raw secret is gone.
+    expect(siem.sources.activity_logs.lastError).toBe('unclassified_error');
+    expect(JSON.stringify(jsonMock.mock.calls[0][0])).not.toContain('sk-live-abc123');
   });
 
   it('given a SIEM section DB error, should return 200 with a siem.error field instead of 500', async () => {

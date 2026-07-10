@@ -326,6 +326,89 @@ describe('buildSiemHealth', () => {
     });
   });
 
+  it('given a cursor whose lastError holds a raw webhook body, should redact it to unclassified_error on /health while keeping error status', () => {
+    const rawBody =
+      'HTTP 500: {"error":"invalid token: sk-live-abc123","stack":"at handler (/srv/app.js:42)"}';
+    const cursors: CursorSnapshot[] = [
+      makeCursor({
+        id: 'activity_logs',
+        lastDeliveredId: null,
+        lastDeliveredAt: null,
+        lastError: rawBody,
+        lastErrorAt: new Date('2026-04-10T12:05:00Z'),
+        deliveryCount: 0,
+      }),
+    ];
+
+    const result = buildSiemHealth({
+      enabled: true,
+      type: 'webhook',
+      sources: SOURCES,
+      cursors,
+      recentReceipts: null,
+      cursorInitSentinel: SENTINEL,
+    });
+
+    assert({
+      given: 'a legacy cursor row containing a raw customer-controlled webhook body',
+      should: 'replace lastError with the safe marker but still report error status',
+      actual: {
+        lastError: result.sources.activity_logs!.lastError,
+        status: result.sources.activity_logs!.status,
+      },
+      expected: { lastError: 'unclassified_error', status: 'error' },
+    });
+  });
+
+  it('given a cursor whose lastError is a recognized safe class, should pass it through unchanged on /health', () => {
+    const cursors: CursorSnapshot[] = [
+      makeCursor({
+        id: 'activity_logs',
+        lastDeliveredId: null,
+        lastDeliveredAt: null,
+        lastError: 'http_server_error',
+        lastErrorAt: new Date('2026-04-10T12:05:00Z'),
+        deliveryCount: 0,
+      }),
+    ];
+
+    const result = buildSiemHealth({
+      enabled: true,
+      type: 'webhook',
+      sources: SOURCES,
+      cursors,
+      recentReceipts: null,
+      cursorInitSentinel: SENTINEL,
+    });
+
+    assert({
+      given: 'a cursor whose lastError is already a safe DeliveryErrorClass',
+      should: 'pass the class through to /health verbatim',
+      actual: result.sources.activity_logs!.lastError,
+      expected: 'http_server_error',
+    });
+  });
+
+  it('given a cursor with no error, should leave lastError null on /health', () => {
+    const cursors: CursorSnapshot[] = [makeCursor({ id: 'activity_logs', lastError: null })];
+
+    const result = buildSiemHealth({
+      enabled: true,
+      type: 'webhook',
+      sources: SOURCES,
+      cursors,
+      recentReceipts: null,
+      cursorInitSentinel: SENTINEL,
+    });
+
+    assert({
+      given: 'a healthy cursor with lastError null',
+      should: 'keep lastError null (no spurious marker)',
+      actual: result.sources.activity_logs!.lastError,
+      expected: null,
+    });
+  });
+
   it('given a cursor lastDeliveredAt, should serialize it to ISO string in the output', () => {
     const cursors: CursorSnapshot[] = [
       makeCursor({

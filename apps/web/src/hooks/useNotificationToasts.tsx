@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { toast } from 'sonner';
 import { useNotificationStore } from '@/stores/useNotificationStore';
-import { resolveDestination, type StoredNotification } from '@/lib/notifications/resolve-destination';
+import { resolveDestination } from '@/lib/notifications/resolve-destination';
 import { isToastEligible } from '@/lib/notifications/toast-eligible-types';
 import { NotificationToast } from '@/components/notifications/NotificationToast';
 import { useToastPreferences } from '@/hooks/useToastPreferences';
+import { useNewStoreNotification } from '@/hooks/useNewStoreNotification';
 
 /**
  * Shows a live custom toast whenever a new (or updated-in-place, e.g.
@@ -25,47 +25,31 @@ export function useNotificationToasts() {
   const handleNotificationRead = useNotificationStore((state) => state.handleNotificationRead);
   const { level } = useToastPreferences();
 
-  const mountTimeRef = useRef(Date.now());
-  const toastedRef = useRef(new Map<string, string>());
+  useNewStoreNotification((top) => {
+    if (!isToastEligible(top.type, level)) return;
 
-  useEffect(() => {
-    const handleSelect = (notification: StoredNotification, toastId: string | number) => {
-      if (!notification.isRead) {
-        handleNotificationRead(notification.id);
+    const destination = resolveDestination(top);
+    if (destination && destination === pathname) return;
+
+    const handleSelect = (toastId: string | number) => {
+      if (!top.isRead) {
+        handleNotificationRead(top.id);
       }
-      const destination = resolveDestination(notification);
       if (destination) {
         router.push(destination);
       }
       toast.dismiss(toastId);
     };
 
-    const unsubscribe = useNotificationStore.subscribe((state) => {
-      const top = state.notifications[0] as StoredNotification | undefined;
-      if (!top) return;
-      if (new Date(top.createdAt).getTime() < mountTimeRef.current) return;
-
-      const signature = `${top.message}|${new Date(top.createdAt).toISOString()}`;
-      if (toastedRef.current.get(top.id) === signature) return;
-      toastedRef.current.set(top.id, signature);
-
-      if (!isToastEligible(top.type, level)) return;
-
-      const destination = resolveDestination(top);
-      if (destination && destination === pathname) return;
-
-      toast.custom(
-        (id) => (
-          <NotificationToast
-            notification={top}
-            onSelect={() => handleSelect(top, id)}
-            onDismiss={() => toast.dismiss(id)}
-          />
-        ),
-        { id: top.id, duration: 8000 },
-      );
-    });
-
-    return unsubscribe;
-  }, [router, pathname, handleNotificationRead, level]);
+    toast.custom(
+      (id) => (
+        <NotificationToast
+          notification={top}
+          onSelect={() => handleSelect(id)}
+          onDismiss={() => toast.dismiss(id)}
+        />
+      ),
+      { id: top.id, duration: 8000 },
+    );
+  });
 }

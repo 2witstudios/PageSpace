@@ -5,6 +5,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { createId } from '@paralleldrive/cuid2';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
+import { generateOnPremSetupLink } from '@pagespace/lib/auth/onprem-setup-link';
 import { userEmailMatch, prepareUserWrite } from '@pagespace/lib/auth/user-repository';
 import { withAdminAuth } from '@/lib/auth/auth';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
@@ -72,8 +73,34 @@ export const POST = withAdminAuth(async (adminUser, request) => {
       role,
     });
 
+    // On-prem has no outbound email, so the new user can't receive a magic-link
+    // email and has no passkey yet. Hand the admin a one-time setup link to pass
+    // to the user out-of-band; first sign-in funnels them into passkey enrollment.
+    let setupLink: string | undefined;
+    if (onPrem) {
+      try {
+        setupLink = await generateOnPremSetupLink(userId);
+        loggers.api.info('Issued on-prem setup link for admin-created user', {
+          adminId: adminUser.id,
+          newUserId: userId,
+        });
+      } catch (error) {
+        // The account was created regardless; report success even if the link
+        // mint fails (rare — a DB error minting the token). The user simply has
+        // no first-login link yet; an admin re-issues one out-of-band. Note
+        // `setup:admin` is admin-only and would wrongly elevate a regular user,
+        // so it is NOT a valid re-issue path for role: 'user' accounts.
+        loggers.api.error('Failed to mint on-prem setup link', error as Error, { userId });
+      }
+    }
+
     return NextResponse.json(
-      { success: true, userId, message: `User ${normalizedEmail} created successfully` },
+      {
+        success: true,
+        userId,
+        message: `User ${normalizedEmail} created successfully`,
+        ...(setupLink ? { setupLink } : {}),
+      },
       { status: 201 }
     );
   } catch (error) {
