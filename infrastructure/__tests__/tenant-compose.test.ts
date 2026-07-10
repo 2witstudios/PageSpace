@@ -403,6 +403,45 @@ describe('Tenant docker-compose configuration', () => {
     );
   });
 
+  describe('upgrade fail-fast for pre-Phase-1 .env files (admin DB credentials)', () => {
+    // A tenant .env generated before Phase 1 has no ADMIN_POSTGRES_* vars.
+    // Plain ${ADMIN_POSTGRES_PASSWORD} renders as "" (only a soft compose
+    // warning) and postgres-admin never becomes healthy, silently wedging the
+    // whole stack behind depends_on. The ${VAR:?message} required-var syntax
+    // makes `docker compose` abort immediately with a message naming the
+    // cause and the upgrade note instead.
+    it('given the postgres-admin service, POSTGRES_PASSWORD should use required-var syntax pointing at infrastructure/UPGRADE.md', () => {
+      const raw = getRawYaml();
+      expect(raw).toMatch(
+        /POSTGRES_PASSWORD: \$\{ADMIN_POSTGRES_PASSWORD:\?[^}]*infrastructure\/UPGRADE\.md[^}]*\}/,
+      );
+    });
+
+    it('given every ADMIN_DATABASE_URL derivation, should use required-var syntax on the admin password', () => {
+      const lines = getRawYaml()
+        .split('\n')
+        .filter((l) => !l.trim().startsWith('#') && l.includes('ADMIN_DATABASE_URL:'));
+      expect(lines.length).toBeGreaterThanOrEqual(4); // web, processor, realtime, migrate
+      for (const line of lines) {
+        expect(line).toMatch(/\$\{ADMIN_POSTGRES_PASSWORD:\?/);
+      }
+    });
+
+    it('given the comment block above the postgres-admin service, should link infrastructure/UPGRADE.md', () => {
+      const lines = getRawYaml().split('\n');
+      const svcIdx = lines.findIndex((l) => l.startsWith('  postgres-admin:'));
+      expect(svcIdx).toBeGreaterThan(-1);
+      const commentBlock: string[] = [];
+      for (let i = svcIdx - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (line.startsWith('#')) commentBlock.push(line);
+        else if (line === '') continue;
+        else break;
+      }
+      expect(commentBlock.join('\n')).toContain('infrastructure/UPGRADE.md');
+    });
+  });
+
   describe('healthchecks', () => {
     it('given the postgres service, should use pg_isready', () => {
       const test = compose.services.postgres.healthcheck?.test;

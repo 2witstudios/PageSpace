@@ -33,6 +33,11 @@ services:
 
   # Trust plane: dedicated Admin Postgres for the tamper-evident security audit
   # chain, isolated from the app database in every deployment mode (#890).
+  #
+  # UPGRADING an existing deployment: a pre-Phase-1 .env has no ADMIN_POSTGRES_*
+  # vars, so this stack refuses to start (required-var errors below) until they
+  # are APPENDED to the existing .env — see infrastructure/UPGRADE.md. Never
+  # re-run generate-tenant-env.sh on a live deployment.
   postgres-admin:
     image: postgres:17.5-alpine
     restart: unless-stopped
@@ -41,7 +46,7 @@ services:
     environment:
       POSTGRES_DB: ${ADMIN_POSTGRES_DB:-pagespace_admin}
       POSTGRES_USER: ${ADMIN_POSTGRES_USER:-pagespace}
-      POSTGRES_PASSWORD: ${ADMIN_POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${ADMIN_POSTGRES_PASSWORD:?ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admin DB)}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${ADMIN_POSTGRES_USER:-pagespace} -d ${ADMIN_POSTGRES_DB:-pagespace_admin}"]
       interval: 10s
@@ -68,7 +73,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
-      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
+      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD:?ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admin DB)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
@@ -113,7 +118,7 @@ services:
       - cache_storage:/data/cache
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
-      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
+      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD:?ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admin DB)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
       FILE_STORAGE_PATH: /data/files
       CACHE_PATH: /data/cache
       PORT: "3003"
@@ -169,7 +174,7 @@ services:
       DEPLOYMENT_MODE: tenant
       NEXT_PUBLIC_DEPLOYMENT_MODE: tenant
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
-      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
+      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD:?ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admin DB)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
       FILE_STORAGE_PATH: /app/storage
       PROCESSOR_URL: http://processor:3003
       CRON_SECRET: ${CRON_SECRET}
@@ -218,7 +223,7 @@ services:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
-      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
+      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD:?ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admin DB)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
       PORT: "3001"
       CORS_ORIGIN: ${CORS_ORIGIN}
       REALTIME_BROADCAST_SECRET: ${REALTIME_BROADCAST_SECRET}
