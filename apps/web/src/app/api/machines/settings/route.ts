@@ -4,12 +4,14 @@
  *
  * GET    ?terminalId=<id>                                    → current settings (view-access)
  * PATCH  { terminalId, name?, description?, ...toggles }     → update settings (edit-access)
- * DELETE ?terminalId=<id>                                    → destroy the Machine (edit-access)
+ * DELETE ?terminalId=<id>                                    → destroy the Machine (delete-access)
  *
  * A Machine's identity is its backing Terminal page (`terminalId`). Session-only
  * (no MCP/agent tokens) — this is a human/UI surface. Every request re-checks
- * access for the named page (view-level for GET, edit-level for PATCH/DELETE),
- * mirroring machine-projects/machine-branches/agent-terminals.
+ * access for the named page (view-level for GET, edit-level for PATCH, delete-level
+ * for DELETE — destroying a Machine trashes its page, so it requires DELETE
+ * permission, matching the canonical page-trash), mirroring
+ * machine-projects/machine-branches/agent-terminals.
  *
  * DELETE has two side effects with a REQUIRED fail-safe order — trash the page
  * first (reversible), then tear down the Sprite — enforced in `deleteMachine`.
