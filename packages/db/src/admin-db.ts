@@ -18,6 +18,7 @@ import {
   resolveAdminDbMode,
   resolveAdminPoolConfig,
   type AdminDbEnv,
+  type AdminDbModeDecision,
   type AdminPoolConfig,
 } from './admin-db-mode';
 
@@ -44,6 +45,15 @@ export interface AdminDbDeps {
 
 export interface AdminDbRegistry {
   getAdminDb: () => AdminDatabase;
+  /**
+   * Resolved-mode readback for callers that must BRANCH on the mode without
+   * triggering init side effects (#890 Phase 2, leaf 5): the audit bind point
+   * routes writes to the ingest path only under 'dedicated' and keeps the
+   * legacy main-DB path under 'break-glass'. Pure observation — never
+   * constructs a pool, never alerts, never throws; re-reads env each call so
+   * late-loaded dotenv wins, same as init.
+   */
+  getMode: () => AdminDbModeDecision;
 }
 
 const breakGlassAlert = (reason: string): string =>
@@ -86,6 +96,9 @@ export function createAdminDbRegistry(deps: AdminDbDeps): AdminDbRegistry {
       if (!instance) instance = init();
       return instance;
     },
+    getMode() {
+      return resolveAdminDbMode(deps.getEnv());
+    },
   };
 }
 
@@ -110,3 +123,9 @@ const registry = createAdminDbRegistry({
  * loud alert) on first call, then returns the same instance for the process.
  */
 export const getAdminDb = (): AdminDatabase => registry.getAdminDb();
+
+/**
+ * Resolved Admin PG mode for the current process env. Side-effect free —
+ * see AdminDbRegistry.getMode().
+ */
+export const getAdminDbMode = (): AdminDbModeDecision => registry.getMode();

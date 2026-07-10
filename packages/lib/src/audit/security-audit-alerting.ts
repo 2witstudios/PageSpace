@@ -29,7 +29,14 @@ import {
 export interface ChainVerificationAlert {
   result: SecurityChainVerificationResult;
   triggeredAt: Date;
-  source: 'periodic' | 'manual' | 'preflight' | 'append' | 'anchor_publish';
+  source:
+    | 'periodic'
+    | 'manual'
+    | 'preflight'
+    | 'append'
+    | 'anchor_publish'
+    | 'anchor_verify'
+    | 'break_glass';
 }
 
 /**
@@ -325,6 +332,147 @@ export async function notifyAnchorPublishFailure(
     await alertHandler(alert);
   } catch (error) {
     loggers.security.error('[SecurityAuditAlerting] Anchor publish alert handler failed:', {
+      error,
+    });
+  }
+}
+
+/**
+ * Details of a failed anchor-vs-chain verification (#890 Phase 2, leaf 5).
+ * Fired by the full audit verifier when matchAnchorsAgainstChain reports
+ * anything but a clean match: a hash_mismatch means the chain was rewritten
+ * under a witnessed head — the exact tamper class chain-consistency alone
+ * cannot see; a seq_gap means rows below a witnessed head are missing; an
+ * unverifiable anchor means the witness statement itself cannot be trusted.
+ */
+export interface AnchorVerificationFailureDetails {
+  anchorsChecked: number;
+  hashMismatches: number;
+  seqGaps: number;
+  unverifiable: number;
+  /** The lowest-seq failing anchor, for forensics. */
+  firstFailure: {
+    chainSeq: number;
+    verdict: 'hash_mismatch' | 'seq_gap' | 'unverifiable';
+    anchorHead: string;
+    chainHead: string | null;
+  };
+}
+
+/**
+ * Fire an anchor-verification failure alert through the globally-registered
+ * handler. Same contract as the other notify helpers: no handler → no-op;
+ * handler errors are swallowed with a logged error.
+ */
+export async function notifyAnchorVerificationFailure(
+  details: AnchorVerificationFailureDetails
+): Promise<void> {
+  if (!alertHandler) return;
+
+  const now = new Date();
+  const syntheticResult: SecurityChainVerificationResult = {
+    isValid: false,
+    totalEntries: details.anchorsChecked,
+    entriesVerified: details.anchorsChecked,
+    validEntries:
+      details.anchorsChecked -
+      (details.hashMismatches + details.seqGaps + details.unverifiable),
+    invalidEntries: details.hashMismatches + details.seqGaps + details.unverifiable,
+    breakPoint: {
+      entryId: `anchor-${details.firstFailure.chainSeq}`,
+      timestamp: now,
+      position: 0,
+      storedHash: details.firstFailure.chainHead ?? '',
+      computedHash: details.firstFailure.anchorHead,
+      previousHashUsed: '',
+      description:
+        `Anchor verification FAILED: ${details.hashMismatches} hash mismatch(es), ${details.seqGaps} seq gap(s), ` +
+        `${details.unverifiable} unverifiable of ${details.anchorsChecked} anchors checked. ` +
+        `First failure at chain_seq ${details.firstFailure.chainSeq} (${details.firstFailure.verdict}): ` +
+        `witnessed head ${details.firstFailure.anchorHead}, chain has ${details.firstFailure.chainHead ?? 'no row'}. ` +
+        'A mismatch under a witnessed head means the chain was rewritten after anchoring.',
+    },
+    firstEntryId: null,
+    lastEntryId: null,
+    verificationStartedAt: now,
+    verificationCompletedAt: now,
+    durationMs: 0,
+  };
+
+  const alert: ChainVerificationAlert = {
+    result: syntheticResult,
+    triggeredAt: now,
+    source: 'anchor_verify',
+  };
+
+  try {
+    await alertHandler(alert);
+  } catch (error) {
+    loggers.security.error('[SecurityAuditAlerting] Anchor verification alert handler failed:', {
+      error,
+    });
+  }
+}
+
+/**
+ * Details of an active Admin-DB break-glass degrade (#890 Phase 2, leaf 5).
+ * Fired ONCE per process by the audit write bind point when the resolved
+ * mode is 'break-glass': audit writes are going to the MAIN application
+ * database — an emergency rollback state, never a supported steady state.
+ */
+export interface AdminDbBreakGlassDetails {
+  /** The mode-decision reason from resolveAdminDbMode. */
+  reason: string;
+}
+
+/**
+ * Fire an Admin-DB break-glass alert through the globally-registered handler.
+ * Same contract as the other notify helpers: no handler → no-op; handler
+ * errors are swallowed with a logged error so a broken alert surface never
+ * breaks the (already degraded) audit path. The console banner and the
+ * self-recorded security event fire regardless — this is the third,
+ * externally-routable channel.
+ */
+export async function notifyAdminDbBreakGlass(
+  details: AdminDbBreakGlassDetails
+): Promise<void> {
+  if (!alertHandler) return;
+
+  const now = new Date();
+  const syntheticResult: SecurityChainVerificationResult = {
+    isValid: false,
+    totalEntries: 0,
+    entriesVerified: 0,
+    validEntries: 0,
+    invalidEntries: 0,
+    breakPoint: {
+      entryId: 'admin-db-break-glass',
+      timestamp: now,
+      position: 0,
+      storedHash: '',
+      computedHash: '',
+      previousHashUsed: '',
+      description:
+        `Admin DB break-glass is ACTIVE: audit writes are degraded to the MAIN application database (${details.reason}). ` +
+        'Provision the Admin PG, set ADMIN_DATABASE_URL, and disarm ADMIN_DB_BREAK_GLASS.',
+    },
+    firstEntryId: null,
+    lastEntryId: null,
+    verificationStartedAt: now,
+    verificationCompletedAt: now,
+    durationMs: 0,
+  };
+
+  const alert: ChainVerificationAlert = {
+    result: syntheticResult,
+    triggeredAt: now,
+    source: 'break_glass',
+  };
+
+  try {
+    await alertHandler(alert);
+  } catch (error) {
+    loggers.security.error('[SecurityAuditAlerting] Break-glass alert handler failed:', {
       error,
     });
   }

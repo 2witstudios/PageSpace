@@ -165,4 +165,39 @@ describe('createAdminDbRegistry', () => {
       expect(deps.alert).not.toHaveBeenCalled();
     });
   });
+
+  describe('getMode() — resolved-mode readback for the audit bind point (#890 Phase 2, leaf 5)', () => {
+    it('given a dedicated env, should report dedicated without constructing a pool or alerting', () => {
+      const { deps } = makeDeps();
+      const decision = createAdminDbRegistry(deps).getMode();
+      expect(decision.mode).toBe('dedicated');
+      expect(deps.createPool).not.toHaveBeenCalled();
+      expect(deps.getMainDb).not.toHaveBeenCalled();
+      expect(deps.alert).not.toHaveBeenCalled();
+    });
+
+    it('given a break-glass env, should report break-glass WITHOUT firing the banner (observation, not activation)', () => {
+      const { deps } = makeDeps({ getEnv: () => BREAK_GLASS_ENV });
+      const decision = createAdminDbRegistry(deps).getMode();
+      expect(decision.mode).toBe('break-glass');
+      expect(deps.alert).not.toHaveBeenCalled();
+      expect(deps.getMainDb).not.toHaveBeenCalled();
+    });
+
+    it('given a fail env, should report fail with the actionable reason instead of throwing', () => {
+      const { deps } = makeDeps({ getEnv: () => ({}) });
+      const decision = createAdminDbRegistry(deps).getMode();
+      expect(decision.mode).toBe('fail');
+      expect(decision.reason).toMatch(/ADMIN_DATABASE_URL/);
+    });
+
+    it('should re-read env on every call (late-loaded dotenv wins, no caching)', () => {
+      let env: Record<string, string> = {};
+      const { deps } = makeDeps({ getEnv: () => env });
+      const registry = createAdminDbRegistry(deps);
+      expect(registry.getMode().mode).toBe('fail');
+      env = { ...DEDICATED_ENV };
+      expect(registry.getMode().mode).toBe('dedicated');
+    });
+  });
 });

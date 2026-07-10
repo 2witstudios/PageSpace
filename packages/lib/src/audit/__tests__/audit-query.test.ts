@@ -27,6 +27,13 @@ const { mockDb, mockSecurityAuditLog } = vi.hoisted(() => {
 vi.mock('@pagespace/db/db', () => ({
   db: mockDb,
 }));
+// Default binding (#890 Phase 2, leaf 5): dedicated mode resolves the Admin
+// PG client. Point it at the same mockDb so the "default db" expectations
+// below exercise the post-cutover default.
+vi.mock('@pagespace/db/admin-db', () => ({
+  getAdminDbMode: vi.fn(() => ({ mode: 'dedicated', reason: 'ADMIN_DATABASE_URL is set' })),
+  getAdminDb: vi.fn(() => mockDb),
+}));
 vi.mock('@pagespace/db/schema/security-audit', () => ({
   securityAuditLog: mockSecurityAuditLog,
 }));
@@ -200,11 +207,29 @@ describe('queryAuditEvents()', () => {
       expect(result).toEqual(injectedEvents);
     });
 
-    it('given no injected client, should fall back to the default db (parity with today)', async () => {
+    it('given no injected client, should fall back to the resolved audit binding (Admin PG in dedicated mode)', async () => {
       const result = await queryAuditEvents({});
 
       expect(mockDb.select).toHaveBeenCalled();
       expect(result).toEqual(mockEvents);
+    });
+
+    it('PARITY: identical filters against the injected admin client and the default binding produce identical results', async () => {
+      const rows = [
+        { id: 'evt-a', eventType: 'auth.login.success', userId: 'user-1', ipAddress: null },
+        { id: 'evt-b', eventType: 'auth.login.success', userId: 'user-1', ipAddress: null },
+      ];
+      const injectedAdminDb = createInjectedDb(rows);
+      mockDb._chain.orderBy.mockResolvedValue(rows);
+
+      const viaInjected = await queryAuditEvents(
+        { userId: 'user-1', eventType: 'auth.login.success' },
+        { db: injectedAdminDb as unknown as AuditQueryDeps['db'] },
+      );
+      const viaDefault = await queryAuditEvents({ userId: 'user-1', eventType: 'auth.login.success' });
+
+      expect(viaInjected).toEqual(viaDefault);
+      expect(viaInjected).toEqual(rows);
     });
   });
 });

@@ -20,9 +20,10 @@
  * a throwing logger never fails the write, and a failed insert is never
  * witnessed.
  *
- * NOT bound to production flow yet: the securityAudit singleton and
- * audit-log.ts stay on the advisory-lock repository until leaf 5 cuts over
- * (same staging precedent as Phase 0's readChainHead).
+ * Bound to production flow since leaf 5: the securityAudit singleton routes
+ * logEvent through this writer whenever the Admin PG resolves 'dedicated'
+ * (security-audit.ts getDefaultAppendPath); break-glass keeps the legacy
+ * advisory-lock repository against the main DB.
  */
 
 import { createId } from '@paralleldrive/cuid2';

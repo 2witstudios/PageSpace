@@ -50,6 +50,13 @@
       "when": 1783673960814,
       "tag": "0006_security_audit_anchors",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783677044891,
+      "tag": "0007_anchor_select_for_verifier",
+      "breakpoints": true
     }
   ]
 }

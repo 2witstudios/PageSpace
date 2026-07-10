@@ -413,6 +413,30 @@ describe.skipIf(!url)('zero-trust roles on the Admin PG', () => {
     });
   });
 
+  describe('security_audit_anchors readback for the periodic verifier (migration 0007)', () => {
+    it('admin_app should SELECT anchors (the cron verifier matches them against the chain)', async () => {
+      await asRole('admin_app', async (client) => {
+        const { rows } = await client.query(
+          `SELECT version, chain_seq, head_hash, anchored_at, signature FROM security_audit_anchors`,
+        );
+        expect(Array.isArray(rows)).toBe(true);
+      });
+    });
+
+    it('admin_app should STILL be denied INSERT, UPDATE, DELETE and TRUNCATE on anchors (witness stays append-only, chainer-only writes)', async () => {
+      await asRole('admin_app', async (client) => {
+        await expectDenied(
+          client,
+          `INSERT INTO security_audit_anchors (id, version, chain_seq, head_hash, anchored_at, signature)
+           VALUES ('app-anchor-1', 1, 1, 'h', now(), 's')`,
+        );
+        await expectDenied(client, `UPDATE security_audit_anchors SET head_hash = 'tampered'`);
+        await expectDenied(client, `DELETE FROM security_audit_anchors`);
+        await expectDenied(client, `TRUNCATE security_audit_anchors`);
+      });
+    });
+  });
+
   describe('re-runnability', () => {
     it('should apply cleanly on a fresh DB where the roles ALREADY exist at cluster level', async () => {
       // Roles are cluster-scoped: a re-provisioned database in the same
