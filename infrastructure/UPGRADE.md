@@ -17,8 +17,9 @@ emits everything below.
 
 The stack now runs a second PostgreSQL container, `postgres-admin` (the
 "trust plane"), holding the tamper-evident security audit chain in isolation
-from the app database. The compose file requires three new variables and
-**refuses to start** without them:
+from the app database. The compose file introduces three new variables and
+**refuses to start** without `ADMIN_POSTGRES_PASSWORD` (the other two have
+compose-level defaults — see Notes):
 
 ```
 required variable ADMIN_POSTGRES_PASSWORD is missing a value:
