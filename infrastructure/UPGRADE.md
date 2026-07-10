@@ -46,7 +46,13 @@ ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admi
    ADMIN_POSTGRES_PASSWORD=<paste the generated password>
    ```
 
-3. Pull and restart the stack as usual:
+3. Pull and restart the stack as usual — via the wrapper if you deploy with it:
+
+   ```bash
+   ./scripts/tenant-stack.sh upgrade <slug>
+   ```
+
+   or with docker compose directly:
 
    ```bash
    docker compose -p ps-<slug> -f docker-compose.tenant.yml --env-file /data/tenants/<slug>/.env up -d
