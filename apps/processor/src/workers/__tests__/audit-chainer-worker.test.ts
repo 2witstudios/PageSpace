@@ -156,6 +156,36 @@ describe('processAuditChainer', () => {
     expect(mockNotifyAppendFailure).not.toHaveBeenCalled();
   });
 
+  it('given drained rows, should serialize the chained INSERT timestamp params as UTC ISO strings (a raw-pg Date param stores LOCAL wall clock in the tz-less column — false tamper on non-UTC processors)', async () => {
+    const rows = makeIngestRows(2);
+    const expected = assignChainBatch(rows, { prevHash: GENESIS_PREVIOUS_HASH });
+
+    stubLock(true);
+    stub(rows); // ingest SELECT
+    stub([]); // head SELECT — empty chain → genesis
+    stub(); // BEGIN
+    stub([], 2); // INSERT
+    stub([], 2); // DELETE
+    stub(); // COMMIT
+    stub(
+      expected.chainedRowPayloads.map((p) => ({
+        id: p.id,
+        emissionHash: p.emissionHash,
+        previousHash: p.previousHash,
+        eventHash: p.eventHash,
+      })),
+    ); // verify re-read
+    stub([]); // unlock
+
+    await processAuditChainer({ pool: mockPool });
+
+    // 18 params per row; timestamp is the 15th (index 14) in each row block.
+    const insertValues = mockQuery.mock.calls[4][1] as unknown[];
+    rows.forEach((row, i) => {
+      expect(insertValues[i * 18 + 14]).toBe(row.timestamp.toISOString());
+    });
+  });
+
   it('given an existing chain head, should link the first payload to it (not genesis)', async () => {
     const rows = makeIngestRows(2);
     const priorHead = 'existing-head-hash';

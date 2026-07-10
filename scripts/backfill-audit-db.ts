@@ -459,15 +459,21 @@ interface GatheredState extends BackfillStoreState {
 
 const num = (v: unknown): number => Number(v ?? 0);
 
-async function readCursorId(db: QueryExecutor, source: string): Promise<string | null> {
+export async function readCursorId(
+  db: QueryExecutor,
+  source: string,
+  side: 'main' | 'admin'
+): Promise<string | null> {
   try {
     const r = await db.query('SELECT "lastDeliveredId" FROM siem_delivery_cursors WHERE id = $1', [
       source,
     ]);
     return (r.rows[0]?.lastDeliveredId as string | undefined) ?? null;
   } catch (error) {
-    // 42P01 undefined_table — tolerable only on the MAIN side of odd installs.
-    if ((error as { code?: string }).code === '42P01') return null;
+    // 42P01 undefined_table — tolerable only on the MAIN side of odd installs;
+    // a missing ADMIN cursors table is a broken admin schema and must abort
+    // (falling back to the main cursor would mask it).
+    if (side === 'main' && (error as { code?: string }).code === '42P01') return null;
     throw error;
   }
 }
@@ -506,8 +512,8 @@ export async function gatherBackfillState(deps: {
 
   const emissionCount = num(emissionAgg.rows[0]?.count);
   const [adminCursorId, mainCursorId] = await Promise.all([
-    readCursorId(deps.admin, SIEM_SECURITY_SOURCE),
-    readCursorId(deps.main, SIEM_SECURITY_SOURCE),
+    readCursorId(deps.admin, SIEM_SECURITY_SOURCE, 'admin'),
+    readCursorId(deps.main, SIEM_SECURITY_SOURCE, 'main'),
   ]);
 
   return {

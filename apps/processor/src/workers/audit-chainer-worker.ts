@@ -301,7 +301,12 @@ function buildChainedInsert(payloads: ChainedRowPayload[]): { text: string; valu
       p.details === null ? null : JSON.stringify(p.details),
       p.riskScore,
       p.anomalyFlags,
-      p.timestamp,
+      // Serialized explicitly: a raw-pg Date param stores LOCAL wall clock in
+      // the tz-less timestamp column, shifting the hashed instant on non-UTC
+      // processors (the UTC read parser in admin-pg-types.ts is the other
+      // half). A string (pool without the admin types config) is already the
+      // zone-free wall clock and passes through byte-identical.
+      p.timestamp instanceof Date ? p.timestamp.toISOString() : p.timestamp,
       p.emissionHash,
       p.previousHash,
       p.eventHash,

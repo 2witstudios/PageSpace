@@ -6,9 +6,11 @@
  * creates — connecting AS each user over the wire (not SET ROLE), so the
  * probes exercise the same identity path a deployed service uses.
  *
- * Acceptance (leaf 0): admin_app_user can INSERT+SELECT security_audit_log
- * and is DENIED UPDATE/DELETE with a real 42501; processor/reader users get
- * exactly their templates' privileges; re-provisioning rotates passwords.
+ * Acceptance (post-cutover, admin migration 0008): admin_app_user can INSERT
+ * security_audit_ingest and SELECT security_audit_log, and is DENIED direct
+ * chain-table writes (INSERT/UPDATE/DELETE) with a real 42501; processor and
+ * reader users get exactly their templates' privileges; re-provisioning
+ * rotates passwords.
  *
  * Requires a running scratch Postgres (never the app DB):
  *   docker run --rm -d --name pagespace-admin-smoke -p 55432:5432 \

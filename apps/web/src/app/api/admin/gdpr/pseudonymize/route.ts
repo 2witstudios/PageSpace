@@ -90,13 +90,55 @@ export const POST = withAdminAuth(async (admin, request) => {
   }
 
   // 2. Apply the denormalized-actor-only patches — every store the subject's
-  //    rows live in, each through the identity allowed to write it.
-  const activityRows = await pseudonymizeActivityLogsForUser(userId);
+  //    rows live in, each through the identity allowed to write it. A failure
+  //    part-way must leave the completed mutations traceable: self-audit the
+  //    partial state before surfacing. The patches are idempotent, so the
+  //    operator re-runs the same request to finish the remaining stores.
+  let activityRows = 0;
   const securityRowsByStore: Record<string, number> = {};
-  for (const target of targets) {
-    securityRowsByStore[target.store] = await pseudonymizeSecurityAuditLogForUser(userId, {
-      db: target.write,
-    });
+  try {
+    activityRows = await pseudonymizeActivityLogsForUser(userId);
+    for (const target of targets) {
+      securityRowsByStore[target.store] = await pseudonymizeSecurityAuditLogForUser(userId, {
+        db: target.write,
+      });
+    }
+  } catch (error) {
+    const failedStore =
+      targets.find((t) => !(t.store in securityRowsByStore))?.store ?? 'activity';
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      await securityAudit.logEvent({
+        eventType: 'data.write',
+        userId: admin.id,
+        resourceType: 'audit_logs',
+        resourceId: userId,
+        details: {
+          action: 'art17_pseudonymization_failed',
+          legalBasis,
+          auditStoreMode: resolved.mode,
+          activityRowsPseudonymized: activityRows,
+          securityRowsByStore,
+          failedStore,
+          error: message,
+        },
+      });
+    } catch (auditError) {
+      loggers.auth.error('Could not self-audit failed pseudonymization run:', auditError as Error);
+    }
+    loggers.auth.error(
+      `Pseudonymization for user ${userId} failed part-way at store '${failedStore}' — completed stores stay erased; re-run to finish`,
+      error as Error
+    );
+    return Response.json(
+      {
+        error: `Pseudonymization failed part-way at store '${failedStore}'. Completed mutations are audited; re-run the same request to finish the remaining stores.`,
+        activityRowsPseudonymized: activityRows,
+        securityRowsByStore,
+        failedStore,
+      },
+      { status: 500 }
+    );
   }
   const securityRows = Object.values(securityRowsByStore).reduce((sum, n) => sum + n, 0);
 

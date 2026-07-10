@@ -128,10 +128,21 @@ export const quotePgLiteral = (value: string): string => {
 };
 
 /**
+ * Every template role the provisioner manages — the universe stale
+ * memberships are revoked from when a user's template set changes.
+ */
+export const ADMIN_MANAGED_TEMPLATE_ROLES: readonly string[] = [
+  ...new Set(ADMIN_LOGIN_USERS.flatMap((spec) => spec.roles)),
+];
+
+/**
  * SQL statements provisioning one LOGIN user: guarded CREATE (roles are
  * cluster-scoped and may pre-exist), an ALTER that unconditionally (re)sets
  * LOGIN + password + least-privilege attributes (so re-running rotates the
- * password and repairs drifted attributes), then one GRANT per template role.
+ * password and repairs drifted attributes), one REVOKE per managed template
+ * role the entry does NOT hold (GRANT only adds — without this a template
+ * change would leave the old membership in place forever), then one GRANT
+ * per template role.
  */
 export const buildLoginUserStatements = (entry: AdminLoginUserProvision): string[] => {
   assertSafeIdentifier(entry.user, 'login user');
@@ -153,5 +164,12 @@ export const buildLoginUserStatements = (entry: AdminLoginUserProvision): string
     `ALTER ROLE ${entry.user} WITH LOGIN PASSWORD ${quotePgLiteral(entry.password)} ` +
     'NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS INHERIT';
 
-  return [create, alter, ...entry.roles.map((role) => `GRANT ${role} TO ${entry.user}`)];
+  const stale = ADMIN_MANAGED_TEMPLATE_ROLES.filter((role) => !entry.roles.includes(role));
+
+  return [
+    create,
+    alter,
+    ...stale.map((role) => `REVOKE ${role} FROM ${entry.user}`),
+    ...entry.roles.map((role) => `GRANT ${role} TO ${entry.user}`),
+  ];
 };

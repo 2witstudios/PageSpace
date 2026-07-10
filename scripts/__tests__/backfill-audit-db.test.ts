@@ -14,6 +14,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  readCursorId,
   assessBackfillPreconditions,
   planSequenceTarget,
   resolveAnchorRowId,
@@ -362,6 +363,36 @@ describe('freeze guard column partition', () => {
       expect(sql).not.toContain(`NEW.${column} IS DISTINCT FROM OLD.${column}`);
     }
     expect(sql).toMatch(/RAISE EXCEPTION/);
+  });
+});
+
+describe('readCursorId', () => {
+  const undefinedTable = () => {
+    const err = new Error('relation "siem_delivery_cursors" does not exist') as Error & {
+      code: string;
+    };
+    err.code = '42P01';
+    return err;
+  };
+
+  it('given a missing cursors table on the MAIN side, should tolerate it (odd installs) and resolve null', async () => {
+    const db = { query: async () => Promise.reject(undefinedTable()) };
+    await expect(readCursorId(db, 'security_audit_log', 'main')).resolves.toBeNull();
+  });
+
+  it('given a missing cursors table on the ADMIN side, should abort — a broken admin schema must never silently fall back to the main cursor', async () => {
+    const db = { query: async () => Promise.reject(undefinedTable()) };
+    await expect(readCursorId(db, 'security_audit_log', 'admin')).rejects.toThrow('does not exist');
+  });
+
+  it('given any non-42P01 error on either side, should abort', async () => {
+    const db = { query: async () => Promise.reject(new Error('connection refused')) };
+    await expect(readCursorId(db, 'security_audit_log', 'main')).rejects.toThrow('connection refused');
+  });
+
+  it('given a cursor row, should return its lastDeliveredId', async () => {
+    const db = { query: async () => ({ rows: [{ lastDeliveredId: 'evt-42' }], rowCount: 1 }) };
+    await expect(readCursorId(db, 'security_audit_log', 'admin')).resolves.toBe('evt-42');
   });
 });
 

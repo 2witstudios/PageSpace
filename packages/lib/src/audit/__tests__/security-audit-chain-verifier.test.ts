@@ -423,7 +423,7 @@ describe('security-audit-chain-verifier', () => {
         expect(result.breakPoint?.entryId).toBe(entries[1]!.id);
       });
 
-      it('given a tampered event_hash in a chainer-era row, should detect the chain-hash mismatch', async () => {
+      it('given a tampered event_hash in a chainer-era row, should detect the chain-hash mismatch AT the tampered row', async () => {
         const entries = createValidChainerEraChain(3);
         entries[1] = { ...entries[1]!, eventHash: 'a'.repeat(64) };
         mockEntries = entries;
@@ -431,7 +431,7 @@ describe('security-audit-chain-verifier', () => {
         const result = await verifySecurityAuditChain();
 
         expect(result.isValid).toBe(false);
-        expect(result.breakPoint?.entryId).toBeTruthy();
+        expect(result.breakPoint?.entryId).toBe(entries[1]!.id);
       });
 
       it('given a legacy chain continued by a chainer-era segment (the backfill era boundary), should verify clean across the boundary', async () => {

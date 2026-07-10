@@ -21,12 +21,27 @@ const pgTypes = (
 /** OID of `timestamp without time zone`. */
 export const TIMESTAMP_WITHOUT_TZ_OID = 1114;
 
+// pg's text wire format for OID 1114: 'YYYY-MM-DD HH:MM:SS[.ffffff]'.
+const PG_TIMESTAMP_TEXT = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$/;
+
 /**
  * Parse a timestamp-without-tz wire string ('2026-07-10 03:04:05.678') as
- * UTC wall clock — the zone drizzle wrote it in.
+ * UTC wall clock — the zone drizzle wrote it in. Parsed field-by-field:
+ * space-separated date strings are implementation-defined for `new Date()`
+ * (V8 accepts them, JavaScriptCore often does not), and hash recomputation
+ * cannot tolerate an engine-dependent Invalid Date.
  */
 export function parsePgTimestampAsUtc(value: string): Date {
-  return new Date(`${value}+0000`);
+  const m = PG_TIMESTAMP_TEXT.exec(value);
+  if (!m) {
+    // Non-timestamp wire text ('infinity', BC dates): defer to the engine
+    // rather than guess — these never feed hash recomputation.
+    return new Date(`${value}+0000`);
+  }
+  const ms = m[7] ? Number(m[7].padEnd(3, '0').slice(0, 3)) : 0;
+  return new Date(
+    Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]), ms),
+  );
 }
 
 export interface PgTypesConfig {

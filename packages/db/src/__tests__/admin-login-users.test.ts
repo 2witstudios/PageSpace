@@ -167,11 +167,23 @@ describe('buildLoginUserStatements', () => {
 
   it('given an entry, should emit guarded CREATE, an ALTER that always (re)sets LOGIN + password, then one GRANT per role', () => {
     const statements = buildLoginUserStatements(entry);
-    expect(statements).toHaveLength(3);
     expect(statements[0]).toContain("IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'admin_app_user')");
     expect(statements[0]).toContain('CREATE ROLE admin_app_user');
     expect(statements[1]).toContain('ALTER ROLE admin_app_user WITH LOGIN');
-    expect(statements[2]).toBe('GRANT admin_app TO admin_app_user');
+    expect(statements[statements.length - 1]).toBe('GRANT admin_app TO admin_app_user');
+  });
+
+  it('given an entry, should REVOKE every managed template role NOT in entry.roles — GRANT only adds, so re-provisioning after a template change must strip stale memberships', () => {
+    const statements = buildLoginUserStatements(entry);
+    for (const stale of ['admin_chainer', 'admin_siem', 'admin_reader', 'admin_gdpr_eraser']) {
+      expect(statements).toContain(`REVOKE ${stale} FROM admin_app_user`);
+    }
+    // Never revoke what this entry is about to hold.
+    expect(statements).not.toContain('REVOKE admin_app FROM admin_app_user');
+    // Revokes come before grants so a re-provision always ENDS granted.
+    expect(statements.indexOf('REVOKE admin_reader FROM admin_app_user')).toBeLessThan(
+      statements.indexOf('GRANT admin_app TO admin_app_user'),
+    );
   });
 
   it('given the ALTER, should pin least-privilege attributes and INHERIT (template privileges apply without SET ROLE)', () => {

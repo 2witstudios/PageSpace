@@ -172,8 +172,10 @@ describe('Root (dev/self-host) docker-compose configuration', () => {
       expect(getEnv(compose, 'realtime')).not.toHaveProperty('ADMIN_DATABASE_URL');
     });
 
-    it('given the processor service, AUDIT_CHAINER_ALLOW_GENESIS should be true — the local stack is always a fresh install (empty admin chain, nothing to backfill; #890 Phase 2 era-fork guard)', () => {
-      expect(getEnv(compose, 'processor').AUDIT_CHAINER_ALLOW_GENESIS).toBe('true');
+    it('given the processor service, AUDIT_CHAINER_ALLOW_GENESIS should pass through from .env — the volumes are persistent, so an upgraded stack can hold legacy rows and must NOT default to genesis chaining; fresh installs opt in via .env.example (#890 Phase 2 era-fork guard)', () => {
+      const value = String(getEnv(compose, 'processor').AUDIT_CHAINER_ALLOW_GENESIS ?? '');
+      expect(value).toContain('${AUDIT_CHAINER_ALLOW_GENESIS');
+      expect(value).not.toBe('true');
     });
 
     // #890 Phase 2 leaf 6: the GDPR pseudonymization route (web) erases PII

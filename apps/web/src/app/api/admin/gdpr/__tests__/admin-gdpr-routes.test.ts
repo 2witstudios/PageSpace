@@ -198,6 +198,32 @@ describe('POST /api/admin/gdpr/pseudonymize', () => {
     );
   });
 
+  it('given a store write failing part-way, should self-audit the partial state and return 500 telling the operator to re-run', async () => {
+    vi.mocked(pseudonymizeSecurityAuditLogForUser)
+      .mockReset()
+      .mockResolvedValueOnce(2) // admin store succeeds
+      .mockRejectedValueOnce(new Error('main db down')); // main store fails
+
+    const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.failedStore).toBe('main');
+    expect(body.securityRowsByStore).toEqual({ admin: 2 });
+    expect(body.error).toContain('re-run');
+    // The completed mutations stay traceable even though the run failed.
+    expect(securityAudit.logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceId: 'u1',
+        details: expect.objectContaining({
+          action: 'art17_pseudonymization_failed',
+          securityRowsByStore: { admin: 2 },
+          failedStore: 'main',
+        }),
+      })
+    );
+  });
+
   it('given break-glass mode (single main target), should erase and verify only the main store', async () => {
     vi.mocked(resolveSecurityAuditErasureTargets).mockReturnValue({
       ok: true,
