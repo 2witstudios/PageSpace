@@ -72,6 +72,7 @@ async function main() {
       ADMIN_APP_PASSWORD: process.env.ADMIN_APP_PASSWORD,
       ADMIN_PROCESSOR_PASSWORD: process.env.ADMIN_PROCESSOR_PASSWORD,
       ADMIN_READER_PASSWORD: process.env.ADMIN_READER_PASSWORD,
+      ADMIN_ERASER_PASSWORD: process.env.ADMIN_ERASER_PASSWORD,
     },
     console.log,
   );

@@ -120,11 +120,12 @@ describe('Root (dev/self-host) docker-compose configuration', () => {
       );
     });
 
-    it('given the migrate service, should receive all three per-service login passwords for provisioning', () => {
+    it('given the migrate service, should receive all four per-service login passwords for provisioning', () => {
       const env = getEnv(compose, 'migrate');
       expect(env.ADMIN_APP_PASSWORD).toBeTruthy();
       expect(env.ADMIN_PROCESSOR_PASSWORD).toBeTruthy();
       expect(env.ADMIN_READER_PASSWORD).toBeTruthy();
+      expect(env.ADMIN_ERASER_PASSWORD).toBeTruthy();
     });
   });
 
@@ -170,6 +171,22 @@ describe('Root (dev/self-host) docker-compose configuration', () => {
     it('given the realtime service, should NOT wire ADMIN_DATABASE_URL (no audit path in realtime)', () => {
       expect(getEnv(compose, 'realtime')).not.toHaveProperty('ADMIN_DATABASE_URL');
     });
+
+    // #890 Phase 2 leaf 6: the GDPR pseudonymization route (web) erases PII
+    // on the trust plane as its own column-scoped identity.
+    it('given the web service, ADMIN_ERASER_DATABASE_URL should connect as admin_gdpr_eraser_user with the password migrate provisions', () => {
+      const url = getEnv(compose, 'web').ADMIN_ERASER_DATABASE_URL;
+      const provisionPassword = getEnv(compose, 'migrate').ADMIN_ERASER_PASSWORD;
+      expect(url).toContain(`://admin_gdpr_eraser_user:${provisionPassword}@`);
+      expect(url).toContain('@postgres-admin:5432/pagespace_admin');
+    });
+
+    it.each(['admin', 'processor', 'realtime'])(
+      'given the %s service, should NOT wire ADMIN_ERASER_DATABASE_URL (only the web GDPR route erases)',
+      (svc) => {
+        expect(getEnv(compose, svc)).not.toHaveProperty('ADMIN_ERASER_DATABASE_URL');
+      },
+    );
 
     it.each(['web', 'admin', 'processor', 'realtime'])(
       'given the %s service, should still receive DATABASE_URL pointing at the main postgres',

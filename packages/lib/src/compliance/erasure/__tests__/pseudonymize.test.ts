@@ -26,10 +26,13 @@ describe('activity-log pseudonymization patch', () => {
 });
 
 describe('security-audit pseudonymization patch', () => {
-  it('should null only the non-hashed denormalized PII columns', () => {
+  it('should null only the non-hashed denormalized PII columns, including the ip blind index', () => {
     const patch = buildSecurityAuditPseudonymizationPatch();
     expect(patch).toEqual({
       ipAddress: null,
+      // The blind index is DERIVED from the IP — leaving it while nulling
+      // ip_address keeps the subject's IP linkable by equality (#890 leaf 6).
+      ipBidx: null,
       userAgent: null,
       geoLocation: null,
       sessionId: null,

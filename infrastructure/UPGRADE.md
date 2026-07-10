@@ -85,15 +85,16 @@ Runtime services no longer touch the admin database as its owner. The
 `db:migrate:admin`, creating one least-privilege LOGIN user per service and
 attaching it to the NOLOGIN role templates from `drizzle-admin/0001`:
 
-| login user             | granted templates          | used by             |
-|------------------------|----------------------------|---------------------|
-| `admin_app_user`       | `admin_app`                | web                 |
-| `admin_processor_user` | `admin_chainer`, `admin_siem` | processor        |
-| `admin_reader_user`    | `admin_reader`             | admin app (read-only) |
+| login user               | granted templates          | used by             |
+|--------------------------|----------------------------|---------------------|
+| `admin_app_user`         | `admin_app`                | web                 |
+| `admin_processor_user`   | `admin_chainer`, `admin_siem` | processor        |
+| `admin_reader_user`      | `admin_reader`             | admin app (read-only) |
+| `admin_gdpr_eraser_user` | `admin_gdpr_eraser`        | web GDPR pseudonymization route (Art 17 — column-scoped UPDATE on exactly the 6 PII columns, via `ADMIN_ERASER_DATABASE_URL`) |
 
 `ADMIN_POSTGRES_*` (the owner) is now consumed **only** by the
 `postgres-admin` container and the `migrate` one-shot. The compose stack
-**refuses to start** without the three new password variables:
+**refuses to start** without the four new password variables:
 
 ```
 required variable ADMIN_APP_PASSWORD is missing a value:
@@ -102,11 +103,11 @@ ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRA
 
 ### Steps (tenant / self-host)
 
-1. Generate three passwords (alphanumeric is **required** — the compose stack
+1. Generate four passwords (alphanumeric is **required** — the compose stack
    embeds them in `ADMIN_DATABASE_URL` without URL-encoding):
 
    ```bash
-   for i in 1 2 3; do openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32; echo; done
+   for i in 1 2 3 4; do openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32; echo; done
    ```
 
 2. **Append** to the **existing** `.env` (mirroring the
@@ -117,6 +118,7 @@ ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRA
    ADMIN_APP_PASSWORD=<generated password 1>
    ADMIN_PROCESSOR_PASSWORD=<generated password 2>
    ADMIN_READER_PASSWORD=<generated password 3>
+   ADMIN_ERASER_PASSWORD=<generated password 4>
    ```
 
 3. Pull and restart the stack as usual. Provisioning is idempotent and
@@ -134,14 +136,19 @@ to the one-shot machine only (`migrate-admin.ts` prefers
 |------------------------------------|------------------------------|--------------------------|
 | GitHub Actions (repo secret)       | `ADMIN_DATABASE_URL_MIGRATE` | owner — migrations + provisioning only |
 | Fly `pagespace-web`                | `ADMIN_DATABASE_URL`         | `admin_app_user`         |
+| Fly `pagespace-web`                | `ADMIN_ERASER_DATABASE_URL`  | `admin_gdpr_eraser_user` (GDPR pseudonymization route only) |
 | Fly `pagespace-processor`          | `ADMIN_DATABASE_URL`         | `admin_processor_user`   |
 | Fly `pagespace-admin`              | `ADMIN_DATABASE_URL`         | `admin_reader_user`      |
 | Fly `pagespace-realtime`           | — (no audit path)            | —                        |
 
 Provisioning the login users on Fly: run `bun run db:provision:admin-users`
 once (e.g. on a one-shot machine or via `fly ssh console`) with
-`ADMIN_DATABASE_URL_MIGRATE` set to the owner URL and the three
+`ADMIN_DATABASE_URL_MIGRATE` set to the owner URL and the four
 `ADMIN_*_PASSWORD` values exported for that run — then set each app's
-runtime `ADMIN_DATABASE_URL` from the matrix above. With
-`ADMIN_DB_MIGRATIONS_ENABLED=true`, the CI step fails fast if
-`ADMIN_DATABASE_URL_MIGRATE` is missing.
+runtime `ADMIN_DATABASE_URL` (and web's `ADMIN_ERASER_DATABASE_URL`) from
+the matrix above. With `ADMIN_DB_MIGRATIONS_ENABLED=true`, the CI step fails
+fast if `ADMIN_DATABASE_URL_MIGRATE` is missing.
+
+Without `ADMIN_ERASER_DATABASE_URL`, the admin GDPR pseudonymization
+endpoint refuses with 503 (it never silently skips the Admin PG or falls
+back to another identity) — everything else is unaffected.

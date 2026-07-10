@@ -70,6 +70,7 @@ services:
       - ADMIN_APP_PASSWORD=admin-app-password
       - ADMIN_PROCESSOR_PASSWORD=admin-processor-password
       - ADMIN_READER_PASSWORD=admin-reader-password
+      - ADMIN_ERASER_PASSWORD=admin-eraser-password
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
@@ -119,6 +120,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - ADMIN_DATABASE_URL=postgresql://admin_app_user:admin-app-password@postgres-admin:5432/pagespace_admin
+      # GDPR pseudonymization route — the only consumer of the eraser identity.
+      - ADMIN_ERASER_DATABASE_URL=postgresql://admin_gdpr_eraser_user:admin-eraser-password@postgres-admin:5432/pagespace_admin
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
       - PROCESSOR_URL=http://processor:3003
       - PORT=3000

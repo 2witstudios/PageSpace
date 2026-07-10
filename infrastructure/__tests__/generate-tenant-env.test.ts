@@ -124,7 +124,12 @@ describe('generate-tenant-env.sh', () => {
     // #890 Phase 2: per-service Admin PG LOGIN passwords. Alphanumeric is
     // load-bearing — the compose stack embeds them in ADMIN_DATABASE_URL
     // without URL-encoding.
-    const loginPasswords = ['ADMIN_APP_PASSWORD', 'ADMIN_PROCESSOR_PASSWORD', 'ADMIN_READER_PASSWORD'];
+    const loginPasswords = [
+      'ADMIN_APP_PASSWORD',
+      'ADMIN_PROCESSOR_PASSWORD',
+      'ADMIN_READER_PASSWORD',
+      'ADMIN_ERASER_PASSWORD',
+    ];
     it.each(loginPasswords)(
       'given %s, should be at least 24 alphanumeric characters',
       (v) => {
@@ -143,6 +148,7 @@ describe('generate-tenant-env.sh', () => {
         env.get('ADMIN_APP_PASSWORD'),
         env.get('ADMIN_PROCESSOR_PASSWORD'),
         env.get('ADMIN_READER_PASSWORD'),
+        env.get('ADMIN_ERASER_PASSWORD'),
         env.get('CRON_SECRET'),
         env.get('REALTIME_BROADCAST_SECRET'),
       ];

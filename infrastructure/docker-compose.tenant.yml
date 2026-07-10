@@ -87,6 +87,7 @@ services:
       ADMIN_APP_PASSWORD: ${ADMIN_APP_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
       ADMIN_PROCESSOR_PASSWORD: ${ADMIN_PROCESSOR_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
       ADMIN_READER_PASSWORD: ${ADMIN_READER_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
+      ADMIN_ERASER_PASSWORD: ${ADMIN_ERASER_PASSWORD:?ADMIN_ERASER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 GDPR eraser login user)}
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
@@ -190,6 +191,7 @@ services:
       NEXT_PUBLIC_DEPLOYMENT_MODE: tenant
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
       ADMIN_DATABASE_URL: postgresql://admin_app_user:${ADMIN_APP_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
+      ADMIN_ERASER_DATABASE_URL: postgresql://admin_gdpr_eraser_user:${ADMIN_ERASER_PASSWORD:?ADMIN_ERASER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 GDPR eraser login user)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
       FILE_STORAGE_PATH: /app/storage
       PROCESSOR_URL: http://processor:3003
       CRON_SECRET: ${CRON_SECRET}

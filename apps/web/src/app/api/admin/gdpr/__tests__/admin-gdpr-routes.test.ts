@@ -26,6 +26,9 @@ vi.mock('@pagespace/lib/compliance/erasure/pseudonymize-repository', () => ({
   pseudonymizeActivityLogsForUser: vi.fn(),
   pseudonymizeSecurityAuditLogForUser: vi.fn(),
 }));
+vi.mock('@pagespace/lib/compliance/erasure/pseudonymize-targets', () => ({
+  resolveSecurityAuditErasureTargets: vi.fn(),
+}));
 vi.mock('@pagespace/lib/monitoring/hash-chain-verifier', () => ({ verifyHashChain: vi.fn() }));
 vi.mock('@pagespace/lib/audit/security-audit-chain-verifier', () => ({ verifySecurityAuditChain: vi.fn() }));
 vi.mock('@pagespace/lib/audit/security-audit', () => ({ securityAudit: { logEvent: vi.fn() } }));
@@ -37,6 +40,7 @@ import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-s
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
 import { enqueueAccountErasure } from '@/lib/erasure/enqueue';
 import { pseudonymizeActivityLogsForUser, pseudonymizeSecurityAuditLogForUser } from '@pagespace/lib/compliance/erasure/pseudonymize-repository';
+import { resolveSecurityAuditErasureTargets } from '@pagespace/lib/compliance/erasure/pseudonymize-targets';
 import { verifyHashChain } from '@pagespace/lib/monitoring/hash-chain-verifier';
 import { verifySecurityAuditChain } from '@pagespace/lib/audit/security-audit-chain-verifier';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
@@ -111,12 +115,26 @@ describe('POST /api/admin/gdpr/erasure (force-delete escalation)', () => {
 
 describe('POST /api/admin/gdpr/pseudonymize', () => {
   const validChain = { isValid: true, breakPoint: null } as never;
+  const adminWrite = { __client: 'admin-eraser' };
+  const adminRead = { __client: 'admin-read' };
+  const mainDb = { __client: 'main' };
+  const dualTargets = {
+    ok: true,
+    mode: 'dedicated',
+    targets: [
+      { store: 'admin', write: adminWrite, read: adminRead },
+      { store: 'main', write: mainDb, read: mainDb },
+    ],
+  } as never;
 
   beforeEach(() => {
+    vi.mocked(resolveSecurityAuditErasureTargets).mockReturnValue(dualTargets);
     vi.mocked(verifyHashChain).mockResolvedValue(validChain);
     vi.mocked(verifySecurityAuditChain).mockResolvedValue(validChain);
     vi.mocked(pseudonymizeActivityLogsForUser).mockResolvedValue(3);
-    vi.mocked(pseudonymizeSecurityAuditLogForUser).mockResolvedValue(2);
+    vi.mocked(pseudonymizeSecurityAuditLogForUser)
+      .mockResolvedValueOnce(2) // admin store
+      .mockResolvedValueOnce(5); // main store (legacy rows)
     vi.mocked(securityAudit.logEvent).mockResolvedValue(undefined);
   });
 
@@ -126,23 +144,76 @@ describe('POST /api/admin/gdpr/pseudonymize', () => {
     expect(pseudonymizeActivityLogsForUser).not.toHaveBeenCalled();
   });
 
-  it('given an already-broken chain, should refuse with 409 before mutating', async () => {
-    vi.mocked(verifyHashChain).mockResolvedValue({ isValid: false, breakPoint: {} } as never);
+  it('given no usable erasure targets (trust plane or eraser unconfigured), should refuse with 503 and the actionable reason — never a silent no-op', async () => {
+    vi.mocked(resolveSecurityAuditErasureTargets).mockReturnValue({
+      ok: false,
+      reason: 'Post-cutover audit PII lives in the Admin PG… ADMIN_ERASER_DATABASE_URL is not set',
+    } as never);
+    const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toContain('ADMIN_ERASER_DATABASE_URL');
+    expect(pseudonymizeActivityLogsForUser).not.toHaveBeenCalled();
+    expect(pseudonymizeSecurityAuditLogForUser).not.toHaveBeenCalled();
+  });
+
+  it('given an already-broken chain in ANY store, should refuse with 409 before mutating', async () => {
+    vi.mocked(verifySecurityAuditChain)
+      .mockResolvedValueOnce(validChain) // admin store
+      .mockResolvedValueOnce({ isValid: false, breakPoint: {} } as never); // main store
     const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
     expect(res.status).toBe(409);
     expect(pseudonymizeActivityLogsForUser).not.toHaveBeenCalled();
+    expect(pseudonymizeSecurityAuditLogForUser).not.toHaveBeenCalled();
   });
 
-  it('given a valid run, should pseudonymize, verify, self-audit and report counts', async () => {
+  it('given a valid dual-location run, should erase each store with ITS write client, verify each with ITS read client, self-audit and report per-store counts', async () => {
     const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
     const body = await res.json();
     expect(res.status).toBe(200);
+
+    // Writes go through the store-paired clients (eraser identity on admin).
+    expect(pseudonymizeSecurityAuditLogForUser).toHaveBeenNthCalledWith(1, 'u1', { db: adminWrite });
+    expect(pseudonymizeSecurityAuditLogForUser).toHaveBeenNthCalledWith(2, 'u1', { db: mainDb });
+
+    // Chain verification targets the stores the rows actually live in —
+    // before AND after (2 stores × 2 phases). Never the write client.
+    expect(verifySecurityAuditChain).toHaveBeenCalledTimes(4);
+    for (const call of vi.mocked(verifySecurityAuditChain).mock.calls) {
+      expect([adminRead, mainDb]).toContainEqual(call[1]!.db);
+    }
+
     expect(body.activityRowsPseudonymized).toBe(3);
-    expect(body.securityRowsPseudonymized).toBe(2);
+    expect(body.securityRowsPseudonymized).toBe(7); // 2 admin + 5 main
+    expect(body.securityRowsByStore).toEqual({ admin: 2, main: 5 });
+    expect(body.auditStoreMode).toBe('dedicated');
     expect(body.chainIntact).toBe(true);
     expect(securityAudit.logEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ resourceId: 'u1', details: expect.objectContaining({ action: 'art17_pseudonymization' }) })
+      expect.objectContaining({
+        resourceId: 'u1',
+        details: expect.objectContaining({
+          action: 'art17_pseudonymization',
+          securityRowsByStore: { admin: 2, main: 5 },
+        }),
+      })
     );
+  });
+
+  it('given break-glass mode (single main target), should erase and verify only the main store', async () => {
+    vi.mocked(resolveSecurityAuditErasureTargets).mockReturnValue({
+      ok: true,
+      mode: 'break-glass',
+      targets: [{ store: 'main', write: mainDb, read: mainDb }],
+    } as never);
+    vi.mocked(pseudonymizeSecurityAuditLogForUser).mockReset().mockResolvedValue(4);
+
+    const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(pseudonymizeSecurityAuditLogForUser).toHaveBeenCalledTimes(1);
+    expect(pseudonymizeSecurityAuditLogForUser).toHaveBeenCalledWith('u1', { db: mainDb });
+    expect(verifySecurityAuditChain).toHaveBeenCalledTimes(2); // before + after, one store
+    expect(body.securityRowsByStore).toEqual({ main: 4 });
+    expect(body.auditStoreMode).toBe('break-glass');
   });
 
   it('given the chain breaks AFTER pseudonymization, should fail loudly with 500', async () => {
@@ -151,5 +222,17 @@ describe('POST /api/admin/gdpr/pseudonymize', () => {
       .mockResolvedValueOnce({ isValid: false, breakPoint: {} } as never); // after
     const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
     expect(res.status).toBe(500);
+  });
+
+  it('given a SECURITY store chain break after the run, should fail loudly with 500 naming the store', async () => {
+    vi.mocked(verifySecurityAuditChain)
+      .mockResolvedValueOnce(validChain) // before: admin
+      .mockResolvedValueOnce(validChain) // before: main
+      .mockResolvedValueOnce({ isValid: false, breakPoint: { entryId: 'x' } } as never) // after: admin
+      .mockResolvedValueOnce(validChain); // after: main
+    const res = await post(pseudoPost, { userId: 'u1', legalBasis: 'dispute', confirmation: 'PSEUDONYMIZE u1' });
+    const body = await res.json();
+    expect(res.status).toBe(500);
+    expect(body.securityChainByStore).toEqual({ admin: false, main: true });
   });
 });

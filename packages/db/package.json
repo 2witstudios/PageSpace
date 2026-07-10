@@ -11,6 +11,10 @@
       "types": "./dist/admin-db.d.ts",
       "default": "./dist/admin-db.js"
     },
+    "./admin-eraser-db": {
+      "types": "./dist/admin-eraser-db.d.ts",
+      "default": "./dist/admin-eraser-db.js"
+    },
     "./admin-schema": {
       "types": "./dist/admin-schema.d.ts",
       "default": "./dist/admin-schema.js"

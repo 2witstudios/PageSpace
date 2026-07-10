@@ -12,6 +12,9 @@
  *   admin_app_user         admin_app                    web (audit emission)
  *   admin_processor_user   admin_chainer, admin_siem    processor (chainer + SIEM workers)
  *   admin_reader_user      admin_reader                 admin app (read-only)
+ *   admin_gdpr_eraser_user admin_gdpr_eraser            web GDPR pseudonymization route
+ *                                                       (Art 17 — column-scoped UPDATE on
+ *                                                       exactly the 6 PII columns; leaf 6)
  *
  * Provisioning is idempotent and rotation-safe: CREATE is guarded, ALTER
  * always (re)sets LOGIN + password + least-privilege attributes, GRANT is
@@ -29,6 +32,7 @@ export interface AdminLoginUserEnv {
   ADMIN_APP_PASSWORD?: string | undefined;
   ADMIN_PROCESSOR_PASSWORD?: string | undefined;
   ADMIN_READER_PASSWORD?: string | undefined;
+  ADMIN_ERASER_PASSWORD?: string | undefined;
 }
 
 export const ADMIN_LOGIN_USERS: readonly AdminLoginUserSpec[] = [
@@ -39,6 +43,11 @@ export const ADMIN_LOGIN_USERS: readonly AdminLoginUserSpec[] = [
     roles: ['admin_chainer', 'admin_siem'],
   },
   { user: 'admin_reader_user', envVar: 'ADMIN_READER_PASSWORD', roles: ['admin_reader'] },
+  {
+    user: 'admin_gdpr_eraser_user',
+    envVar: 'ADMIN_ERASER_PASSWORD',
+    roles: ['admin_gdpr_eraser'],
+  },
 ];
 
 export interface AdminLoginUserProvision {

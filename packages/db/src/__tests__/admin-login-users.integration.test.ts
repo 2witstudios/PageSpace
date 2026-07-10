@@ -28,6 +28,7 @@ const PASSWORDS = {
   ADMIN_APP_PASSWORD: 'app-secret-integration-1',
   ADMIN_PROCESSOR_PASSWORD: 'processor-secret-integration-1',
   ADMIN_READER_PASSWORD: 'reader-secret-integration-1',
+  ADMIN_ERASER_PASSWORD: 'eraser-secret-integration-1',
 } as const;
 
 const TEMPLATE_ROLES = [
@@ -93,6 +94,7 @@ describe.skipIf(!url)('per-service Admin PG LOGIN users (db:provision:admin-user
       'admin_app_user',
       'admin_processor_user',
       'admin_reader_user',
+      'admin_gdpr_eraser_user',
     ]);
 
     // Seed one chain row as owner for UPDATE/DELETE-denial probes.
@@ -106,13 +108,13 @@ describe.skipIf(!url)('per-service Admin PG LOGIN users (db:provision:admin-user
     await owner.end();
   });
 
-  it('should create the three login users as LOGIN with least-privilege attributes', async () => {
+  it('should create the four login users as LOGIN with least-privilege attributes', async () => {
     const { rows } = await owner.query(
       `SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolinherit
        FROM pg_roles WHERE rolname = ANY($1) ORDER BY rolname`,
       [ADMIN_LOGIN_USERS.map((u) => u.user)],
     );
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     for (const row of rows) {
       expect(row.rolcanlogin).toBe(true);
       expect(row.rolsuper).toBe(false);
@@ -136,6 +138,7 @@ describe.skipIf(!url)('per-service Admin PG LOGIN users (db:provision:admin-user
     const memberships = rows.map((r: { member: string; granted: string }) => `${r.member}→${r.granted}`);
     expect(memberships).toEqual([
       'admin_app_user→admin_app',
+      'admin_gdpr_eraser_user→admin_gdpr_eraser',
       'admin_processor_user→admin_chainer',
       'admin_processor_user→admin_siem',
       'admin_reader_user→admin_reader',
@@ -248,6 +251,64 @@ describe.skipIf(!url)('per-service Admin PG LOGIN users (db:provision:admin-user
     });
   });
 
+  describe('admin_gdpr_eraser_user (Art 17 erasure identity, connected over the wire)', () => {
+    it('should UPDATE exactly the 6 PII columns and leave chain columns untouched', async () => {
+      await asLoginUser('admin_gdpr_eraser_user', PASSWORDS.ADMIN_ERASER_PASSWORD, async (pool) => {
+        const { rowCount } = await pool.query(
+          `UPDATE security_audit_log
+           SET user_id = NULL, session_id = NULL, ip_address = NULL,
+               ip_bidx = NULL, user_agent = NULL, geo_location = NULL
+           WHERE id = 'seed-row-1'`,
+        );
+        expect(rowCount).toBe(1);
+      });
+      const { rows } = await owner.query(
+        `SELECT ip_address, event_hash, previous_hash FROM security_audit_log WHERE id = 'seed-row-1'`,
+      );
+      expect(rows[0]).toEqual({ ip_address: null, event_hash: 'hash-1', previous_hash: 'GENESIS' });
+    });
+
+    it.each(['event_hash', 'previous_hash', 'event_type', 'details'])(
+      'should be DENIED UPDATE on hash/content column %s (42501)',
+      async (column) => {
+        const literal = column === 'details' ? `'{}'::jsonb` : `'tampered'`;
+        await asLoginUser('admin_gdpr_eraser_user', PASSWORDS.ADMIN_ERASER_PASSWORD, async (pool) => {
+          await expect(
+            pool.query(`UPDATE security_audit_log SET ${column} = ${literal} WHERE id = 'seed-row-1'`),
+          ).rejects.toMatchObject({ code: '42501' });
+        });
+      },
+    );
+
+    it('should be DENIED INSERT, DELETE and TRUNCATE on security_audit_log (42501)', async () => {
+      await asLoginUser('admin_gdpr_eraser_user', PASSWORDS.ADMIN_ERASER_PASSWORD, async (pool) => {
+        await expect(
+          pool.query(
+            `INSERT INTO security_audit_log (id, event_type, previous_hash, event_hash)
+             VALUES ('login-eraser-row', 'auth.login', 'x', 'y')`,
+          ),
+        ).rejects.toMatchObject({ code: '42501' });
+        await expect(
+          pool.query(`DELETE FROM security_audit_log WHERE id = 'seed-row-1'`),
+        ).rejects.toMatchObject({ code: '42501' });
+        await expect(pool.query('TRUNCATE security_audit_log')).rejects.toMatchObject({
+          code: '42501',
+        });
+      });
+    });
+
+    it('should hold NOTHING on the ingest queue or SIEM tables (42501)', async () => {
+      await asLoginUser('admin_gdpr_eraser_user', PASSWORDS.ADMIN_ERASER_PASSWORD, async (pool) => {
+        await expect(pool.query('SELECT 1 FROM security_audit_ingest')).rejects.toMatchObject({
+          code: '42501',
+        });
+        await expect(
+          pool.query(`INSERT INTO siem_delivery_cursors (id) VALUES ('c-eraser')`),
+        ).rejects.toMatchObject({ code: '42501' });
+      });
+    });
+  });
+
   describe('idempotency + rotation', () => {
     it('given a re-run with a changed password, should rotate it (old fails auth, new connects)', async () => {
       const rotated = 'app-secret-integration-ROTATED';
@@ -277,7 +338,11 @@ describe.skipIf(!url)('per-service Admin PG LOGIN users (db:provision:admin-user
         ADMIN_APP_PASSWORD: PASSWORDS.ADMIN_APP_PASSWORD,
       });
       expect(result.provisioned).toEqual(['admin_app_user']);
-      expect(result.skipped).toEqual(['admin_processor_user', 'admin_reader_user']);
+      expect(result.skipped).toEqual([
+        'admin_processor_user',
+        'admin_reader_user',
+        'admin_gdpr_eraser_user',
+      ]);
     });
 
     it('given ADMIN_DATABASE_URL_MIGRATE, should provision through it (owner path preference)', async () => {

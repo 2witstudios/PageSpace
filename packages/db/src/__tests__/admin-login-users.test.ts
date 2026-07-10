@@ -20,10 +20,11 @@ const ALL_PASSWORDS: AdminLoginUserEnv = {
   ADMIN_APP_PASSWORD: 'app-password-123',
   ADMIN_PROCESSOR_PASSWORD: 'processor-password-123',
   ADMIN_READER_PASSWORD: 'reader-password-123',
+  ADMIN_ERASER_PASSWORD: 'eraser-password-123',
 };
 
 describe('ADMIN_LOGIN_USERS (the per-service identity matrix)', () => {
-  it('given the matrix, should map web to admin_app, processor to admin_chainer+admin_siem, admin app to admin_reader', () => {
+  it('given the matrix, should map web to admin_app, processor to admin_chainer+admin_siem, admin app to admin_reader, GDPR erasure to admin_gdpr_eraser', () => {
     expect(ADMIN_LOGIN_USERS).toEqual([
       { user: 'admin_app_user', envVar: 'ADMIN_APP_PASSWORD', roles: ['admin_app'] },
       {
@@ -32,6 +33,11 @@ describe('ADMIN_LOGIN_USERS (the per-service identity matrix)', () => {
         roles: ['admin_chainer', 'admin_siem'],
       },
       { user: 'admin_reader_user', envVar: 'ADMIN_READER_PASSWORD', roles: ['admin_reader'] },
+      {
+        user: 'admin_gdpr_eraser_user',
+        envVar: 'ADMIN_ERASER_PASSWORD',
+        roles: ['admin_gdpr_eraser'],
+      },
     ]);
   });
 
@@ -46,7 +52,7 @@ describe('ADMIN_LOGIN_USERS (the per-service identity matrix)', () => {
 });
 
 describe('planAdminLoginUsers', () => {
-  it('given all three passwords set, should provision all three users with their template roles', () => {
+  it('given all four passwords set, should provision all four users with their template roles', () => {
     const plan = planAdminLoginUsers(ALL_PASSWORDS);
     expect(plan.ok).toBe(true);
     if (plan.ok) {
@@ -54,10 +60,12 @@ describe('planAdminLoginUsers', () => {
         'admin_app_user',
         'admin_processor_user',
         'admin_reader_user',
+        'admin_gdpr_eraser_user',
       ]);
       expect(plan.skipped).toEqual([]);
       expect(plan.provision[1]!.roles).toEqual(['admin_chainer', 'admin_siem']);
       expect(plan.provision[0]!.password).toBe('app-password-123');
+      expect(plan.provision[3]!.roles).toEqual(['admin_gdpr_eraser']);
     }
   });
 
@@ -72,7 +80,7 @@ describe('planAdminLoginUsers', () => {
         'admin_app_user',
         'admin_processor_user',
       ]);
-      expect(plan.skipped).toEqual(['admin_reader_user']);
+      expect(plan.skipped).toEqual(['admin_reader_user', 'admin_gdpr_eraser_user']);
     }
   });
 
@@ -85,6 +93,7 @@ describe('planAdminLoginUsers', () => {
         'admin_app_user',
         'admin_processor_user',
         'admin_reader_user',
+        'admin_gdpr_eraser_user',
       ]);
     }
   });
@@ -120,6 +129,14 @@ describe('planAdminLoginUsers', () => {
   it('given a password containing a backslash, should refuse (escaping only guarantees quote-safety under standard_conforming_strings)', () => {
     const plan = planAdminLoginUsers({ ...ALL_PASSWORDS, ADMIN_APP_PASSWORD: 'back\\slash-123' });
     expect(plan.ok).toBe(false);
+  });
+
+  it('given an invalid ADMIN_ERASER_PASSWORD, should refuse the whole plan naming the eraser env var', () => {
+    const plan = planAdminLoginUsers({ ...ALL_PASSWORDS, ADMIN_ERASER_PASSWORD: 'short' });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) {
+      expect(plan.reason).toContain('ADMIN_ERASER_PASSWORD');
+    }
   });
 });
 

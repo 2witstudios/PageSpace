@@ -1427,6 +1427,11 @@
       "import": "./dist/compliance/erasure/pseudonymize.js",
       "require": "./dist/compliance/erasure/pseudonymize.js"
     },
+    "./compliance/erasure/pseudonymize-targets": {
+      "types": "./dist/compliance/erasure/pseudonymize-targets.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize-targets.js",
+      "require": "./dist/compliance/erasure/pseudonymize-targets.js"
+    },
     "./compliance/erasure/pseudonymize-repository": {
       "types": "./dist/compliance/erasure/pseudonymize-repository.d.ts",
       "import": "./dist/compliance/erasure/pseudonymize-repository.js",

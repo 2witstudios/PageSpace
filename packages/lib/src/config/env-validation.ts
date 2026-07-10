@@ -32,6 +32,19 @@ export const serverEnvSchema = z
     ADMIN_DATABASE_SSL: z.enum(['true', 'false']).optional(),
     ADMIN_DB_POOL_MAX: z.coerce.number().int().positive().optional(),
 
+    // GDPR eraser identity (#890 Phase 2, leaf 6): the web pseudonymization
+    // route connects to the Admin PG as admin_gdpr_eraser_user through this
+    // URL. Optional at the schema level — when unset, the pseudonymize route
+    // refuses (503) via the eraser client, never at app boot.
+    ADMIN_ERASER_DATABASE_URL: z
+      .string()
+      .min(1, 'ADMIN_ERASER_DATABASE_URL must not be empty when set')
+      .refine(
+        (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
+        'ADMIN_ERASER_DATABASE_URL must be a valid PostgreSQL connection string'
+      )
+      .optional(),
+
     // Break-glass rollback ONLY: arms the fallback that permits audit writes to
     // the main DB (which must alert loudly) when the Admin PG is unavailable.
     // Never a supported steady state. Accept any string so a stray value (e.g.

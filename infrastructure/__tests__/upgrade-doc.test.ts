@@ -55,19 +55,29 @@ describe('infrastructure/UPGRADE.md (operator upgrade note)', () => {
   // owner-credential scoping. Operators upgrading a live tenant need the new
   // password vars; cloud ops needs the secret matrix.
   describe('Phase 2 section (per-service admin login users)', () => {
-    it('given the Phase 2 section, should show the three per-service password lines to append', () => {
+    it('given the Phase 2 section, should show the four per-service password lines to append', () => {
       expect(doc).toMatch(/ADMIN_APP_PASSWORD=/);
       expect(doc).toMatch(/ADMIN_PROCESSOR_PASSWORD=/);
       expect(doc).toMatch(/ADMIN_READER_PASSWORD=/);
+      expect(doc).toMatch(/ADMIN_ERASER_PASSWORD=/);
     });
 
     it('given the Phase 2 section, should name the per-service login users and their role templates', () => {
-      for (const user of ['admin_app_user', 'admin_processor_user', 'admin_reader_user']) {
+      for (const user of [
+        'admin_app_user',
+        'admin_processor_user',
+        'admin_reader_user',
+        'admin_gdpr_eraser_user',
+      ]) {
         expect(doc).toContain(user);
       }
-      for (const role of ['admin_app', 'admin_chainer', 'admin_siem', 'admin_reader']) {
+      for (const role of ['admin_app', 'admin_chainer', 'admin_siem', 'admin_reader', 'admin_gdpr_eraser']) {
         expect(doc).toContain(role);
       }
+    });
+
+    it('given the eraser identity (leaf 6), should document ADMIN_ERASER_DATABASE_URL for the web app', () => {
+      expect(doc).toContain('ADMIN_ERASER_DATABASE_URL');
     });
 
     it('given the Fly secret matrix, should map each app to its URL and reserve ADMIN_DATABASE_URL_MIGRATE for the migrate one-shot', () => {
