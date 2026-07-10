@@ -272,6 +272,11 @@
       "import": "./dist/audit/chain-step.js",
       "require": "./dist/audit/chain-step.js"
     },
+    "./audit/anchor": {
+      "types": "./dist/audit/anchor.d.ts",
+      "import": "./dist/audit/anchor.js",
+      "require": "./dist/audit/anchor.js"
+    },
     "./audit/audit-ingest-writer": {
       "types": "./dist/audit/audit-ingest-writer.d.ts",
       "import": "./dist/audit/audit-ingest-writer.js",
