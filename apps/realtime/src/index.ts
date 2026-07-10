@@ -307,7 +307,7 @@ async function makeAgentTerminalCheckAuth({
     agentTerminalId: resolved.agentTerminalId,
     sandboxId: resolved.sandboxId,
     cwd: resolved.cwd,
-    sessionKey: buildAgentTerminalSessionKey({ terminalId, projectName, branchName, name }),
+    sessionKey: buildAgentTerminalSessionKey({ terminalId: machineId, projectName, branchName, name }),
     sprite,
     releaseSlot,
     command: spec.command,

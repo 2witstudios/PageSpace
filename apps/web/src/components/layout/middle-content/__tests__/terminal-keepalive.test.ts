@@ -105,15 +105,15 @@ describe('collectTerminalPageIds', () => {
       id: 'root',
       type: 'FOLDER',
       children: [
-        { id: 't1', type: 'TERMINAL' },
+        { id: 't1', type: 'MACHINE' },
         {
           id: 'doc',
           type: 'DOCUMENT',
-          children: [{ id: 't2', type: 'TERMINAL' }],
+          children: [{ id: 't2', type: 'MACHINE' }],
         },
       ],
     },
-    { id: 't3', type: 'TERMINAL', children: [] },
+    { id: 't3', type: 'MACHINE', children: [] },
   ];
 
   it('given a nested tree, should collect every terminal id at any depth', () => {
