@@ -47,7 +47,7 @@ vi.mock('@pagespace/lib/services/sandbox/machine-fs', () => ({
 import { GET } from '../route';
 
 function get(query: Record<string, string>): Request {
-  const params = new URLSearchParams({ terminalId: 't1', projectName: 'p1', branchName: 'b1', ...query });
+  const params = new URLSearchParams({ machineId: 't1', projectName: 'p1', branchName: 'b1', ...query });
   return new Request(`http://localhost/api/machines/files?${params.toString()}`);
 }
 

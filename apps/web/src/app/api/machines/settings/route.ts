@@ -2,11 +2,11 @@
  * Machine Settings API — the Machine page's Settings tab surface onto its own
  * name, description, access toggles, and destruction (Terminal — GA).
  *
- * GET    ?terminalId=<id>                                    → current settings (view-access)
- * PATCH  { terminalId, name?, description?, ...toggles }     → update settings (edit-access)
- * DELETE ?terminalId=<id>                                    → destroy the Machine (delete-access)
+ * GET    ?machineId=<id>                                    → current settings (view-access)
+ * PATCH  { machineId, name?, description?, ...toggles }     → update settings (edit-access)
+ * DELETE ?machineId=<id>                                    → destroy the Machine (delete-access)
  *
- * A Machine's identity is its backing Terminal page (`terminalId`). Session-only
+ * A Machine's identity is its backing Terminal page (`machineId`). Session-only
  * (no MCP/agent tokens) — this is a human/UI surface. Every request re-checks
  * access for the named page (view-level for GET, edit-level for PATCH, delete-level
  * for DELETE — destroying a Machine trashes its page, so it requires DELETE
@@ -51,12 +51,12 @@ function requireString(value: unknown, field: string): { ok: true; value: string
 const notFound = () => NextResponse.json({ error: 'Machine not found' }, { status: 404 });
 
 /** Audit the authz denial (so SIEM can detect probing) and return a fresh 403. */
-function forbidden(request: Request, userId: string, terminalId: string): NextResponse {
+function forbidden(request: Request, userId: string, machineId: string): NextResponse {
   auditRequest(request, {
     eventType: 'authz.access.denied',
     userId,
     resourceType: RESOURCE_TYPE,
-    resourceId: terminalId,
+    resourceId: machineId,
     riskScore: 0.5,
   });
   return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
@@ -67,12 +67,12 @@ export async function GET(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  if (!machineId.ok) return machineId.error;
 
-  if (!(await canViewMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
+  if (!(await canViewMachine(auth.userId, machineId.value))) return forbidden(request, auth.userId, machineId.value);
 
-  const settings = await getMachineSettings({ terminalId: terminalId.value, store: createDbMachineSettingsStore() });
+  const settings = await getMachineSettings({ machineId: machineId.value, store: createDbMachineSettingsStore() });
   if (!settings) return notFound();
   return NextResponse.json({ settings });
 }
@@ -129,7 +129,7 @@ export async function PATCH(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   let body: {
-    terminalId?: unknown;
+    machineId?: unknown;
     name?: unknown;
     description?: unknown;
     visibleToGlobalAssistant?: unknown;
@@ -147,18 +147,18 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const terminalId = requireString(body.terminalId, 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(body.machineId, 'machineId');
+  if (!machineId.ok) return machineId.error;
 
   // Authorize BEFORE validating field shapes so an unauthorized caller can't
   // distinguish a well-formed patch (would-be 403) from a malformed one (400).
-  if (!(await canAccessMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
+  if (!(await canAccessMachine(auth.userId, machineId.value))) return forbidden(request, auth.userId, machineId.value);
 
   const parsed = parsePatch(body);
   if (!parsed.ok) return parsed.error;
 
   const settings = await updateMachineSettings({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     patch: parsed.patch,
     store: createDbMachineSettingsStore(),
   });
@@ -168,7 +168,7 @@ export async function PATCH(request: Request) {
     eventType: 'data.write',
     userId: auth.userId,
     resourceType: RESOURCE_TYPE,
-    resourceId: terminalId.value,
+    resourceId: machineId.value,
     details: { fields: Object.keys(parsed.patch) },
     riskScore: 0,
   });
@@ -180,16 +180,16 @@ export async function DELETE(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  if (!machineId.ok) return machineId.error;
 
   // Destroying a Machine trashes its page → requires DELETE permission (stricter
   // than the edit-gated GET/PATCH), so a drive member with edit-but-not-delete
   // cannot destroy Machines they lack delete rights on.
-  if (!(await canDeleteMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
+  if (!(await canDeleteMachine(auth.userId, machineId.value))) return forbidden(request, auth.userId, machineId.value);
 
   const result = await deleteMachine({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     store: createDbMachineSettingsStore(),
     sprite: createMachineSpriteTeardown(),
   });
@@ -199,7 +199,7 @@ export async function DELETE(request: Request) {
     eventType: 'data.delete',
     userId: auth.userId,
     resourceType: RESOURCE_TYPE,
-    resourceId: terminalId.value,
+    resourceId: machineId.value,
     details: { spriteTornDown: result.spriteTornDown },
     riskScore: 0.5,
   });

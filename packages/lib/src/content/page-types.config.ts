@@ -186,8 +186,8 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     uiComponent: 'CodePageView',
     layoutViewType: 'code',
   },
-  [PageType.TERMINAL]: {
-    type: PageType.TERMINAL,
+  [PageType.MACHINE]: {
+    type: PageType.MACHINE,
     displayName: 'Terminal',
     description: 'Interactive terminal with shell access',
     iconName: 'SquareTerminal',
@@ -299,8 +299,8 @@ export function isCodePage(type: PageType): boolean {
   return type === PageType.CODE;
 }
 
-export function isTerminalPage(type: PageType): boolean {
-  return type === PageType.TERMINAL;
+export function isMachinePage(type: PageType): boolean {
+  return type === PageType.MACHINE;
 }
 
 export function getCreatablePageTypes(): PageType[] {

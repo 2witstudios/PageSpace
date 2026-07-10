@@ -8,7 +8,7 @@
  * `branch` (the branch-terminal's OWN isolated Sprite, `machine_branches`).
  *
  * `spawnAgentTerminal` and `listAgentTerminals` are addressed by scope
- * (`terminalId` + optional `projectName`/`branchName` — neither → machine,
+ * (`machineId` + optional `projectName`/`branchName` — neither → machine,
  * `projectName` only → project, both → branch), since creating or enumerating
  * within a scope requires knowing which one. `resolveAgentTerminal` and
  * `killAgentTerminal` (by-name equivalents, kept for today's only wired
@@ -54,14 +54,14 @@ export { deriveAgentTerminalScope };
 
 /** The minimal slice of the Branches store this module needs — resolving a branch's Sprite (`sandboxId`) either by (project, branch) name or by the branch row's OWN id. */
 export interface AgentTerminalBranchLookup {
-  findByName(terminalId: string, projectName: string, branchName: string): Promise<{ id: string; sandboxId: string } | null>;
+  findByName(machineId: string, projectName: string, branchName: string): Promise<{ id: string; sandboxId: string } | null>;
   /** Level-agnostic lookup, used by the id-keyed resolve/kill path — no project/branch name required. */
   findById(machineBranchId: string): Promise<{ sandboxId: string } | null>;
 }
 
 /** The minimal slice of the Projects store this module needs — just enough to resolve a project's clone path. */
 export interface AgentTerminalProjectLookup {
-  findByName(terminalId: string, name: string): Promise<{ path: string } | null>;
+  findByName(machineId: string, name: string): Promise<{ path: string } | null>;
 }
 
 export type AgentTerminalMachineSandboxResult =
@@ -70,7 +70,7 @@ export type AgentTerminalMachineSandboxResult =
 
 /** Acquires the OWNING Machine's persistent Sprite (machine/project scope share this one Sprite) — see `services/sandbox/machine-session.ts` for the production implementation. */
 export interface AgentTerminalMachineSandbox {
-  acquire(terminalId: string): Promise<AgentTerminalMachineSandboxResult>;
+  acquire(machineId: string): Promise<AgentTerminalMachineSandboxResult>;
 }
 
 export interface AgentTerminalsDeps {
@@ -101,7 +101,7 @@ export interface AgentTerminalActor {
  * named project) and is rejected as `invalid_target`.
  */
 export interface AgentTerminalTarget {
-  terminalId: string;
+  machineId: string;
   projectName?: string;
   branchName?: string;
   name: string;
@@ -121,31 +121,31 @@ type ScopeKeyResolution =
 
 /** Resolve WHICH scope row a target addresses, without touching any Sprite — enough for spawn/list. */
 async function resolveScopeKey({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   deps,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName?: string;
   branchName?: string;
   deps: Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore'>;
 }): Promise<ScopeKeyResolution> {
   if (branchName !== undefined) {
     if (!projectName) return { ok: false, reason: 'invalid_target' };
-    const branch = await deps.branchStore.findByName(terminalId, projectName, branchName);
+    const branch = await deps.branchStore.findByName(machineId, projectName, branchName);
     if (!branch) return { ok: false, reason: 'branch_not_found' };
-    return { ok: true, scopeKey: { terminalId, projectName, machineBranchId: branch.id } };
+    return { ok: true, scopeKey: { machineId, projectName, machineBranchId: branch.id } };
   }
 
   if (projectName !== undefined) {
     if (!deps.projectStore) return { ok: false, reason: 'scope_unsupported' };
-    const project = await deps.projectStore.findByName(terminalId, projectName);
+    const project = await deps.projectStore.findByName(machineId, projectName);
     if (!project) return { ok: false, reason: 'project_not_found' };
-    return { ok: true, scopeKey: { terminalId, projectName, machineBranchId: null } };
+    return { ok: true, scopeKey: { machineId, projectName, machineBranchId: null } };
   }
 
-  return { ok: true, scopeKey: { terminalId, projectName: null, machineBranchId: null } };
+  return { ok: true, scopeKey: { machineId, projectName: null, machineBranchId: null } };
 }
 
 type LocationResolution =
@@ -154,24 +154,24 @@ type LocationResolution =
 
 /** Shared project/machine-scope location resolution — the SAME Machine Sprite either way, differing only in `cwd`. */
 async function resolveProjectOrMachineLocation({
-  terminalId,
+  machineId,
   projectName,
   deps,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName: string | null;
   deps: Pick<AgentTerminalsDeps, 'projectStore' | 'machineSandbox'>;
 }): Promise<LocationResolution> {
   let cwd = SANDBOX_ROOT;
   if (projectName !== null) {
     if (!deps.projectStore) return { ok: false, reason: 'scope_unsupported' };
-    const project = await deps.projectStore.findByName(terminalId, projectName);
+    const project = await deps.projectStore.findByName(machineId, projectName);
     if (!project) return { ok: false, reason: 'project_not_found' };
     cwd = project.path;
   }
 
   if (!deps.machineSandbox) return { ok: false, reason: 'scope_unsupported' };
-  const acquired = await deps.machineSandbox.acquire(terminalId);
+  const acquired = await deps.machineSandbox.acquire(machineId);
   if (!acquired.ok) return { ok: false, reason: 'machine_unavailable' };
   return { ok: true, sandboxId: acquired.sandboxId, cwd };
 }
@@ -182,34 +182,34 @@ type ScopeLocationResolution =
 
 /** Resolve WHERE a scope target's Sprite + working directory live, by (project, branch) NAME — used by the by-name resolve/kill path. */
 async function resolveScopeLocation({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   deps,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName?: string;
   branchName?: string;
   deps: Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox'>;
 }): Promise<ScopeLocationResolution> {
   if (branchName !== undefined) {
     if (!projectName) return { ok: false, reason: 'invalid_target' };
-    const branch = await deps.branchStore.findByName(terminalId, projectName, branchName);
+    const branch = await deps.branchStore.findByName(machineId, projectName, branchName);
     if (!branch) return { ok: false, reason: 'branch_not_found' };
     return {
       ok: true,
-      scopeKey: { terminalId, projectName, machineBranchId: branch.id },
+      scopeKey: { machineId, projectName, machineBranchId: branch.id },
       sandboxId: branch.sandboxId,
       cwd: BRANCH_REPO_PATH,
     };
   }
 
   const resolvedProjectName = projectName ?? null;
-  const located = await resolveProjectOrMachineLocation({ terminalId, projectName: resolvedProjectName, deps });
+  const located = await resolveProjectOrMachineLocation({ machineId, projectName: resolvedProjectName, deps });
   if (!located.ok) return located;
   return {
     ok: true,
-    scopeKey: { terminalId, projectName: resolvedProjectName, machineBranchId: null },
+    scopeKey: { machineId, projectName: resolvedProjectName, machineBranchId: null },
     sandboxId: located.sandboxId,
     cwd: located.cwd,
   };
@@ -217,7 +217,7 @@ async function resolveScopeLocation({
 
 /** Resolve WHERE an already-known ROW's Sprite + working directory live, by its OWN scope columns — the level-agnostic path (no name lookup at all). */
 async function resolveLocationForRow(
-  row: Pick<MachineAgentTerminalRecord, 'terminalId' | 'projectName' | 'machineBranchId'>,
+  row: Pick<MachineAgentTerminalRecord, 'machineId' | 'projectName' | 'machineBranchId'>,
   deps: Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox'>,
 ): Promise<LocationResolution> {
   if (row.machineBranchId) {
@@ -225,7 +225,7 @@ async function resolveLocationForRow(
     if (!branch) return { ok: false, reason: 'branch_not_found' };
     return { ok: true, sandboxId: branch.sandboxId, cwd: BRANCH_REPO_PATH };
   }
-  return resolveProjectOrMachineLocation({ terminalId: row.terminalId, projectName: row.projectName, deps });
+  return resolveProjectOrMachineLocation({ machineId: row.machineId, projectName: row.projectName, deps });
 }
 
 export type SpawnAgentTerminalDenialReason =
@@ -263,7 +263,7 @@ export type SpawnAgentTerminalResult =
  * original spawn already fixed.
  */
 export async function spawnAgentTerminal({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   name,
@@ -276,7 +276,7 @@ export async function spawnAgentTerminal({
   if (!plan.ok) return plan;
   const resolvedType = agentType as AgentRuntimeType;
 
-  const scope = await resolveScopeKey({ terminalId, projectName, branchName, deps });
+  const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
   if (!scope.ok) return scope;
 
   const existing = await deps.store.findByName(scope.scopeKey, name);
@@ -288,7 +288,7 @@ export async function spawnAgentTerminal({
   try {
     const row = await deps.store.create({
       ownerId: actor.userId,
-      terminalId: scope.scopeKey.terminalId,
+      machineId: scope.scopeKey.machineId,
       scope: deriveAgentTerminalScope(scope.scopeKey),
       projectName: scope.scopeKey.projectName,
       machineBranchId: scope.scopeKey.machineBranchId,
@@ -346,13 +346,13 @@ function toResolveResult(row: MachineAgentTerminalRecord, location: { sandboxId:
  * hibernating.
  */
 export async function resolveAgentTerminal({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   name,
   deps,
 }: AgentTerminalTarget & { deps: ResolveAgentTerminalDeps }): Promise<ResolveAgentTerminalResult> {
-  const location = await resolveScopeLocation({ terminalId, projectName, branchName, deps });
+  const location = await resolveScopeLocation({ machineId, projectName, branchName, deps });
   if (!location.ok) return location;
 
   const row = await deps.store.findByName(location.scopeKey, name);
@@ -367,10 +367,10 @@ export async function resolveAgentTerminal({
  * `projectName`/`machineBranchId` columns tell us where its Sprite lives.
  *
  * PERFORMS NO ACCESS CHECK — unlike the by-name path (whose callers already
- * hold a `terminalId` from the request and check page access to it BEFORE
+ * hold a `machineId` from the request and check page access to it BEFORE
  * calling in), a by-id caller only learns which page a row belongs to AFTER
  * this resolves. No route wires this today; whoever adds one MUST check the
- * caller's access to the *resolved* `row.terminalId` (e.g. via
+ * caller's access to the *resolved* `row.machineId` (e.g. via
  * `packages/lib/src/permissions/`) before trusting or acting on the result.
  */
 export async function resolveAgentTerminalById({
@@ -389,17 +389,17 @@ export async function resolveAgentTerminalById({
 }
 
 export async function listAgentTerminals({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   deps,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName?: string;
   branchName?: string;
   deps: ListAgentTerminalsDeps;
 }): Promise<{ ok: true; terminals: MachineAgentTerminalRecord[] } | { ok: false; reason: 'invalid_target' | 'project_not_found' | 'branch_not_found' | 'scope_unsupported' }> {
-  const scope = await resolveScopeKey({ terminalId, projectName, branchName, deps });
+  const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
   if (!scope.ok) return scope;
   const terminals = await deps.store.list(scope.scopeKey);
   return { ok: true, terminals };
@@ -424,7 +424,7 @@ async function killAtLocation(
     }
   }
 
-  await deps.store.remove({ terminalId: row.terminalId, projectName: row.projectName, machineBranchId: row.machineBranchId }, row.name);
+  await deps.store.remove({ machineId: row.machineId, projectName: row.projectName, machineBranchId: row.machineBranchId }, row.name);
   return { ok: true };
 }
 
@@ -437,13 +437,13 @@ async function killAtLocation(
  * session keeps the row so a retry can find it again.
  */
 export async function killAgentTerminal({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   name,
   deps,
 }: AgentTerminalTarget & { deps: KillAgentTerminalDeps }): Promise<KillAgentTerminalResult> {
-  const location = await resolveScopeLocation({ terminalId, projectName, branchName, deps });
+  const location = await resolveScopeLocation({ machineId, projectName, branchName, deps });
   if (!location.ok) return location;
 
   const row = await deps.store.findByName(location.scopeKey, name);
@@ -458,7 +458,7 @@ export async function killAgentTerminal({
  *
  * PERFORMS NO ACCESS CHECK — see the identical warning on
  * `resolveAgentTerminalById`. A future caller MUST authorize against the
- * resolved row's `terminalId` itself; this function will happily kill any
+ * resolved row's `machineId` itself; this function will happily kill any
  * agent terminal on the machine's Sprite given only its id.
  */
 export async function killAgentTerminalById({

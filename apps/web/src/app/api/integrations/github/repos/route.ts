@@ -5,7 +5,7 @@
  *
  * GET ?page=<n> → { connected: false } | { connected: true, repos, page }
  *
- * Session-only, no terminalId or driveId — this only ever returns the
+ * Session-only, no machineId or driveId — this only ever returns the
  * calling user's own repos via their own GitHub connection, using the same
  * declarative `list_repos` tool the AI agent's integration tools already use
  * (packages/lib/src/integrations/providers/github.ts).

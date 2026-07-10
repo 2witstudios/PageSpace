@@ -101,7 +101,7 @@ describe('TerminalAccessCard', () => {
     mocks.fetchWithAuth.mockResolvedValue(
       mockGetResponse({
         terminalAccess: true,
-        machines: [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+        machines: [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         availableTerminals: [{ id: 't1', title: 'Shared Terminal' }],
       }),
     );

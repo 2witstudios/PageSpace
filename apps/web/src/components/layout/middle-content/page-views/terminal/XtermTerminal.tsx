@@ -10,7 +10,7 @@ import { getCssVar } from '@/lib/theme/css-color-resolution';
 const FALLBACK_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace";
 
 export interface AgentTerminalConnectPayload {
-  terminalId: string;
+  machineId: string;
   /** Neither set → machine scope, projectName alone → project scope, both → branch scope (see `agent-terminals.ts`). */
   projectName?: string;
   branchName?: string;

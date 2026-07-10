@@ -77,11 +77,11 @@ beforeEach(() => {
 describe('GET /api/machines/settings', () => {
   it('given no auth, returns the auth error', async () => {
     mockAuthenticateRequest.mockResolvedValue(AUTH_DENIED);
-    const res = await GET(new Request('https://x.test/api/machines/settings?terminalId=t1'));
+    const res = await GET(new Request('https://x.test/api/machines/settings?machineId=t1'));
     expect(res.status).toBe(401);
   });
 
-  it('given no terminalId, returns 400', async () => {
+  it('given no machineId, returns 400', async () => {
     const res = await GET(new Request('https://x.test/api/machines/settings'));
     expect(res.status).toBe(400);
     expect(mockCanViewMachine).not.toHaveBeenCalled();
@@ -89,7 +89,7 @@ describe('GET /api/machines/settings', () => {
 
   it('given no view access, returns 403 without reading settings and audits the denial', async () => {
     mockCanViewMachine.mockResolvedValue(false);
-    const res = await GET(new Request('https://x.test/api/machines/settings?terminalId=t1'));
+    const res = await GET(new Request('https://x.test/api/machines/settings?machineId=t1'));
     expect(res.status).toBe(403);
     expect(mockGetMachineSettings).not.toHaveBeenCalled();
     expect(mockAuditRequest).toHaveBeenCalledWith(
@@ -101,7 +101,7 @@ describe('GET /api/machines/settings', () => {
   it('given view access, returns the settings', async () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockGetMachineSettings.mockResolvedValue(SETTINGS);
-    const res = await GET(new Request('https://x.test/api/machines/settings?terminalId=t1'));
+    const res = await GET(new Request('https://x.test/api/machines/settings?machineId=t1'));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.settings).toEqual(SETTINGS);
@@ -111,7 +111,7 @@ describe('GET /api/machines/settings', () => {
   it('given the machine no longer exists, returns 404', async () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockGetMachineSettings.mockResolvedValue(null);
-    const res = await GET(new Request('https://x.test/api/machines/settings?terminalId=t1'));
+    const res = await GET(new Request('https://x.test/api/machines/settings?machineId=t1'));
     expect(res.status).toBe(404);
   });
 });
@@ -125,7 +125,7 @@ describe('PATCH /api/machines/settings', () => {
     });
   }
 
-  it('given no terminalId, returns 400 without checking access', async () => {
+  it('given no machineId, returns 400 without checking access', async () => {
     const res = await PATCH(req({ name: 'x' }));
     expect(res.status).toBe(400);
     expect(mockCanAccessMachine).not.toHaveBeenCalled();
@@ -147,32 +147,32 @@ describe('PATCH /api/machines/settings', () => {
   // to reach the 400 (an unauthorized caller gets 403 regardless of patch shape).
   it('given an empty patch (with access), returns 400', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    const res = await PATCH(req({ terminalId: 't1' }));
+    const res = await PATCH(req({ machineId: 't1' }));
     expect(res.status).toBe(400);
     expect(mockUpdateMachineSettings).not.toHaveBeenCalled();
   });
 
   it('given a blank name (with access), returns 400', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    const res = await PATCH(req({ terminalId: 't1', name: '   ' }));
+    const res = await PATCH(req({ machineId: 't1', name: '   ' }));
     expect(res.status).toBe(400);
   });
 
   it('given a non-boolean toggle (with access), returns 400', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    const res = await PATCH(req({ terminalId: 't1', allowPageAgents: 'yes' }));
+    const res = await PATCH(req({ machineId: 't1', allowPageAgents: 'yes' }));
     expect(res.status).toBe(400);
   });
 
   it('given no access, returns 403 for a malformed patch without revealing validation', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
-    const res = await PATCH(req({ terminalId: 't1', allowPageAgents: 'yes' }));
+    const res = await PATCH(req({ machineId: 't1', allowPageAgents: 'yes' }));
     expect(res.status).toBe(403);
   });
 
   it('given no edit access, returns 403 without updating and audits the denial', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
-    const res = await PATCH(req({ terminalId: 't1', name: 'Renamed' }));
+    const res = await PATCH(req({ machineId: 't1', name: 'Renamed' }));
     expect(res.status).toBe(403);
     expect(mockUpdateMachineSettings).not.toHaveBeenCalled();
     expect(mockAuditRequest).toHaveBeenCalledWith(
@@ -184,13 +184,13 @@ describe('PATCH /api/machines/settings', () => {
   it('given edit access, updates and returns the settings and audits the write', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockUpdateMachineSettings.mockResolvedValue({ ...SETTINGS, name: 'Renamed', description: null });
-    const res = await PATCH(req({ terminalId: 't1', name: 'Renamed', description: null, allowPageAgents: true }));
+    const res = await PATCH(req({ machineId: 't1', name: 'Renamed', description: null, allowPageAgents: true }));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.settings.name).toBe('Renamed');
     expect(mockUpdateMachineSettings).toHaveBeenCalledWith(
       expect.objectContaining({
-        terminalId: 't1',
+        machineId: 't1',
         patch: { name: 'Renamed', description: null, allowPageAgents: true },
       }),
     );
@@ -203,7 +203,7 @@ describe('PATCH /api/machines/settings', () => {
   it('given the machine no longer exists, returns 404', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockUpdateMachineSettings.mockResolvedValue(null);
-    const res = await PATCH(req({ terminalId: 't1', name: 'Renamed' }));
+    const res = await PATCH(req({ machineId: 't1', name: 'Renamed' }));
     expect(res.status).toBe(404);
   });
 
@@ -220,7 +220,7 @@ describe('PATCH /api/machines/settings', () => {
 });
 
 describe('DELETE /api/machines/settings', () => {
-  it('given no terminalId, returns 400', async () => {
+  it('given no machineId, returns 400', async () => {
     const res = await DELETE(new Request('https://x.test/api/machines/settings', { method: 'DELETE' }));
     expect(res.status).toBe(400);
     expect(mockCanDeleteMachine).not.toHaveBeenCalled();
@@ -229,19 +229,19 @@ describe('DELETE /api/machines/settings', () => {
   it('given the machine does not exist, returns 404', async () => {
     mockCanDeleteMachine.mockResolvedValue(true);
     mockDeleteMachine.mockResolvedValue({ ok: false, reason: 'not_found' });
-    const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
+    const res = await DELETE(new Request('https://x.test/api/machines/settings?machineId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(404);
   });
 
   it('given a successful delete, returns 200 with the teardown outcome and audits the delete', async () => {
     mockCanDeleteMachine.mockResolvedValue(true);
     mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: true });
-    const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
+    const res = await DELETE(new Request('https://x.test/api/machines/settings?machineId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({ success: true, spriteTornDown: true });
     expect(mockDeleteMachine).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', store: FAKE_STORE, sprite: FAKE_SPRITE }),
+      expect.objectContaining({ machineId: 't1', store: FAKE_STORE, sprite: FAKE_SPRITE }),
     );
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
@@ -258,7 +258,7 @@ describe('DELETE /api/machines/settings', () => {
     // Regression: a drive member has canEdit but NOT canDelete; DELETE must reject.
     mockCanDeleteMachine.mockResolvedValue(false);
     mockCanAccessMachine.mockResolvedValue(true); // edit access alone must not suffice
-    const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
+    const res = await DELETE(new Request('https://x.test/api/machines/settings?machineId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(403);
     expect(mockDeleteMachine).not.toHaveBeenCalled();
     expect(mockAuditRequest).toHaveBeenCalledWith(
@@ -270,7 +270,7 @@ describe('DELETE /api/machines/settings', () => {
   it('given a delete where Sprite teardown failed, still returns 200 (page trashed)', async () => {
     mockCanDeleteMachine.mockResolvedValue(true);
     mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: false });
-    const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
+    const res = await DELETE(new Request('https://x.test/api/machines/settings?machineId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({ success: true, spriteTornDown: false });

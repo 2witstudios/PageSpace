@@ -156,7 +156,7 @@ function makeMachineDirectoryDeps(
   overrides: Partial<MachineDirectoryRuntimeDeps> = {},
 ): MachineDirectoryRuntimeDeps {
   return {
-    findPage: async () => ({ title: 'Shared Terminal', type: 'TERMINAL', driveId: 'drive-1' }),
+    findPage: async () => ({ title: 'Shared Terminal', type: 'MACHINE', driveId: 'drive-1' }),
     canViewPage: async () => true,
     getAgentConfig: async () => ({ terminalAccess: false, machines: [] }),
     getGlobalConfig: async () => ({ terminalAccess: false, machines: [] }),
@@ -193,7 +193,7 @@ describe('createMachineDirectory', () => {
         }),
       );
       await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual([
-        { kind: 'existing', terminalId: 'personal-page-1' },
+        { kind: 'existing', machineId: 'personal-page-1' },
       ]);
     });
 
@@ -202,14 +202,14 @@ describe('createMachineDirectory', () => {
         makeMachineDirectoryDeps({
           getGlobalConfig: async () => ({
             terminalAccess: true,
-            machines: [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+            machines: [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
           }),
           getOrCreateOwnMachinePageId: async () => 'personal-page-1',
         }),
       );
       await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual([
-        { kind: 'existing', terminalId: 'personal-page-1' },
-        { kind: 'existing', terminalId: 't1' },
+        { kind: 'existing', machineId: 'personal-page-1' },
+        { kind: 'existing', machineId: 't1' },
       ]);
     });
 
@@ -221,7 +221,7 @@ describe('createMachineDirectory', () => {
     });
 
     it('given a page agent with terminalAccess on and configured machines, should return the configured machines', async () => {
-      const machines: MachineRef[] = [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }];
+      const machines: MachineRef[] = [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }];
       const directory = createMachineDirectory(
         makeMachineDirectoryDeps({ getAgentConfig: async () => ({ terminalAccess: true, machines }) }),
       );
@@ -257,24 +257,24 @@ describe('createMachineDirectory', () => {
 
   describe('describeMachine', () => {
     it('given the own machine, should return a fixed name without a DB lookup', async () => {
-      const findPage = async () => ({ title: 'should not be used', type: 'TERMINAL', driveId: 'drive-1' });
+      const findPage = async () => ({ title: 'should not be used', type: 'MACHINE', driveId: 'drive-1' });
       const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage }));
       await expect(directory.describeMachine(undefined, { kind: 'own' })).resolves.toEqual({ name: 'My Machine' });
     });
 
     it('given an existing machine, should return the Terminal page title', async () => {
       const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Shared Terminal', type: 'TERMINAL', driveId: 'drive-1' }) }),
+        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Shared Terminal', type: 'MACHINE', driveId: 'drive-1' }) }),
       );
       await expect(
-        directory.describeMachine(undefined, { kind: 'existing', terminalId: 't1' }),
+        directory.describeMachine(undefined, { kind: 'existing', machineId: 't1' }),
       ).resolves.toEqual({ name: 'Shared Terminal' });
     });
 
     it('given an existing machine whose page is missing, should fall back to a generic name', async () => {
       const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage: async () => undefined }));
       await expect(
-        directory.describeMachine(undefined, { kind: 'existing', terminalId: 'gone' }),
+        directory.describeMachine(undefined, { kind: 'existing', machineId: 'gone' }),
       ).resolves.toEqual({ name: 'Terminal' });
     });
   });
@@ -290,37 +290,37 @@ describe('createMachineDirectory', () => {
     it('given no rawContext, should deny an existing machine (fail closed)', async () => {
       const directory = createMachineDirectory(makeMachineDirectoryDeps());
       await expect(
-        directory.isMachineAccessible(undefined, { kind: 'existing', terminalId: 't1' }),
+        directory.isMachineAccessible(undefined, { kind: 'existing', machineId: 't1' }),
       ).resolves.toBe(false);
     });
 
     it('given the terminal page is missing, should deny', async () => {
       const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage: async () => undefined }));
       await expect(
-        directory.isMachineAccessible(context, { kind: 'existing', terminalId: 'gone' }),
+        directory.isMachineAccessible(context, { kind: 'existing', machineId: 'gone' }),
       ).resolves.toBe(false);
     });
 
-    it('given the page exists but is not a TERMINAL page, should deny', async () => {
+    it('given the page exists but is not a MACHINE page, should deny', async () => {
       const directory = createMachineDirectory(
         makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Not a terminal', type: 'DOCUMENT', driveId: 'drive-1' }) }),
       );
       await expect(
-        directory.isMachineAccessible(context, { kind: 'existing', terminalId: 'doc-1' }),
+        directory.isMachineAccessible(context, { kind: 'existing', machineId: 'doc-1' }),
       ).resolves.toBe(false);
     });
 
-    it('given a TERMINAL page the actor cannot view, should deny', async () => {
+    it('given a MACHINE page the actor cannot view, should deny', async () => {
       const directory = createMachineDirectory(makeMachineDirectoryDeps({ canViewPage: async () => false }));
       await expect(
-        directory.isMachineAccessible(context, { kind: 'existing', terminalId: 't1' }),
+        directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
       ).resolves.toBe(false);
     });
 
-    it('given a TERMINAL page the actor can view, should allow', async () => {
+    it('given a MACHINE page the actor can view, should allow', async () => {
       const directory = createMachineDirectory(makeMachineDirectoryDeps({ canViewPage: async () => true }));
       await expect(
-        directory.isMachineAccessible(context, { kind: 'existing', terminalId: 't1' }),
+        directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
       ).resolves.toBe(true);
     });
   });
@@ -336,18 +336,18 @@ describe('createMachineDirectory', () => {
     it('given an existing machine, should return the Terminal page\'s own driveId, overriding the ambient one', async () => {
       const directory = createMachineDirectory(
         makeMachineDirectoryDeps({
-          findPage: async () => ({ title: 'Personal Machine', type: 'TERMINAL', driveId: 'home-drive-1' }),
+          findPage: async () => ({ title: 'Personal Machine', type: 'MACHINE', driveId: 'home-drive-1' }),
         }),
       );
       await expect(
-        directory.resolveDriveId?.(undefined, { kind: 'existing', terminalId: 't1' }, 'ambient-drive'),
+        directory.resolveDriveId?.(undefined, { kind: 'existing', machineId: 't1' }, 'ambient-drive'),
       ).resolves.toBe('home-drive-1');
     });
 
     it('given an existing machine whose page has vanished, should fall back to the ambient driveId', async () => {
       const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage: async () => undefined }));
       await expect(
-        directory.resolveDriveId?.(undefined, { kind: 'existing', terminalId: 'gone' }, 'ambient-drive'),
+        directory.resolveDriveId?.(undefined, { kind: 'existing', machineId: 'gone' }, 'ambient-drive'),
       ).resolves.toBe('ambient-drive');
     });
   });
@@ -365,7 +365,7 @@ describe('createMachineDirectory', () => {
         makeMachineDirectoryDeps({ lookupPageOwnerId: async () => 'real-drive-owner' }),
       );
       await expect(
-        directory.resolveTenantId?.(undefined, { kind: 'existing', terminalId: 't1' }, 'ambient-tenant'),
+        directory.resolveTenantId?.(undefined, { kind: 'existing', machineId: 't1' }, 'ambient-tenant'),
       ).resolves.toBe('real-drive-owner');
     });
 
@@ -374,7 +374,7 @@ describe('createMachineDirectory', () => {
         makeMachineDirectoryDeps({ lookupPageOwnerId: async () => null }),
       );
       await expect(
-        directory.resolveTenantId?.(undefined, { kind: 'existing', terminalId: 'gone' }, 'ambient-tenant'),
+        directory.resolveTenantId?.(undefined, { kind: 'existing', machineId: 'gone' }, 'ambient-tenant'),
       ).resolves.toBe('ambient-tenant');
     });
   });

@@ -28,18 +28,18 @@ describe('useTerminalWorkspaceStore', () => {
     });
   });
 
-  it('given ensureWorkspace is called for a new terminalId, should create a single-pane workspace', () => {
+  it('given ensureWorkspace is called for a new machineId, should create a single-pane workspace', () => {
     useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
 
     const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
     expect({
-      given: 'ensureWorkspace is called for a new terminalId',
+      given: 'ensureWorkspace is called for a new machineId',
       should: 'create a single-pane workspace',
       actual: allPanes(workspace).length,
       expected: 1,
     }).toEqual({
-      given: 'ensureWorkspace is called for a new terminalId',
+      given: 'ensureWorkspace is called for a new machineId',
       should: 'create a single-pane workspace',
       actual: 1,
       expected: 1,
@@ -210,7 +210,7 @@ describe('useTerminalWorkspaceStore', () => {
     });
   });
 
-  it('given actions on a terminalId that was never ensured, should be a no-op', () => {
+  it('given actions on a machineId that was never ensured, should be a no-op', () => {
     useTerminalWorkspaceStore.getState().openTerminal('never-ensured', { name: 'ghost' });
     useTerminalWorkspaceStore.getState().splitRight('never-ensured', 'anything');
     useTerminalWorkspaceStore.getState().splitDown('never-ensured', 'anything');
@@ -220,12 +220,12 @@ describe('useTerminalWorkspaceStore', () => {
     const workspace = selectWorkspace('never-ensured')(useTerminalWorkspaceStore.getState());
 
     expect({
-      given: 'actions on a terminalId that was never ensured',
+      given: 'actions on a machineId that was never ensured',
       should: 'be a no-op',
       actual: workspace,
       expected: undefined,
     }).toEqual({
-      given: 'actions on a terminalId that was never ensured',
+      given: 'actions on a machineId that was never ensured',
       should: 'be a no-op',
       actual: undefined,
       expected: undefined,

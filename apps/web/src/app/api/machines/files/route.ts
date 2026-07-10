@@ -2,7 +2,7 @@
  * Machine Files API — the Machine page's surface onto a branch checkout's
  * WORKING TREE (Machine page rebuild, Phase 1 — file browsing).
  *
- * GET ?terminalId=&projectName=&branchName=[&path=][&mode=list|read]
+ * GET ?machineId=&projectName=&branchName=[&path=][&mode=list|read]
  *   mode=list (default) → { entries: [{ name, type }] } for the directory `path`
  *   mode=read           → { content, encoding, truncated } for the file `path`
  *
@@ -47,8 +47,8 @@ export async function GET(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  if (!machineId.ok) return machineId.error;
   const projectName = requireString(url.searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
   const branchName = requireString(url.searchParams.get('branchName'), 'branchName');
@@ -56,7 +56,7 @@ export async function GET(request: Request) {
 
   // Authorize BEFORE parsing optional params, so a user without view access gets
   // a uniform 403 and can never probe path/mode handling.
-  if (!(await canViewMachine(auth.userId, terminalId.value))) {
+  if (!(await canViewMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
@@ -81,7 +81,7 @@ export async function GET(request: Request) {
   }
 
   const resolved = await resolveBranchMachineHandle({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     projectName: projectName.value,
     branchName: branchName.value,
   });

@@ -60,7 +60,7 @@ const listCallsFor = (path: string): number =>
 
 const renderTree = (props: Partial<Parameters<typeof MachineFileTree>[0]> = {}) =>
   render(
-    <MachineFileTree terminalId="machine-1" projectName="my-repo" branchName="main" {...props} />,
+    <MachineFileTree machineId="machine-1" projectName="my-repo" branchName="main" {...props} />,
   );
 
 const expandFolder = async (name: string) => {
@@ -197,7 +197,7 @@ describe('MachineFileTree', () => {
     await waitFor(() => screen.getByText('index.ts'));
 
     rerender(
-      <MachineFileTree terminalId="machine-1" projectName="my-repo" branchName="dev" />,
+      <MachineFileTree machineId="machine-1" projectName="my-repo" branchName="dev" />,
     );
     await waitFor(() => {
       if (listCallsFor('') < 2) throw new Error('new branch root listing not fetched yet');

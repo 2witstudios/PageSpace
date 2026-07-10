@@ -104,7 +104,7 @@ describe('validateTerminalConnectPayload', () => {
 });
 
 describe('validateAgentTerminalConnectPayload', () => {
-  const valid = { terminalId: 't1', projectName: 'repo', branchName: 'feature-x', name: 'cli', cols: 80, rows: 24 };
+  const valid = { machineId: 't1', projectName: 'repo', branchName: 'feature-x', name: 'cli', cols: 80, rows: 24 };
 
   it('given a valid payload, should return ok:true with typed value', () => {
     expect(validateAgentTerminalConnectPayload(valid)).toEqual({ ok: true, value: valid });
@@ -116,7 +116,7 @@ describe('validateAgentTerminalConnectPayload', () => {
     if (!result.ok) expect(result.error).toBe('invalid payload');
   });
 
-  for (const field of ['terminalId', 'name']) {
+  for (const field of ['machineId', 'name']) {
     it(`given ${field} is missing, should return ok:false`, () => {
       const { [field]: _omit, ...rest } = valid;
       const result = validateAgentTerminalConnectPayload(rest);

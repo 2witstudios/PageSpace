@@ -135,11 +135,11 @@ describe('runBashInSandbox', () => {
     });
     await runBashInSandbox({
       command: 'echo hi',
-      ctx: makeCtx({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+      ctx: makeCtx({ activeMachine: { kind: 'existing', machineId: 't1' } }),
       deps,
     });
     expect(seen).toEqual([
-      expect.objectContaining({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+      expect.objectContaining({ activeMachine: { kind: 'existing', machineId: 't1' } }),
     ]);
   });
 
@@ -855,7 +855,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(resolvePayerIdCalls).toEqual([{ tenantId: 'owner-1', machinePageId: 'own-agent-page' }]);
   });
 
-  it("for an 'existing' machine, resolves machinePageId from the ACTIVE machine's terminalId (not the agent's own page)", async () => {
+  it("for an 'existing' machine, resolves machinePageId from the ACTIVE machine's machineId (not the agent's own page)", async () => {
     const { billing, resolvePayerIdCalls } = makeBilling();
     const { deps } = makeDeps({ billing });
 
@@ -864,7 +864,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       ctx: makeCtx({
         tenantId: 'acting-user',
         agentPageId: 'own-agent-page',
-        activeMachine: { kind: 'existing', terminalId: 'other-terminal-page' },
+        activeMachine: { kind: 'existing', machineId: 'other-terminal-page' },
       }),
       deps,
     });
@@ -889,7 +889,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       command: 'echo hi',
       ctx: makeCtx({
         tenantId: 'acting-user',
-        activeMachine: { kind: 'existing', terminalId: 'other-terminal-page' },
+        activeMachine: { kind: 'existing', machineId: 'other-terminal-page' },
       }),
       deps,
     });
@@ -916,7 +916,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       command: 'echo hi',
       ctx: makeCtx({
         tenantId: 'acting-user',
-        activeMachine: { kind: 'existing', terminalId: 'other-terminal-page' },
+        activeMachine: { kind: 'existing', machineId: 'other-terminal-page' },
       }),
       deps,
     });

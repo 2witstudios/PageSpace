@@ -81,20 +81,20 @@ describe('isMachineRef', () => {
     expect(isMachineRef({ kind: 'own' })).toBe(true);
   });
 
-  it('accepts { kind: "existing", terminalId }', () => {
-    expect(isMachineRef({ kind: 'existing', terminalId: 'term_1' })).toBe(true);
+  it('accepts { kind: "existing", machineId }', () => {
+    expect(isMachineRef({ kind: 'existing', machineId: 'term_1' })).toBe(true);
   });
 
-  it('rejects "existing" without a terminalId', () => {
+  it('rejects "existing" without a machineId', () => {
     expect(isMachineRef({ kind: 'existing' })).toBe(false);
   });
 
-  it('rejects "existing" with an empty terminalId', () => {
-    expect(isMachineRef({ kind: 'existing', terminalId: '' })).toBe(false);
+  it('rejects "existing" with an empty machineId', () => {
+    expect(isMachineRef({ kind: 'existing', machineId: '' })).toBe(false);
   });
 
-  it('rejects "existing" with a non-string terminalId', () => {
-    expect(isMachineRef({ kind: 'existing', terminalId: 123 })).toBe(false);
+  it('rejects "existing" with a non-string machineId', () => {
+    expect(isMachineRef({ kind: 'existing', machineId: 123 })).toBe(false);
   });
 
   it('rejects an unknown kind', () => {
@@ -115,7 +115,7 @@ describe('isMachineRefArray', () => {
 
   it('accepts an array of valid MachineRefs', () => {
     expect(
-      isMachineRefArray([{ kind: 'own' }, { kind: 'existing', terminalId: 'term_1' }])
+      isMachineRefArray([{ kind: 'own' }, { kind: 'existing', machineId: 'term_1' }])
     ).toBe(true);
   });
 
@@ -172,7 +172,7 @@ describe('getAgentById', () => {
   });
 
   it('passes through a populated machines column and terminalAccess: true', async () => {
-    const machines = [{ kind: 'own' }, { kind: 'existing', terminalId: 'term_1' }];
+    const machines = [{ kind: 'own' }, { kind: 'existing', machineId: 'term_1' }];
     mockSelectResult({ ...basePageRow, terminalAccess: true, machines });
 
     const agent = await pageAgentRepository.getAgentById('agent_1');

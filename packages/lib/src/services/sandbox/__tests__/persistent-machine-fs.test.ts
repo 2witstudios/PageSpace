@@ -168,13 +168,13 @@ describe('persistent machine filesystem across runs', () => {
     await writeSandboxFile({
       path: '/workspace/shared.txt',
       content: 'shared state',
-      ctx: makeCtx({ agentPageId: 'agent-1', activeMachine: { kind: 'existing', terminalId: 'terminal-page-1' } }),
+      ctx: makeCtx({ agentPageId: 'agent-1', activeMachine: { kind: 'existing', machineId: 'terminal-page-1' } }),
       deps,
     });
 
     const readFromOtherAgent = await readSandboxFile({
       path: '/workspace/shared.txt',
-      ctx: makeCtx({ agentPageId: 'agent-2', activeMachine: { kind: 'existing', terminalId: 'terminal-page-1' } }),
+      ctx: makeCtx({ agentPageId: 'agent-2', activeMachine: { kind: 'existing', machineId: 'terminal-page-1' } }),
       deps,
     });
     expect(readFromOtherAgent).toMatchObject({ success: true, content: 'shared state' });

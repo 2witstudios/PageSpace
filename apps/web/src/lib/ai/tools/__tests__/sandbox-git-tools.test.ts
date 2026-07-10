@@ -1470,7 +1470,7 @@ describe('cwd threading', () => {
 describe('active machine access', () => {
   it('git_status: given the resolved active machine is no longer accessible, should deny without acquiring a sandbox', async () => {
     const deps = makeDeps();
-    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', terminalId: 't1' }]);
+    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', machineId: 't1' }]);
     deps.machines.isMachineAccessible = vi.fn().mockResolvedValue(false);
     const { git_status } = createSandboxGitTools(deps);
     const result = await git_status.execute!({}, {} as never);
@@ -1502,7 +1502,7 @@ describe('active machine access', () => {
 
   it('git_status: given machines provides resolveDriveId/resolveTenantId (existing machine in another drive), should override both — mirroring sandbox-tools.ts so git tools attach to the same session as bash/file tools', async () => {
     const deps = makeDeps();
-    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', terminalId: 't1' }]);
+    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', machineId: 't1' }]);
     deps.machines.resolveDriveId = vi.fn().mockResolvedValue('home-drive-1');
     deps.machines.resolveTenantId = vi.fn().mockResolvedValue('real-drive-owner');
     const { git_status } = createSandboxGitTools(deps);

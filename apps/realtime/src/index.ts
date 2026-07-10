@@ -105,21 +105,21 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
   // The caller (resolveProjectOrMachineLocation, agent-terminals.ts) collapses
   // every acquire failure to one generic 'machine_unavailable' reason — log the
   // SPECIFIC reason here so it's still visible in realtime logs for triage.
-  function deny(reason: string, terminalId: string): AgentTerminalMachineSandboxResult {
-    loggers.realtime.warn('Machine sandbox acquire denied', { reason, terminalId, actorUserId });
+  function deny(reason: string, machineId: string): AgentTerminalMachineSandboxResult {
+    loggers.realtime.warn('Machine sandbox acquire denied', { reason, machineId, actorUserId });
     return { ok: false, reason };
   }
 
   return {
-    acquire: async (terminalId): Promise<AgentTerminalMachineSandboxResult> => {
-      const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, terminalId)).limit(1);
-      if (!pageRow) return deny('page_not_found', terminalId);
+    acquire: async (machineId): Promise<AgentTerminalMachineSandboxResult> => {
+      const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, machineId)).limit(1);
+      if (!pageRow) return deny('page_not_found', machineId);
       const [driveRow] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1);
-      if (!driveRow) return deny('drive_not_found', terminalId);
+      if (!driveRow) return deny('drive_not_found', machineId);
 
       const nowMs = Date.now();
-      const guardrail = checkMachineRuntimeGuardrail({ machineKey: terminalId, now: nowMs });
-      if (!guardrail.allowed) return deny(guardrail.reason, terminalId);
+      const guardrail = checkMachineRuntimeGuardrail({ machineKey: machineId, now: nowMs });
+      if (!guardrail.allowed) return deny(guardrail.reason, machineId);
 
       const [store, sdk] = await Promise.all([dbTerminalSessionStorePromise, getRealtimeSpritesSdk()]);
       const rawClient = createSpritesSandboxClient({ sdk });
@@ -127,7 +127,7 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
       const client = createExecClientFromMachineHost(host, { kind: 'sprite' });
 
       const result = await acquireTerminalSandbox({
-        pageId: terminalId,
+        pageId: machineId,
         driveId: pageRow.driveId,
         tenantId: driveRow.ownerId,
         userId: actorUserId,
@@ -146,18 +146,18 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
             }),
         },
       });
-      if (!result.ok) return deny(result.reason, terminalId);
+      if (!result.ok) return deny(result.reason, machineId);
 
       if (result.resumed) {
         try {
           const sprite = await sdk.getSprite(result.sandboxId);
           await ensureSpriteAwake(sprite);
         } catch {
-          return deny('provision_failed', terminalId);
+          return deny('provision_failed', machineId);
         }
       }
 
-      recordMachineActivity({ machineKey: terminalId, now: nowMs });
+      recordMachineActivity({ machineKey: machineId, now: nowMs });
       return { ok: true, sandboxId: result.sandboxId };
     },
   };
@@ -189,7 +189,7 @@ function buildAgentTerminalSessionKey({
 /**
  * Auth for a named, pluggable-agent-typed terminal at one of the three
  * universal Terminal scopes (`agent-terminals.ts`) — access is governed by
- * the OWNING Machine's Terminal page (`terminalId`), same edit-level bar the
+ * the OWNING Machine's Terminal page (`machineId`), same edit-level bar the
  * retired human terminal used, then resolved down to the specific
  * machine/project/branch target + agent-terminal row. Does not provision an
  * agent-terminal row itself: an unreserved (scope, name) is `not_found`
@@ -198,32 +198,32 @@ function buildAgentTerminalSessionKey({
  */
 async function makeAgentTerminalCheckAuth({
   userId,
-  terminalId,
+  machineId,
   projectName,
   branchName,
   name,
 }: {
   userId: string;
-  terminalId: string;
+  machineId: string;
   projectName?: string;
   branchName?: string;
   name: string;
 }): Promise<AgentTerminalCheckAuthResult> {
-  const access = await getUserAccessLevel(userId, terminalId);
+  const access = await getUserAccessLevel(userId, machineId);
   if (!access?.canEdit) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: 'no_edit_access', userId, terminalId });
+    loggers.realtime.warn('Agent terminal auth denied', { reason: 'no_edit_access', userId, machineId });
     return { ok: false, reason: 'no_edit_access' };
   }
 
-  const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, terminalId)).limit(1);
+  const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, machineId)).limit(1);
   if (!pageRow) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: 'page_not_found', userId, terminalId });
+    loggers.realtime.warn('Agent terminal auth denied', { reason: 'page_not_found', userId, machineId });
     return { ok: false, reason: 'page_not_found' };
   }
 
   const codeAuth = await canRunCode({ userId, driveId: pageRow.driveId, requestOrigin: 'user' });
   if (!codeAuth.ok) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: codeAuth.reason, userId, terminalId });
+    loggers.realtime.warn('Agent terminal auth denied', { reason: codeAuth.reason, userId, machineId });
     return { ok: false, reason: codeAuth.reason };
   }
 
@@ -232,7 +232,7 @@ async function makeAgentTerminalCheckAuth({
     db.select({ subscriptionTier: users.subscriptionTier, email: users.email }).from(users).where(eq(users.id, userId)).limit(1).then((r) => r[0]),
   ]);
   if (!driveRow) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: 'drive_not_found', userId, terminalId });
+    loggers.realtime.warn('Agent terminal auth denied', { reason: 'drive_not_found', userId, machineId });
     return { ok: false, reason: 'drive_not_found' };
   }
   const payerId = driveRow.ownerId;
@@ -241,7 +241,7 @@ async function makeAgentTerminalCheckAuth({
 
   const slotAcquired = acquireCodeExecutionSlot({ userId, tier });
   if (!slotAcquired) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: 'concurrency_limit', userId, terminalId });
+    loggers.realtime.warn('Agent terminal auth denied', { reason: 'concurrency_limit', userId, machineId });
     return { ok: false, reason: 'concurrency_limit' };
   }
   const releaseSlot = () => releaseCodeExecutionSlot({ userId });
@@ -252,7 +252,7 @@ async function makeAgentTerminalCheckAuth({
     dbMachineProjectStorePromise,
   ]);
   const resolved = await resolveAgentTerminal({
-    terminalId,
+    machineId,
     projectName,
     branchName,
     name,
@@ -265,7 +265,7 @@ async function makeAgentTerminalCheckAuth({
   });
   if (!resolved.ok) {
     releaseSlot();
-    loggers.realtime.warn('Agent terminal auth denied', { reason: resolved.reason, userId, terminalId, projectName, branchName, name });
+    loggers.realtime.warn('Agent terminal auth denied', { reason: resolved.reason, userId, machineId, projectName, branchName, name });
     return { ok: false, reason: resolved.reason };
   }
 

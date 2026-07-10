@@ -13,7 +13,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 const machineRefSchema = z.union([
   z.object({ kind: z.literal('own') }),
-  z.object({ kind: z.literal('existing'), terminalId: z.string().min(1) }),
+  z.object({ kind: z.literal('existing'), machineId: z.string().min(1) }),
 ]);
 
 const updateConfigSchema = z.object({
@@ -90,8 +90,8 @@ export async function PUT(request: Request) {
       );
     }
 
-    // Validate machines: verify every "existing" terminalId points to a
-    // non-trashed TERMINAL page in the user's Home drive they can access —
+    // Validate machines: verify every "existing" machineId points to a
+    // non-trashed MACHINE page in the user's Home drive they can access —
     // mirrors agent-config/route.ts's scoping, so a caller can't attach a
     // Terminal outside their access via a direct API call.
     if (validation.data.machines !== undefined) {

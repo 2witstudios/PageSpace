@@ -3,11 +3,9 @@
  *
  * Binds the provider-agnostic orchestration (`@pagespace/lib/services/machines/
  * machine-settings`) to the real DB + Sprite implementations. Access is governed
- * by the Machine's Terminal page — this reuses `canAccessMachine`/`canViewMachine`
- * from the Branches runtime (`./machine-branches-runtime`, the canonical home the
- * other machine routes also import) rather than duplicating the page-permission
- * check. (Phase 0's shared `machine-access.ts` is not present on this branch; the
- * established sibling convention is these two functions.)
+ * by the Machine page — this reuses `canViewMachine`/`canEditMachine` (re-exported
+ * here as `canAccessMachine` for the settings route) from the canonical
+ * `./machine-access-runtime`, rather than duplicating the page-permission check.
  *
  * `createDbMachineSettingsStore` reads/writes the four settings fields on the
  * Machine's `pages` row, broadcasts a page `updated`/`trashed` event (so other
@@ -35,13 +33,13 @@
  * NOT handled here (deliberate scope — see the PR's flagged architecture decision):
  * this route writes the page via raw `db.update` / `pageRepository.trash` rather
  * than the canonical `applyPageMutation` / `pageService.trashPage` paths, so it does
- * NOT (yet): trash DESCENDANT pages of a Machine (Machine/TERMINAL pages are
+ * NOT (yet): trash DESCENDANT pages of a Machine (Machine pages are
  * leaf-like in practice), bump the page `revision` / write a page-version / fire
- * page-update|trash workflow triggers, or scrub the deleted `terminalId` from
+ * page-update|trash workflow triggers, or scrub the deleted `machineId` from
  * AI_CHAT agents' `machines` arrays. Wiring those through the canonical services is
  * a follow-up (the Settings-UI node that exercises these paths is separate, and the
  * surface is behind `CODE_EXECUTION_ENABLED`, OFF). Also not handled: returning 404
- * (vs 403) for an already-deleted terminalId. DELETE-permission gating IS enforced
+ * (vs 403) for an already-deleted machineId. DELETE-permission gating IS enforced
  * (`canDeleteMachine`), matching the canonical page-trash.
  */
 
@@ -57,7 +55,7 @@ import {
 } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
-import { isTerminalPage } from '@pagespace/lib/content/page-types.config';
+import { isMachinePage } from '@pagespace/lib/content/page-types.config';
 import type { PageType } from '@pagespace/lib/utils/enums';
 import type {
   MachineSettings,
@@ -65,9 +63,10 @@ import type {
   MachineSettingsStore,
   MachineSpriteTeardown,
 } from '@pagespace/lib/services/machines/machine-settings';
-import { canAccessMachine, canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
+import { getMachineHostForBranches } from './machine-branches-runtime';
+import { canViewMachine, canEditMachine } from './machine-access-runtime';
 
-export { canAccessMachine, canViewMachine };
+export { canViewMachine, canEditMachine as canAccessMachine };
 
 /**
  * DELETE-level access. Destroying a Machine trashes its page, so — unlike GET
@@ -75,13 +74,13 @@ export { canAccessMachine, canViewMachine };
  * page-trash route (a drive MEMBER has canEdit but NOT canDelete, so gating a
  * page-trash on edit would let members destroy Machines they cannot delete).
  */
-export async function canDeleteMachine(actorUserId: string, terminalId: string): Promise<boolean> {
+export async function canDeleteMachine(actorUserId: string, machineId: string): Promise<boolean> {
   const page = await db.query.pages.findFirst({
-    where: eq(pages.id, terminalId),
+    where: eq(pages.id, machineId),
     columns: { type: true },
   });
-  if (!page || !isTerminalPage(page.type as PageType)) return false;
-  return canUserDeletePage(actorUserId, terminalId);
+  if (!page || !isMachinePage(page.type as PageType)) return false;
+  return canUserDeletePage(actorUserId, machineId);
 }
 
 interface SettingsRow {
@@ -100,9 +99,9 @@ function toMachineSettings(row: SettingsRow): MachineSettings {
   };
 }
 
-async function readSettings(terminalId: string): Promise<MachineSettings | null> {
+async function readSettings(machineId: string): Promise<MachineSettings | null> {
   const page = await db.query.pages.findFirst({
-    where: eq(pages.id, terminalId),
+    where: eq(pages.id, machineId),
     columns: {
       title: true,
       description: true,
@@ -118,7 +117,7 @@ async function readSettings(terminalId: string): Promise<MachineSettings | null>
 export function createDbMachineSettingsStore(): MachineSettingsStore {
   return {
     getSettings: readSettings,
-    async updateSettings(terminalId: string, patch: MachineSettingsPatch): Promise<MachineSettings | null> {
+    async updateSettings(machineId: string, patch: MachineSettingsPatch): Promise<MachineSettings | null> {
       const set: Record<string, unknown> = {};
       if (patch.name !== undefined) set.title = patch.name;
       if (patch.description !== undefined) set.description = patch.description;
@@ -135,7 +134,7 @@ export function createDbMachineSettingsStore(): MachineSettingsStore {
       const [row] = await db
         .update(pages)
         .set(set)
-        .where(and(eq(pages.id, terminalId), eq(pages.isTrashed, false)))
+        .where(and(eq(pages.id, machineId), eq(pages.isTrashed, false)))
         .returning({
           title: pages.title,
           description: pages.description,
@@ -149,19 +148,19 @@ export function createDbMachineSettingsStore(): MachineSettingsStore {
       // toggling a flag or editing the description alters nothing the tree renders,
       // so those saves skip the fan-out.
       if (patch.name !== undefined) {
-        await broadcastPageEvent(createPageEventPayload(row.driveId, terminalId, 'updated', { title: row.title }));
+        await broadcastPageEvent(createPageEventPayload(row.driveId, machineId, 'updated', { title: row.title }));
       }
       return toMachineSettings(row);
     },
-    async trashPage(terminalId: string): Promise<void> {
+    async trashPage(machineId: string): Promise<void> {
       const page = await db.query.pages.findFirst({
-        where: eq(pages.id, terminalId),
+        where: eq(pages.id, machineId),
         columns: { driveId: true, parentId: true },
       });
-      await pageRepository.trash(terminalId);
+      await pageRepository.trash(machineId);
       if (page) {
         await broadcastPageEvent(
-          createPageEventPayload(page.driveId, terminalId, 'trashed', { parentId: page.parentId }),
+          createPageEventPayload(page.driveId, machineId, 'trashed', { parentId: page.parentId }),
         );
       }
     },
@@ -176,9 +175,9 @@ export function createDbMachineSettingsStore(): MachineSettingsStore {
  */
 export function createMachineSpriteTeardown(): MachineSpriteTeardown {
   return {
-    async teardown(terminalId: string): Promise<void> {
+    async teardown(machineId: string): Promise<void> {
       const page = await db.query.pages.findFirst({
-        where: eq(pages.id, terminalId),
+        where: eq(pages.id, machineId),
         columns: { driveId: true },
       });
       if (!page) return;
@@ -186,7 +185,7 @@ export function createMachineSpriteTeardown(): MachineSpriteTeardown {
       const branchRows = await db
         .select({ sandboxId: machineBranches.sandboxId })
         .from(machineBranches)
-        .where(eq(machineBranches.terminalId, terminalId));
+        .where(eq(machineBranches.machineId, machineId));
 
       const drive = await db.query.drives.findFirst({
         where: eq(drives.id, page.driveId),
@@ -196,7 +195,7 @@ export function createMachineSpriteTeardown(): MachineSpriteTeardown {
         ? deriveTerminalSessionKey({
             tenantId: drive.ownerId,
             driveId: page.driveId,
-            pageId: terminalId,
+            pageId: machineId,
             secret: getSandboxSessionSecret(),
           })
         : null;

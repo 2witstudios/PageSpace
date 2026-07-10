@@ -2,6 +2,18 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.0] — 2026-07-10
+
+### Changed
+
+- **The `'TERMINAL'` page type was renamed to `'MACHINE'`.** `pageTypeSchema` (and therefore
+  `createPage`) now accepts `type: 'MACHINE'` in place of `type: 'TERMINAL'` — the same page (a
+  Sprite-backed "Machine"); `'TERMINAL'` was only ever the internal name for the UI surface that
+  lives *inside* a Machine. This is **not** treated as a breaking major bump: creating this page
+  type is admin-only and experimental-gated (it never shipped GA), so no stable consumer passes it.
+  The net public change is additive — `'MACHINE'` is now an accepted value.
+  **If you were passing `type: 'TERMINAL'`** (experimental use only), pass `type: 'MACHINE'` instead.
+
 ## [2.0.0] — 2026-07-08
 
 ### Breaking Changes

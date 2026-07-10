@@ -96,7 +96,7 @@ import { GET } from '../route';
 
 function get(query: Record<string, string>): Request {
   const params = new URLSearchParams({
-    terminalId: 't1',
+    machineId: 't1',
     projectName: 'p1',
     branchName: 'feature/x',
     scope: 'uncommitted',
@@ -131,9 +131,9 @@ beforeEach(() => {
 });
 
 describe('GET /api/machines/diff — request validation', () => {
-  it.each(['terminalId', 'projectName', 'branchName'])('400s when %s is missing', async (field) => {
+  it.each(['machineId', 'projectName', 'branchName'])('400s when %s is missing', async (field) => {
     const params = new URLSearchParams({
-      terminalId: 't1',
+      machineId: 't1',
       projectName: 'p1',
       branchName: 'feature/x',
       scope: 'uncommitted',
@@ -144,7 +144,7 @@ describe('GET /api/machines/diff — request validation', () => {
   });
 
   it('400s on a missing or unknown scope', async () => {
-    const missing = new URLSearchParams({ terminalId: 't1', projectName: 'p1', branchName: 'feature/x' });
+    const missing = new URLSearchParams({ machineId: 't1', projectName: 'p1', branchName: 'feature/x' });
     expect((await GET(new Request(`http://localhost/api/machines/diff?${missing.toString()}`))).status).toBe(400);
     expect((await GET(get({ scope: 'everything' }))).status).toBe(400);
   });

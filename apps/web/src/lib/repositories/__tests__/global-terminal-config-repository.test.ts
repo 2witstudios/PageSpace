@@ -106,12 +106,12 @@ describe('globalTerminalConfigRepository.getConfig', () => {
   it('given a valid MachineRef array, should pass it through', async () => {
     mockGetOrCreateConfig.mockResolvedValue({
       terminalAccess: true,
-      machines: [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+      machines: [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
     });
     const result = await globalTerminalConfigRepository.getConfig('u1');
     expect(result).toEqual({
       terminalAccess: true,
-      machines: [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+      machines: [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
     });
   });
 });
@@ -123,15 +123,15 @@ describe('globalTerminalConfigRepository.validateMachines', () => {
     expect(mockGetHomeDrive).not.toHaveBeenCalled();
   });
 
-  it('given the user has no Home drive yet, should reject every existing terminalId as invalid', async () => {
+  it('given the user has no Home drive yet, should reject every existing machineId as invalid', async () => {
     mockGetHomeDrive.mockResolvedValue(null);
     const result = await globalTerminalConfigRepository.validateMachines('u1', [
-      { kind: 'existing', terminalId: 't1' },
+      { kind: 'existing', machineId: 't1' },
     ]);
     expect(result).toEqual({ ok: false, invalidIds: ['t1'] });
   });
 
-  it('given a terminalId outside the accessible set, should report it as invalid', async () => {
+  it('given a machineId outside the accessible set, should report it as invalid', async () => {
     mockGetHomeDrive.mockResolvedValue({ id: 'home-1' });
     mockGetUserAccessiblePagesInDrive.mockResolvedValue(['t1']);
     mockDbSelect.mockReturnValue({
@@ -140,13 +140,13 @@ describe('globalTerminalConfigRepository.validateMachines', () => {
       }),
     });
     const result = await globalTerminalConfigRepository.validateMachines('u1', [
-      { kind: 'existing', terminalId: 't1' },
-      { kind: 'existing', terminalId: 't2' },
+      { kind: 'existing', machineId: 't1' },
+      { kind: 'existing', machineId: 't2' },
     ]);
     expect(result).toEqual({ ok: false, invalidIds: ['t2'] });
   });
 
-  it('given every terminalId resolves and is accessible, should return ok', async () => {
+  it('given every machineId resolves and is accessible, should return ok', async () => {
     mockGetHomeDrive.mockResolvedValue({ id: 'home-1' });
     mockGetUserAccessiblePagesInDrive.mockResolvedValue(['t1']);
     mockDbSelect.mockReturnValue({
@@ -155,7 +155,7 @@ describe('globalTerminalConfigRepository.validateMachines', () => {
       }),
     });
     const result = await globalTerminalConfigRepository.validateMachines('u1', [
-      { kind: 'existing', terminalId: 't1' },
+      { kind: 'existing', machineId: 't1' },
     ]);
     expect(result).toEqual({ ok: true });
   });
@@ -168,7 +168,7 @@ describe('globalTerminalConfigRepository.getOrCreateOwnMachinePageId', () => {
 
   it('given an existing valid ownMachinePageId under the row lock, should reuse it without creating a new page', async () => {
     mockTxLockedRow.mockReturnValue([{ ownMachinePageId: 'page-1' }]);
-    mockPageRepoFindById.mockResolvedValue({ id: 'page-1', type: 'TERMINAL' });
+    mockPageRepoFindById.mockResolvedValue({ id: 'page-1', type: 'MACHINE' });
 
     const result = await globalTerminalConfigRepository.getOrCreateOwnMachinePageId('u1');
 
@@ -181,13 +181,13 @@ describe('globalTerminalConfigRepository.getOrCreateOwnMachinePageId', () => {
     mockTxLockedRow.mockReturnValue([{ ownMachinePageId: null }]);
     mockProvisionHomeDriveIfNeeded.mockResolvedValue({ driveId: 'home-drive-1', created: false });
     mockPageRepoGetNextPosition.mockResolvedValue(1);
-    mockPageRepoCreate.mockResolvedValue({ id: 'new-page-1', title: 'My Machine', type: 'TERMINAL' });
+    mockPageRepoCreate.mockResolvedValue({ id: 'new-page-1', title: 'My Machine', type: 'MACHINE' });
 
     const result = await globalTerminalConfigRepository.getOrCreateOwnMachinePageId('u1');
 
     expect(result).toBe('new-page-1');
     expect(mockPageRepoCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'TERMINAL', driveId: 'home-drive-1', createdBy: 'u1' }),
+      expect.objectContaining({ type: 'MACHINE', driveId: 'home-drive-1', createdBy: 'u1' }),
     );
     expect(mockTxUpdateSet).toHaveBeenCalledWith({ ownMachinePageId: 'new-page-1' });
   });
@@ -197,7 +197,7 @@ describe('globalTerminalConfigRepository.getOrCreateOwnMachinePageId', () => {
     mockPageRepoFindById.mockResolvedValue(null);
     mockProvisionHomeDriveIfNeeded.mockResolvedValue({ driveId: 'home-drive-1', created: false });
     mockPageRepoGetNextPosition.mockResolvedValue(2);
-    mockPageRepoCreate.mockResolvedValue({ id: 'replacement-page', title: 'My Machine', type: 'TERMINAL' });
+    mockPageRepoCreate.mockResolvedValue({ id: 'replacement-page', title: 'My Machine', type: 'MACHINE' });
 
     const result = await globalTerminalConfigRepository.getOrCreateOwnMachinePageId('u1');
 
@@ -208,7 +208,7 @@ describe('globalTerminalConfigRepository.getOrCreateOwnMachinePageId', () => {
     // Simulates the second (blocked) caller unblocking AFTER the first committed
     // its ownMachinePageId — the row lock is what makes this the observed order.
     mockTxLockedRow.mockReturnValueOnce([{ ownMachinePageId: 'winner-page' }]);
-    mockPageRepoFindById.mockResolvedValue({ id: 'winner-page', type: 'TERMINAL' });
+    mockPageRepoFindById.mockResolvedValue({ id: 'winner-page', type: 'MACHINE' });
 
     const result = await globalTerminalConfigRepository.getOrCreateOwnMachinePageId('u2');
 

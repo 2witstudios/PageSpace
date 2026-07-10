@@ -30,16 +30,16 @@ const actor = {
 
 function makeStore(seed: MachineBranchRecord[] = []) {
   const rows = new Map<string, MachineBranchRecord>();
-  const key = (terminalId: string, projectName: string, branchName: string) => `${terminalId}\0${projectName}\0${branchName}`;
-  for (const row of seed) rows.set(key(row.terminalId, row.projectName, row.branchName), row);
+  const key = (machineId: string, projectName: string, branchName: string) => `${machineId}\0${projectName}\0${branchName}`;
+  for (const row of seed) rows.set(key(row.machineId, row.projectName, row.branchName), row);
   let counter = 0;
   const store: MachineBranchStore = {
-    list: async (terminalId, projectName) =>
-      [...rows.values()].filter((r) => r.terminalId === terminalId && r.projectName === projectName),
-    findByName: async (terminalId, projectName, branchName) => rows.get(key(terminalId, projectName, branchName)) ?? null,
+    list: async (machineId, projectName) =>
+      [...rows.values()].filter((r) => r.machineId === machineId && r.projectName === projectName),
+    findByName: async (machineId, projectName, branchName) => rows.get(key(machineId, projectName, branchName)) ?? null,
     findById: async (id) => [...rows.values()].find((r) => r.id === id) ?? null,
     create: async (input) => {
-      const k = key(input.terminalId, input.projectName, input.branchName);
+      const k = key(input.machineId, input.projectName, input.branchName);
       if (rows.has(k)) {
         throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
       }
@@ -47,7 +47,7 @@ function makeStore(seed: MachineBranchRecord[] = []) {
       const row: MachineBranchRecord = {
         id: `branch-${counter}`,
         ownerId: input.ownerId,
-        terminalId: input.terminalId,
+        machineId: input.machineId,
         projectName: input.projectName,
         branchName: input.branchName,
         sessionKey: input.sessionKey,
@@ -68,8 +68,8 @@ function makeStore(seed: MachineBranchRecord[] = []) {
       }
       return false;
     },
-    remove: async (terminalId, projectName, branchName) => {
-      rows.delete(key(terminalId, projectName, branchName));
+    remove: async (machineId, projectName, branchName) => {
+      rows.delete(key(machineId, projectName, branchName));
     },
   };
   return { store, rows };
@@ -191,7 +191,7 @@ describe('spawnBranch', () => {
     const { host, provisionCalls, byId } = makeFakeHost();
     const { deps, store } = makeDeps({ host });
 
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
 
     expect(result).toMatchObject({ ok: true, resumed: false });
     if (!result.ok) throw new Error('expected ok');
@@ -213,7 +213,7 @@ describe('spawnBranch', () => {
     const { host, provisionCalls } = makeFakeHost();
     const { deps } = makeDeps({ host, isEnabled: () => false });
 
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(result).toEqual({ ok: false, reason: 'kill_switch_off' });
     expect(provisionCalls).toHaveLength(0);
   });
@@ -228,14 +228,14 @@ describe('spawnBranch', () => {
         },
       },
     });
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: '../etc', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: '../etc', actor, deps });
     expect(result).toEqual({ ok: false, reason: 'invalid_branch_name' });
     expect(lookedUp).toBe(false);
   });
 
   it('given no such project on this machine, should refuse', async () => {
     const { deps } = makeDeps({ projectStore: makeProjectStore(null) });
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: 'nope', branchName: 'main', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: 'nope', branchName: 'main', actor, deps });
     expect(result).toEqual({ ok: false, reason: 'project_not_found' });
   });
 
@@ -243,7 +243,7 @@ describe('spawnBranch', () => {
     const { host, provisionCalls } = makeFakeHost();
     const { deps } = makeDeps({ host, checkFullEgressEnablement: async () => ({ ok: false, reason: 'containment_unverified' }) });
 
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(result).toEqual({ ok: false, reason: 'containment_unverified' });
     expect(provisionCalls).toHaveLength(0);
   });
@@ -257,7 +257,7 @@ describe('spawnBranch', () => {
     });
     const { deps, store } = makeDeps({ host });
 
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
     expect(killCalls).toHaveLength(1);
     expect(await store.list(TERMINAL_ID, PROJECT_NAME)).toEqual([]);
@@ -275,12 +275,12 @@ describe('spawnBranch', () => {
       if (args.cmd === 'git' && args.args?.[0] === 'clone') {
         void store.create({
           ownerId: 'other-user',
-          terminalId: TERMINAL_ID,
+          machineId: TERMINAL_ID,
           projectName: PROJECT_NAME,
           branchName: 'main',
           sessionKey: deriveBranchSessionKey({
             tenantId: actor.tenantId,
-            terminalId: TERMINAL_ID,
+            machineId: TERMINAL_ID,
             projectName: PROJECT_NAME,
             branchName: 'main',
             secret: SECRET,
@@ -294,7 +294,7 @@ describe('spawnBranch', () => {
     });
     const { deps } = makeDeps({ host, store });
 
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected ok');
     expect(result.resumed).toBe(true);
@@ -312,12 +312,12 @@ describe('spawnBranch', () => {
         // genuinely independent Sprite (not the one we hold).
         void store.create({
           ownerId: 'other-user',
-          terminalId: TERMINAL_ID,
+          machineId: TERMINAL_ID,
           projectName: PROJECT_NAME,
           branchName: 'main',
           sessionKey: deriveBranchSessionKey({
             tenantId: actor.tenantId,
-            terminalId: TERMINAL_ID,
+            machineId: TERMINAL_ID,
             projectName: PROJECT_NAME,
             branchName: 'main',
             secret: SECRET,
@@ -330,7 +330,7 @@ describe('spawnBranch', () => {
     });
     const { deps } = makeDeps({ host, store });
 
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-other-winner', resumed: true });
     // Our own redundant Sprite is killed, but NEVER the winner's.
     expect(provisionCalls).toHaveLength(1);
@@ -358,7 +358,7 @@ describe('spawnBranch', () => {
     });
     const { deps, store } = makeDeps({ host });
 
-    const first = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const first = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     if (!first.ok) throw new Error('expected ok');
     const before = await store.findByName(TERMINAL_ID, PROJECT_NAME, 'main');
     if (!before) throw new Error('expected row');
@@ -368,7 +368,7 @@ describe('spawnBranch', () => {
     racePreviousSandboxId = before.sandboxId;
     armed = true;
 
-    const second = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(second).toEqual({ ok: true, sandboxId: 'sbx-concurrent-winner', resumed: true });
     // Our own re-provisioned (now-redundant) Sprite is killed; the winner's never is.
     expect(killCalls).not.toContain('sbx-concurrent-winner');
@@ -389,7 +389,7 @@ describe('spawnBranch', () => {
     const { deps } = makeDeps({ host });
 
     const result = await spawnBranch({
-      terminalId: TERMINAL_ID,
+      machineId: TERMINAL_ID,
       projectName: PROJECT_NAME,
       branchName: 'feature-new',
       actor,
@@ -411,7 +411,7 @@ describe('spawnBranch', () => {
     });
     const { deps, store } = makeDeps({ host });
 
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(result).toMatchObject({ ok: false, reason: 'checkout_failed' });
     expect(killCalls).toHaveLength(1);
     expect(await store.list(TERMINAL_ID, PROJECT_NAME)).toEqual([]);
@@ -421,10 +421,10 @@ describe('spawnBranch', () => {
     const { host, provisionCalls } = makeFakeHost();
     const { deps } = makeDeps({ host });
 
-    const first = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const first = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(first).toMatchObject({ ok: true, resumed: false });
 
-    const second = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(second).toMatchObject({ ok: true, resumed: true });
     if (!first.ok || !second.ok) throw new Error('expected ok');
     expect(second.sandboxId).toBe(first.sandboxId);
@@ -436,14 +436,14 @@ describe('spawnBranch', () => {
     const { host, provisionCalls } = makeFakeHost();
     const { deps, store } = makeDeps({ host });
 
-    const first = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const first = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     if (!first.ok) throw new Error('expected ok');
 
     const before = await store.findByName(TERMINAL_ID, PROJECT_NAME, 'main');
     // Simulate the Sprite vanishing (reaped) without going through killBranch.
     await host.kill({ machineId: first.sandboxId });
 
-    const second = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(second).toMatchObject({ ok: true, resumed: false });
     if (!second.ok) throw new Error('expected ok');
 
@@ -457,7 +457,7 @@ describe('spawnBranch', () => {
     const { host, byId } = makeFakeHost();
     const { deps } = makeDeps({ host, resolveGitHubToken: async () => null });
 
-    const result = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected ok');
     const state = byId.get(result.sandboxId);
@@ -471,8 +471,8 @@ describe('spawnBranch — isolation between two branches of one project', () => 
     const { host, provisionCalls } = makeFakeHost();
     const { deps } = makeDeps({ host });
 
-    const a = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-a', actor, deps });
-    const b = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-b', actor, deps });
+    const a = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-a', actor, deps });
+    const b = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-b', actor, deps });
     if (!a.ok || !b.ok) throw new Error('expected both spawns to succeed');
 
     expect(a.sandboxId).not.toBe(b.sandboxId);
@@ -484,8 +484,8 @@ describe('spawnBranch — isolation between two branches of one project', () => 
     const { host } = makeFakeHost();
     const { deps } = makeDeps({ host });
 
-    const a = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-a', actor, deps });
-    const b = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-b', actor, deps });
+    const a = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-a', actor, deps });
+    const b = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-b', actor, deps });
     if (!a.ok || !b.ok) throw new Error('expected both spawns to succeed');
 
     const handleA = await host.attach({ machineId: a.sandboxId });
@@ -502,8 +502,8 @@ describe('spawnBranch — isolation between two branches of one project', () => 
     const { host, byId } = makeFakeHost();
     const { deps } = makeDeps({ host });
 
-    const a = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-a', actor, deps });
-    const b = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-b', actor, deps });
+    const a = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-a', actor, deps });
+    const b = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'branch-b', actor, deps });
     if (!a.ok || !b.ok) throw new Error('expected both spawns to succeed');
 
     const stateA = byId.get(a.sandboxId);
@@ -520,29 +520,29 @@ describe('attachBranch', () => {
   it('given an existing, live branch, should reattach to its Sprite', async () => {
     const { host } = makeFakeHost();
     const { deps, store } = makeDeps({ host });
-    const spawned = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const spawned = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     if (!spawned.ok) throw new Error('expected ok');
 
-    const result = await attachBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
+    const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
     expect(result).toEqual({ ok: true, sandboxId: spawned.sandboxId });
   });
 
   it('given no tracked branch, should return not_found', async () => {
     const { host } = makeFakeHost();
     const { store } = makeDeps({ host });
-    const result = await attachBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'nope', store, host });
+    const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'nope', store, host });
     expect(result).toEqual({ ok: false, reason: 'not_found' });
   });
 
   it('given a tracked branch whose Sprite has vanished, should return vanished', async () => {
     const { host } = makeFakeHost();
     const { deps, store } = makeDeps({ host });
-    const spawned = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const spawned = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     if (!spawned.ok) throw new Error('expected ok');
 
     await host.kill({ machineId: spawned.sandboxId });
 
-    const result = await attachBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
+    const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
     expect(result).toEqual({ ok: false, reason: 'vanished' });
   });
 });
@@ -551,10 +551,10 @@ describe('killBranch', () => {
   it('given an existing branch, should DELETE its Sprite through the MachineHost seam and drop the tracking row', async () => {
     const { host, killCalls } = makeFakeHost();
     const { deps, store } = makeDeps({ host });
-    const spawned = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const spawned = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     if (!spawned.ok) throw new Error('expected ok');
 
-    const result = await killBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
+    const result = await killBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
     expect(result).toEqual({ ok: true });
     expect(killCalls).toContain(spawned.sandboxId);
     expect(await store.findByName(TERMINAL_ID, PROJECT_NAME, 'main')).toBeNull();
@@ -563,7 +563,7 @@ describe('killBranch', () => {
   it('given no such tracked branch, should return not_found without touching the host', async () => {
     const { host, killCalls } = makeFakeHost();
     const { store } = makeDeps({ host });
-    const result = await killBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'nope', store, host });
+    const result = await killBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'nope', store, host });
     expect(result).toEqual({ ok: false, reason: 'not_found' });
     expect(killCalls).toHaveLength(0);
   });
@@ -571,7 +571,7 @@ describe('killBranch', () => {
   it('given the Sprite is unreachable, should keep the tracking row so a retry can still find it (no orphans)', async () => {
     const { host } = makeFakeHost();
     const { deps, store } = makeDeps({ host });
-    const spawned = await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const spawned = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     if (!spawned.ok) throw new Error('expected ok');
 
     const failingHost: MachineHost = {
@@ -581,7 +581,7 @@ describe('killBranch', () => {
       },
     };
 
-    const result = await killBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host: failingHost });
+    const result = await killBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host: failingHost });
     expect(result).toEqual({ ok: false, reason: 'error' });
     expect(await store.findByName(TERMINAL_ID, PROJECT_NAME, 'main')).not.toBeNull();
   });
@@ -591,16 +591,16 @@ describe('listBranches', () => {
   it('given branches tracked on a project, should list only that project\'s branches', async () => {
     const { host } = makeFakeHost();
     const { deps, store } = makeDeps({ host });
-    await spawnBranch({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     await spawnBranch({
-      terminalId: TERMINAL_ID,
+      machineId: TERMINAL_ID,
       projectName: 'other-repo',
       branchName: 'main',
       actor,
       deps: { ...deps, projectStore: makeProjectStore(REPO_URL) },
     });
 
-    const result = await listBranches({ terminalId: TERMINAL_ID, projectName: PROJECT_NAME, store });
+    const result = await listBranches({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, store });
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ branchName: 'main', projectName: PROJECT_NAME });
   });

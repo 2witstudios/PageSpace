@@ -3,7 +3,7 @@
  *
  * Binds the provider-agnostic orchestration (`@pagespace/lib/services/machines/
  * machine-projects`) to the real implementations. A Machine's identity is its
- * backing page (`terminalId`) — Projects clone onto the SAME persistent Sprite
+ * backing page (`machineId`) — Projects clone onto the SAME persistent Sprite
  * session (`terminal_sessions` / `acquireTerminalSandbox`) that a live
  * Terminal shell or a page-agent's "own machine" tool calls already
  * reconnect to, not a separate one. The underlying Sprite client
@@ -37,7 +37,7 @@ import {
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { defaultBuildEnv } from '@pagespace/lib/services/sandbox/tool-runners';
 import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
-import { isTerminalPage } from '@pagespace/lib/content/page-types.config';
+import { isMachinePage } from '@pagespace/lib/content/page-types.config';
 import type { PageType } from '@pagespace/lib/utils/enums';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -110,42 +110,42 @@ export async function resolveMachineActorContext(userId: string): Promise<Machin
   };
 }
 
-async function findTerminalPage(terminalId: string) {
+async function findMachinePage(machineId: string) {
   const page = await db.query.pages.findFirst({
-    where: eq(pages.id, terminalId),
+    where: eq(pages.id, machineId),
     columns: { type: true, driveId: true },
   });
-  if (!page || !isTerminalPage(page.type as PageType)) return null;
+  if (!page || !isMachinePage(page.type as PageType)) return null;
   return page;
 }
 
 /** Edit-level access (add/remove) — re-checked on every acquire, not cached. */
-export async function canAccessMachine(actorUserId: string, terminalId: string): Promise<boolean> {
-  const page = await findTerminalPage(terminalId);
+export async function canAccessMachine(actorUserId: string, machineId: string): Promise<boolean> {
+  const page = await findMachinePage(machineId);
   if (!page) return false;
-  return canUserEditPage(actorUserId, terminalId);
+  return canUserEditPage(actorUserId, machineId);
 }
 
 /** View-level access (list) — looser than edit-level. */
-export async function canViewMachine(actorUserId: string, terminalId: string): Promise<boolean> {
-  const page = await findTerminalPage(terminalId);
+export async function canViewMachine(actorUserId: string, machineId: string): Promise<boolean> {
+  const page = await findMachinePage(machineId);
   if (!page) return false;
-  return canUserViewPage(actorUserId, terminalId);
+  return canUserViewPage(actorUserId, machineId);
 }
 
 export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string }): MachineProjectsDeps {
   return {
     store: {
-      list: async (terminalId) => (await getMachineProjectStore()).list(terminalId),
-      findByName: async (terminalId, name) => (await getMachineProjectStore()).findByName(terminalId, name),
+      list: async (machineId) => (await getMachineProjectStore()).list(machineId),
+      findByName: async (machineId, name) => (await getMachineProjectStore()).findByName(machineId, name),
       create: async (input) => (await getMachineProjectStore()).create(input),
-      remove: async (terminalId, name) => (await getMachineProjectStore()).remove(terminalId, name),
+      remove: async (machineId, name) => (await getMachineProjectStore()).remove(machineId, name),
     },
     isEnabled: isCodeExecutionEnabled,
     now: () => new Date(),
-    acquireMachineSandbox: async (terminalId): Promise<MachineAcquireResult> => {
+    acquireMachineSandbox: async (machineId): Promise<MachineAcquireResult> => {
       const page = await db.query.pages.findFirst({
-        where: eq(pages.id, terminalId),
+        where: eq(pages.id, machineId),
         columns: { driveId: true },
       });
       if (!page) return { ok: false, reason: 'not_found' };
@@ -157,16 +157,16 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
 
       // Resume re-authz: re-verify edit access for the CURRENT actor on every
       // acquire, never trusting a permission check cached from an earlier request.
-      const canRun = isCodeExecutionEnabled() && (await canAccessMachine(actorUserId, terminalId));
+      const canRun = isCodeExecutionEnabled() && (await canAccessMachine(actorUserId, machineId));
 
       const nowMs = Date.now();
       if (canRun) {
-        const guardrail = checkMachineRuntimeGuardrail({ machineKey: terminalId, now: nowMs });
+        const guardrail = checkMachineRuntimeGuardrail({ machineKey: machineId, now: nowMs });
         if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
       }
 
       const result = await acquireTerminalSandbox({
-        pageId: terminalId,
+        pageId: machineId,
         driveId: page.driveId,
         tenantId: drive.ownerId,
         userId: actorUserId,
@@ -185,7 +185,7 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
       });
 
       if (!result.ok) return { ok: false, reason: result.reason, cause: result.cause };
-      recordMachineActivity({ machineKey: terminalId, now: nowMs });
+      recordMachineActivity({ machineKey: machineId, now: nowMs });
       return { ok: true, sandboxId: result.sandboxId, resumed: result.resumed };
     },
     reconnect: async (sandboxId) => (await getSandboxClient()).get({ sandboxId }),
