@@ -9,7 +9,8 @@
  * The three scopes and their exact semantics:
  *
  *   uncommitted — working tree vs the last commit.
- *     File list: `git status --porcelain -z`.
+ *     File list: `git status --porcelain -z -uall` (see STATUS_PORCELAIN_ARGS
+ *     for why `-uall`).
  *     original = blob at HEAD, modified = working-tree file.
  *
  *   committed — the branch's own commits vs where it forked from the main
@@ -24,7 +25,7 @@
  *     File list: `git diff --name-status -z --merge-base <base>` (one ref, no
  *     second side — `--merge-base <commit>` compares the WORKING TREE against
  *     merge-base(<commit>, HEAD)) UNIONED with the untracked working-tree
- *     files from `git status --porcelain -z`. `git diff` lists only TRACKED
+ *     files from `git status --porcelain -z -uall`. `git diff` lists only TRACKED
  *     differences, so a brand-new never-added file would otherwise be missing
  *     from a scope that is documented to include all uncommitted working-tree
  *     changes; `untrackedArgs` on the resolution below supplies exactly that
@@ -71,6 +72,17 @@ export function isMachineDiffScope(value: string): value is MachineDiffScope {
 export const DIFF_BASE_REF = 'origin/HEAD';
 
 /**
+ * The `git status` argv shared by the uncommitted scope's file list and the
+ * branch scope's untracked supplement. `-uall` (`--untracked-files=all`) is
+ * REQUIRED, not cosmetic: the default (`normal`) mode collapses a brand-new
+ * untracked directory into a single `dir/` entry, which the per-file pair
+ * route would then try to `readMachineFile` as a file (→ null/404) instead of
+ * showing the files inside. `-uall` expands the directory into its individual
+ * untracked files. `-z` keeps NUL framing so paths are never C-quoted.
+ */
+const STATUS_PORCELAIN_ARGS: readonly string[] = ['status', '--porcelain', '-z', '-uall'];
+
+/**
  * Is this branch name the repo's main branch? Compared against the literal
  * default-branch names ('master'/'main', case-sensitive) — the convention this
  * codebase already uses for default-branch naming; deliberately NOT a new DB
@@ -115,13 +127,13 @@ export function resolveDiffScope(
   }
   switch (requestedScope) {
     case 'uncommitted':
-      return { gitArgs: ['status', '--porcelain', '-z'] };
+      return { gitArgs: [...STATUS_PORCELAIN_ARGS] };
     case 'committed':
       return { gitArgs: ['diff', '--name-status', '-z', `${DIFF_BASE_REF}...HEAD`] };
     case 'branch':
       return {
         gitArgs: ['diff', '--name-status', '-z', '--merge-base', DIFF_BASE_REF],
-        untrackedArgs: ['status', '--porcelain', '-z'],
+        untrackedArgs: [...STATUS_PORCELAIN_ARGS],
       };
   }
 }

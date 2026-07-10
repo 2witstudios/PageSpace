@@ -121,7 +121,7 @@ describe('resolveMachineMergeBase', () => {
 describe('listMachineDiffFiles', () => {
   it('uncommitted: runs status --porcelain -z only (no merge-base) and parses the working-tree list', async () => {
     const { deps, calls } = makeDeps(
-      scriptGit({ 'status --porcelain -z': { exitCode: 0, stdout: ' M src/a.ts\0?? new.ts\0', stderr: '' } }),
+      scriptGit({ 'status --porcelain -z -uall': { exitCode: 0, stdout: ' M src/a.ts\0?? new.ts\0', stderr: '' } }),
     );
     const result = await listMachineDiffFiles({
       branchName: 'feature/x',
@@ -131,7 +131,7 @@ describe('listMachineDiffFiles', () => {
       ctx: makeCtx(),
       deps,
     });
-    expect(calls).toEqual([{ cmd: 'git', args: ['status', '--porcelain', '-z'] }]);
+    expect(calls).toEqual([{ cmd: 'git', args: ['status', '--porcelain', '-z', '-uall'] }]);
     expect(result).toEqual({
       ok: true,
       notApplicable: false,
@@ -180,7 +180,7 @@ describe('listMachineDiffFiles', () => {
       scriptGit({
         'diff --name-status -z --merge-base origin/HEAD': { exitCode: 0, stdout: 'M\0src/a.ts\0', stderr: '' },
         // `git diff` omits untracked files — the supplement supplies the brand-new one.
-        'status --porcelain -z': { exitCode: 0, stdout: ' M src/a.ts\0?? brand-new.ts\0', stderr: '' },
+        'status --porcelain -z -uall': { exitCode: 0, stdout: ' M src/a.ts\0?? brand-new.ts\0', stderr: '' },
         'merge-base origin/HEAD HEAD': { exitCode: 0, stdout: `${MERGE_BASE_SHA}\n`, stderr: '' },
       }),
     );
@@ -194,7 +194,7 @@ describe('listMachineDiffFiles', () => {
     });
     expect(calls.map((c) => c.args)).toEqual([
       ['diff', '--name-status', '-z', '--merge-base', 'origin/HEAD'],
-      ['status', '--porcelain', '-z'],
+      ['status', '--porcelain', '-z', '-uall'],
       ['merge-base', 'origin/HEAD', 'HEAD'],
     ]);
     expect(result).toEqual({
@@ -215,7 +215,7 @@ describe('listMachineDiffFiles', () => {
       scriptGit({
         // pathological: same path deleted in the tracked diff AND present untracked on disk
         'diff --name-status -z --merge-base origin/HEAD': { exitCode: 0, stdout: 'D\0src/dup.ts\0', stderr: '' },
-        'status --porcelain -z': { exitCode: 0, stdout: '?? src/dup.ts\0?? src/genuinely-new.ts\0', stderr: '' },
+        'status --porcelain -z -uall': { exitCode: 0, stdout: '?? src/dup.ts\0?? src/genuinely-new.ts\0', stderr: '' },
         'merge-base origin/HEAD HEAD': { exitCode: 0, stdout: `${MERGE_BASE_SHA}\n`, stderr: '' },
       }),
     );
@@ -246,7 +246,7 @@ describe('listMachineDiffFiles', () => {
     const { deps } = makeDeps(
       scriptGit({
         'diff --name-status -z --merge-base origin/HEAD': { exitCode: 0, stdout: 'M\0src/a.ts\0', stderr: '' },
-        'status --porcelain -z': { exitCode: 0, stdout: oversized, stderr: '' },
+        'status --porcelain -z -uall': { exitCode: 0, stdout: oversized, stderr: '' },
         'merge-base origin/HEAD HEAD': { exitCode: 0, stdout: `${MERGE_BASE_SHA}\n`, stderr: '' },
       }),
     );
@@ -265,7 +265,7 @@ describe('listMachineDiffFiles', () => {
     const { deps } = makeDeps(
       scriptGit({
         'diff --name-status -z --merge-base origin/HEAD': { exitCode: 0, stdout: 'M\0src/a.ts\0', stderr: '' },
-        'status --porcelain -z': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n' },
+        'status --porcelain -z -uall': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n' },
       }),
     );
     const result = await listMachineDiffFiles({
@@ -316,7 +316,7 @@ describe('listMachineDiffFiles', () => {
   it('maps a failing diff command to exec_failed with stderr detail', async () => {
     const { deps } = makeDeps(
       scriptGit({
-        'status --porcelain -z': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n' },
+        'status --porcelain -z -uall': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n' },
       }),
     );
     const result = await listMachineDiffFiles({

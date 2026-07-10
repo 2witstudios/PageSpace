@@ -32,14 +32,14 @@ describe('resolveDiffScope', () => {
       branchName: 'feature/x',
       isMainBranch: false,
       scope: 'uncommitted',
-      expected: { gitArgs: ['status', '--porcelain', '-z'] },
+      expected: { gitArgs: ['status', '--porcelain', '-z', '-uall'] },
     },
     {
       name: 'uncommitted on the main branch stays applicable (working tree vs last commit is always meaningful)',
       branchName: 'master',
       isMainBranch: true,
       scope: 'uncommitted',
-      expected: { gitArgs: ['status', '--porcelain', '-z'] },
+      expected: { gitArgs: ['status', '--porcelain', '-z', '-uall'] },
     },
     {
       name: 'committed on a feature branch → three-dot diff (merge-base..HEAD) against the default branch',
@@ -62,7 +62,7 @@ describe('resolveDiffScope', () => {
       scope: 'branch',
       expected: {
         gitArgs: ['diff', '--name-status', '-z', '--merge-base', DIFF_BASE_REF],
-        untrackedArgs: ['status', '--porcelain', '-z'],
+        untrackedArgs: ['status', '--porcelain', '-z', '-uall'],
       },
     },
     {
@@ -99,7 +99,7 @@ describe('resolveDiffScope', () => {
 
   it('attaches untrackedArgs ONLY to branch scope (the diff-omits-untracked supplement)', () => {
     const branch = resolveDiffScope('feature/x', false, 'branch');
-    expect('gitArgs' in branch && branch.untrackedArgs).toEqual(['status', '--porcelain', '-z']);
+    expect('gitArgs' in branch && branch.untrackedArgs).toEqual(['status', '--porcelain', '-z', '-uall']);
     for (const scope of ['uncommitted', 'committed'] as const) {
       const resolution = resolveDiffScope('feature/x', false, scope);
       expect('gitArgs' in resolution && resolution.untrackedArgs).toBeUndefined();
