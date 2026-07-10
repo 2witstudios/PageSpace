@@ -472,6 +472,16 @@
       "import": "./dist/services/sandbox/machine-git-blob.js",
       "require": "./dist/services/sandbox/machine-git-blob.js"
     },
+    "./services/sandbox/machine-diff-scope": {
+      "types": "./dist/services/sandbox/machine-diff-scope.d.ts",
+      "import": "./dist/services/sandbox/machine-diff-scope.js",
+      "require": "./dist/services/sandbox/machine-diff-scope.js"
+    },
+    "./services/sandbox/machine-diff": {
+      "types": "./dist/services/sandbox/machine-diff.d.ts",
+      "import": "./dist/services/sandbox/machine-diff.js",
+      "require": "./dist/services/sandbox/machine-diff.js"
+    },
     "./services/sandbox/tool-runners": {
       "types": "./dist/services/sandbox/tool-runners.d.ts",
       "import": "./dist/services/sandbox/tool-runners.js",
@@ -1664,6 +1674,12 @@
       ],
       "services/sandbox/machine-git-blob": [
         "./dist/services/sandbox/machine-git-blob.d.ts"
+      ],
+      "services/sandbox/machine-diff-scope": [
+        "./dist/services/sandbox/machine-diff-scope.d.ts"
+      ],
+      "services/sandbox/machine-diff": [
+        "./dist/services/sandbox/machine-diff.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"

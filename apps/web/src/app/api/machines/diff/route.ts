@@ -1,0 +1,173 @@
+/**
+ * Machine Diff API — the Diff tab's 3-way scope surface (Machine page
+ * rebuild, Phase 1). Composes the two merged read primitives (working-tree
+ * `/api/machines/files`, git-object `/api/machines/git-blob`) behind one
+ * scope-aware endpoint; all scope semantics live in the PURE
+ * `machine-diff-scope.ts` and are executed by the DI'd `machine-diff.ts`.
+ *
+ * GET ?terminalId=&projectName=&branchName=&scope=uncommitted|committed|branch
+ *   → { notApplicable: false, scope, files: [{ path, status, previousPath? }],
+ *       truncated, mergeBase }
+ *     the changed-file list for the scope; `mergeBase` (committed/branch
+ *     scopes) is the concrete SHA a client may pass as `ref` to
+ *     `/api/machines/git-blob` for 'original' sides.
+ *
+ * GET …&path=<repo-relative file>
+ *   → { notApplicable: false, scope, path, original, modified }
+ *     ONE file's diff pair, each side read from the scope's source
+ *     (merge-base blob / HEAD blob / working tree); a side is null when the
+ *     file does not exist there (added file's original, deleted file's
+ *     modified).
+ *
+ * On the main branch ('master'/'main' — the literal default-branch names,
+ * there is no schema flag), the 'committed' and 'branch' scopes are
+ * meaningless (a merge-base with itself), so both forms return
+ * `{ notApplicable: true }` as an EXPLICIT 200 — not empty data, not a 4xx —
+ * so the client renders a disabled scope toggle without inferring anything.
+ * That answer needs no sandbox, so it is returned before the machine handle
+ * is even resolved — it works while the machine is off.
+ *
+ * Session-only (no MCP/agent tokens) — a human/UI browsing surface; the git
+ * calls go through `runGitInSandbox`, NOT the AI-tool orchestration — same
+ * convention as the Files/Git-Blob routes.
+ */
+
+import { NextResponse } from 'next/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { listMachineDiffFiles, readMachineDiffPair } from '@pagespace/lib/services/sandbox/machine-diff';
+import { isMachineDiffScope, isMainBranchName, resolveDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
+import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
+import { resolvePathWithinSync } from '@pagespace/lib/security/path-validator';
+import {
+  canViewMachine,
+  resolveBranchMachineHandle,
+  resolveMachineActorContext,
+  buildDiffActorContext,
+  buildDiffGitDepsForHandle,
+} from '@/lib/machines/machine-diff-runtime';
+
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+
+function requireString(value: unknown, field: string): { ok: true; value: string } | { ok: false; error: NextResponse } {
+  if (typeof value !== 'string' || value.length === 0) {
+    return { ok: false, error: NextResponse.json({ error: `${field} is required` }, { status: 400 }) };
+  }
+  return { ok: true, value };
+}
+
+const DENIAL_STATUS: Record<string, number> = {
+  exec_failed: 502,
+  merge_base_failed: 502,
+};
+
+export async function GET(request: Request) {
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
+  if (isAuthError(auth)) return auth.error;
+
+  const url = new URL(request.url);
+  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
+  if (!terminalId.ok) return terminalId.error;
+  const projectName = requireString(url.searchParams.get('projectName'), 'projectName');
+  if (!projectName.ok) return projectName.error;
+  const branchName = requireString(url.searchParams.get('branchName'), 'branchName');
+  if (!branchName.ok) return branchName.error;
+
+  // Authorize BEFORE parsing scope/path, so a user without view access gets a
+  // uniform 403 and can never probe scope/path handling.
+  if (!(await canViewMachine(auth.userId, terminalId.value))) {
+    return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
+  }
+
+  const scope = url.searchParams.get('scope');
+  if (scope === null || !isMachineDiffScope(scope)) {
+    return NextResponse.json({ error: "scope must be 'uncommitted', 'committed', or 'branch'" }, { status: 400 });
+  }
+
+  // The main-branch answer is pure — no handle, no git — so it comes first
+  // and holds even while the machine is stopped.
+  const isMainBranch = isMainBranchName(branchName.value);
+  if ('notApplicable' in resolveDiffScope(branchName.value, isMainBranch, scope)) {
+    return NextResponse.json({ notApplicable: true });
+  }
+
+  // `path` selects the per-file pair form; it is untrusted and repo-relative,
+  // so confine its working-tree resolution under the checkout root before any
+  // filesystem access (blob sides resolve inside a ref's own git tree and
+  // cannot escape by construction).
+  const rawPath = url.searchParams.get('path');
+  const workingTreePath = rawPath !== null && rawPath.length > 0 ? resolvePathWithinSync(BRANCH_REPO_PATH, rawPath) : null;
+  if (rawPath !== null && rawPath.length > 0 && workingTreePath === null) {
+    return NextResponse.json({ error: 'path escapes the branch checkout root' }, { status: 400 });
+  }
+
+  const resolved = await resolveBranchMachineHandle({
+    terminalId: terminalId.value,
+    projectName: projectName.value,
+    branchName: branchName.value,
+  });
+  if (!resolved.ok) {
+    return NextResponse.json(
+      { error: `Branch machine ${resolved.reason}`, reason: resolved.reason },
+      { status: resolved.reason === 'not_found' ? 404 : 503 },
+    );
+  }
+
+  const actor = await resolveMachineActorContext(auth.userId);
+  const scopeKey = `${terminalId.value}:${projectName.value}:${branchName.value}:diff`;
+  const ctx = buildDiffActorContext(scopeKey, actor);
+  const deps = buildDiffGitDepsForHandle(resolved.handle);
+
+  if (rawPath !== null && rawPath.length > 0 && workingTreePath !== null) {
+    const result = await readMachineDiffPair({
+      branchName: branchName.value,
+      isMainBranch,
+      scope,
+      path: rawPath,
+      workingTreePath,
+      cwd: BRANCH_REPO_PATH,
+      handle: resolved.handle,
+      ctx,
+      deps,
+    });
+    if (!result.ok) {
+      return NextResponse.json(
+        { error: result.detail ?? result.reason, reason: result.reason },
+        { status: DENIAL_STATUS[result.reason] ?? 500 },
+      );
+    }
+    if (result.notApplicable) return NextResponse.json({ notApplicable: true });
+    if (result.original === null && result.modified === null) {
+      return NextResponse.json({ error: 'File not found in this diff scope' }, { status: 404 });
+    }
+    return NextResponse.json({
+      notApplicable: false,
+      scope,
+      path: rawPath,
+      original: result.original,
+      modified: result.modified,
+    });
+  }
+
+  const result = await listMachineDiffFiles({
+    branchName: branchName.value,
+    isMainBranch,
+    scope,
+    cwd: BRANCH_REPO_PATH,
+    ctx,
+    deps,
+  });
+  if (!result.ok) {
+    return NextResponse.json(
+      { error: result.detail ?? result.reason, reason: result.reason },
+      { status: DENIAL_STATUS[result.reason] ?? 500 },
+    );
+  }
+  if (result.notApplicable) return NextResponse.json({ notApplicable: true });
+  return NextResponse.json({
+    notApplicable: false,
+    scope,
+    files: result.files,
+    truncated: result.truncated,
+    mergeBase: result.mergeBase,
+  });
+}
