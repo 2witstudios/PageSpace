@@ -11,7 +11,7 @@
  * - 'genesis' as the chain start (no chainSeed concept)
  */
 
-import { db } from '@pagespace/db/db';
+import { db as defaultDb } from '@pagespace/db/db';
 import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import { asc, count, and, gte, lte, type SQL } from 'drizzle-orm';
 import { loggers } from '../logging/logger-config';
@@ -49,6 +49,11 @@ export interface VerifySecurityChainOptions {
   batchSize?: number;
 }
 
+export interface VerifySecurityChainDeps {
+  /** Drizzle client to read from. Defaults to the main app db. */
+  db?: typeof defaultDb;
+}
+
 /**
  * Stored entry shape used for verification.
  */
@@ -81,13 +86,15 @@ interface StoredSecurityEntry {
  * 4. Verify previousHash matches the prior entry's eventHash (chain-link check)
  */
 export async function verifySecurityAuditChain(
-  options: VerifySecurityChainOptions = {}
+  options: VerifySecurityChainOptions = {},
+  deps: VerifySecurityChainDeps = {}
 ): Promise<SecurityChainVerificationResult> {
   const {
     limit,
     stopOnFirstBreak = true,
     batchSize = 1000,
   } = options;
+  const db = deps.db ?? defaultDb;
 
   const verificationStartedAt = new Date();
   let totalEntries = 0;
