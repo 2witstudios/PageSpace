@@ -360,3 +360,98 @@ describe.skipIf(!url)('upgrade path — partitioning a DB that already holds cha
     expect(rows[0]).toEqual({ app_ins: true, app_del: false, siem_ins: true, siem_upd: false });
   });
 });
+
+describe.skipIf(!url)('DEFAULT-partition poisoning containment (0003 hardening)', () => {
+  // Reproduces the REVIEW 2026-07-10 MINOR finding: a row for month M sitting
+  // in the DEFAULT partition makes CREATE TABLE ... FOR VALUES for month M
+  // fail ("updated partition constraint for default partition would be
+  // violated"). Pre-0003 that single failure rolled back EVERY month in the
+  // call; hardened, month M fails alone, the others are created, and the
+  // failure is reported via WARNING.
+  let pool: Pool;
+  const POISONED_OFFSET = 4; // first month beyond the migration-seeded horizon (0..3)
+
+  beforeAll(async () => {
+    pool = new Pool({ connectionString: url, max: 3 });
+    await resetScratchDb(pool);
+    await migrateAdminDb({ ADMIN_DATABASE_URL: url });
+
+    // Poison: a security_audit_log row for month +4 has no monthly partition
+    // yet, so it lands in DEFAULT — exactly what a >horizon cron outage causes.
+    await pool.query(
+      `INSERT INTO security_audit_log (id, event_type, "timestamp", previous_hash, event_hash)
+       VALUES ('poison-row', 'auth.login.success', $1, 'GENESIS', 'poison-hash')`,
+      [midMonthUtc(POISONED_OFFSET)],
+    );
+  });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it('should have the poison row sitting in the DEFAULT partition', async () => {
+    const { rows } = await pool.query(
+      `SELECT tableoid::regclass::text AS partition FROM security_audit_log WHERE id = 'poison-row'`,
+    );
+    expect(rows[0].partition).toBe('security_audit_log_default');
+  });
+
+  it('should create every unpoisoned month, skip ONLY the poisoned one, and WARN with its name', async () => {
+    const client = await pool.connect();
+    const warnings: string[] = [];
+    client.on('notice', (msg) => {
+      if (msg.message) warnings.push(msg.message);
+    });
+    try {
+      // Horizon 6: for security_audit_log months +4 (poisoned), +5, +6;
+      // for siem_delivery_receipts (unpoisoned) months +4, +5, +6.
+      const { rows } = await client.query('SELECT admin_ensure_partitions(6) AS created');
+      expect(rows[0].created).toBe(5); // 2 + 3 — everything except the poisoned month
+    } finally {
+      client.release();
+    }
+
+    const auditPartitions = await listPartitions(pool, 'security_audit_log');
+    expect(auditPartitions).not.toContain(partitionName('security_audit_log', POISONED_OFFSET));
+    expect(auditPartitions).toContain(partitionName('security_audit_log', 5));
+    expect(auditPartitions).toContain(partitionName('security_audit_log', 6));
+
+    const receiptPartitions = await listPartitions(pool, 'siem_delivery_receipts');
+    for (const offset of [4, 5, 6]) {
+      expect(receiptPartitions).toContain(partitionName('siem_delivery_receipts', offset));
+    }
+
+    expect(
+      warnings.some((w) => w.includes(partitionName('security_audit_log', POISONED_OFFSET))),
+    ).toBe(true);
+  });
+
+  it('should create the poisoned month after ops repair (move rows out of DEFAULT, rerun)', async () => {
+    // The documented repair: move the stranded rows out of DEFAULT, create the
+    // month, put them back. Runs as the migrate identity (table owner) — no
+    // zero-trust role holds DELETE, by design.
+    const { rows: moved } = await pool.query(
+      `DELETE FROM security_audit_log WHERE id = 'poison-row'
+       RETURNING id, event_type, "timestamp", previous_hash, event_hash`,
+    );
+    expect(moved).toHaveLength(1);
+
+    const { rows } = await pool.query('SELECT admin_ensure_partitions(6) AS created');
+    expect(rows[0].created).toBe(1); // exactly the previously poisoned month
+
+    const row = moved[0];
+    await pool.query(
+      `INSERT INTO security_audit_log (id, event_type, "timestamp", previous_hash, event_hash)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [row.id, row.event_type, row.timestamp, row.previous_hash, row.event_hash],
+    );
+    const { rows: routed } = await pool.query(
+      `SELECT tableoid::regclass::text AS partition FROM security_audit_log WHERE id = 'poison-row'`,
+    );
+    expect(routed[0].partition).toBe(partitionName('security_audit_log', POISONED_OFFSET));
+
+    // Fully healed: a rerun has nothing left to create.
+    const rerun = await pool.query('SELECT admin_ensure_partitions(6) AS created');
+    expect(rerun.rows[0].created).toBe(0);
+  });
+});

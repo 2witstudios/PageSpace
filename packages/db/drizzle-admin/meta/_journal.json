@@ -22,6 +22,13 @@
       "when": 1783657358022,
       "tag": "0002_partition_chain_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783659177987,
+      "tag": "0003_harden_ensure_partitions",
+      "breakpoints": true
     }
   ]
 }

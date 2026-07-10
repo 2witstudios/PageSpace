@@ -21,10 +21,13 @@ const sql = migrationFile
   ? readFileSync(path.join(ADMIN_MIGRATIONS_DIR, migrationFile), 'utf8')
   : '';
 /** SQL with line comments stripped, so assertions never match prose. */
-const code = sql
-  .split('\n')
-  .filter((line) => !line.trimStart().startsWith('--'))
-  .join('\n');
+function stripComments(raw: string): string {
+  return raw
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n');
+}
+const code = stripComments(sql);
 
 describe('drizzle-admin/0002 monthly-partitioning migration', () => {
   it('should exist in the admin journal as migration 0002', () => {
@@ -189,5 +192,60 @@ describe('drizzle-admin/0002 monthly-partitioning migration', () => {
       expect(grant).not.toMatch(/\bTRUNCATE\b/);
       expect(grant).not.toMatch(/\bGRANT\s+ALL\b/);
     }
+  });
+});
+
+describe('drizzle-admin/0003 per-month exception hardening of admin_ensure_partitions', () => {
+  // REVIEW 2026-07-10 MINOR: one poisoned month (rows for month M sitting in
+  // the DEFAULT partition) aborted the ENTIRE create-ahead call, rolling back
+  // every other month — after a long cron outage this self-perpetuates. 0003
+  // replaces the function so each partition CREATE is its own plpgsql
+  // exception scope: a poisoned month fails ALONE and is reported via
+  // WARNING; every other month is still created.
+  const hardeningFile = readdirSync(ADMIN_MIGRATIONS_DIR).find((f) =>
+    /^0003_.*\.sql$/.test(f),
+  );
+  const hardeningCode = stripComments(
+    hardeningFile ? readFileSync(path.join(ADMIN_MIGRATIONS_DIR, hardeningFile), 'utf8') : '',
+  );
+
+  it('should exist in the admin journal as migration 0003 (never edit an applied migration)', () => {
+    expect(hardeningFile).toBeDefined();
+    const journal = JSON.parse(
+      readFileSync(path.join(ADMIN_MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
+    ) as { entries: Array<{ idx: number; tag: string }> };
+    expect(`${journal.entries.find((e) => e.idx === 3)?.tag}.sql`).toBe(hardeningFile);
+  });
+
+  it('should CREATE OR REPLACE the function with the same signature, SECURITY DEFINER, and pinned search_path', () => {
+    expect(hardeningCode).toContain(
+      'CREATE OR REPLACE FUNCTION admin_ensure_partitions(months_ahead integer DEFAULT 3)',
+    );
+    expect(hardeningCode).toContain('RETURNS integer');
+    expect(hardeningCode).toContain('SECURITY DEFINER');
+    expect(hardeningCode).toContain('SET search_path = public, pg_temp');
+  });
+
+  it('should wrap each partition CREATE in its own exception scope so one poisoned month fails alone', () => {
+    // One handler for the DEFAULT safety net, one inside the month loop.
+    const handlers = hardeningCode.match(/EXCEPTION WHEN OTHERS THEN/g) ?? [];
+    expect(handlers.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('should report every failed partition by name via WARNING (visible to the cron log)', () => {
+    const warnings = hardeningCode.match(/RAISE WARNING[^;]+;/g) ?? [];
+    expect(warnings.length).toBeGreaterThanOrEqual(1);
+    expect(warnings.some((w) => w.includes('part_name') || w.includes('failed'))).toBe(true);
+  });
+
+  it('should keep the horizon guard and still return the created count', () => {
+    expect(hardeningCode).toContain('months_ahead < 0 OR months_ahead > 120');
+    expect(hardeningCode).toContain('RETURN created');
+  });
+
+  it('should contain NO drop path and NO grant changes (CREATE OR REPLACE preserves the 0002 ACL)', () => {
+    expect(hardeningCode).not.toMatch(/\bDROP\b/);
+    expect(hardeningCode).not.toMatch(/\bGRANT\b/);
+    expect(hardeningCode).not.toMatch(/\bREVOKE\b/);
   });
 });
