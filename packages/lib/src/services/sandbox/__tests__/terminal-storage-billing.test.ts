@@ -256,6 +256,25 @@ describe('measureMachineStorageOpportunistically', () => {
     });
   });
 
+  it('resolveHandle path: does NOT attach when the PERSISTED measurement is recent (cold in-process cache, another instance measured)', async () => {
+    // Cold in-process cache (fresh pageId) but the row was measured 1 minute ago
+    // → the persisted throttle must gate the attach.
+    const recent = new Date(Date.now() - 60_000);
+    mockDb.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: async () => [{ storageMeasuredAt: recent }] }) }),
+    });
+    const resolveHandle = vi.fn(async () => ({ exec: vi.fn() }));
+
+    await measureMachineStorageOpportunistically({ pageId: 'lazy-persisted-recent', resolveHandle });
+
+    assert({
+      given: 'a cold in-process cache but a persisted measurement within the window',
+      should: 'skip the network attach (persisted throttle gates it)',
+      actual: resolveHandle.mock.calls.length,
+      expected: 0,
+    });
+  });
+
   it('resolveHandle path: does NOT attach on a throttled second call within the window', async () => {
     mockDb.select.mockReturnValue({
       from: () => ({ where: () => ({ limit: async () => [{ storageMeasuredAt: null }] }) }),

@@ -19,6 +19,7 @@ import { loggers } from '../../logging/logger-config';
 import type { MachineHandle } from './machine-host';
 import {
   refreshStorageMeasurement,
+  shouldRefreshMeasurement,
   STORAGE_MEASUREMENT_THROTTLE_MS,
   type PersistStorageMeasurement,
 } from './terminal-storage-measure';
@@ -143,6 +144,21 @@ export async function measureMachineStorageOpportunistically(input: {
       .limit(1);
     // No billing row for this page → nothing to attribute the measurement to.
     if (!row) return;
+
+    // Authoritative (persisted) throttle: if another process/instance measured
+    // this page within the window, skip BEFORE resolving the handle so a lazy
+    // caller with a cold in-process cache (e.g. a freshly-restarted realtime
+    // node) never pays a wasted network attach. refreshStorageMeasurement
+    // re-checks this too — this is purely to gate the attach.
+    if (
+      !shouldRefreshMeasurement({
+        lastMeasuredAt: row.storageMeasuredAt ?? null,
+        now: new Date(nowMs),
+        throttleMs: STORAGE_MEASUREMENT_THROTTLE_MS,
+      })
+    ) {
+      return;
+    }
 
     // Resolve the handle only now that we know a measurement is actually due,
     // so a lazy caller's network attach is never paid on a throttled wake.
