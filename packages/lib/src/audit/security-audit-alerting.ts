@@ -29,7 +29,7 @@ import {
 export interface ChainVerificationAlert {
   result: SecurityChainVerificationResult;
   triggeredAt: Date;
-  source: 'periodic' | 'manual' | 'preflight';
+  source: 'periodic' | 'manual' | 'preflight' | 'append';
 }
 
 /**
@@ -174,6 +174,85 @@ export async function notifyChainPreflightFailure(
     await alertHandler(alert);
   } catch (error) {
     loggers.security.error('[SecurityAuditAlerting] Preflight alert handler failed:', { error });
+  }
+}
+
+/**
+ * Details of a verify-on-append failure caught by the audit chainer worker
+ * (#890 Phase 2). Shapes mirror PreflightChainBreakDetails, but the source is
+ * the just-appended security_audit_log segment re-read after commit, not a
+ * SIEM delivery batch — reasons come from verifyAppendedSegment (chain-step.ts).
+ */
+export interface AppendVerificationFailureDetails {
+  /** id of the chained row at which verification broke. */
+  entryId: string;
+  /** 0-based index inside the just-appended segment. */
+  breakAtIndex: number;
+  /** Classification from verifyAppendedSegment. */
+  breakReason: 'hash_mismatch' | 'linkage_break' | 'missing_emission_hash';
+  expectedHash: string | null;
+  actualHash: string | null;
+  /** Total rows in the appended segment. */
+  segmentTotalRows: number;
+  /** The chain head the segment was chained from (for forensics). */
+  priorHead: string;
+}
+
+/**
+ * Fire a verify-on-append failure alert through the globally-registered
+ * handler. Called by the audit chainer worker when its post-commit
+ * re-verification of a just-written segment fails — the loud path beside the
+ * worker's own console.error. Same contract as notifyChainPreflightFailure:
+ * no registered handler → no-op; handler errors are swallowed with a logged
+ * error so a broken alert surface never masks the detection itself.
+ */
+export async function notifyChainAppendVerificationFailure(
+  details: AppendVerificationFailureDetails
+): Promise<void> {
+  if (!alertHandler) return;
+
+  const now = new Date();
+  const reasonMessage =
+    details.breakReason === 'hash_mismatch'
+      ? 'Recomputed chain hash does not match the stored event_hash'
+      : details.breakReason === 'linkage_break'
+        ? 'previous_hash does not link to the preceding row'
+        : 'Chainer-written row has no stored emission_hash';
+
+  const syntheticResult: SecurityChainVerificationResult = {
+    isValid: false,
+    totalEntries: details.segmentTotalRows,
+    entriesVerified: details.breakAtIndex + 1,
+    validEntries: details.breakAtIndex,
+    invalidEntries: 1,
+    breakPoint: {
+      entryId: details.entryId,
+      timestamp: now,
+      position: details.breakAtIndex,
+      storedHash: details.actualHash ?? '',
+      computedHash: details.expectedHash ?? '',
+      previousHashUsed: details.priorHead,
+      description: `Chainer verify-on-append break at segment[${details.breakAtIndex}] (${details.entryId}): ${reasonMessage}`,
+    },
+    firstEntryId: null,
+    lastEntryId: details.entryId,
+    verificationStartedAt: now,
+    verificationCompletedAt: now,
+    durationMs: 0,
+  };
+
+  const alert: ChainVerificationAlert = {
+    result: syntheticResult,
+    triggeredAt: now,
+    source: 'append',
+  };
+
+  try {
+    await alertHandler(alert);
+  } catch (error) {
+    loggers.security.error('[SecurityAuditAlerting] Append verification alert handler failed:', {
+      error,
+    });
   }
 }
 

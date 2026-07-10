@@ -267,6 +267,11 @@
       "import": "./dist/audit/emission-hash.js",
       "require": "./dist/audit/emission-hash.js"
     },
+    "./audit/chain-step": {
+      "types": "./dist/audit/chain-step.d.ts",
+      "import": "./dist/audit/chain-step.js",
+      "require": "./dist/audit/chain-step.js"
+    },
     "./audit/audit-ingest-writer": {
       "types": "./dist/audit/audit-ingest-writer.d.ts",
       "import": "./dist/audit/audit-ingest-writer.js",

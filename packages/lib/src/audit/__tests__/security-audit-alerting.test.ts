@@ -72,6 +72,7 @@ import {
   setChainAlertHandler,
   getChainAlertHandler,
   verifyAndAlert,
+  notifyChainAppendVerificationFailure,
   startPeriodicVerification,
   stopPeriodicVerification,
   isPeriodicVerificationRunning,
@@ -266,6 +267,66 @@ describe('security-audit-alerting (#544)', () => {
       stopPeriodicVerification();
       stopPeriodicVerification();
       expect(isPeriodicVerificationRunning()).toBe(false);
+    });
+  });
+
+  describe('notifyChainAppendVerificationFailure (#890 Phase 2 chainer verify-on-append)', () => {
+    const details = {
+      entryId: 'chained-row-4',
+      breakAtIndex: 4,
+      breakReason: 'hash_mismatch' as const,
+      expectedHash: 'expected-hash',
+      actualHash: 'actual-hash',
+      segmentTotalRows: 12,
+      priorHead: 'prior-head-hash',
+    };
+
+    it('given no registered handler, should be a silent no-op (processor context)', async () => {
+      await expect(notifyChainAppendVerificationFailure(details)).resolves.toBeUndefined();
+    });
+
+    it('given a registered handler, should fire an append-sourced alert with a synthetic result describing the break', async () => {
+      const handler = vi.fn();
+      setChainAlertHandler(handler);
+
+      await notifyChainAppendVerificationFailure(details);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const alert: ChainVerificationAlert = handler.mock.calls[0][0];
+      expect(alert.source).toBe('append');
+      expect(alert.result.isValid).toBe(false);
+      expect(alert.result.totalEntries).toBe(12);
+      expect(alert.result.entriesVerified).toBe(5);
+      expect(alert.result.validEntries).toBe(4);
+      expect(alert.result.invalidEntries).toBe(1);
+      expect(alert.result.breakPoint?.entryId).toBe('chained-row-4');
+      expect(alert.result.breakPoint?.storedHash).toBe('actual-hash');
+      expect(alert.result.breakPoint?.computedHash).toBe('expected-hash');
+      expect(alert.result.breakPoint?.previousHashUsed).toBe('prior-head-hash');
+      expect(alert.result.breakPoint?.description).toContain('verify-on-append');
+    });
+
+    it('given a throwing handler, should swallow the error and log it (alerting must never mask the detection)', async () => {
+      setChainAlertHandler(() => {
+        throw new Error('alert transport down');
+      });
+
+      await expect(notifyChainAppendVerificationFailure(details)).resolves.toBeUndefined();
+      expect(mockLoggers.security.error).toHaveBeenCalled();
+    });
+
+    it('given each break reason, should render a distinct human description', async () => {
+      const handler = vi.fn();
+      setChainAlertHandler(handler);
+
+      for (const breakReason of ['hash_mismatch', 'linkage_break', 'missing_emission_hash'] as const) {
+        await notifyChainAppendVerificationFailure({ ...details, breakReason });
+      }
+
+      const descriptions = handler.mock.calls.map(
+        (call) => (call[0] as ChainVerificationAlert).result.breakPoint?.description,
+      );
+      expect(new Set(descriptions).size).toBe(3);
     });
   });
 });
