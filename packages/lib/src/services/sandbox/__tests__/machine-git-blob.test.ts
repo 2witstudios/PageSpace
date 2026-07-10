@@ -164,5 +164,12 @@ describe('readMachineGitBlob', () => {
       expect(result).toEqual({ ok: false, reason: 'invalid_ref' });
       expect(calls).toHaveLength(0);
     });
+
+    it('rejects an empty path without calling git, so a bypass of the route\'s own check can never fall through to `git show <ref>:` (a tree listing, not a file)', async () => {
+      const { deps, calls } = makeDeps(async () => ({ exitCode: 0, stdout: 'tree HEAD:\n\na.txt\n', stderr: '' }));
+      const result = await readMachineGitBlob({ ref: 'HEAD', path: '', cwd: '/workspace/repo', ctx: makeCtx(), deps });
+      expect(result).toEqual({ ok: false, reason: 'not_found' });
+      expect(calls).toHaveLength(0);
+    });
   });
 });

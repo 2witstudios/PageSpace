@@ -66,6 +66,14 @@ const NOT_FOUND_PATTERN =
  * primitive. Every valid git ref/branch/tag/SHA is already barred from a
  * leading `-` by git's own `check-ref-format` rules, so this excludes no
  * legitimate ref.
+ *
+ * An empty `path` is rejected as `not_found` rather than passed through:
+ * `git show <ref>:` (nothing after the colon) is valid git syntax for "list
+ * this ref's root tree" and succeeds with exit 0 (verified against a real
+ * repo) — silently returning a directory listing mislabeled as one file's
+ * content instead of an error. The shipped route already requires a non-empty
+ * `path` before calling this, but the primitive guards it too so a future
+ * caller can't reach that surprise by skipping the route's own check.
  */
 export async function readMachineGitBlob({
   ref,
@@ -82,6 +90,9 @@ export async function readMachineGitBlob({
 }): Promise<ReadMachineGitBlobResult> {
   if (ref.length === 0 || ref.startsWith('-')) {
     return { ok: false, reason: 'invalid_ref' };
+  }
+  if (path.length === 0) {
+    return { ok: false, reason: 'not_found' };
   }
 
   const run = await runGitInSandbox({
