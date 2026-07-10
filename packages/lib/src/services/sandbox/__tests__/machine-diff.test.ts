@@ -487,6 +487,63 @@ describe('readMachineDiffPair', () => {
     });
   });
 
+  it("status='deleted' (branch): forces the modified side null WITHOUT reading the working tree, so an untracked file masquerading at the path can't be surfaced", async () => {
+    // `git rm --cached f` leaves f on disk untracked; the branch list dedups to
+    // the tracked deletion, and the pair reader must not read that leftover file.
+    const { deps, calls } = makeDeps(
+      scriptGit({
+        'merge-base origin/HEAD HEAD': { exitCode: 0, stdout: `${MERGE_BASE_SHA}\n`, stderr: '' },
+        [`show ${MERGE_BASE_SHA}:src/a.ts`]: { exitCode: 0, stdout: 'base content', stderr: '' },
+      }),
+    );
+    // handle DOES have the file on disk (the masquerading untracked leftover):
+    const { handle, reads } = makeHandle({ [`${CWD}/src/a.ts`]: 'leftover untracked bytes' });
+    const result = await readMachineDiffPair({
+      branchName: 'feature/x',
+      isMainBranch: false,
+      scope: 'branch',
+      status: 'deleted',
+      ...PAIR_BASE,
+      handle,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(calls.map((c) => c.args)).toEqual([
+      ['merge-base', 'origin/HEAD', 'HEAD'],
+      ['show', `${MERGE_BASE_SHA}:src/a.ts`],
+    ]);
+    expect(reads).toHaveLength(0); // working tree never touched for a deletion
+    expect(result).toEqual({
+      ok: true,
+      notApplicable: false,
+      original: { content: 'base content', truncated: false },
+      modified: null,
+    });
+  });
+
+  it("status='added': forces the original side null and skips the blob read (and merge-base) entirely", async () => {
+    const { deps, calls } = makeDeps(scriptGit({})); // no git calls should happen at all
+    const { handle, reads } = makeHandle({ [`${CWD}/src/a.ts`]: 'brand new' });
+    const result = await readMachineDiffPair({
+      branchName: 'feature/x',
+      isMainBranch: false,
+      scope: 'uncommitted',
+      status: 'added',
+      ...PAIR_BASE,
+      handle,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(calls).toHaveLength(0); // original (HEAD blob) skipped; no merge-base for uncommitted
+    expect(reads).toEqual([`${CWD}/src/a.ts`]);
+    expect(result).toEqual({
+      ok: true,
+      notApplicable: false,
+      original: null,
+      modified: { content: 'brand new', truncated: false },
+    });
+  });
+
   it('an added file has a null original (blob not_found is not an error)', async () => {
     const { deps } = makeDeps(
       scriptGit({

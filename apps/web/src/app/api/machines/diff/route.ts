@@ -12,7 +12,7 @@
  *     scopes) is the concrete SHA a client may pass as `ref` to
  *     `/api/machines/git-blob` for 'original' sides.
  *
- * GET …&path=<repo-relative file>[&previousPath=<repo-relative source>]
+ * GET …&path=<repo-relative file>[&previousPath=<source>][&status=<list status>]
  *   → { notApplicable: false, scope, path, original, modified }
  *     ONE file's diff pair, each side read from the scope's source
  *     (merge-base blob / HEAD blob / working tree); a side is null when the
@@ -20,7 +20,9 @@
  *     modified). For a RENAMED file the client passes `previousPath` (the
  *     rename source from the list entry) so the 'original' side is read from
  *     the pre-rename location instead of resolving to null and mis-showing the
- *     rename as an add.
+ *     rename as an add. The client also passes `status` (the file's list
+ *     status) so a deletion's modified side is forced null rather than reading
+ *     an untracked file masquerading at the same path (e.g. `git rm --cached`).
  *
  * On the main branch ('master'/'main' — the literal default-branch names,
  * there is no schema flag), the 'committed' and 'branch' scopes are
@@ -38,7 +40,12 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { listMachineDiffFiles, readMachineDiffPair } from '@pagespace/lib/services/sandbox/machine-diff';
-import { isMachineDiffScope, isMainBranchName, resolveDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
+import {
+  isMachineDiffFileStatus,
+  isMachineDiffScope,
+  isMainBranchName,
+  resolveDiffScope,
+} from '@pagespace/lib/services/sandbox/machine-diff-scope';
 import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
 import { resolvePathWithinSync } from '@pagespace/lib/security/path-validator';
 import {
@@ -110,6 +117,20 @@ export async function GET(request: Request) {
   const rawPreviousPath = url.searchParams.get('previousPath');
   const previousPath = rawPreviousPath !== null && rawPreviousPath.length > 0 ? rawPreviousPath : undefined;
 
+  // `status` (the file's status from the changed-file list) lets the pair
+  // reader skip a side that can't exist — critically, a 'deleted' file's
+  // working-tree modified side, which could otherwise surface an untracked
+  // file masquerading at the same path (e.g. after `git rm --cached`). Optional
+  // but validated when present so a bad value fails fast rather than silently.
+  const rawStatus = url.searchParams.get('status');
+  if (rawStatus !== null && rawStatus.length > 0 && !isMachineDiffFileStatus(rawStatus)) {
+    return NextResponse.json(
+      { error: "status must be 'added', 'modified', 'deleted', or 'renamed'" },
+      { status: 400 },
+    );
+  }
+  const status = rawStatus !== null && isMachineDiffFileStatus(rawStatus) ? rawStatus : undefined;
+
   const resolved = await resolveBranchMachineHandle({
     terminalId: terminalId.value,
     projectName: projectName.value,
@@ -134,6 +155,7 @@ export async function GET(request: Request) {
       scope,
       path: rawPath,
       previousPath,
+      status,
       workingTreePath,
       cwd: BRANCH_REPO_PATH,
       handle: resolved.handle,

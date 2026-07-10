@@ -262,6 +262,23 @@ describe('GET /api/machines/diff — per-file pair form', () => {
     );
   });
 
+  it('forwards a valid status so the pair reader can skip a nonexistent side', async () => {
+    const res = await GET(get({ path: 'src/a.ts', status: 'deleted' }));
+    expect(res.status).toBe(200);
+    expect(readMachineDiffPair).toHaveBeenCalledWith(expect.objectContaining({ status: 'deleted' }));
+  });
+
+  it('400s an invalid status value without touching the machine', async () => {
+    const res = await GET(get({ path: 'src/a.ts', status: 'bogus' }));
+    expect(res.status).toBe(400);
+    expect(readMachineDiffPair).not.toHaveBeenCalled();
+  });
+
+  it('omits status (undefined) when absent or empty', async () => {
+    await GET(get({ path: 'src/a.ts' }));
+    expect(readMachineDiffPair).toHaveBeenCalledWith(expect.objectContaining({ status: undefined }));
+  });
+
   it('omits previousPath (undefined) when absent or empty', async () => {
     await GET(get({ path: 'src/a.ts' }));
     expect(readMachineDiffPair).toHaveBeenCalledWith(expect.objectContaining({ previousPath: undefined }));

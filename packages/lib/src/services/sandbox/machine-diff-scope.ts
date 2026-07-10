@@ -166,6 +166,17 @@ export function diffScopeSides(scope: MachineDiffScope): MachineDiffSides {
 
 export type MachineDiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
+export const MACHINE_DIFF_FILE_STATUSES: readonly MachineDiffFileStatus[] = [
+  'added',
+  'modified',
+  'deleted',
+  'renamed',
+];
+
+export function isMachineDiffFileStatus(value: string): value is MachineDiffFileStatus {
+  return (MACHINE_DIFF_FILE_STATUSES as readonly string[]).includes(value);
+}
+
 export interface MachineDiffFile {
   /** Repo-relative path (the rename/copy TARGET for renamed entries). */
   path: string;

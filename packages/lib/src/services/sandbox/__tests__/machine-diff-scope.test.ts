@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   diffScopeSides,
+  isMachineDiffFileStatus,
   isMachineDiffScope,
   isMainBranchName,
   parseNameStatusZ,
@@ -129,6 +130,19 @@ describe('isMachineDiffScope', () => {
     { value: '', expected: false },
   ])('"$value" → $expected', ({ value, expected }) => {
     expect(isMachineDiffScope(value)).toBe(expected);
+  });
+});
+
+describe('isMachineDiffFileStatus', () => {
+  it.each([
+    { value: 'added', expected: true },
+    { value: 'modified', expected: true },
+    { value: 'deleted', expected: true },
+    { value: 'renamed', expected: true },
+    { value: 'copied', expected: false },
+    { value: '', expected: false },
+  ])('"$value" → $expected', ({ value, expected }) => {
+    expect(isMachineDiffFileStatus(value)).toBe(expected);
   });
 });
 

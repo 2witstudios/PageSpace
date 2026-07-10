@@ -42,6 +42,7 @@ import {
   resolveDiffScope,
   DIFF_BASE_REF,
   type MachineDiffFile,
+  type MachineDiffFileStatus,
   type MachineDiffScope,
   type MachineDiffSideSource,
 } from './machine-diff-scope';
@@ -202,6 +203,14 @@ const MAX_WORKING_TREE_READ_BYTES = 2 * 1024 * 1024;
  * 'modified' side (HEAD blob or working tree) always uses `path`. Without this,
  * a pure rename's original blob would not resolve at `path` in the old ref and
  * the file would be mis-presented as an add.
+ *
+ * STATUS HINT: when the list `status` is provided, a 'deleted' file's modified
+ * side and an 'added' file's original side are forced to `null` WITHOUT reading
+ * the backend. This is load-bearing for the working-tree modified side: a file
+ * deleted from the index can still sit on disk as an UNTRACKED file at the same
+ * path (e.g. `git rm --cached f`), so blindly reading the working tree would
+ * surface that masquerading file as the deletion's modified content and render
+ * a deletion as unchanged. The list status is authoritative; honor it.
  */
 export async function readMachineDiffPair({
   branchName,
@@ -209,6 +218,7 @@ export async function readMachineDiffPair({
   scope,
   path,
   previousPath,
+  status,
   workingTreePath,
   cwd,
   handle,
@@ -226,6 +236,12 @@ export async function readMachineDiffPair({
    * absent for non-renamed files, where the original side falls back to `path`.
    */
   previousPath?: string;
+  /**
+   * The file's status from the changed-file list. When given, a 'deleted' file
+   * skips its (modified) side and an 'added' file skips its (original) side —
+   * see the STATUS HINT note above. Omit to read both sides unconditionally.
+   */
+  status?: MachineDiffFileStatus;
   /** Absolute working-tree path, ALREADY confined under the checkout root by the caller. */
   workingTreePath: string;
   cwd: string;
@@ -237,9 +253,15 @@ export async function readMachineDiffPair({
   if ('notApplicable' in resolution) return { ok: true, notApplicable: true };
 
   const sides = diffScopeSides(scope);
+  // A 'deleted' file has no modified side and an 'added' file no original side.
+  const readOriginal = status !== 'added';
+  const readModified = status !== 'deleted';
 
   let mergeBase: string | null = null;
-  if (sides.original === 'merge-base-blob' || sides.modified === 'merge-base-blob') {
+  const needsMergeBase =
+    (readOriginal && sides.original === 'merge-base-blob') ||
+    (readModified && sides.modified === 'merge-base-blob');
+  if (needsMergeBase) {
     const resolved = await resolveMachineMergeBase({ cwd, ctx, deps });
     if (!resolved.ok) return resolved;
     mergeBase = resolved.sha;
@@ -270,10 +292,15 @@ export async function readMachineDiffPair({
 
   // The original side lives at the pre-rename source when the list reported
   // one; the modified side is always the file's current path. A working-tree
-  // side ignores its blobPath argument (it reads `workingTreePath`).
-  const original = await readSide(sides.original, previousPath ?? path);
+  // side ignores its blobPath argument (it reads `workingTreePath`). A side the
+  // status says can't exist is forced null without any read (see STATUS HINT).
+  const original = readOriginal
+    ? await readSide(sides.original, previousPath ?? path)
+    : { ok: true as const, content: null };
   if (!original.ok) return original;
-  const modified = await readSide(sides.modified, path);
+  const modified = readModified
+    ? await readSide(sides.modified, path)
+    : { ok: true as const, content: null };
   if (!modified.ok) return modified;
 
   return { ok: true, notApplicable: false, original: original.content, modified: modified.content };
