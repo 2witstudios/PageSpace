@@ -11,6 +11,15 @@ export default defineConfig({
     css: true,
     include: ['src/**/*.{test,spec}.{js,ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
+    // Give coverage workers headroom above the default ~4 GB V8 heap. The web
+    // suite under v8 coverage peaks a worker during coverage collection; paired
+    // with sharding (see the `test:coverage` script), this keeps each shard's
+    // workers within the CI runner. Harmless (a ceiling) for non-sharded runs.
+    poolOptions: {
+      forks: {
+        execArgv: ['--max-old-space-size=6144'],
+      },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
