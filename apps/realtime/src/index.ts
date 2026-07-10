@@ -34,6 +34,7 @@ import {
   type SocketLike,
 } from './terminal/agent-terminal-handler';
 import { handleTerminalActivityRequest } from './terminal/terminal-activity';
+import { deriveAgentTerminalSessionKey, agentTerminalScopeFromNames } from './terminal/agent-terminal-session-key';
 import { createTerminalSessionMap } from './terminal/terminal-session-map';
 import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
@@ -164,26 +165,29 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
 }
 
 /**
- * The in-memory `agentTerminalSessionMap` key for a (scope, name) target.
- * Machine and project scope share the SAME owning Machine's Sprite
- * (`sandboxId`) — see `resolveProjectOrMachineLocation` in `agent-terminals.ts`
- * — so the scope discriminant (not just `sandboxId` + `name`) is required to
- * keep e.g. a machine-scope "cli" terminal and a project-scope "cli" terminal
- * on the SAME machine from colliding onto one shared PTY session.
+ * Shell adapter over the pure `deriveAgentTerminalSessionKey`
+ * (`agent-terminal-session-key.ts`): maps the transport's optional
+ * (projectName, branchName) pair into the discriminated scope and keys off the
+ * owning Machine Terminal page id (`terminalId`), NOT the Sprite `sandboxId`.
+ * Keying on `terminalId` means a warm reattach never has to resolve the Sprite
+ * before the fast-path map lookup can run.
  */
 function buildAgentTerminalSessionKey({
-  sandboxId,
+  terminalId,
   projectName,
   branchName,
   name,
 }: {
-  sandboxId: string;
+  terminalId: string;
   projectName?: string;
   branchName?: string;
   name: string;
 }): string {
-  const scope = branchName ? `branch:${projectName}:${branchName}` : projectName ? `project:${projectName}` : 'machine';
-  return `${sandboxId}:agent:${scope}:${name}`;
+  return deriveAgentTerminalSessionKey({
+    terminalId,
+    scope: agentTerminalScopeFromNames({ projectName, branchName }),
+    name,
+  });
 }
 
 /**
@@ -303,7 +307,7 @@ async function makeAgentTerminalCheckAuth({
     agentTerminalId: resolved.agentTerminalId,
     sandboxId: resolved.sandboxId,
     cwd: resolved.cwd,
-    sessionKey: buildAgentTerminalSessionKey({ sandboxId: resolved.sandboxId, projectName, branchName, name }),
+    sessionKey: buildAgentTerminalSessionKey({ terminalId, projectName, branchName, name }),
     sprite,
     releaseSlot,
     command: spec.command,
@@ -641,16 +645,16 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 {
                     sessionMap: agentTerminalSessionMap,
                     // The machine's conventional 'shell' agent terminal (the retired
-                    // human `terminal:*` family's replacement) lives under the SAME
-                    // sandboxId a fresh/resumed acquireTerminalSandbox call for this
-                    // (tenant, drive, page) would resolve to — look that sandboxId up
-                    // from the persisted terminal_sessions record (no provisioning) and
-                    // rebuild the exact in-memory sessionKey agent-terminal-handler.ts uses.
+                    // human `terminal:*` family's replacement) is keyed on the owning
+                    // Terminal page id (`pageId` == the checkAuth `terminalId`), so its
+                    // in-memory sessionKey is derivable WITHOUT resolving the Sprite. We
+                    // still gate on the persisted terminal_sessions record existing (no
+                    // provisioning) so we only target a shell that has actually run.
                     resolveSessionKey: async ({ tenantId, driveId, pageId }) => {
                         const store = await dbTerminalSessionStorePromise;
                         const key = deriveTerminalSessionKey({ tenantId, driveId, pageId, secret: getSandboxSessionSecret() });
                         const record = await store.findBySessionKey(key);
-                        return record ? buildAgentTerminalSessionKey({ sandboxId: record.sandboxId, name: SHELL_AGENT_TERMINAL_NAME }) : null;
+                        return record ? buildAgentTerminalSessionKey({ terminalId: pageId, name: SHELL_AGENT_TERMINAL_NAME }) : null;
                     },
                 },
                 body,
