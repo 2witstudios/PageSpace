@@ -16,7 +16,7 @@ import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger
 import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS } from '@/lib/tasks/completion-guard';
 import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
+import { decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -420,7 +420,7 @@ export async function PATCH(
     return NextResponse.json({ error: 'Task not found after update' }, { status: 404 });
   }
 
-  const [taskWithRelations] = await decryptTaskUserRelations([fetchedTask]);
+  const taskWithRelations = await decryptTaskUserRelationsOne(fetchedTask);
 
   const responseTitle = taskWithRelations.page?.title ?? '';
 

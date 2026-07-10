@@ -562,7 +562,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         }
 
         // Query tasks assigned to the agent (task list membership derived from pages.parentId)
-        const fetchedTasks = await db.query.taskItems.findMany({
+        const tasks = await db.query.taskItems.findMany({
           where: and(...conditions),
           orderBy: [asc(taskItems.position)],
           with: {
@@ -574,7 +574,6 @@ This helps agents understand their responsibilities and coordinate work with oth
             },
           },
         });
-        const tasks = await decryptTaskUserRelations(fetchedTasks);
 
         // Collect unique task list page IDs from task parents
         const taskListPageIds = [...new Set(
@@ -620,7 +619,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         );
 
         // Filter out tasks with trashed pages, inaccessible drives, and optionally by driveId
-        const filteredTasks = tasks.filter(task => {
+        const matchingTasks = tasks.filter(task => {
           if (task.page?.isTrashed) return false;
           const parentId = task.page?.parentId;
           const taskDriveId = parentId ? taskListPageInfoMap.get(parentId)?.driveId : undefined;
@@ -630,6 +629,9 @@ This helps agents understand their responsibilities and coordinate work with oth
           if (driveId && taskDriveId !== driveId) return false;
           return true;
         });
+
+        // Decrypt after filtering — none of the filters read PII, so skip crypto work for dropped rows
+        const filteredTasks = await decryptTaskUserRelations(matchingTasks);
 
         // Build group lookup from status configs across all task lists
         const uniqueTaskListIds = taskListsInfo.map(tl => tl.id);

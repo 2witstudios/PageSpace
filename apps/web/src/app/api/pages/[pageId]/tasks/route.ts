@@ -15,7 +15,7 @@ import { createTaskAssignedNotification } from '@pagespace/lib/notifications/not
 import { computeHasContent } from './task-utils';
 import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
+import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -548,9 +548,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       },
     },
   });
-  const taskWithRelations = fetchedTask
-    ? (await decryptTaskUserRelations([fetchedTask]))[0]
-    : fetchedTask;
+  const taskWithRelations = await decryptTaskUserRelationsOne(fetchedTask);
 
   const createdTitle = result.page.title;
 
