@@ -2,7 +2,7 @@ import { eq, inArray, or, and, ne } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
-import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs } from '@pagespace/db/schema/monitoring';
+import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { channelMessages } from '@pagespace/db/schema/chat';
@@ -14,8 +14,23 @@ import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { decryptUserRow } from '../../auth/user-repository';
+import { isClickHouseEnabled, getClickHouseClient } from '../../observability/clickhouse-client';
+import {
+  collectChUserSystemLogs,
+  collectChUserApiMetrics,
+  collectChUserErrorLogs,
+} from '../../observability/analytics-gdpr';
 
 type DB = NodePgDatabase<Record<string, unknown>>;
+
+/**
+ * Analytics collectors below export the UNION of both stores while the
+ * CLICKHOUSE_ENABLED transition window is open: writers gate on the same
+ * flag, so pre-cutover rows live only in main PG and post-cutover rows only
+ * in ClickHouse — the union is complete with no overlap (#890 Phase 3).
+ * CH read failures propagate: an Art 15 export must be complete or fail.
+ */
+const clickHouseClientOrNull = () => (isClickHouseEnabled() ? getClickHouseClient() : null);
 
 export interface UserProfileExport {
   id: string;
@@ -482,7 +497,9 @@ export async function collectUserSystemLogs(database: DB, userId: string): Promi
     .from(systemLogs)
     .where(eq(systemLogs.userId, userId));
 
-  return result;
+  const client = clickHouseClientOrNull();
+  if (!client) return result;
+  return [...result, ...(await collectChUserSystemLogs(client, userId))];
 }
 
 export async function collectUserApiMetrics(database: DB, userId: string): Promise<UserApiMetricExport[]> {
@@ -500,7 +517,9 @@ export async function collectUserApiMetrics(database: DB, userId: string): Promi
     .from(apiMetrics)
     .where(eq(apiMetrics.userId, userId));
 
-  return result;
+  const client = clickHouseClientOrNull();
+  if (!client) return result;
+  return [...result, ...(await collectChUserApiMetrics(client, userId))];
 }
 
 export async function collectUserErrorLogs(database: DB, userId: string): Promise<UserErrorLogExport[]> {
@@ -520,7 +539,25 @@ export async function collectUserErrorLogs(database: DB, userId: string): Promis
     .from(errorLogs)
     .where(eq(errorLogs.userId, userId));
 
-  return result;
+  const client = clickHouseClientOrNull();
+  if (!client) return result;
+
+  const chRows = await collectChUserErrorLogs(client, userId);
+  if (chRows.length === 0) return result;
+
+  // CH rows carry no resolution state — the resolved flag lives in the
+  // error_resolutions mini-table in main PG (cross-store two-step, leaf 3).
+  const resolutionRows = await database
+    .select({ errorId: errorResolutions.errorId, resolved: errorResolutions.resolved })
+    .from(errorResolutions)
+    .where(inArray(errorResolutions.errorId, chRows.map((r) => r.id)));
+  const resolvedById = new Map(resolutionRows.map((r) => [r.errorId, r.resolved]));
+
+  return [
+    ...result,
+    // No workflow row = never resolved (false, matching the PG column default).
+    ...chRows.map((r) => ({ ...r, resolved: resolvedById.get(r.id) ?? false })),
+  ];
 }
 
 export async function collectUserAiUsage(database: DB, userId: string): Promise<UserAiUsageExport[]> {

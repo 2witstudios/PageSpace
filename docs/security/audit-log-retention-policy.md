@@ -7,18 +7,34 @@ configurable retention windows for monitoring data.
 
 | Table | Retention | Mechanism |
 |-------|-----------|-----------|
-| `security_audit_log` | **Infinite** | Never deleted — tamper-evident hash chain requires an uninterrupted chain (GDPR Art 17(3)(b) legal-obligation justification). |
+| `security_audit_log` (Admin PG) | **Infinite** | Never deleted — tamper-evident hash chain requires an uninterrupted chain (GDPR Art 17(3)(b) legal-obligation justification). Monthly partitions exist for index/vacuum bounding only; `admin_ensure_partitions` is create-ahead ONLY, no drop path exists (`drizzle-admin/0002`, pinned by `admin-partition-migration.test.ts`). |
+| `siem_delivery_receipts` (Admin PG) | **Infinite** | Never deleted — receipts are the external-witness half of the anchoring evidence (paired with S3 Object-Lock anchors); dropping them would truncate the proof trail the infinite-retention chain relies on. Same create-ahead-only partition maintenance as above, deliberately without a drop path. |
 | `activity_logs` | **Infinite (rows), tiered visibility** | Never deleted (hash chain + rollback provenance). Old rows are flagged `isArchived = true` to keep the hot/active view bounded — see **Archival** below. |
-| `api_metrics` | `RETENTION_API_METRICS_DAYS` (default 90) | Time-based delete. |
-| `system_logs` | `RETENTION_SYSTEM_LOGS_DAYS` (default 30) | Time-based delete. |
-| `error_logs` | `RETENTION_ERROR_LOGS_DAYS` (default 90) | Time-based delete. |
-| `user_activities` | `RETENTION_USER_ACTIVITIES_DAYS` (default 180) | Time-based delete. |
-| `ai_usage_logs` | `RETENTION_AI_USAGE_LOGS_DAYS` (default 90) | Time-based delete (purge-ai-usage-logs cron). |
+| `api_metrics` | `RETENTION_API_METRICS_DAYS` (default 90) | PG time-based delete; **CH mode: 90-day table TTL**. |
+| `system_logs` | `RETENTION_SYSTEM_LOGS_DAYS` (default 30) | PG time-based delete; **CH mode: 30-day table TTL**. |
+| `error_logs` | `RETENTION_ERROR_LOGS_DAYS` (default 90) | PG time-based delete; **CH mode: NO TTL by design** — GDPR erasure mutations (`observability/analytics-gdpr.ts`) are the only eraser. |
+| `user_activities` | `RETENTION_USER_ACTIVITIES_DAYS` (default 180) | PG time-based delete; **CH mode: 180-day table TTL**. |
+| `ai_usage_logs` | `RETENTION_AI_USAGE_LOGS_DAYS` (default 90) | Time-based delete (purge-ai-usage-logs cron). Stays in main PG permanently. |
 
 All windows are positive integers (days). Unset, zero, negative, or non-numeric
 values fall back to the defaults above. This makes retention tunable per
 deployment (including tenant deployments) without a code change. See
 `packages/lib/src/compliance/retention/monitoring-retention.ts`.
+
+## ClickHouse analytics tier (#890 Phase 3)
+
+With `CLICKHOUSE_ENABLED=true`, new rows for the 4 analytics tables
+(`api_metrics`, `system_logs`, `user_activities`, `error_logs`) land only in
+ClickHouse, where retention is enforced by the table TTLs above
+(`packages/lib/src/observability/clickhouse-ddl.ts`). In that mode
+`runMonitoringRetentionCleanup` is a no-op for those tables — the PG copies
+hold only frozen pre-cutover history until the deferred Phase 6 drop
+(`scripts/deferred-migrations/0890-phase6-drop-analytics-pg-tables.sql`).
+GDPR Art 15 export unions both stores and Art 17 erasure deletes from both
+stores while that transition window is open (`gdpr-export.ts`,
+`monitoring-purge.ts`). ClickHouse TTLs apply at insert time: rows older than
+the TTL horizon are silently dropped on insert, which constrains any future
+history backfill.
 
 ## Archival (`activity_logs` hot→cold tier)
 

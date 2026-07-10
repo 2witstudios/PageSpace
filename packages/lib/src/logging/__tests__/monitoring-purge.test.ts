@@ -17,11 +17,20 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
 }));
+vi.mock('../../observability/clickhouse-client', () => ({
+  isClickHouseEnabled: vi.fn(() => false),
+  getClickHouseClient: vi.fn(() => null),
+}));
+vi.mock('../../observability/analytics-gdpr', () => ({
+  deleteChUserAnalytics: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { deleteMonitoringDataForUser } from '../monitoring-purge';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { systemLogs, apiMetrics, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
+import { isClickHouseEnabled, getClickHouseClient } from '../../observability/clickhouse-client';
+import { deleteChUserAnalytics } from '../../observability/analytics-gdpr';
 
 describe('deleteMonitoringDataForUser', () => {
   beforeEach(() => {
@@ -29,6 +38,8 @@ describe('deleteMonitoringDataForUser', () => {
     mockReturning.mockResolvedValue([]);
     mockWhere.mockReturnValue({ returning: mockReturning });
     vi.mocked(db.delete).mockReturnValue({ where: mockWhere } as never);
+    vi.mocked(isClickHouseEnabled).mockReturnValue(false);
+    vi.mocked(getClickHouseClient).mockReturnValue(null);
   });
 
   it('given a userId, should delete from all four monitoring tables', async () => {
@@ -71,5 +82,43 @@ describe('deleteMonitoringDataForUser', () => {
     mockReturning.mockRejectedValue(new Error('Connection lost'));
 
     await expect(deleteMonitoringDataForUser('user-123')).rejects.toThrow('Connection lost');
+  });
+
+  it('given ClickHouse disabled (default), should never touch the CH erasure path', async () => {
+    await deleteMonitoringDataForUser('user-123');
+
+    expect(getClickHouseClient).not.toHaveBeenCalled();
+    expect(deleteChUserAnalytics).not.toHaveBeenCalled();
+  });
+
+  describe('with CLICKHOUSE_ENABLED (transition window: rows live in BOTH stores)', () => {
+    const chClient = { command: vi.fn() };
+
+    beforeEach(() => {
+      vi.mocked(isClickHouseEnabled).mockReturnValue(true);
+      vi.mocked(getClickHouseClient).mockReturnValue(chClient as never);
+    });
+
+    it('given a userId, should erase from CH AND still delete the pre-cutover PG copies', async () => {
+      await deleteMonitoringDataForUser('user-789');
+
+      expect(deleteChUserAnalytics).toHaveBeenCalledWith(chClient, 'user-789');
+      expect(db.delete).toHaveBeenCalledTimes(4);
+    });
+
+    it('given a CH erasure failure, should propagate (Art 17 erasure is fail-closed)', async () => {
+      vi.mocked(deleteChUserAnalytics).mockRejectedValueOnce(new Error('mutation rejected'));
+
+      await expect(deleteMonitoringDataForUser('user-789')).rejects.toThrow('mutation rejected');
+    });
+
+    it('given a misconfigured client (getClickHouseClient throws), should propagate rather than skip erasure', async () => {
+      vi.mocked(getClickHouseClient).mockImplementation(() => {
+        throw new Error('ClickHouse client init failed: missing CLICKHOUSE_PASSWORD');
+      });
+
+      await expect(deleteMonitoringDataForUser('user-789')).rejects.toThrow('ClickHouse client init failed');
+      expect(deleteChUserAnalytics).not.toHaveBeenCalled();
+    });
   });
 });

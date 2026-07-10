@@ -127,6 +127,11 @@
       "import": "./dist/observability/analytics-reads.js",
       "require": "./dist/observability/analytics-reads.js"
     },
+    "./observability/analytics-gdpr": {
+      "types": "./dist/observability/analytics-gdpr.d.ts",
+      "import": "./dist/observability/analytics-gdpr.js",
+      "require": "./dist/observability/analytics-gdpr.js"
+    },
     "./observability/error-resolutions": {
       "types": "./dist/observability/error-resolutions.d.ts",
       "import": "./dist/observability/error-resolutions.js",

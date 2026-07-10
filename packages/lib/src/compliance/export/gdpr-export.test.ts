@@ -10,7 +10,7 @@
  * be tested without reproducing the ORM chain shape. Once that seam
  * exists, remove the chain mocks and promote these to contract tests.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mockTable } = vi.hoisted(() => {
   const fn = (name: string) => ({
@@ -98,6 +98,16 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
   systemLogs: mockTable('systemLogs'),
   apiMetrics: mockTable('apiMetrics'),
   errorLogs: mockTable('errorLogs'),
+  errorResolutions: mockTable('errorResolutions'),
+}));
+vi.mock('../../observability/clickhouse-client', () => ({
+  isClickHouseEnabled: vi.fn(() => false),
+  getClickHouseClient: vi.fn(() => null),
+}));
+vi.mock('../../observability/analytics-gdpr', () => ({
+  collectChUserSystemLogs: vi.fn(),
+  collectChUserApiMetrics: vi.fn(),
+  collectChUserErrorLogs: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/storage', () => ({
   files: mockTable('files'),
@@ -148,6 +158,12 @@ import {
   collectUserPersonalization,
   collectAllUserData,
 } from './gdpr-export';
+import { isClickHouseEnabled, getClickHouseClient } from '../../observability/clickhouse-client';
+import {
+  collectChUserSystemLogs,
+  collectChUserApiMetrics,
+  collectChUserErrorLogs,
+} from '../../observability/analytics-gdpr';
 
 /** Creates a chain-mock db that resolves .where() calls with queued results */
 function createChainDb(whereResults: unknown[][]) {
@@ -471,6 +487,102 @@ describe('collectUserErrorLogs', () => {
     expect(result[0].resolved).toBe(true);
     expect(result[0].endpoint).toBeNull();
     expect(result[0].file).toBeNull();
+  });
+});
+
+describe('analytics collectors with CLICKHOUSE_ENABLED (union of both stores — #890 Phase 3 leaf 4)', () => {
+  const chClient = { query: vi.fn() };
+
+  beforeEach(() => {
+    vi.mocked(isClickHouseEnabled).mockReturnValue(true);
+    vi.mocked(getClickHouseClient).mockReturnValue(chClient as never);
+    vi.mocked(collectChUserSystemLogs).mockResolvedValue([]);
+    vi.mocked(collectChUserApiMetrics).mockResolvedValue([]);
+    vi.mocked(collectChUserErrorLogs).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.mocked(isClickHouseEnabled).mockReturnValue(false);
+    vi.mocked(getClickHouseClient).mockReturnValue(null);
+  });
+
+  it('given_rowsInBothStores_systemLogsExportReturnsTheUnion', async () => {
+    // Writers gate on the same flag, so pre-cutover rows live only in PG and
+    // post-cutover rows only in CH — the union is complete with no overlap.
+    const pgLog = {
+      id: 'pg1', timestamp: new Date('2026-01-01'), level: 'info', message: 'pre-cutover',
+      category: null, endpoint: null, method: null, duration: null,
+    };
+    const chLog = {
+      id: 'ch1', timestamp: new Date('2026-07-01'), level: 'warn', message: 'post-cutover',
+      category: 'api', endpoint: '/api/x', method: 'GET', duration: 3,
+    };
+    vi.mocked(collectChUserSystemLogs).mockResolvedValue([chLog]);
+    const db = createChainDb([[pgLog]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(collectChUserSystemLogs).toHaveBeenCalledWith(chClient, 'user-1');
+    expect(result.map(r => r.id)).toEqual(['pg1', 'ch1']);
+  });
+
+  it('given_rowsInBothStores_apiMetricsExportReturnsTheUnion', async () => {
+    const pgMetric = {
+      id: 'pg1', timestamp: new Date('2026-01-01'), endpoint: '/a', method: 'GET',
+      statusCode: 200, duration: 1, requestSize: null, responseSize: null,
+    };
+    const chMetric = {
+      id: 'ch1', timestamp: new Date('2026-07-01'), endpoint: '/b', method: 'POST',
+      statusCode: 201, duration: 2, requestSize: 10, responseSize: 20,
+    };
+    vi.mocked(collectChUserApiMetrics).mockResolvedValue([chMetric]);
+    const db = createChainDb([[pgMetric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(collectChUserApiMetrics).toHaveBeenCalledWith(chClient, 'user-1');
+    expect(result.map(r => r.id)).toEqual(['pg1', 'ch1']);
+  });
+
+  it('given_chErrorRows_errorLogsExportAttachesResolvedFromTheErrorResolutionsMiniTable', async () => {
+    const chError = {
+      id: 'ch-resolved', timestamp: new Date('2026-07-01'), name: 'TypeError', message: 'boom',
+      endpoint: null, method: null, file: null, line: null, column: null,
+    };
+    const chUnresolved = {
+      id: 'ch-open', timestamp: new Date('2026-07-02'), name: 'RangeError', message: 'bad',
+      endpoint: null, method: null, file: null, line: null, column: null,
+    };
+    vi.mocked(collectChUserErrorLogs).mockResolvedValue([chError, chUnresolved]);
+    // First where(): PG errorLogs rows; second where(): errorResolutions rows.
+    const db = createChainDb([[], [{ errorId: 'ch-resolved', resolved: true }]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result).toHaveLength(2);
+    expect(result.find(r => r.id === 'ch-resolved')?.resolved).toBe(true);
+    // No workflow row = never resolved; PG legacy default is false, not null.
+    expect(result.find(r => r.id === 'ch-open')?.resolved).toBe(false);
+  });
+
+  it('given_noChErrorRows_errorLogsExportSkipsTheResolutionsQuery', async () => {
+    const pgError = {
+      id: 'pg1', timestamp: new Date('2026-01-01'), name: 'TypeError', message: 'old',
+      endpoint: null, method: null, file: null, line: null, column: null, resolved: false,
+    };
+    const db = createChainDb([[pgError]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result.map(r => r.id)).toEqual(['pg1']);
+    expect(db.where).toHaveBeenCalledTimes(1);
+  });
+
+  it('given_aChReadFailure_exportPropagates_neverSilentlyOmitsSubjectData', async () => {
+    vi.mocked(collectChUserSystemLogs).mockRejectedValue(new Error('CH unreachable'));
+    const db = createChainDb([[]]);
+
+    await expect(collectUserSystemLogs(db as never, 'user-1')).rejects.toThrow('CH unreachable');
   });
 });
 
