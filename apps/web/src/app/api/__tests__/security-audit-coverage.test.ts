@@ -162,6 +162,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['machines/agent-terminals', 'Reserves/kills a named PTY session tracking row; the PTY itself is audited via writeCodeExecutionAudit when opened (see apps/realtime/src/index.ts)'],
   ['machines/files', 'Read-only working-tree browse (fixed `ls` + single file read on an already-provisioned branch Sprite) — no data write, no code execution/provisioning, no git; GET-only, view-gated by canViewMachine and path-confined to the branch checkout root, consistent with the other read-only machines/* and drive/page read sub-routes'],
   ['machines/git-blob', 'Audited via writeCodeExecutionAudit inside runGitInSandbox (machine-git-blob.ts\'s `git show <ref>:<path>` on the branch Sprite) — same deep audit path as machines/branches and machines/projects, not a direct route.ts call'],
+  ['machines/diff', 'Audited via writeCodeExecutionAudit inside runGitInSandbox (machine-diff.ts\'s status/diff/merge-base/`git show` calls on the branch Sprite — same deep audit path as machines/git-blob); its only non-git read is the same read-only, path-confined working-tree file read machines/files documents'],
 
   // --- Integration-tool UI routes (audited via the shared executeToolSaga
   // audit path deep in the integrations engine, not directly in route.ts) ---

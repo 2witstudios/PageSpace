@@ -76,6 +76,7 @@ import {
 } from '../step-up-service';
 import { computeActionBindingHash } from '../step-up-decisions';
 import { computeMcpTokenActionBinding, normalizeDriveScopes } from '../mcp-token-scopes';
+import { encryptField } from '../../encryption/field-crypto';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
@@ -414,6 +415,26 @@ describe('step-up-service', () => {
       expect(mockSendEmail).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'user@example.com' }),
       );
+    });
+
+    it('decrypts an encrypted-at-rest stored email before handing it to sendEmail', async () => {
+      const prevKey = process.env.ENCRYPTION_KEY;
+      process.env.ENCRYPTION_KEY = 'step-up-service-test-master-key-32-chars!!';
+      try {
+        const ciphertext = await encryptField('user@example.com');
+        expect(ciphertext).not.toBe('user@example.com');
+        mockDb.query.users.findFirst.mockResolvedValue({ id: 'user-1', email: ciphertext });
+
+        const result = await requestMagicLinkStepUp({ userId: 'user-1', actionBinding: { clientId: 'cli-1' } });
+
+        expect(result.ok).toBe(true);
+        expect(mockSendEmail).toHaveBeenCalledWith(
+          expect.objectContaining({ to: 'user@example.com' }),
+        );
+      } finally {
+        if (prevKey === undefined) delete process.env.ENCRYPTION_KEY;
+        else process.env.ENCRYPTION_KEY = prevKey;
+      }
     });
   });
 
