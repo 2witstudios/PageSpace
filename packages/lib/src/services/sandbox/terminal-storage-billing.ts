@@ -93,23 +93,39 @@ export const persistStorageMeasurement: PersistStorageMeasurement = async ({
 };
 
 /**
- * In-process "last attempted a real measurement" clock per pageId. The tool
- * runner calls the helper below on EVERY bash/read/write/edit op, but a machine
- * only needs measuring once per throttle window — this cache lets the common
- * case (within-window) short-circuit BEFORE touching the DB, so a 30-tool-call
- * agent turn does one measurement attempt, not 30 wasted `SELECT`s. It is a
- * best-effort hint only: the authoritative throttle is still the PERSISTED
- * `storageMeasuredAt` re-checked inside `refreshStorageMeasurement` (which
- * survives a process restart and is shared across web instances), so a cold
- * cache simply falls through to the DB read exactly as before.
+ * In-process per-page clock recording the last DEFINITIVE measurement outcome
+ * (a successful measure, an already-fresh row, or a confirmed no-billing-row).
+ * The tool runner calls the helper below on EVERY bash/read/write/edit op, but a
+ * machine only needs measuring once per throttle window — this lets the common
+ * case (within-window, after a definitive outcome) short-circuit BEFORE touching
+ * the DB, so a 30-tool-call turn does one measurement attempt, not 30 wasted
+ * `SELECT`s. It is a best-effort hint only: the authoritative throttle is the
+ * PERSISTED `storageMeasuredAt` (survives restart, shared across instances).
+ *
+ * Deliberately NOT stamped on a transient failure (unreachable sprite / failed
+ * attach / failed exec) so continuous real work keeps retrying the measurement
+ * within the window instead of being locked out until it elapses. Bounded to
+ * {@link MEASURE_CACHE_MAX} entries with oldest-first eviction so a long-lived
+ * process serving many ephemeral pageIds cannot leak memory.
  */
+const MEASURE_CACHE_MAX = 10_000;
 const lastMeasureAttemptAtMs = new Map<string, number>();
+
+function noteMeasureAttempt(pageId: string, nowMs: number): void {
+  // delete-then-set moves the key to the end so eviction is oldest-first (LRU-ish).
+  lastMeasureAttemptAtMs.delete(pageId);
+  lastMeasureAttemptAtMs.set(pageId, nowMs);
+  if (lastMeasureAttemptAtMs.size > MEASURE_CACHE_MAX) {
+    const oldest = lastMeasureAttemptAtMs.keys().next().value;
+    if (oldest !== undefined) lastMeasureAttemptAtMs.delete(oldest);
+  }
+}
 
 /**
  * Opportunistically measure a machine's used storage bytes while it is ALREADY
  * awake for real work, throttled and fully non-fatal. Fast-paths on an
  * in-process per-page clock to avoid a DB read on every tool op; on a due page
- * it reads the persisted measurement time, measures via `du -sbx`, and persists.
+ * it reads the persisted measurement time, measures via `du -sxB1`, and persists.
  * Never throws to the caller and never wakes a paused sprite — the handle is
  * already live because real work is happening on it. Skips silently when the
  * page has no `terminal_sessions` row.
@@ -129,12 +145,12 @@ export async function measureMachineStorageOpportunistically(input: {
 }): Promise<void> {
   const nowMs = Date.now();
   // Cheap in-process gate: skip entirely (no DB, no attach, no exec) if THIS
-  // instance already attempted a measurement for this page within the window.
+  // instance reached a DEFINITIVE outcome for this page within the window. NOT
+  // stamped yet — a transient failure below must leave the page retryable.
   const lastAttempt = lastMeasureAttemptAtMs.get(input.pageId);
   if (lastAttempt !== undefined && nowMs - lastAttempt < STORAGE_MEASUREMENT_THROTTLE_MS) {
     return;
   }
-  lastMeasureAttemptAtMs.set(input.pageId, nowMs);
 
   try {
     const [row] = await db
@@ -143,13 +159,17 @@ export async function measureMachineStorageOpportunistically(input: {
       .where(eq(terminalSessions.pageId, input.pageId))
       .limit(1);
     // No billing row for this page → nothing to attribute the measurement to.
-    if (!row) return;
+    // Definitive: cache so we don't re-SELECT every op for a page we can't bill.
+    if (!row) {
+      noteMeasureAttempt(input.pageId, nowMs);
+      return;
+    }
 
     // Authoritative (persisted) throttle: if another process/instance measured
     // this page within the window, skip BEFORE resolving the handle so a lazy
     // caller with a cold in-process cache (e.g. a freshly-restarted realtime
     // node) never pays a wasted network attach. refreshStorageMeasurement
-    // re-checks this too — this is purely to gate the attach.
+    // re-checks this too — this is purely to gate the attach. Definitive: cache.
     if (
       !shouldRefreshMeasurement({
         lastMeasuredAt: row.storageMeasuredAt ?? null,
@@ -157,21 +177,27 @@ export async function measureMachineStorageOpportunistically(input: {
         throttleMs: STORAGE_MEASUREMENT_THROTTLE_MS,
       })
     ) {
+      noteMeasureAttempt(input.pageId, nowMs);
       return;
     }
 
     // Resolve the handle only now that we know a measurement is actually due,
-    // so a lazy caller's network attach is never paid on a throttled wake.
+    // so a lazy caller's network attach is never paid on a throttled wake. A
+    // null handle is a TRANSIENT failure (sprite vanished / attach failed) — do
+    // NOT cache, so a later op this window retries.
     const handle = input.handle ?? (input.resolveHandle ? await input.resolveHandle() : null);
     if (!handle) return;
 
-    await refreshStorageMeasurement({
+    const result = await refreshStorageMeasurement({
       handle,
       pageId: input.pageId,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(nowMs),
       persist: persistStorageMeasurement,
     });
+    // Cache only on a successful measure. A failed/unparseable `du` (measured:
+    // false) is transient — leave the page retryable within the window.
+    if (result.measured) noteMeasureAttempt(input.pageId, nowMs);
   } catch (error) {
     // Best-effort: a measurement failure must never break the real work that
     // woke the sprite.

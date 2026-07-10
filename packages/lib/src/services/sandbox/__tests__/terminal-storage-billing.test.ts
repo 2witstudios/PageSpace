@@ -293,6 +293,30 @@ describe('measureMachineStorageOpportunistically', () => {
     });
   });
 
+  it('transient failure does NOT lock out re-measurement: a null-handle attempt is retried on the next call', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: async () => [{ storageMeasuredAt: null }] }) }),
+    });
+    mockDb.update.mockReturnValue({ set: () => ({ where: async () => {} }) });
+    // First resolveHandle transiently fails (null); second succeeds.
+    let call = 0;
+    const exec = vi.fn(async (_args: { cmd: string }) => ({ exitCode: 0, stdout: DU_OK, stderr: '' }));
+    const resolveHandle = vi.fn(async () => {
+      call += 1;
+      return call === 1 ? null : { exec };
+    });
+
+    await measureMachineStorageOpportunistically({ pageId: 'transient', resolveHandle });
+    await measureMachineStorageOpportunistically({ pageId: 'transient', resolveHandle });
+
+    assert({
+      given: 'a first attempt whose handle resolution transiently failed (not cached)',
+      should: 'retry on the next call within the window (resolveHandle invoked twice, measured on the second)',
+      actual: { resolves: resolveHandle.mock.calls.length, execs: exec.mock.calls.length },
+      expected: { resolves: 2, execs: 1 },
+    });
+  });
+
   it('skips (no exec, no write) when the page has no terminal_sessions row', async () => {
     mockDb.select.mockReturnValue({
       from: () => ({ where: () => ({ limit: async () => [] }) }),

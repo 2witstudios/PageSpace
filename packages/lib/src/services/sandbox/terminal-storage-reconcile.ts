@@ -180,29 +180,26 @@ export async function reconcileTerminalStorage(
       const gbMonths = computeElapsedGbMonths({ measuredGB: gb, elapsedMs });
       const costDollars = calculateTerminalStorageCostDollars(gbMonths);
 
-      // Nothing to charge this window. Two cases, handled differently:
+      // Nothing to charge this window (zero elapsed, a never-measured 0 floor,
+      // or a footprint so tiny its per-window cost rounds to $0). ALWAYS advance
+      // the watermark to now when real time elapsed — for measured and
+      // never-measured rows alike.
       //
-      //  • NEVER-MEASURED (measuredBytes === null): advance the watermark past
-      //    this un-measured window (when real time elapsed) so that once a
-      //    measurement finally lands it is not billed retroactively over the
-      //    whole idle span — this is what keeps the cutover from the old
-      //    allocation-billing clean. (One-time residual: the first measured
-      //    window still spans from the last advance to now, i.e. AT MOST one
-      //    reconcile interval of pre-measurement time — bounded and one-time,
-      //    the deliberate cost of a single watermark with no separate
-      //    measurement-start marker.)
+      // Advancing unconditionally is deliberate: it caps this window's residual
+      // at the pricing rounding floor (a sub-cent, and only for footprints under
+      // ~2.4MB on an hourly cron, which genuinely cost ~$0), and — critically —
+      // it prevents a retroactive OVER-bill. If we instead froze the watermark
+      // on a tiny measured footprint, a machine that later grows to (say) 100GB
+      // and is re-measured would be billed 100GB across the entire frozen span,
+      // charging the payer for storage they did not hold. Losing a sub-cent
+      // residual is negligible; retroactively over-charging is not. The
+      // never-measured case is likewise advanced so the cutover from the old
+      // allocation-billing is clean (its first measured window bills AT MOST one
+      // reconcile interval of pre-measurement time — bounded and one-time).
       //
-      //  • MEASURED but sub-charge (a tiny footprint whose per-window cost
-      //    rounds to $0, or a genuine zero-byte footprint): do NOT advance.
-      //    Leaving the watermark lets the residual accumulate across windows
-      //    until it crosses the pricing rounding floor and actually bills —
-      //    otherwise a small machine on a frequent cron would be billed $0
-      //    forever, discarding real (if tiny) storage cost every run.
-      //
-      // A back-to-back rerun (elapsedMs === 0) advances nothing either way,
-      // staying a pure no-op.
+      // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
       if (costDollars <= 0) {
-        if (machine.measuredBytes === null && elapsedMs > 0) {
+        if (elapsedMs > 0) {
           await deps.advanceWatermark({ pageId: machine.pageId, billedThrough: now });
         }
         continue;

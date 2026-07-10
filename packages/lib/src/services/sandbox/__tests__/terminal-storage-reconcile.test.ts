@@ -283,7 +283,7 @@ describe('reconcileTerminalStorage', () => {
     expect(result).toMatchObject({ processed: 1, charged: 0 });
   });
 
-  it('a MEASURED tiny footprint whose window cost rounds to $0 does NOT advance the watermark (residual accrues, not discarded)', async () => {
+  it('a MEASURED tiny footprint whose window cost rounds to $0 ADVANCES the watermark (bill $0, do not freeze)', async () => {
     const now = new Date('2026-07-01T01:00:00.000Z');
     const advanceCalls: Array<{ pageId: string; billedThrough: Date }> = [];
     const chargeCalls: Array<unknown> = [];
@@ -292,8 +292,8 @@ describe('reconcileTerminalStorage', () => {
       listMachines: async () => [
         {
           pageId: 'tiny',
-          // One hour elapsed at a ~1KB footprint prices to well below the
-          // 6-decimal rounding floor → costDollars === 0.
+          // One hour elapsed at a ~1KB footprint prices below the 6-decimal
+          // rounding floor → costDollars === 0.
           storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z'),
           measuredBytes: 1_000, // MEASURED (not null), tiny
           measuredAt: new Date('2026-06-30T23:30:00.000Z'),
@@ -314,11 +314,54 @@ describe('reconcileTerminalStorage', () => {
 
     assert({
       given: 'a measured sub-cent footprint on a frequent cron',
-      should: 'neither charge nor advance the watermark, so the residual accrues toward a future charge',
+      should: 'charge nothing but ADVANCE the watermark, so the window is settled and cannot be billed retroactively later',
       actual: { charged: chargeCalls.length, advanced: advanceCalls.length },
-      expected: { charged: 0, advanced: 0 },
+      expected: { charged: 0, advanced: 1 },
     });
     expect(result).toMatchObject({ processed: 1, charged: 0 });
+  });
+
+  it('NO retroactive over-bill: a tiny footprint that later grows bills only the post-growth window, not the whole frozen span', async () => {
+    let watermark = new Date('2026-05-01T00:00:00.000Z'); // long-idle machine
+    let measuredBytes = 1_000; // ~1KB → sub-cent → $0 this tick
+    let measuredAt = new Date('2026-05-01T00:00:00.000Z');
+    let nowIso = '2026-06-01T00:00:00.000Z';
+    const chargeCalls: Array<{ gbMonths: number }> = [];
+
+    const deps: ReconcileTerminalStorageDeps = {
+      listMachines: async () => [
+        { pageId: 'grower', storageLastBilledAt: watermark, measuredBytes, measuredAt, lastActiveAt: measuredAt },
+      ],
+      lookupPageOwnerId: async () => 'owner-1',
+      chargeStorage: async (input) => {
+        chargeCalls.push({ gbMonths: input.gbMonths });
+      },
+      advanceWatermark: async (input) => {
+        watermark = input.billedThrough;
+      },
+      now: () => new Date(nowIso),
+    };
+
+    // Tick 1: tiny footprint, one month idle → $0, watermark advances to 2026-06-01.
+    await reconcileTerminalStorage(deps);
+    expect(chargeCalls).toHaveLength(0);
+    expect(watermark.toISOString()).toBe('2026-06-01T00:00:00.000Z');
+
+    // The machine balloons to 100GB; next tick is exactly one month later.
+    measuredBytes = 100_000_000_000;
+    measuredAt = new Date('2026-06-20T00:00:00.000Z');
+    nowIso = '2026-07-01T00:00:00.000Z';
+
+    await reconcileTerminalStorage(deps);
+
+    // Billed window is 2026-06-01 → 2026-07-01 (one month at 100GB = ~100 GB-months),
+    // NOT back to 2026-05-01 — the frozen-span retroactive over-bill is avoided.
+    assert({
+      given: 'a tiny footprint that grew to 100GB after its watermark advanced',
+      should: 'bill ~100 GB-months (one month), not ~200 (two months back to the old watermark)',
+      actual: Math.round(chargeCalls[0].gbMonths),
+      expected: 100,
+    });
   });
 
   it('CUTOVER continuity: after the watermark advances, the FIRST measured window bills only from the advanced mark (no over-bill)', async () => {

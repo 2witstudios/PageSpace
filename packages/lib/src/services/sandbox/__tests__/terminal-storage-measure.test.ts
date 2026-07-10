@@ -110,8 +110,9 @@ describe('refreshStorageMeasurement', () => {
     });
 
     expect(exec).toHaveBeenCalledTimes(1);
-    // Measures the workspace SUBTREE (du), not the whole filesystem (df).
-    expect(exec.mock.calls[0][0]).toMatchObject({ cmd: 'du', args: ['-sbx', '--', '/workspace'] });
+    // Measures the workspace SUBTREE at ACTUAL disk usage (du -sxB1), not the
+    // whole filesystem (df) and not apparent size (du -b).
+    expect(exec.mock.calls[0][0]).toMatchObject({ cmd: 'du', args: ['-sxB1', '--', '/workspace'] });
     expect(out).toEqual({ measured: true, bytes: 209_715_200 });
     expect(persisted).toEqual([{ pageId: 'page-1', measuredBytes: 209_715_200, measuredAt: now }]);
   });
@@ -138,23 +139,16 @@ describe('refreshStorageMeasurement', () => {
     expect(out).toEqual({ measured: false });
   });
 
-  it('still persists a valid total even when du exits non-zero (partial cannot-read but printed the sum)', async () => {
-    // du -sbx exits 1 on an unreadable child yet prints the total on stdout.
+  it('does NOT persist a partial total when du exits non-zero (cannot-read → under-count is untrustworthy)', async () => {
+    // du exits 1 when it couldn't read part of the tree; the printed total then
+    // excludes the unreadable part, so it must not be persisted as authoritative.
     const { handle } = fakeHandle({ exitCode: 1, stdout: '4096\t/workspace', stderr: 'du: cannot read /workspace/x' });
-    const persisted: Array<{ pageId: string; measuredBytes: number; measuredAt: Date }> = [];
+    const persist = vi.fn();
 
-    const out = await refreshStorageMeasurement({
-      handle,
-      pageId: 'p',
-      lastMeasuredAt: null,
-      now,
-      persist: async (p) => {
-        persisted.push(p);
-      },
-    });
+    const out = await refreshStorageMeasurement({ handle, pageId: 'p', lastMeasuredAt: null, now, persist });
 
-    expect(out).toEqual({ measured: true, bytes: 4096 });
-    expect(persisted).toEqual([{ pageId: 'p', measuredBytes: 4096, measuredAt: now }]);
+    expect(persist).not.toHaveBeenCalled();
+    expect(out).toEqual({ measured: false });
   });
 
   it('does not persist when du output is unparseable', async () => {

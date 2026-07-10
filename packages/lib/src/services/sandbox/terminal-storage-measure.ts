@@ -9,10 +9,10 @@
  * keep-awake billing bug). So measurement is captured HERE, opportunistically,
  * only while a sprite is ALREADY awake for real work (agent tool run today; any
  * other genuine wake path may call in too), and throttled so a burst of real
- * work costs at most one `du -sbx` of the workspace per machine per window.
+ * work costs at most one `du -sxB1` of the workspace per machine per window.
  *
  * Pure core (parse/convert/throttle) + a thin DI'd shell (`refreshStorageMeasurement`)
- * that runs one `du -sbx` through an injected `MachineHandle.exec` and persists
+ * that runs one `du -sxB1` through an injected `MachineHandle.exec` and persists
  * via an injected writer — unit-tested against a fake handle with zero real
  * sprite calls.
  *
@@ -55,7 +55,7 @@ export const STORAGE_MEASUREMENT_THROTTLE_MS = envInt('TERMINAL_STORAGE_MEASURE_
 export const STORAGE_MEASURE_PATH = SANDBOX_ROOT;
 
 /**
- * Wall-clock cap on the measurement exec. `du -sbx` walks the workspace subtree,
+ * Wall-clock cap on the measurement exec. `du -sxB1` walks the workspace subtree,
  * so it is not instant on a large checkout; this is generous enough for a normal
  * tree yet bounded so a pathological one can't run unbounded. On expiry the
  * driver SIGKILLs `du` and the run fails → no persist (retried next window).
@@ -63,9 +63,11 @@ export const STORAGE_MEASURE_PATH = SANDBOX_ROOT;
 const MEASURE_EXEC_TIMEOUT_MS = 20_000;
 
 /**
- * Pure: parse `du -sbx <path>` output → used bytes. `du -sb` prints a single
- * summary line `"<bytes>\t<path>"` (apparent size in bytes); the leading integer
- * is the total. Returns null for empty / malformed output (caller persists nothing).
+ * Pure: parse `du -sxB1 <path>` output → used bytes. `du -s … B1` prints a single
+ * summary line `"<bytes>\t<path>"` — the ACTUAL allocated disk usage in bytes (NOT
+ * `-b`/apparent size, which would bill a sparse 100GB file that occupies 1GB of
+ * real blocks as 100GB). The leading integer is the total. Returns null for empty
+ * / malformed output (caller persists nothing).
  */
 export function parseDuBytes(stdout: string): number | null {
   const firstLine = stdout
@@ -130,12 +132,13 @@ export interface RefreshStorageMeasurementResult {
  * Opportunistically measure and persist a machine's used storage bytes IF the
  * throttle window has elapsed. Fully non-fatal: any exec failure / non-zero
  * exit / unparseable output leaves the last good measurement untouched and
- * returns `{ measured: false }`. Runs at most one `du -sbx` per call.
+ * returns `{ measured: false }`. Runs at most one `du -sxB1` per call.
  *
- * `du -sbx <path>`: `-s` summary, `-b` apparent size in bytes, `-x` stay on one
- * filesystem (don't descend into other mounts), `--` so a path starting with `-`
- * is never read as a flag. The spawned `du` runs as its own process on the VM,
- * so it does not serialize with the primary op that woke the sprite.
+ * `du -sxB1 <path>`: `-s` summary, `-x` stay on one filesystem (don't descend
+ * into other mounts), `-B1` report ACTUAL allocated bytes (not `-b`/apparent
+ * size), `--` so a path starting with `-` is never read as a flag. The spawned
+ * `du` runs as its own process on the VM, so it does not serialize with the
+ * primary op that woke the sprite.
  */
 export async function refreshStorageMeasurement(
   input: RefreshStorageMeasurementInput,
@@ -148,16 +151,19 @@ export async function refreshStorageMeasurement(
   const path = input.measurePath ?? STORAGE_MEASURE_PATH;
   let run: { exitCode: number; stdout: string; stderr: string };
   try {
-    run = await input.handle.exec({ cmd: 'du', args: ['-sbx', '--', path], timeoutMs: MEASURE_EXEC_TIMEOUT_MS });
+    run = await input.handle.exec({ cmd: 'du', args: ['-sxB1', '--', path], timeoutMs: MEASURE_EXEC_TIMEOUT_MS });
   } catch {
     // Measurement is best-effort — a dead/unreachable sprite must never break
     // the real work that woke it.
     return { measured: false };
   }
 
-  // `du` exits non-zero on partial "cannot read" errors even when it printed a
-  // valid total on stdout, so parse the total regardless of exit code and only
-  // treat unparseable output as a failure.
+  // Only trust a clean walk: `du` exits non-zero when it couldn't read part of
+  // the tree, in which case the printed total is an UNDER-count. Persisting that
+  // as authoritative would silently under-bill, so skip and retry next window
+  // (the workspace is normally fully readable by the measuring process, so a
+  // clean exit 0 is the common case).
+  if (run.exitCode !== 0) return { measured: false };
   const bytes = parseDuBytes(run.stdout);
   if (bytes === null) return { measured: false };
 
