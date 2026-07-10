@@ -18,3 +18,8 @@ services:
     networks:
       - internal
       - frontend
+
+  clickhouse:
+    networks:
+      - internal
+      - frontend

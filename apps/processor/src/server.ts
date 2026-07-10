@@ -17,6 +17,8 @@ import { authenticateService, requireScope } from './middleware/auth';
 import { requireResourceBinding, requirePageBinding } from './middleware/resource-binding';
 import { validateCorsOrigin } from './utils/cors-validation';
 import { loadSiemConfig, type AuditLogSource } from './services/siem-adapter';
+import { probeClickHouseStartup } from '@pagespace/lib/observability/clickhouse-client';
+import { drainAnalyticsInserts } from '@pagespace/lib/observability/analytics-inserts';
 import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from './services/siem-sources';
 import { buildSiemHealth, type SiemHealthResponse } from './services/siem-health-builder';
 import { readCursorSnapshots } from './workers/siem-cursor-reader';
@@ -368,6 +370,13 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // Initialize and start server
 async function start() {
   try {
+    // Fail-fast: a half-configured ClickHouse deploy (flag on, creds missing)
+    // must crash here — the insert adapters absorb per-row errors by design,
+    // so a running process would silently drop all 4 analytics tables'
+    // telemetry (#890 Phase 3). Throws into the catch below → process.exit(1).
+    const chMode = probeClickHouseStartup();
+    console.log(`✓ ClickHouse analytics tier: ${chMode.mode}`);
+
     // Initialize content store
     await contentStore.initialize();
     console.log('✓ Content store initialized');
@@ -394,12 +403,34 @@ async function start() {
       }
     }, 60 * 60 * 1000);
 
-    // Graceful shutdown
-    process.on('SIGTERM', async () => {
-      console.log('SIGTERM received, shutting down gracefully...');
-      await queueManager.shutdown();
+    // Graceful shutdown: drain the CH insert buffers first (workers write
+    // analytics rows through them — up to 500 rows/table sit in memory),
+    // then stop the queue manager.
+    let shuttingDown = false;
+    const shutdown = async (signal: string) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`${signal} received, shutting down gracefully...`);
+      // Each step is guarded so a rejection can never skip process.exit(0) —
+      // otherwise the process would hang until the runtime SIGKILLs it (mirrors
+      // the per-step guards in packages/lib graceful-shutdown.ts).
+      try {
+        await drainAnalyticsInserts();
+      } catch (error) {
+        console.error('Analytics drain failed during shutdown:', error);
+      }
+      try {
+        await queueManager.shutdown();
+      } catch (error) {
+        console.error('Queue manager shutdown failed:', error);
+      }
       process.exit(0);
-    });
+    };
+    // Return the shutdown promise so callers/tests can await the full
+    // drain → queue-shutdown → exit chain; Node ignores the handler's
+    // return value at runtime (same fire-and-forget as an async handler).
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
 
   } catch (error) {
     console.error('Failed to start processor service:', error);

@@ -9,6 +9,8 @@ import { eq, and, sql } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core'
 import { userActivities } from '@pagespace/db/schema/monitoring'
 import { conversations } from '@pagespace/db/schema/conversations';
+import { isClickHouseEnabled } from '@pagespace/lib/observability/clickhouse-client';
+import { insertUserActivity } from '@pagespace/lib/observability/analytics-inserts';
 import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
 
 // Types for repository operations
@@ -367,7 +369,7 @@ export const conversationRepository = {
    * Log conversation deletion for audit trail
    */
   async logConversationDeletion(data: ConversationDeletionLog): Promise<void> {
-    await db.insert(userActivities).values({
+    const activity = {
       userId: data.userId,
       action: 'delete',
       resource: 'conversation',
@@ -381,7 +383,15 @@ export const conversationRepository = {
         lastMessageTime: data.metadata?.lastMessageTime,
         deletionReason: 'user_initiated',
       },
-    });
+    };
+
+    // #890 Phase 3: user_activities cuts over to ClickHouse when enabled.
+    if (isClickHouseEnabled()) {
+      insertUserActivity(activity);
+      return;
+    }
+
+    await db.insert(userActivities).values(activity);
   },
 };
 

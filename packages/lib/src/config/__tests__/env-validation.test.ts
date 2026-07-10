@@ -75,6 +75,52 @@ describe('env-validation', () => {
       }
     });
 
+    it('given CLICKHOUSE_* vars absent, should parse successfully (analytics tier is off by default, #890 Phase 3)', () => {
+      const env = {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.CLICKHOUSE_ENABLED).toBeUndefined();
+      }
+    });
+
+    it('given a stray CLICKHOUSE_ENABLED value (e.g. "0"), should still parse — the exact-match gate lives in clickhouse-env, not app-wide validation', () => {
+      const env = {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        CLICKHOUSE_ENABLED: '0',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+    });
+
+    it('given full CLICKHOUSE_* connection config, should parse and pass the values through', () => {
+      const env = {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        CLICKHOUSE_ENABLED: 'true',
+        CLICKHOUSE_HOST: 'https://my-cluster.clickhouse.cloud:8443',
+        CLICKHOUSE_USER: 'default',
+        CLICKHOUSE_PASSWORD: 'secret',
+        CLICKHOUSE_DATABASE: 'pagespace_analytics',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.CLICKHOUSE_HOST).toBe('https://my-cluster.clickhouse.cloud:8443');
+        expect(result.data.CLICKHOUSE_DATABASE).toBe('pagespace_analytics');
+      }
+    });
+
     it('given invalid DATABASE_URL format, should fail validation', () => {
       const invalidEnv = {
         DATABASE_URL: 'not-a-valid-url',

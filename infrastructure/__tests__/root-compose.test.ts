@@ -94,6 +94,63 @@ describe('Root (dev/self-host) docker-compose configuration', () => {
     });
   });
 
+  describe('clickhouse service (analytics tier, #890 Phase 3 — dev/CI only)', () => {
+    // Production analytics is cloud-managed ClickHouse Cloud; this container
+    // exists so dev + integration tests have a real CH. The tenant/onprem
+    // compose stacks deliberately do NOT run it.
+    it('given the root compose, should define the clickhouse service', () => {
+      expect(compose.services.clickhouse).toBeDefined();
+    });
+
+    it('given the clickhouse service, should pin an exact clickhouse-server image version (no latest/floating tag)', () => {
+      const image = compose.services.clickhouse.image ?? '';
+      expect(image).toMatch(/^clickhouse\/clickhouse-server:\d+\.\d+/);
+      expect(image).not.toContain('latest');
+    });
+
+    it('given the clickhouse service, should mount its own clickhouse_data volume', () => {
+      const vols = compose.services.clickhouse.volumes ?? [];
+      expect(vols.some(v => v.startsWith('clickhouse_data:'))).toBe(true);
+    });
+
+    it('given the compose file, should define the clickhouse_data volume', () => {
+      expect(compose.volumes).toHaveProperty('clickhouse_data');
+    });
+
+    it('given the clickhouse service, should expose the HTTP interface on host port 8123 (@clickhouse/client speaks HTTP only)', () => {
+      const ports = compose.services.clickhouse.ports ?? [];
+      expect(ports.some(p => String(p).startsWith('8123:'))).toBe(true);
+    });
+
+    it('given the clickhouse service, should create the pagespace_analytics database with dev credentials', () => {
+      const env = getEnv(compose, 'clickhouse');
+      expect(env.CLICKHOUSE_DB).toBe('pagespace_analytics');
+      expect(env.CLICKHOUSE_USER).toBeTruthy();
+      expect(env.CLICKHOUSE_PASSWORD).toBeTruthy();
+    });
+
+    it('given the clickhouse service, should have a /ping healthcheck', () => {
+      const test = compose.services.clickhouse.healthcheck?.test;
+      const testStr = Array.isArray(test) ? test.join(' ') : test;
+      expect(testStr).toContain('8123/ping');
+    });
+
+    it('given the clickhouse service, should join only the internal network', () => {
+      const nets = compose.services.clickhouse.networks;
+      if (Array.isArray(nets)) {
+        expect(nets).toEqual(['internal']);
+      } else {
+        expect(Object.keys(nets ?? {})).toEqual(['internal']);
+      }
+    });
+
+    it('given the app services, should NOT hard-wire CLICKHOUSE_ENABLED on (ships dark; devs opt in via .env)', () => {
+      for (const svc of ['web', 'admin', 'processor', 'realtime']) {
+        expect(getEnv(compose, svc).CLICKHOUSE_ENABLED).not.toBe('true');
+      }
+    });
+  });
+
   describe('migrate one-shot', () => {
     it('given the migrate service, should depend on both postgres and postgres-admin being healthy', () => {
       const deps = compose.services.migrate.depends_on;

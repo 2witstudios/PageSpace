@@ -53,6 +53,33 @@ services:
         limits:
           memory: 200M
 
+  # Analytics tier (#890 Phase 3): local ClickHouse so dev + integration tests
+  # have a real CH to hit. DEV/CI ONLY — in production the analytics tier is
+  # cloud-managed ClickHouse Cloud (AWS us-east-1), so the tenant/onprem
+  # compose stacks deliberately do NOT carry this service. Ships dark: no app
+  # service sets CLICKHOUSE_ENABLED; devs opt in via .env (see .env.example).
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.3-alpine
+    ports:
+      - "8123:8123"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    environment:
+      - CLICKHOUSE_DB=pagespace_analytics
+      - CLICKHOUSE_USER=user
+      - CLICKHOUSE_PASSWORD=password
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
   migrate:
     build:
       context: .
@@ -327,4 +354,5 @@ networks:
 volumes:
   postgres_data:
   postgres_admin_data:
+  clickhouse_data:
   cron_logs:
