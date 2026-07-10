@@ -17,22 +17,10 @@
 
 import { createHash } from 'crypto';
 import { db } from '@pagespace/db/db';
-import { sql } from '@pagespace/db/operators';
-import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
 import { queryAuditEvents } from './audit-query';
 import { stableStringify } from '../utils/stable-stringify';
-import { deriveIndexKey } from '../encryption/blind-index';
-import { encryptAuditIp } from '../encryption/audit-ip-crypto';
-
-/**
- * Derive the blind-index key from ENCRYPTION_KEY, or null when no usable key is
- * configured (e.g. dev/test) so audit IPs fall back to plaintext storage.
- */
-function auditIndexKey(): Buffer | null {
-  const master = process.env.ENCRYPTION_KEY ?? '';
-  return master.length >= 32 ? deriveIndexKey(master) : null;
-}
+import { createSecurityAuditRepository, type SecurityAuditRepository } from './security-audit-repository';
 
 /**
  * Audit event input structure
@@ -115,6 +103,7 @@ export function computeSecurityEventHash(
  */
 export class SecurityAuditService {
   private initialized = false;
+  private repository: SecurityAuditRepository | null = null;
 
   /**
    * Mark the service as initialized. Retained for callers that invoke it at
@@ -133,6 +122,18 @@ export class SecurityAuditService {
   static readonly CHAIN_LOCK_KEY = 8370291546;
 
   /**
+   * Lazily build the default repository instance. Deferred (rather than built
+   * eagerly at construction) so module load order between security-audit.ts
+   * and security-audit-repository.ts never matters.
+   */
+  private getRepository(): SecurityAuditRepository {
+    if (!this.repository) {
+      this.repository = createSecurityAuditRepository({ db });
+    }
+    return this.repository;
+  }
+
+  /**
    * Log a security event with hash chain integrity.
    *
    * Uses a PostgreSQL advisory lock to serialize concurrent writes and prevent
@@ -146,49 +147,7 @@ export class SecurityAuditService {
       await this.initialize();
     }
 
-    const timestamp = new Date();
-
-    await db.transaction(async (tx) => {
-      // Acquire advisory lock scoped to this transaction.
-      // Blocks concurrent writers until this transaction completes.
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(${SecurityAuditService.CHAIN_LOCK_KEY})`);
-
-      // Read the latest hash — safe from races under the advisory lock
-      const lastRecord = await tx.execute(sql`
-        SELECT event_hash
-        FROM security_audit_log
-        ORDER BY chain_seq DESC
-        LIMIT 1
-      `);
-
-      const previousHash = (lastRecord.rows[0] as { event_hash: string } | undefined)?.event_hash ?? 'genesis';
-
-      const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
-
-      // GDPR #965/#969: encrypt the IP at rest + populate its blind index.
-      // ipAddress is excluded from the event hash, so this is chain-safe.
-      const { ipAddress: storedIp, ipBidx } = await encryptAuditIp(event.ipAddress, auditIndexKey());
-
-      await tx.insert(securityAuditLog).values({
-        eventType: event.eventType,
-        userId: event.userId,
-        sessionId: event.sessionId,
-        serviceId: event.serviceId,
-        resourceType: event.resourceType,
-        resourceId: event.resourceId,
-        ipAddress: storedIp,
-        ipBidx,
-        userAgent: event.userAgent,
-        geoLocation: event.geoLocation,
-        details: event.details,
-        riskScore: event.riskScore,
-        anomalyFlags: event.anomalyFlags,
-        timestamp,
-        previousHash,
-        eventHash,
-      });
-
-    });
+    return this.getRepository().appendEvent(event);
   }
 
   // ==========================================================================
