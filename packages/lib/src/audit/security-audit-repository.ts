@@ -64,6 +64,9 @@ export interface SecurityAuditRepository {
  * Build a security audit repository backed by the given Drizzle client.
  */
 export function createSecurityAuditRepository({ db }: SecurityAuditRepositoryDeps): SecurityAuditRepository {
+  // Unused outside this module's tests until Phase 2: the single-writer
+  // chainer (#890) reads the head directly instead of racing appendEvent's
+  // internal lookup. Staged now so the seam doesn't need to be re-added then.
   async function readChainHead(): Promise<string> {
     return fetchChainHead(db);
   }
