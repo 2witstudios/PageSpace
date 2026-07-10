@@ -210,6 +210,35 @@ describe('listMachineDiffFiles', () => {
     });
   });
 
+  it('branch: dedups an untracked path that also appears in the tracked diff (tracked entry wins)', async () => {
+    const { deps } = makeDeps(
+      scriptGit({
+        // pathological: same path deleted in the tracked diff AND present untracked on disk
+        'diff --name-status -z --merge-base origin/HEAD': { exitCode: 0, stdout: 'D\0src/dup.ts\0', stderr: '' },
+        'status --porcelain -z': { exitCode: 0, stdout: '?? src/dup.ts\0?? src/genuinely-new.ts\0', stderr: '' },
+        'merge-base origin/HEAD HEAD': { exitCode: 0, stdout: `${MERGE_BASE_SHA}\n`, stderr: '' },
+      }),
+    );
+    const result = await listMachineDiffFiles({
+      branchName: 'feature/x',
+      isMainBranch: false,
+      scope: 'branch',
+      cwd: CWD,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toEqual({
+      ok: true,
+      notApplicable: false,
+      files: [
+        { path: 'src/dup.ts', status: 'deleted' }, // tracked entry kept, not duplicated as 'added'
+        { path: 'src/genuinely-new.ts', status: 'added' },
+      ],
+      truncated: false,
+      mergeBase: MERGE_BASE_SHA,
+    });
+  });
+
   it('branch: an output-capped untracked supplement flags the whole list truncated', async () => {
     // runGitInSandbox recomputes `truncated` from real byte length (256 KB cap),
     // so the untracked run must genuinely overflow it to exercise the OR.

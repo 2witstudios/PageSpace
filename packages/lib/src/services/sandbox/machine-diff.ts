@@ -139,15 +139,20 @@ export async function listMachineDiffFiles({
   // 'branch' scope: `git diff --merge-base` lists only tracked differences, so
   // append the untracked working-tree files (a second run) — otherwise a
   // brand-new never-added file is invisible in a scope documented to include
-  // all uncommitted working-tree changes. Untracked paths can't collide with
-  // the diff's tracked paths, so they simply extend the list.
+  // all uncommitted working-tree changes. Untracked paths normally can't
+  // collide with the diff's tracked paths, but a path deleted from the index
+  // yet still present untracked on disk can appear in both; dedup so the
+  // tracked diff entry always wins and no path is listed twice.
   if (resolution.untrackedArgs) {
     const untracked = await runGitInSandbox({ cmd: 'git', args: resolution.untrackedArgs, cwd, ctx, deps });
     if (!untracked.success) return { ok: false, reason: 'exec_failed', detail: untracked.error };
     if (untracked.exitCode !== 0) {
       return { ok: false, reason: 'exec_failed', detail: untracked.stderr.trim() || undefined };
     }
-    files.push(...parseUntrackedPorcelainZ(untracked.stdout));
+    const trackedPaths = new Set(files.map((f) => f.path));
+    for (const file of parseUntrackedPorcelainZ(untracked.stdout)) {
+      if (!trackedPaths.has(file.path)) files.push(file);
+    }
     truncated = truncated || untracked.truncated;
   }
 

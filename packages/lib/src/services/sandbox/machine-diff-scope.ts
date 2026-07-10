@@ -28,8 +28,9 @@
  *     differences, so a brand-new never-added file would otherwise be missing
  *     from a scope that is documented to include all uncommitted working-tree
  *     changes; `untrackedArgs` on the resolution below supplies exactly that
- *     gap. Untracked paths cannot collide with the diff's tracked paths, so
- *     the shell simply appends them (no dedup needed).
+ *     gap. Untracked paths normally cannot collide with the diff's tracked
+ *     paths, but the shell dedups by path anyway (tracked entry wins) to cover
+ *     the pathological deleted-from-index-yet-present-untracked case.
  *     original = blob at the merge-base, modified = working-tree file.
  *
  * On the main branch itself, 'committed' and 'branch' are meaningless — the
