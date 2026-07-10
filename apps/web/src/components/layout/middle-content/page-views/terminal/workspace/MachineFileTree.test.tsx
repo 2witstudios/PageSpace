@@ -12,11 +12,13 @@ import MachineFileTree from './MachineFileTree';
 
 /**
  * Fake checkout served by the mocked /api/machines/files. Root order is
- * deliberately file-before-directory to prove the component sorts directories
- * first rather than echoing server order.
+ * deliberately unsorted (file-first, reverse-alphabetical) to prove the
+ * component sorts directories first and alphabetically within each type,
+ * rather than echoing server order.
  */
 const FAKE_FS: Record<string, { name: string; type: 'file' | 'directory' }[]> = {
   '': [
+    { name: 'zeta.md', type: 'file' },
     { name: 'README.md', type: 'file' },
     { name: 'src', type: 'directory' },
   ],
@@ -32,6 +34,15 @@ const requestedPath = (url: string): string =>
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+/** A promise the test resolves by hand, to hold one directory's listing in flight. */
+const deferredResponse = () => {
+  let resolve!: (r: Response) => void;
+  const promise = new Promise<Response>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+};
 
 /** Serve FAKE_FS; per-path overrides let a test hold one directory pending or failing. */
 const cannedFetch = (overrides: Record<string, () => Promise<Response>> = {}) =>
@@ -57,6 +68,12 @@ const expandFolder = async (name: string) => {
   await userEvent.click(label);
 };
 
+/** All row labels currently rendered, in document order. */
+const rowLabels = (): (string | null)[] =>
+  Array.from(
+    document.querySelectorAll('[data-testid="file-tree-dir-toggle"], [data-testid="file-tree-file"]'),
+  ).map((el) => el.textContent);
+
 describe('MachineFileTree', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -76,17 +93,16 @@ describe('MachineFileTree', () => {
     });
   });
 
-  test('sorts directories before files regardless of server order', async () => {
+  test('sorts directories first, then files alphabetically, regardless of server order', async () => {
     renderTree();
 
-    const file = await waitFor(() => screen.getByText('README.md'));
-    const dir = screen.getByText('src');
+    await waitFor(() => screen.getByText('README.md'));
 
     assert({
-      given: 'a root listing the server returned file-first',
-      should: 'render the directory row above the file row',
-      actual: Boolean(dir.compareDocumentPosition(file) & Node.DOCUMENT_POSITION_FOLLOWING),
-      expected: true,
+      given: 'a root listing the server returned unsorted (zeta.md, README.md, src)',
+      should: 'render the directory first, then files in alphabetical order',
+      actual: rowLabels(),
+      expected: ['src', 'README.md', 'zeta.md'],
     });
   });
 
@@ -132,6 +148,85 @@ describe('MachineFileTree', () => {
       should: 'hide children while collapsed and re-show them from cache with no second fetch',
       actual: { collapsedChild, srcFetches: listCallsFor('src') },
       expected: { collapsedChild: null, srcFetches: 1 },
+    });
+  });
+
+  test('collapsing and re-expanding while the listing is in flight does not duplicate the fetch', async () => {
+    const deferred = deferredResponse();
+    cannedFetch({ src: () => deferred.promise });
+    renderTree();
+
+    await expandFolder('src'); // starts the fetch, still pending
+    await userEvent.click(screen.getByText('src')); // collapse mid-flight
+    await userEvent.click(screen.getByText('src')); // re-expand mid-flight
+    deferred.resolve(jsonResponse({ entries: FAKE_FS['src'] }));
+    await waitFor(() => screen.getByText('index.ts'));
+
+    assert({
+      given: 'a directory toggled closed and open again while its first listing is still loading',
+      should: 'issue exactly one fetch and render the children once it resolves',
+      actual: { srcFetches: listCallsFor('src'), child: screen.getByText('index.ts').textContent },
+      expected: { srcFetches: 1, child: 'index.ts' },
+    });
+  });
+
+  test('preserves nested expansion state across a parent collapse', async () => {
+    renderTree();
+
+    await expandFolder('src');
+    await expandFolder('components');
+    await waitFor(() => screen.getByText('Button.tsx'));
+    await userEvent.click(screen.getByText('src')); // collapse parent
+    await userEvent.click(screen.getByText('src')); // re-expand parent
+    await waitFor(() => screen.getByText('Button.tsx'));
+
+    assert({
+      given: 'a nested directory expanded, then its parent collapsed and re-expanded',
+      should: 'still show the nested directory open, from cache, without refetching it',
+      actual: {
+        nestedChild: screen.getByText('Button.tsx').textContent,
+        componentsFetches: listCallsFor('src/components'),
+      },
+      expected: { nestedChild: 'Button.tsx', componentsFetches: 1 },
+    });
+  });
+
+  test('changing the branch identity remounts the tree: cache dropped, expansion reset', async () => {
+    const { rerender } = renderTree();
+    await expandFolder('src');
+    await waitFor(() => screen.getByText('index.ts'));
+
+    rerender(
+      <MachineFileTree terminalId="machine-1" projectName="my-repo" branchName="dev" />,
+    );
+    await waitFor(() => {
+      if (listCallsFor('') < 2) throw new Error('new branch root listing not fetched yet');
+    });
+
+    assert({
+      given: 'the branchName prop changed after a directory was expanded',
+      should: 'refetch the root for the new branch and reset expansion (old children gone)',
+      actual: { rootFetches: listCallsFor(''), staleChild: screen.queryByText('index.ts') },
+      expected: { rootFetches: 2, staleChild: null },
+    });
+  });
+
+  test('the header refresh drops the cache and reloads every visible directory', async () => {
+    renderTree();
+    await expandFolder('src');
+    await waitFor(() => screen.getByText('index.ts'));
+
+    await userEvent.click(screen.getByTitle('Refresh files'));
+    await waitFor(() => {
+      if (listCallsFor('src') < 2) throw new Error('src not refetched yet');
+    });
+    await waitFor(() => screen.getByText('index.ts'));
+
+    assert({
+      given: 'refresh clicked while root and one expanded directory are visible',
+      should: 'refetch both listings (the working tree is live) and keep the directory expanded',
+      actual: { rootFetches: listCallsFor(''), srcFetches: listCallsFor('src'), child: screen.getByText('index.ts').textContent },
+      expected: { rootFetches: 2, srcFetches: 2, child: 'index.ts' },
     });
   });
 
@@ -191,6 +286,21 @@ describe('MachineFileTree', () => {
       should: "surface the API's error message under that directory",
       actual: error.textContent,
       expected: 'exec failed',
+    });
+  });
+
+  test('a 200 response without an entries array is surfaced as an error, not a crash', async () => {
+    cannedFetch({ src: async () => jsonResponse({ unexpected: true }) });
+    renderTree();
+
+    await expandFolder('src');
+    const error = await waitFor(() => screen.getByText('Malformed file listing response'));
+
+    assert({
+      given: 'a successful response whose body has no entries array',
+      should: 'show a meaningful error row for that directory',
+      actual: error.textContent,
+      expected: 'Malformed file listing response',
     });
   });
 

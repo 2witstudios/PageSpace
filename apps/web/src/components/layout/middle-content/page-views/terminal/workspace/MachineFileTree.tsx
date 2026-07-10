@@ -7,11 +7,16 @@
  * Sibling of MachineTree.tsx and follows its plain border-border inner-sidebar
  * row conventions (this is NOT one of the app's liquid-glass sidebars). Reads
  * `/api/machines/files` (mode=list). Each directory fetches its immediate
- * children only when first expanded — a real checkout can be large, so there is
- * deliberately no eager whole-tree walk on mount — and listings are cached per
- * path for the life of the component instance, so collapsing and re-expanding a
- * folder never refetches. The cache (and all expansion state) resets when the
- * terminal/project/branch identity changes, via a React key remount.
+ * children only when its listing first becomes visible — a real checkout can be
+ * large, so there is deliberately no eager whole-tree walk on mount — and
+ * listings are cached per path, so collapsing and re-expanding a folder never
+ * refetches. Expansion state lives in one root-level set keyed by path (not in
+ * per-node component state), so collapsing a parent does not discard which of
+ * its descendants were expanded. The working tree is LIVE (agent terminals
+ * write and delete files), so the header offers a manual refresh that drops the
+ * whole cache while keeping expansion — every visible directory then reloads.
+ * Cache and expansion also reset when the terminal/project/branch identity
+ * changes, via a React key remount.
  *
  * Presentation-only about selection: file rows report their checkout-relative
  * path through `onSelectFile`; the Code tab owns what selection does (e.g.
@@ -19,6 +24,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { MachineDirectoryEntry } from '@pagespace/lib/services/sandbox/machine-fs';
 import { cn } from '@/lib/utils';
 import {
   ChevronDown,
@@ -26,6 +32,7 @@ import {
   File as FileIcon,
   Folder,
   FolderOpen,
+  RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -40,27 +47,23 @@ export interface MachineFileTreeProps {
   selectedPath?: string | null;
 }
 
-/** One `entries[]` element from GET /api/machines/files?mode=list. */
-interface MachineFileEntry {
-  name: string;
-  type: 'file' | 'directory';
-}
-
 type DirectoryState =
   | { status: 'loading' }
-  | { status: 'loaded'; entries: MachineFileEntry[] }
+  | { status: 'loaded'; entries: MachineDirectoryEntry[] }
   | { status: 'error'; message: string };
 
-/** Everything the recursive nodes need, threaded as one object so recursion doesn't re-plumb five props per level. */
+/** Everything the recursive nodes need, threaded as one object so recursion doesn't re-plumb six props per level. */
 interface TreeContext {
   directories: ReadonlyMap<string, DirectoryState>;
+  expandedPaths: ReadonlySet<string>;
   loadDirectory: (path: string) => Promise<void>;
+  toggleExpanded: (path: string) => void;
   onSelectFile?: (path: string) => void;
   selectedPath: string | null;
 }
 
 /** Directories first, then files, each alphabetical — the universal file-explorer ordering. */
-const sortEntries = (entries: MachineFileEntry[]): MachineFileEntry[] =>
+const sortEntries = (entries: MachineDirectoryEntry[]): MachineDirectoryEntry[] =>
   [...entries].sort((a, b) =>
     a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'directory' ? -1 : 1,
   );
@@ -74,8 +77,8 @@ const readErrorMessage = (body: unknown): string | null => {
 };
 
 export default function MachineFileTree(props: MachineFileTreeProps) {
-  // Remount on identity change so the per-path cache and every node's
-  // expansion state reset together — a different branch is a different tree.
+  // Remount on identity change so the per-path cache and all expansion state
+  // reset together — a different branch is a different tree.
   return (
     <FileTreeRoot
       key={`${props.terminalId}\u0000${props.projectName}\u0000${props.branchName}`}
@@ -85,11 +88,13 @@ export default function MachineFileTree(props: MachineFileTreeProps) {
 }
 
 function FileTreeRoot({ terminalId, projectName, branchName, onSelectFile, selectedPath }: MachineFileTreeProps) {
-  // The ref is the canonical cache (synchronously readable, so a re-expand or a
-  // double-click can never race a stale render into a duplicate fetch); the
-  // state copy just triggers re-renders.
+  // The ref is the canonical cache — synchronously readable, so two renders
+  // racing the same path (e.g. a collapse/re-expand while the listing is still
+  // in flight) can never issue a duplicate fetch. The state map is a snapshot
+  // copy for rendering, never the same object the ref mutates.
   const cacheRef = useRef<Map<string, DirectoryState>>(new Map());
-  const [directories, setDirectories] = useState<ReadonlyMap<string, DirectoryState>>(cacheRef.current);
+  const [directories, setDirectories] = useState<ReadonlyMap<string, DirectoryState>>(new Map());
+  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set());
 
   const setDirectoryState = useCallback((path: string, state: DirectoryState) => {
     cacheRef.current.set(path, state);
@@ -110,8 +115,12 @@ function FileTreeRoot({ terminalId, projectName, branchName, onSelectFile, selec
           const body: unknown = await res.json().catch(() => null);
           throw new Error(readErrorMessage(body) ?? `Failed to list directory (${res.status})`);
         }
-        const body = (await res.json()) as { entries: MachineFileEntry[] };
-        setDirectoryState(path, { status: 'loaded', entries: sortEntries(body.entries) });
+        const body = (await res.json()) as { entries?: unknown };
+        if (!Array.isArray(body.entries)) throw new Error('Malformed file listing response');
+        setDirectoryState(path, {
+          status: 'loaded',
+          entries: sortEntries(body.entries as MachineDirectoryEntry[]),
+        });
       } catch (err) {
         setDirectoryState(path, {
           status: 'error',
@@ -122,29 +131,65 @@ function FileTreeRoot({ terminalId, projectName, branchName, onSelectFile, selec
     [terminalId, projectName, branchName, setDirectoryState],
   );
 
-  // The root listing is the one directory that loads without a user expand —
-  // it IS the tree's first visible level. Children stay lazy.
-  useEffect(() => {
-    void loadDirectory('');
-  }, [loadDirectory]);
+  const toggleExpanded = useCallback((path: string) => {
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(path)) next.add(path);
+      return next;
+    });
+  }, []);
+
+  // The working tree is live — drop the whole cache but keep expansion, so
+  // every visible directory reloads in place (see DirectoryChildren's effect).
+  const refresh = useCallback(() => {
+    cacheRef.current = new Map();
+    setDirectories(new Map());
+  }, []);
 
   const ctx: TreeContext = {
     directories,
+    expandedPaths,
     loadDirectory,
+    toggleExpanded,
+    onSelectFile,
     selectedPath: selectedPath ?? null,
   };
-  if (onSelectFile) ctx.onSelectFile = onSelectFile;
 
   return (
     <div className="p-1 text-sm" data-testid="machine-file-tree">
+      <div className="flex items-center justify-between py-0.5 pr-1">
+        <span className="text-xs text-muted-foreground">Files</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-5"
+          title="Refresh files"
+          onClick={refresh}
+        >
+          <RefreshCw className="size-3" />
+        </Button>
+      </div>
       <DirectoryChildren path="" ctx={ctx} />
     </div>
   );
 }
 
-/** The loading/error/empty/entries body for one directory — shared by the root and every expanded folder. */
+/**
+ * The loading/error/empty/entries body for one directory — shared by the root
+ * and every expanded folder. Fetch-on-render: becoming visible with no cache
+ * entry is what triggers the (lazy) load, which also makes refresh trivial —
+ * clearing the cache reloads exactly the directories currently on screen.
+ */
 function DirectoryChildren({ path, ctx }: { path: string; ctx: TreeContext }) {
+  const { loadDirectory } = ctx;
   const state = ctx.directories.get(path);
+  const needsLoad = state === undefined;
+
+  useEffect(() => {
+    if (needsLoad) void loadDirectory(path);
+  }, [needsLoad, loadDirectory, path]);
+
   if (state === undefined || state.status === 'loading') {
     return <div className="px-2 py-1 text-xs text-muted-foreground">Loading…</div>;
   }
@@ -159,7 +204,7 @@ function DirectoryChildren({ path, ctx }: { path: string; ctx: TreeContext }) {
           variant="ghost"
           size="sm"
           className="h-5 shrink-0 px-1.5 text-xs"
-          onClick={() => void ctx.loadDirectory(path)}
+          onClick={() => void loadDirectory(path)}
         >
           Retry
         </Button>
@@ -184,20 +229,13 @@ function DirectoryChildren({ path, ctx }: { path: string; ctx: TreeContext }) {
 }
 
 function DirectoryNode({ name, path, ctx }: { name: string; path: string; ctx: TreeContext }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const toggle = () => {
-    const next = !expanded;
-    setExpanded(next);
-    // Lazy load on first expand; the per-path cache makes re-expands free.
-    if (next) void ctx.loadDirectory(path);
-  };
+  const expanded = ctx.expandedPaths.has(path);
 
   return (
     <div>
       <button
         type="button"
-        onClick={toggle}
+        onClick={() => ctx.toggleExpanded(path)}
         aria-expanded={expanded}
         data-testid="file-tree-dir-toggle"
         className="flex w-full min-w-0 items-center gap-1 rounded-sm py-1 pr-1 text-left hover:bg-accent/50"
