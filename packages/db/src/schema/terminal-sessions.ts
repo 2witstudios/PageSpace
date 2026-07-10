@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, bigint, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { pages } from './core';
@@ -51,6 +51,20 @@ export const terminalSessions = pgTable('terminal_sessions', {
   // Defaults to now() so pre-existing rows start accruing from migration time
   // rather than requiring a backfill.
   storageLastBilledAt: timestamp('storageLastBilledAt', { mode: 'date' }).defaultNow().notNull(),
+
+  // Measured persistent-storage usage, in BYTES, captured opportunistically
+  // while the machine is already awake for real work (terminal connect, agent
+  // run, file browse) — never by waking a paused sprite. The storage reconcile
+  // (terminal-storage-reconcile.ts) bills these MEASURED bytes, not the
+  // provisioned allocation: the platform charges for bytes actually written
+  // (TRIM-friendly), not the full volume size (docs.sprites.dev/concepts/lifecycle).
+  // NULL = never measured yet → the reconcile bills a conservative 0 floor for
+  // that window (it does NOT fall back to the provisioned cap, the old bug).
+  storageMeasuredBytes: bigint('storageMeasuredBytes', { mode: 'number' }),
+  // When `storageMeasuredBytes` was last captured — drives the measurement
+  // throttle (at most one measure per machine per window) and the reconcile's
+  // staleness signal. NULL alongside a NULL byte count means never measured.
+  storageMeasuredAt: timestamp('storageMeasuredAt', { mode: 'date' }),
 
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

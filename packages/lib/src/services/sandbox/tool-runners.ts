@@ -144,6 +144,14 @@ export interface SandboxRunDeps {
    * cost against the machine's payer. Omitted -> unmetered (no hold, no charge).
    */
   billing?: SandboxBillingDeps;
+  /**
+   * Optional opportunistic storage-measurement seam (Sprites Platform Alignment
+   * 6-1): while this sprite is ALREADY awake for this real op, capture its used
+   * storage bytes (throttled, best-effort) so the storage reconcile can bill
+   * MEASURED usage without ever waking a paused sprite. Best-effort — a failure
+   * must never affect the tool result; omitting it disables measurement.
+   */
+  measureStorage?: (input: { sandbox: ExecutableSandbox; pageId: string }) => Promise<void>;
   now: () => Date;
   logger?: {
     warn?: (message: string, metadata?: Record<string, unknown>) => void;
@@ -420,6 +428,19 @@ async function openSession(
       });
       return { ok: false, reason: 'provision_failed' };
     }
+    // Opportunistic, throttled, best-effort: the sprite is awake NOW for this
+    // real op, so measure its storage without ever waking a paused one. Never
+    // blocks or fails the op — fired concurrently and self-contained.
+    if (acquired.pageId && deps.measureStorage) {
+      const pageId = acquired.pageId;
+      void deps.measureStorage({ sandbox, pageId }).catch((error) => {
+        safeLogWarn(deps.logger, 'Opportunistic storage measurement failed', {
+          pageId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
     return {
       ok: true,
       sandbox,

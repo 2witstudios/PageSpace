@@ -1,28 +1,115 @@
 import { describe, it, expect, vi } from 'vitest';
+import { assert } from './riteway';
 import {
   reconcileTerminalStorage,
   computeElapsedGbMonths,
+  pickBillableGB,
   MS_PER_STORAGE_MONTH,
+  STALE_MEASUREMENT_MS,
   type ReconcileTerminalStorageDeps,
   type TerminalStorageMachineRow,
 } from '../terminal-storage-reconcile';
 
 describe('computeElapsedGbMonths', () => {
-  it('prices a full storage-month at the full storageGB', () => {
-    expect(computeElapsedGbMonths({ storageGB: 5, elapsedMs: MS_PER_STORAGE_MONTH })).toBeCloseTo(5, 10);
+  it('prices a full storage-month at the full measuredGB', () => {
+    assert({
+      given: 'a full storage-month of a 2GB measured footprint',
+      should: 'accrue 2 GB-months',
+      actual: computeElapsedGbMonths({ measuredGB: 2, elapsedMs: MS_PER_STORAGE_MONTH }),
+      expected: 2,
+    });
   });
 
   it('prorates a half-month to half the GB-months', () => {
-    expect(computeElapsedGbMonths({ storageGB: 5, elapsedMs: MS_PER_STORAGE_MONTH / 2 })).toBeCloseTo(2.5, 10);
+    expect(computeElapsedGbMonths({ measuredGB: 4, elapsedMs: MS_PER_STORAGE_MONTH / 2 })).toBeCloseTo(2, 10);
   });
 
   it('returns 0 for zero or negative elapsed time', () => {
-    expect(computeElapsedGbMonths({ storageGB: 5, elapsedMs: 0 })).toBe(0);
-    expect(computeElapsedGbMonths({ storageGB: 5, elapsedMs: -1000 })).toBe(0);
+    assert({
+      given: 'zero elapsed time',
+      should: 'accrue nothing',
+      actual: computeElapsedGbMonths({ measuredGB: 5, elapsedMs: 0 }),
+      expected: 0,
+    });
+    expect(computeElapsedGbMonths({ measuredGB: 5, elapsedMs: -1000 })).toBe(0);
   });
 
-  it('returns 0 for a non-positive storageGB', () => {
-    expect(computeElapsedGbMonths({ storageGB: 0, elapsedMs: MS_PER_STORAGE_MONTH })).toBe(0);
+  it('returns 0 for a non-positive measuredGB (never-measured / zero-usage floor)', () => {
+    assert({
+      given: 'a zero measured footprint',
+      should: 'accrue nothing regardless of elapsed time',
+      actual: computeElapsedGbMonths({ measuredGB: 0, elapsedMs: MS_PER_STORAGE_MONTH }),
+      expected: 0,
+    });
+  });
+});
+
+describe('pickBillableGB', () => {
+  const now = new Date('2026-07-01T00:00:00.000Z');
+
+  it('bills a fresh measurement at its measured GB and reports not-stale', () => {
+    assert({
+      given: 'a measurement taken one minute ago',
+      should: 'bill the measured GB and flag it fresh',
+      actual: pickBillableGB({
+        lastMeasuredGB: 0.2,
+        lastMeasuredAt: new Date(now.getTime() - 60_000),
+        awake: false,
+        now,
+      }),
+      expected: { gb: 0.2, stale: false },
+    });
+  });
+
+  it('reuses a stale measurement (older than the window) for billing but flags it stale', () => {
+    assert({
+      given: 'a paused machine whose last measurement is older than the stale window',
+      should: 'still bill the last measured GB (never wake to re-measure) but flag stale',
+      actual: pickBillableGB({
+        lastMeasuredGB: 0.5,
+        lastMeasuredAt: new Date(now.getTime() - STALE_MEASUREMENT_MS - 1),
+        awake: false,
+        now,
+      }),
+      expected: { gb: 0.5, stale: true },
+    });
+  });
+
+  it('does not flag an awake machine stale even with an old timestamp (refresh is imminent)', () => {
+    assert({
+      given: 'an awake machine with an old measurement timestamp',
+      should: 'bill the measured GB and NOT flag stale (opportunistic refresh will land)',
+      actual: pickBillableGB({
+        lastMeasuredGB: 0.5,
+        lastMeasuredAt: new Date(now.getTime() - STALE_MEASUREMENT_MS - 1),
+        awake: true,
+        now,
+      }),
+      expected: { gb: 0.5, stale: false },
+    });
+  });
+
+  it('falls back to a 0 floor (never the provisioned cap) when never measured', () => {
+    assert({
+      given: 'a machine that has never been measured',
+      should: 'bill 0 (conservative floor), never the provisioned cap',
+      actual: pickBillableGB({ lastMeasuredGB: null, lastMeasuredAt: null, awake: false, now }),
+      expected: { gb: 0, stale: true },
+    });
+  });
+
+  it('bills 0 for a machine measured at zero usage', () => {
+    assert({
+      given: 'a machine measured at exactly zero bytes',
+      should: 'bill 0',
+      actual: pickBillableGB({
+        lastMeasuredGB: 0,
+        lastMeasuredAt: new Date(now.getTime() - 60_000),
+        awake: false,
+        now,
+      }),
+      expected: { gb: 0, stale: false },
+    });
   });
 });
 
@@ -43,22 +130,25 @@ function makeDeps(over: Partial<ReconcileTerminalStorageDeps> = {}): {
       advanceCalls.push(input);
     },
     now: () => new Date('2026-07-01T00:00:00.000Z'),
-    storageGB: 5,
     ...over,
   };
   return { deps, chargeCalls, advanceCalls };
 }
 
+/** A measured machine: 1GB written, measured just before `now`, active (awake). */
 function machine(over: Partial<TerminalStorageMachineRow> = {}): TerminalStorageMachineRow {
   return {
     pageId: 'page-1',
     storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+    measuredBytes: 1_000_000_000, // 1 GB
+    measuredAt: new Date('2026-06-30T23:00:00.000Z'),
+    lastActiveAt: new Date('2026-06-30T23:59:00.000Z'),
     ...over,
   };
 }
 
 describe('reconcileTerminalStorage', () => {
-  it('charges each machine for its accrued storage window and advances its watermark to now', async () => {
+  it('charges each machine for its MEASURED storage window and advances its watermark to now', async () => {
     const { deps, chargeCalls, advanceCalls } = makeDeps({
       listMachines: async () => [machine({ pageId: 'page-1' })],
     });
@@ -69,10 +159,43 @@ describe('reconcileTerminalStorage', () => {
     expect(chargeCalls).toHaveLength(1);
     expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-1', pageId: 'page-1' });
     expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
+    // 1 GB measured over a 30-day window ≈ 1 GB-month — NOT the 5GB provisioned cap.
+    expect(chargeCalls[0].gbMonths).toBeCloseTo(1, 5);
     expect(advanceCalls).toEqual([{ pageId: 'page-1', billedThrough: new Date('2026-07-01T00:00:00.000Z') }]);
   });
 
-  it('bills the payer resolved via lookupPageOwnerId for THIS machine page, not a caller-supplied identity', async () => {
+  it('NEVER bills from a provisioned allocation cap — a 200MB machine bills ~0.2 GB-months, not 5', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listMachines: async () => [machine({ pageId: 'small', measuredBytes: 200_000_000 })],
+    });
+
+    await reconcileTerminalStorage(deps);
+
+    assert({
+      given: 'a machine that wrote 200MB over a ~30-day window',
+      should: 'bill ~0.2 GB-months (measured), not the 5 GB provisioned cap',
+      actual: Math.round(chargeCalls[0].gbMonths * 100) / 100,
+      expected: 0.2,
+    });
+  });
+
+  it('never wakes a sprite to measure — the cron makes zero sprite calls', async () => {
+    // The deps seam exposes no sprite handle at all: a compile-time guarantee the
+    // cron cannot exec against a machine. This asserts the runtime contract too —
+    // reconcile touches only list/lookup/charge/advance, never a machine exec.
+    const spriteExec = vi.fn();
+    const { deps } = makeDeps({
+      listMachines: async () => [machine({ pageId: 'page-1' }), machine({ pageId: 'page-2' })],
+    });
+
+    await reconcileTerminalStorage(deps);
+
+    expect(spriteExec).not.toHaveBeenCalled();
+    expect(deps).not.toHaveProperty('exec');
+    expect(deps).not.toHaveProperty('measure');
+  });
+
+  it('bills the payer resolved via lookupPageOwnerId for THIS machine page', async () => {
     const lookup = vi.fn(async (pageId: string) => `owner-of-${pageId}`);
     const { deps, chargeCalls } = makeDeps({
       listMachines: async () => [machine({ pageId: 'terminal-a' }), machine({ pageId: 'terminal-b' })],
@@ -90,9 +213,49 @@ describe('reconcileTerminalStorage', () => {
     const now = new Date('2026-07-01T00:00:00.000Z');
     let watermark = new Date('2026-06-01T00:00:00.000Z');
     const chargeCalls: Array<unknown> = [];
+    const advanceCalls: Array<unknown> = [];
 
     const deps: ReconcileTerminalStorageDeps = {
-      listMachines: async () => [{ pageId: 'page-1', storageLastBilledAt: watermark }],
+      listMachines: async () => [machine({ pageId: 'page-1', storageLastBilledAt: watermark })],
+      lookupPageOwnerId: async () => 'owner-1',
+      chargeStorage: async (input) => {
+        chargeCalls.push(input);
+      },
+      advanceWatermark: async (input) => {
+        advanceCalls.push(input);
+        watermark = input.billedThrough;
+      },
+      now: () => now,
+    };
+
+    const first = await reconcileTerminalStorage(deps);
+    expect(first.charged).toBe(1);
+    expect(chargeCalls).toHaveLength(1);
+    expect(advanceCalls).toHaveLength(1);
+
+    const second = await reconcileTerminalStorage(deps);
+
+    expect(second).toMatchObject({ processed: 1, charged: 0, skipped: 0, totalCostDollars: 0 });
+    expect(chargeCalls).toHaveLength(1); // unchanged — no double charge
+    expect(advanceCalls).toHaveLength(1); // unchanged — elapsed window is 0, nothing to advance
+  });
+
+  it('CUTOVER: a never-measured row bills $0 and advances its watermark so no window is retroactively billed', async () => {
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    let watermark = new Date('2026-05-01T00:00:00.000Z'); // long pre-cutover accrual
+    const chargeCalls: Array<unknown> = [];
+
+    const deps: ReconcileTerminalStorageDeps = {
+      // Existing pre-cutover row: never measured (null bytes/at).
+      listMachines: async () => [
+        {
+          pageId: 'legacy',
+          storageLastBilledAt: watermark,
+          measuredBytes: null,
+          measuredAt: null,
+          lastActiveAt: new Date('2026-05-01T00:00:00.000Z'),
+        },
+      ],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -101,20 +264,74 @@ describe('reconcileTerminalStorage', () => {
         watermark = input.billedThrough;
       },
       now: () => now,
-      storageGB: 5,
     };
 
-    const first = await reconcileTerminalStorage(deps);
-    expect(first.charged).toBe(1);
-    expect(chargeCalls).toHaveLength(1);
+    const result = await reconcileTerminalStorage(deps);
 
-    const second = await reconcileTerminalStorage(deps);
-
-    expect(second).toMatchObject({ processed: 1, charged: 0, skipped: 0, totalCostDollars: 0 });
-    expect(chargeCalls).toHaveLength(1); // unchanged — no double charge
+    assert({
+      given: 'a legacy never-measured row with a two-month pre-cutover window',
+      should: 'charge nothing (no allocation bill)',
+      actual: chargeCalls.length,
+      expected: 0,
+    });
+    assert({
+      given: 'the never-measured window',
+      should: 'advance the watermark to now so a later measurement bills only forward',
+      actual: watermark.toISOString(),
+      expected: now.toISOString(),
+    });
+    expect(result).toMatchObject({ processed: 1, charged: 0 });
   });
 
-  it('skips (and does not advance the watermark for) a machine whose page/drive owner cannot be resolved', async () => {
+  it('CUTOVER continuity: after the watermark advances, the FIRST measured window bills only from the advanced mark (no over-bill)', async () => {
+    let watermark = new Date('2026-05-01T00:00:00.000Z');
+    let measuredBytes: number | null = null;
+    let measuredAt: Date | null = null;
+    let nowIso = '2026-06-01T00:00:00.000Z';
+    const chargeCalls: Array<{ gbMonths: number }> = [];
+
+    const deps: ReconcileTerminalStorageDeps = {
+      listMachines: async () => [
+        {
+          pageId: 'm',
+          storageLastBilledAt: watermark,
+          measuredBytes,
+          measuredAt,
+          lastActiveAt: new Date('2026-05-15T00:00:00.000Z'),
+        },
+      ],
+      lookupPageOwnerId: async () => 'owner-1',
+      chargeStorage: async (input) => {
+        chargeCalls.push({ gbMonths: input.gbMonths });
+      },
+      advanceWatermark: async (input) => {
+        watermark = input.billedThrough;
+      },
+      now: () => new Date(nowIso),
+    };
+
+    // Tick 1 (never measured): advances watermark to 2026-06-01, charges $0.
+    await reconcileTerminalStorage(deps);
+    expect(chargeCalls).toHaveLength(0);
+    expect(watermark.toISOString()).toBe('2026-06-01T00:00:00.000Z');
+
+    // A measurement lands (1 GB) between ticks; next tick is exactly one month later.
+    measuredBytes = 1_000_000_000;
+    measuredAt = new Date('2026-06-15T00:00:00.000Z');
+    nowIso = '2026-07-01T00:00:00.000Z';
+
+    await reconcileTerminalStorage(deps);
+
+    // Billed window is 2026-06-01 → 2026-07-01 (one month), NOT back to 2026-05-01.
+    assert({
+      given: 'the first measured tick after a cutover advance',
+      should: 'bill ~1 GB-month (one month at 1GB), not the two-month pre-measurement span',
+      actual: Math.round(chargeCalls[0].gbMonths * 100) / 100,
+      expected: 1,
+    });
+  });
+
+  it('skips (and does not advance the watermark for) a measured machine whose owner cannot be resolved', async () => {
     const { deps, chargeCalls, advanceCalls } = makeDeps({
       listMachines: async () => [machine({ pageId: 'orphaned' })],
       lookupPageOwnerId: async () => null,
@@ -129,10 +346,7 @@ describe('reconcileTerminalStorage', () => {
 
   it('isolates a per-machine failure: one row throwing does not abort the rest of the batch', async () => {
     const { deps, chargeCalls, advanceCalls } = makeDeps({
-      listMachines: async () => [
-        machine({ pageId: 'boom' }),
-        machine({ pageId: 'fine' }),
-      ],
+      listMachines: async () => [machine({ pageId: 'boom' }), machine({ pageId: 'fine' })],
       chargeStorage: async (input) => {
         if (input.pageId === 'boom') throw new Error('ledger write failed');
         chargeCalls.push(input);
@@ -146,7 +360,48 @@ describe('reconcileTerminalStorage', () => {
     expect(advanceCalls).toEqual([expect.objectContaining({ pageId: 'fine' })]);
   });
 
-  it('processes multiple machines independently, summing total cost', async () => {
+  it('counts a measured-but-stale (paused, old measurement) machine in staleMeasurements while still billing it', async () => {
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const { deps, chargeCalls } = makeDeps({
+      now: () => now,
+      listMachines: async () => [
+        machine({
+          pageId: 'stale',
+          storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+          measuredBytes: 1_000_000_000,
+          measuredAt: new Date('2026-06-01T00:00:00.000Z'), // 30 days old → stale
+          lastActiveAt: new Date('2026-06-01T00:00:00.000Z'), // not recently active → not awake
+        }),
+      ],
+    });
+
+    const result = await reconcileTerminalStorage(deps);
+
+    assert({
+      given: 'a paused machine billed from a measurement older than the stale window',
+      should: 'flag one stale measurement but still charge it',
+      actual: { staleMeasurements: result.staleMeasurements, charged: result.charged },
+      expected: { staleMeasurements: 1, charged: 1 },
+    });
+    expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
+  });
+
+  it('does not count a never-measured machine as a stale measurement', async () => {
+    const { deps } = makeDeps({
+      listMachines: async () => [machine({ pageId: 'fresh-null', measuredBytes: null, measuredAt: null })],
+    });
+
+    const result = await reconcileTerminalStorage(deps);
+
+    assert({
+      given: 'a never-measured machine',
+      should: 'bill 0 and NOT be counted as a stale measurement',
+      actual: { staleMeasurements: result.staleMeasurements, charged: result.charged },
+      expected: { staleMeasurements: 0, charged: 0 },
+    });
+  });
+
+  it('processes multiple measured machines independently, summing total cost', async () => {
     const { deps } = makeDeps({
       listMachines: async () => [
         machine({ pageId: 'page-1', storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z') }),
