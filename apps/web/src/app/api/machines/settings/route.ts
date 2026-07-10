@@ -26,6 +26,7 @@ import {
 } from '@pagespace/lib/services/machines/machine-settings';
 import {
   canAccessMachine,
+  canDeleteMachine,
   canViewMachine,
   createDbMachineSettingsStore,
   createMachineSpriteTeardown,
@@ -180,7 +181,10 @@ export async function DELETE(request: Request) {
   const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
   if (!terminalId.ok) return terminalId.error;
 
-  if (!(await canAccessMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
+  // Destroying a Machine trashes its page → requires DELETE permission (stricter
+  // than the edit-gated GET/PATCH), so a drive member with edit-but-not-delete
+  // cannot destroy Machines they lack delete rights on.
+  if (!(await canDeleteMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
 
   const result = await deleteMachine({
     terminalId: terminalId.value,

@@ -7,6 +7,7 @@ const {
   mockAuthenticateRequest,
   mockIsAuthError,
   mockCanAccessMachine,
+  mockCanDeleteMachine,
   mockCanViewMachine,
   mockCreateDbMachineSettingsStore,
   mockCreateMachineSpriteTeardown,
@@ -18,6 +19,7 @@ const {
   mockAuthenticateRequest: vi.fn(),
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
   mockCanAccessMachine: vi.fn(),
+  mockCanDeleteMachine: vi.fn(),
   mockCanViewMachine: vi.fn(),
   mockCreateDbMachineSettingsStore: vi.fn(),
   mockCreateMachineSpriteTeardown: vi.fn(),
@@ -38,6 +40,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@/lib/machines/machine-settings-runtime', () => ({
   canAccessMachine: (...args: unknown[]) => mockCanAccessMachine(...args),
+  canDeleteMachine: (...args: unknown[]) => mockCanDeleteMachine(...args),
   canViewMachine: (...args: unknown[]) => mockCanViewMachine(...args),
   createDbMachineSettingsStore: (...args: unknown[]) => mockCreateDbMachineSettingsStore(...args),
   createMachineSpriteTeardown: (...args: unknown[]) => mockCreateMachineSpriteTeardown(...args),
@@ -220,18 +223,18 @@ describe('DELETE /api/machines/settings', () => {
   it('given no terminalId, returns 400', async () => {
     const res = await DELETE(new Request('https://x.test/api/machines/settings', { method: 'DELETE' }));
     expect(res.status).toBe(400);
-    expect(mockCanAccessMachine).not.toHaveBeenCalled();
+    expect(mockCanDeleteMachine).not.toHaveBeenCalled();
   });
 
   it('given the machine does not exist, returns 404', async () => {
-    mockCanAccessMachine.mockResolvedValue(true);
+    mockCanDeleteMachine.mockResolvedValue(true);
     mockDeleteMachine.mockResolvedValue({ ok: false, reason: 'not_found' });
     const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(404);
   });
 
   it('given a successful delete, returns 200 with the teardown outcome and audits the delete', async () => {
-    mockCanAccessMachine.mockResolvedValue(true);
+    mockCanDeleteMachine.mockResolvedValue(true);
     mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: true });
     const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(200);
@@ -251,8 +254,10 @@ describe('DELETE /api/machines/settings', () => {
     );
   });
 
-  it('given no edit access, returns 403 and audits the denial without deleting', async () => {
-    mockCanAccessMachine.mockResolvedValue(false);
+  it('gates DELETE on delete-permission, not edit — an editor without delete access gets 403', async () => {
+    // Regression: a drive member has canEdit but NOT canDelete; DELETE must reject.
+    mockCanDeleteMachine.mockResolvedValue(false);
+    mockCanAccessMachine.mockResolvedValue(true); // edit access alone must not suffice
     const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(403);
     expect(mockDeleteMachine).not.toHaveBeenCalled();
@@ -263,7 +268,7 @@ describe('DELETE /api/machines/settings', () => {
   });
 
   it('given a delete where Sprite teardown failed, still returns 200 (page trashed)', async () => {
-    mockCanAccessMachine.mockResolvedValue(true);
+    mockCanDeleteMachine.mockResolvedValue(true);
     mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: false });
     const res = await DELETE(new Request('https://x.test/api/machines/settings?terminalId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(200);

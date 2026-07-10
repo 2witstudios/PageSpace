@@ -32,11 +32,17 @@
  * user's configured-repo metadata (killing the Sprites frees the compute; the rows
  * stay for a restore).
  *
- * NOT handled here (deliberate, documented scope): trashing DESCENDANT pages of a
- * Machine (Machine/TERMINAL pages are leaf-like in practice, and cascading under
- * the task's edit-access DELETE would let an editor trash children they may lack
- * delete permission on — that reconciliation is a follow-up), and returning 404
- * (vs the current 403) for an already-deleted terminalId.
+ * NOT handled here (deliberate scope — see the PR's flagged architecture decision):
+ * this route writes the page via raw `db.update` / `pageRepository.trash` rather
+ * than the canonical `applyPageMutation` / `pageService.trashPage` paths, so it does
+ * NOT (yet): trash DESCENDANT pages of a Machine (Machine/TERMINAL pages are
+ * leaf-like in practice), bump the page `revision` / write a page-version / fire
+ * page-update|trash workflow triggers, or scrub the deleted `terminalId` from
+ * AI_CHAT agents' `machines` arrays. Wiring those through the canonical services is
+ * a follow-up (the Settings-UI node that exercises these paths is separate, and the
+ * surface is behind `CODE_EXECUTION_ENABLED`, OFF). Also not handled: returning 404
+ * (vs 403) for an already-deleted terminalId. DELETE-permission gating IS enforced
+ * (`canDeleteMachine`), matching the canonical page-trash.
  */
 
 import { and, eq } from '@pagespace/db/operators';
@@ -50,6 +56,9 @@ import {
   getSandboxSessionSecret,
 } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+import { isTerminalPage } from '@pagespace/lib/content/page-types.config';
+import type { PageType } from '@pagespace/lib/utils/enums';
 import type {
   MachineSettings,
   MachineSettingsPatch,
@@ -59,6 +68,21 @@ import type {
 import { canAccessMachine, canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
 
 export { canAccessMachine, canViewMachine };
+
+/**
+ * DELETE-level access. Destroying a Machine trashes its page, so — unlike GET
+ * (view) / PATCH (edit) — it requires DELETE permission, matching the canonical
+ * page-trash route (a drive MEMBER has canEdit but NOT canDelete, so gating a
+ * page-trash on edit would let members destroy Machines they cannot delete).
+ */
+export async function canDeleteMachine(actorUserId: string, terminalId: string): Promise<boolean> {
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, terminalId),
+    columns: { type: true },
+  });
+  if (!page || !isTerminalPage(page.type as PageType)) return false;
+  return canUserDeletePage(actorUserId, terminalId);
+}
 
 interface SettingsRow {
   title: string;
@@ -101,9 +125,7 @@ export function createDbMachineSettingsStore(): MachineSettingsStore {
       if (patch.visibleToGlobalAssistant !== undefined) set.visibleToGlobalAssistant = patch.visibleToGlobalAssistant;
       if (patch.allowPageAgents !== undefined) set.allowPageAgents = patch.allowPageAgents;
 
-      // Nothing to change — just report the current state.
-      if (Object.keys(set).length === 0) return readSettings(terminalId);
-
+      // The route's parsePatch guarantees >=1 field, so `set` is never empty here.
       set.updatedAt = new Date();
       // Guard `isTrashed = false` in the WHERE so a PATCH on a trashed Machine
       // mutates NOTHING (canViewMachine/canAccessMachine don't exclude trashed
@@ -123,9 +145,12 @@ export function createDbMachineSettingsStore(): MachineSettingsStore {
         });
       if (!row) return null;
 
-      // Broadcast so the drive tree / other tabs pick up the new name immediately,
-      // matching the canonical page-title update path (pages/[pageId] PATCH).
-      await broadcastPageEvent(createPageEventPayload(row.driveId, terminalId, 'updated', { title: row.title }));
+      // Broadcast only when the drive tree's view actually changed (the title) —
+      // toggling a flag or editing the description alters nothing the tree renders,
+      // so those saves skip the fan-out.
+      if (patch.name !== undefined) {
+        await broadcastPageEvent(createPageEventPayload(row.driveId, terminalId, 'updated', { title: row.title }));
+      }
       return toMachineSettings(row);
     },
     async trashPage(terminalId: string): Promise<void> {
