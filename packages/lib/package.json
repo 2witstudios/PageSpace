@@ -282,6 +282,16 @@
       "import": "./dist/audit/audit-ingest-writer.js",
       "require": "./dist/audit/audit-ingest-writer.js"
     },
+    "./audit/co-stream": {
+      "types": "./dist/audit/co-stream.d.ts",
+      "import": "./dist/audit/co-stream.js",
+      "require": "./dist/audit/co-stream.js"
+    },
+    "./audit/co-stream-reconciliation": {
+      "types": "./dist/audit/co-stream-reconciliation.d.ts",
+      "import": "./dist/audit/co-stream-reconciliation.js",
+      "require": "./dist/audit/co-stream-reconciliation.js"
+    },
     "./audit/mask-email": {
       "types": "./dist/audit/mask-email.d.ts",
       "import": "./dist/audit/mask-email.js",

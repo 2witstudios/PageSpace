@@ -10,10 +10,12 @@
  * NOT yet bound to production flow: audit-log.ts / the securityAudit
  * singleton still use the advisory-lock repository until leaf 5 cuts over.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import { securityAuditIngest } from '@pagespace/db/admin-schema';
+import { loggers } from '../../logging/logger-config';
 import { createAuditIngestWriter, type AuditIngestWriterDeps } from '../audit-ingest-writer';
+import { CO_STREAM_LOG_MESSAGE } from '../co-stream';
 import { computeEmissionHash } from '../emission-hash';
 import type { AuditEvent } from '../security-audit';
 
@@ -183,6 +185,121 @@ describe('createAuditIngestWriter', () => {
 
       expect(a.inserts).toHaveLength(1);
       expect(b.inserts).toHaveLength(0);
+    });
+  });
+
+  describe('witness co-stream (leaf 4)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function createCoStreamLogger() {
+      const lines: Array<{ message: string; metadata: Record<string, unknown> }> = [];
+      return {
+        lines,
+        coStreamLogger: {
+          info: vi.fn((message: string, metadata?: Record<string, unknown>) => {
+            lines.push({ message, metadata: metadata ?? {} });
+          }),
+        },
+      };
+    }
+
+    it('given a successful insert, should emit exactly ONE co-stream line with the exact allowlisted shape', async () => {
+      const { db, inserts } = createMockDb();
+      const { lines, coStreamLogger } = createCoStreamLogger();
+      const writer = createAuditIngestWriter({ db, coStreamLogger });
+      const now = new Date('2026-02-01T00:10:00.000Z');
+      const event: AuditEvent = {
+        eventType: 'security.anomaly.detected',
+        userId: 'user-1',
+        sessionId: 'sess-1',
+        ipAddress: '10.0.0.5',
+        userAgent: 'UA/1.0',
+        geoLocation: 'US-CA',
+        details: { flag: 'impossible_travel' },
+        riskScore: 0.9,
+      };
+
+      await writer.writeToIngest(event, { now });
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]!.message).toBe(CO_STREAM_LOG_MESSAGE);
+      // Exact allowlist — nothing beyond the four witness fields, PII-free
+      // by construction (no details, no IPs even encrypted).
+      expect(Object.keys(lines[0]!.metadata).sort()).toEqual([
+        'emissionHash', 'emittedAt', 'eventId', 'eventType',
+      ]);
+      expect(lines[0]!.metadata).toEqual({
+        eventId: inserts[0]!.values.id,
+        emissionHash: inserts[0]!.values.emissionHash,
+        eventType: 'security.anomaly.detected',
+        emittedAt: now.toISOString(),
+      });
+    });
+
+    it('the co-stream eventId IS the ingest row id (writer-generated), so reconciliation can match by id', async () => {
+      const { db, inserts } = createMockDb();
+      const { lines, coStreamLogger } = createCoStreamLogger();
+      const writer = createAuditIngestWriter({ db, coStreamLogger });
+
+      await writer.writeToIngest({ eventType: 'auth.login.success' });
+      await writer.writeToIngest({ eventType: 'auth.login.success' });
+
+      expect(inserts[0]!.values.id).toEqual(expect.any(String));
+      expect(lines[0]!.metadata.eventId).toBe(inserts[0]!.values.id);
+      expect(lines[1]!.metadata.eventId).toBe(inserts[1]!.values.id);
+      expect(lines[0]!.metadata.eventId).not.toBe(lines[1]!.metadata.eventId);
+    });
+
+    it('given the co-stream logger throws, the write still succeeds — best-effort witness, log-internal errors swallowed', async () => {
+      const { db, inserts } = createMockDb();
+      const coStreamLogger = {
+        info: vi.fn(() => {
+          throw new Error('collector down');
+        }),
+      };
+      const writer = createAuditIngestWriter({ db, coStreamLogger });
+
+      await expect(writer.writeToIngest({ eventType: 'auth.login.success' })).resolves.toBeUndefined();
+      expect(inserts).toHaveLength(1);
+      expect(coStreamLogger.info).toHaveBeenCalledTimes(1);
+    });
+
+    it('given the insert rejects, should emit NO co-stream line — the witness never records an event the store refused', async () => {
+      const { coStreamLogger } = createCoStreamLogger();
+      const db = {
+        insert: vi.fn(() => ({ values: () => Promise.reject(new Error('admin pg unreachable')) })),
+        transaction: vi.fn(),
+        execute: vi.fn(),
+        select: vi.fn(),
+      } as unknown as AuditIngestWriterDeps['db'];
+      const writer = createAuditIngestWriter({ db, coStreamLogger });
+
+      await expect(writer.writeToIngest({ eventType: 'auth.login.success' })).rejects.toThrow('admin pg unreachable');
+      expect(coStreamLogger.info).not.toHaveBeenCalled();
+    });
+
+    it('given no coStreamLogger dep, defaults to the security-category structured logger (stdout under LOG_DESTINATION stdout/both)', async () => {
+      const securityInfo = vi.spyOn(loggers.security, 'info').mockImplementation(() => undefined);
+      const { db } = createMockDb();
+      const writer = createAuditIngestWriter({ db });
+
+      await writer.writeToIngest(
+        { eventType: 'auth.login.success' },
+        { now: new Date('2026-02-01T00:10:00.000Z') }
+      );
+
+      expect(securityInfo).toHaveBeenCalledTimes(1);
+      expect(securityInfo).toHaveBeenCalledWith(
+        CO_STREAM_LOG_MESSAGE,
+        expect.objectContaining({
+          eventId: expect.any(String),
+          emissionHash: expect.any(String),
+          eventType: 'auth.login.success',
+          emittedAt: '2026-02-01T00:10:00.000Z',
+        })
+      );
     });
   });
 });
