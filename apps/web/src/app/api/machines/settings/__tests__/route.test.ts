@@ -128,20 +128,43 @@ describe('PATCH /api/machines/settings', () => {
     expect(mockCanAccessMachine).not.toHaveBeenCalled();
   });
 
-  it('given an empty patch, returns 400', async () => {
-    const res = await PATCH(req({ terminalId: 't1' }));
+  it('given a null JSON body, returns 400 (not a 500 crash)', async () => {
+    const res = await PATCH(
+      new Request('https://x.test/api/machines/settings', {
+        method: 'PATCH',
+        body: 'null',
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
     expect(res.status).toBe(400);
     expect(mockCanAccessMachine).not.toHaveBeenCalled();
   });
 
-  it('given a blank name, returns 400', async () => {
+  // Access is authorized BEFORE field-shape validation, so these need edit access
+  // to reach the 400 (an unauthorized caller gets 403 regardless of patch shape).
+  it('given an empty patch (with access), returns 400', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    const res = await PATCH(req({ terminalId: 't1' }));
+    expect(res.status).toBe(400);
+    expect(mockUpdateMachineSettings).not.toHaveBeenCalled();
+  });
+
+  it('given a blank name (with access), returns 400', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
     const res = await PATCH(req({ terminalId: 't1', name: '   ' }));
     expect(res.status).toBe(400);
   });
 
-  it('given a non-boolean toggle, returns 400', async () => {
+  it('given a non-boolean toggle (with access), returns 400', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
     const res = await PATCH(req({ terminalId: 't1', allowPageAgents: 'yes' }));
     expect(res.status).toBe(400);
+  });
+
+  it('given no access, returns 403 for a malformed patch without revealing validation', async () => {
+    mockCanAccessMachine.mockResolvedValue(false);
+    const res = await PATCH(req({ terminalId: 't1', allowPageAgents: 'yes' }));
+    expect(res.status).toBe(403);
   });
 
   it('given no edit access, returns 403 without updating and audits the denial', async () => {

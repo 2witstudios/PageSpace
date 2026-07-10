@@ -97,7 +97,10 @@ function parsePatch(body: {
     if (body.description !== null && typeof body.description !== 'string') {
       return { ok: false, error: NextResponse.json({ error: 'description must be a string or null' }, { status: 400 }) };
     }
-    patch.description = body.description;
+    // Trim like `name`; whitespace-only collapses to null so it round-trips as a
+    // cleared description rather than an apparently-blank-but-non-null value.
+    const trimmed = body.description === null ? null : body.description.trim();
+    patch.description = trimmed && trimmed.length > 0 ? trimmed : null;
   }
   if (body.visibleToGlobalAssistant !== undefined) {
     if (typeof body.visibleToGlobalAssistant !== 'boolean') {
@@ -135,13 +138,21 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
+  // `request.json()` returns `null` (or a primitive) for a body like `null` or `42`
+  // without throwing — guard before property access so it's a 400, not a 500.
+  if (body === null || typeof body !== 'object') {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
   const terminalId = requireString(body.terminalId, 'terminalId');
   if (!terminalId.ok) return terminalId.error;
 
+  // Authorize BEFORE validating field shapes so an unauthorized caller can't
+  // distinguish a well-formed patch (would-be 403) from a malformed one (400).
+  if (!(await canAccessMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
+
   const parsed = parsePatch(body);
   if (!parsed.ok) return parsed.error;
-
-  if (!(await canAccessMachine(auth.userId, terminalId.value))) return forbidden(request, auth.userId, terminalId.value);
 
   const settings = await updateMachineSettings({
     terminalId: terminalId.value,

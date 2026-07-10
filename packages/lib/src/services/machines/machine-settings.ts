@@ -100,15 +100,15 @@ export async function updateMachineSettings(input: {
  * tearing the Sprite down first and then failing to trash the page leaves a live
  * page pointing at a dead Sprite, with no easy recovery path.
  *
- * DEPENDENT METADATA IS DELIBERATELY LEFT ALONE. The Machine's `machine_projects`
- * / `machine_branches` / `machine_agent_terminals` rows FK-cascade on the page's
- * eventual HARD purge (permanent delete after the trash-retention window), so
- * they are cleaned up at the right time. We do NOT hard-delete them here: a soft
- * (reversible) delete must not permanently destroy the user's configured-repo
- * metadata — restoring the page must bring that config back. (An earlier revision
- * purged these rows and was reverted; hard-deleting config during a reversible
- * delete is data loss, and the task scopes teardown to the Machine's OWN Sprite,
- * not to branch Sprites — those have their own idle-reap lifecycle.)
+ * The `sprite.teardown` seam frees ALL the compute the Machine spawned — the
+ * Machine's own Sprite AND each branch's own Sprite (branch Sprites have no idle
+ * reaper, so skipping them would leak microVMs). The dependent metadata ROWS
+ * (`machine_projects` / `machine_branches` / `machine_agent_terminals`) are
+ * DELIBERATELY LEFT ALONE: they FK-cascade on the page's eventual HARD purge, so a
+ * soft (reversible) delete never permanently destroys the user's configured-repo
+ * metadata — restoring the page brings that config back (the Sprites re-provision
+ * on next use). An earlier revision hard-deleted these rows and was reverted:
+ * destroying config during a reversible delete is data loss.
  */
 export async function deleteMachine({ terminalId, store, sprite }: DeleteMachineDeps): Promise<DeleteMachineResult> {
   const settings = await store.getSettings(terminalId);

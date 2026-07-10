@@ -10,31 +10,46 @@
  * established sibling convention is these two functions.)
  *
  * `createDbMachineSettingsStore` reads/writes the four settings fields on the
- * Machine's `pages` row and trashes it (soft delete) via `pageRepository.trash`.
- * `createMachineSpriteTeardown` resolves the Machine's persistent Sprite the same
- * way the shell/session layer does — derive the `terminal_sessions` key from
- * (tenant, drive, page) and look up its `sandboxId` — then kills it through the
- * `MachineHost` seam and drops the tracking row. Teardown is built LAZILY (host
- * acquisition happens inside `teardown()`, not at construction) so that any
- * runtime/host error surfaces AFTER the page has been trashed, landing in
- * `deleteMachine`'s recoverable-orphan path rather than aborting the delete before
- * the page is hidden.
+ * Machine's `pages` row, broadcasts a page `updated`/`trashed` event (so other
+ * clients and the drive tree don't show a stale name/still-present page — the
+ * same events the canonical page routes emit), and soft-deletes the page via
+ * `pageRepository.trash`.
  *
- * The Machine's dependent metadata (`machine_projects` / `machine_branches` /
- * `machine_agent_terminals`) is intentionally NOT touched on delete — it
- * FK-cascades on the page's eventual HARD purge, so a reversible soft-delete
- * never destroys the user's configured-repo metadata (see `deleteMachine`).
+ * `createMachineSpriteTeardown` tears down ALL the compute a Machine spawned:
+ * each branch's OWN Sprite (tracked in `machine_branches`, which — unlike the
+ * Machine's own session — has no idle reaper, so a delete that skipped them would
+ * leak microVMs), then the Machine's own persistent Sprite (resolved the same way
+ * the shell/session layer does: derive the `terminal_sessions` key from (tenant,
+ * drive, page), look up its `sandboxId`, kill through the `MachineHost` seam).
+ * Everything runs inside `teardown()` so any host error surfaces AFTER the page is
+ * trashed, landing in `deleteMachine`'s recoverable path. Only the Machine's OWN
+ * Sprite kill governs `spriteTornDown`; branch kills and the tracking-row removal
+ * are best-effort so they never invert that flag.
+ *
+ * The Machine's dependent metadata ROWS (`machine_projects` / `machine_branches` /
+ * `machine_agent_terminals`) are intentionally left in place — they FK-cascade on
+ * the page's eventual HARD purge, so a reversible soft-delete never destroys the
+ * user's configured-repo metadata (killing the Sprites frees the compute; the rows
+ * stay for a restore).
+ *
+ * NOT handled here (deliberate, documented scope): trashing DESCENDANT pages of a
+ * Machine (Machine/TERMINAL pages are leaf-like in practice, and cascading under
+ * the task's edit-access DELETE would let an editor trash children they may lack
+ * delete permission on — that reconciliation is a follow-up), and returning 404
+ * (vs the current 403) for an already-deleted terminalId.
  */
 
 import { and, eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
+import { machineBranches } from '@pagespace/db/schema/machine-branches';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import {
   createDbTerminalSessionStore,
   deriveTerminalSessionKey,
   getSandboxSessionSecret,
 } from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import type {
   MachineSettings,
   MachineSettingsPatch,
@@ -44,6 +59,22 @@ import type {
 import { canAccessMachine, canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
 
 export { canAccessMachine, canViewMachine };
+
+interface SettingsRow {
+  title: string;
+  description: string | null;
+  visibleToGlobalAssistant: boolean;
+  allowPageAgents: boolean;
+}
+
+function toMachineSettings(row: SettingsRow): MachineSettings {
+  return {
+    name: row.title,
+    description: row.description ?? null,
+    visibleToGlobalAssistant: row.visibleToGlobalAssistant,
+    allowPageAgents: row.allowPageAgents,
+  };
+}
 
 async function readSettings(terminalId: string): Promise<MachineSettings | null> {
   const page = await db.query.pages.findFirst({
@@ -57,12 +88,7 @@ async function readSettings(terminalId: string): Promise<MachineSettings | null>
     },
   });
   if (!page || page.isTrashed) return null;
-  return {
-    name: page.title,
-    description: page.description ?? null,
-    visibleToGlobalAssistant: page.visibleToGlobalAssistant,
-    allowPageAgents: page.allowPageAgents,
-  };
+  return toMachineSettings(page);
 }
 
 export function createDbMachineSettingsStore(): MachineSettingsStore {
@@ -93,25 +119,35 @@ export function createDbMachineSettingsStore(): MachineSettingsStore {
           description: pages.description,
           visibleToGlobalAssistant: pages.visibleToGlobalAssistant,
           allowPageAgents: pages.allowPageAgents,
+          driveId: pages.driveId,
         });
       if (!row) return null;
-      return {
-        name: row.title,
-        description: row.description ?? null,
-        visibleToGlobalAssistant: row.visibleToGlobalAssistant,
-        allowPageAgents: row.allowPageAgents,
-      };
+
+      // Broadcast so the drive tree / other tabs pick up the new name immediately,
+      // matching the canonical page-title update path (pages/[pageId] PATCH).
+      await broadcastPageEvent(createPageEventPayload(row.driveId, terminalId, 'updated', { title: row.title }));
+      return toMachineSettings(row);
     },
     async trashPage(terminalId: string): Promise<void> {
+      const page = await db.query.pages.findFirst({
+        where: eq(pages.id, terminalId),
+        columns: { driveId: true, parentId: true },
+      });
       await pageRepository.trash(terminalId);
+      if (page) {
+        await broadcastPageEvent(
+          createPageEventPayload(page.driveId, terminalId, 'trashed', { parentId: page.parentId }),
+        );
+      }
     },
   };
 }
 
 /**
- * Tears down a Machine's persistent Sprite. Everything (host acquisition,
- * session lookup, kill) happens inside `teardown()` so a failure at any step is
- * caught by `deleteMachine` after the page is already trashed — see module doc.
+ * Tears down all the Sprites a Machine spawned. See the module doc: branch Sprites
+ * (no idle reaper) are killed best-effort first, then the Machine's own Sprite
+ * whose kill governs `spriteTornDown`; the tracking-row removal is best-effort so a
+ * post-kill DB error can't falsely report the Sprite as still alive.
  */
 export function createMachineSpriteTeardown(): MachineSpriteTeardown {
   return {
@@ -121,29 +157,55 @@ export function createMachineSpriteTeardown(): MachineSpriteTeardown {
         columns: { driveId: true },
       });
       if (!page) return;
+
+      const branchRows = await db
+        .select({ sandboxId: machineBranches.sandboxId })
+        .from(machineBranches)
+        .where(eq(machineBranches.terminalId, terminalId));
+
       const drive = await db.query.drives.findFirst({
         where: eq(drives.id, page.driveId),
         columns: { ownerId: true },
       });
-      if (!drive) return;
-
-      const sessionKey = deriveTerminalSessionKey({
-        tenantId: drive.ownerId,
-        driveId: page.driveId,
-        pageId: terminalId,
-        secret: getSandboxSessionSecret(),
-      });
-
+      const sessionKey = drive
+        ? deriveTerminalSessionKey({
+            tenantId: drive.ownerId,
+            driveId: page.driveId,
+            pageId: terminalId,
+            secret: getSandboxSessionSecret(),
+          })
+        : null;
       const sessionStore = await createDbTerminalSessionStore();
-      const session = await sessionStore.findBySessionKey(sessionKey);
-      if (!session) return; // No live Sprite tracked for this Machine — nothing to tear down.
+      const session = sessionKey ? await sessionStore.findBySessionKey(sessionKey) : null;
+
+      if (branchRows.length === 0 && !session) return; // Nothing live to tear down.
 
       const host = await getMachineHostForBranches();
-      await host.kill({ machineId: session.sandboxId });
-      // Only drop the tracking row once the kill succeeds — if kill throws, the
-      // row survives so the idle reaper (or a retry) can still reclaim the Sprite,
-      // mirroring killBranch's untracked-orphan guard.
-      await sessionStore.remove(sessionKey);
+
+      // Branch Sprites: best-effort. A failure leaves a microVM the hard-purge
+      // cascade won't reclaim (rows are kept), but it must not fail the delete or
+      // invert spriteTornDown — the branch row stays so a retry can find it.
+      for (const branch of branchRows) {
+        try {
+          await host.kill({ machineId: branch.sandboxId });
+        } catch {
+          // Best-effort; leave the row for a later retry.
+        }
+      }
+
+      // The Machine's OWN Sprite. THIS kill governs spriteTornDown — if it throws,
+      // deleteMachine reports spriteTornDown=false. The tracking-row removal is
+      // best-effort so a remove failure AFTER a successful kill doesn't invert the
+      // flag into falsely reporting the Sprite as still alive.
+      if (session && sessionKey) {
+        await host.kill({ machineId: session.sandboxId });
+        try {
+          await sessionStore.remove(sessionKey);
+        } catch {
+          // Sprite is dead; a stale terminal_sessions row is harmless (the reaper
+          // or a re-provision under the same key reclaims it).
+        }
+      }
     },
   };
 }
