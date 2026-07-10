@@ -10,6 +10,7 @@
  */
 
 import type { db as defaultDb } from '@pagespace/db/db';
+import type { AdminDatabase } from '@pagespace/db/admin-db';
 import { sql } from '@pagespace/db/operators';
 import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import { deriveIndexKey } from '../encryption/blind-index';
@@ -32,7 +33,15 @@ function auditIndexKey(): Buffer | null {
   return master.length >= 32 ? deriveIndexKey(master) : null;
 }
 
-type ChainHeadExecutor = Pick<typeof defaultDb, 'execute'>;
+/**
+ * Any Drizzle client the audit seams may bind to: the main app db (Phase 0
+ * behavior, unchanged) or the Admin PG trust-plane client (#890 Phase 2).
+ * A union — not a widening to a structural `any`-alike — so both sides keep
+ * their full schema type safety.
+ */
+export type SecurityAuditDatabase = typeof defaultDb | AdminDatabase;
+
+type ChainHeadExecutor = Pick<SecurityAuditDatabase, 'execute'>;
 
 async function fetchChainHead(executor: ChainHeadExecutor): Promise<string> {
   const lastRecord = await executor.execute(sql`
@@ -46,7 +55,7 @@ async function fetchChainHead(executor: ChainHeadExecutor): Promise<string> {
 }
 
 export interface SecurityAuditRepositoryDeps {
-  db: typeof defaultDb;
+  db: SecurityAuditDatabase;
 }
 
 export interface AppendEventOptions {

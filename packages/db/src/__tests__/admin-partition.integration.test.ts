@@ -350,14 +350,14 @@ describe.skipIf(!url)('upgrade path — partitioning a DB that already holds cha
     expect(Number(next.rows[0].chain_seq)).toBe(4);
   });
 
-  it('should hold the leaf-4 grant matrix on the re-created parents', async () => {
+  it('should hold the leaf-4 grant matrix on the re-created parents (as amended by the 0008 revoke — admin_app no longer INSERTs the chain)', async () => {
     const { rows } = await pool.query(
       `SELECT has_table_privilege('admin_app', 'security_audit_log', 'INSERT') AS app_ins,
               has_table_privilege('admin_app', 'security_audit_log', 'DELETE') AS app_del,
               has_table_privilege('admin_siem', 'siem_delivery_receipts', 'INSERT') AS siem_ins,
               has_table_privilege('admin_siem', 'siem_delivery_receipts', 'UPDATE') AS siem_upd`,
     );
-    expect(rows[0]).toEqual({ app_ins: true, app_del: false, siem_ins: true, siem_upd: false });
+    expect(rows[0]).toEqual({ app_ins: false, app_del: false, siem_ins: true, siem_upd: false });
   });
 });
 

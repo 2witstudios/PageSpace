@@ -228,14 +228,30 @@ jobs:
           FLY_NO_UPDATE_CHECK: "true"
 
       # Admin PG (trust plane, #890): mirrors the main migration machine but runs
-      # db:migrate:admin. The machine runs in the pagespace-web app, so it inherits
-      # ADMIN_DATABASE_URL from that app's Fly secrets — no GitHub-side copy of the URL.
+      # db:migrate:admin. The machine runs in the pagespace-web app, BUT it must
+      # not use that app's runtime ADMIN_DATABASE_URL secret — that is the
+      # least-privilege admin_app LOGIN (Phase 2), which cannot run DDL. The
+      # OWNER connection string lives ONLY in the ADMIN_DATABASE_URL_MIGRATE
+      # GitHub secret and is passed to the one-shot machine via --env, so owner
+      # credentials never sit in any Fly app's runtime secrets (migrate-admin.ts
+      # prefers ADMIN_DATABASE_URL_MIGRATE over the inherited runtime URL).
       # GATED on the ADMIN_DB_MIGRATIONS_ENABLED repo variable: deploys must not break
       # before the Fly pagespace-db-admin instance is provisioned. Ops flips the
-      # variable to 'true' after provisioning — see the Phase 6 runbook (issue #890).
+      # variable to 'true' after provisioning — see the Phase 6 runbook (issue #890)
+      # and the Fly secret matrix in infrastructure/UPGRADE.md (Phase 2).
       - name: Run admin migrations
         if: ${{ vars.ADMIN_DB_MIGRATIONS_ENABLED == 'true' }}
         run: |
+          # Fail fast: without the dedicated migrate URL the machine would fall
+          # back to the app's runtime login and fail with permission errors deep
+          # inside the migration — surface the misconfiguration by name instead.
+          if [ -z "$ADMIN_DATABASE_URL_MIGRATE" ]; then
+            echo "ERROR: ADMIN_DATABASE_URL_MIGRATE secret is not set."
+            echo "ADMIN_DB_MIGRATIONS_ENABLED=true requires the dedicated owner migrate URL"
+            echo "(see infrastructure/UPGRADE.md, Phase 2 Fly secret matrix)."
+            exit 1
+          fi
+
           docker pull ghcr.io/2witstudios/pagespace-migrate:latest
           docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate-admin
           docker push registry.fly.io/pagespace-web:migrate-admin
@@ -246,6 +262,7 @@ jobs:
             --app pagespace-web \
             --region iad \
             --restart no \
+            --env ADMIN_DATABASE_URL_MIGRATE="$ADMIN_DATABASE_URL_MIGRATE" \
             bun run db:migrate:admin \
             2>&1 | tee /tmp/admin_machine_output.txt || true
 
@@ -304,6 +321,7 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_NO_UPDATE_CHECK: "true"
+          ADMIN_DATABASE_URL_MIGRATE: ${{ secrets.ADMIN_DATABASE_URL_MIGRATE }}
 
       - name: Deploy web
         run: |

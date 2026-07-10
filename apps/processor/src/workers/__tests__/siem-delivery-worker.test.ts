@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, vi } from 'vitest';
 import { assert } from '../../__tests__/riteway';
 
 const {
@@ -48,6 +48,11 @@ vi.mock('../../db', () => ({
       release: mockRelease,
     }),
   })),
+  // Never reached by the legacy-mode suite (break-glass routes everything to
+  // main); the dedicated-mode suite injects its own pools via deps instead.
+  getAdminPoolForWorker: vi.fn(() => {
+    throw new Error('getAdminPoolForWorker must not be called in break-glass mode tests');
+  }),
 }));
 
 // Default preflight stub: returns null (chain verifies clean, no halt). Tests
@@ -63,7 +68,7 @@ vi.mock('@pagespace/lib/audit/security-audit-alerting', () => ({
   notifyChainPreflightFailure: mockNotifyChainPreflightFailure,
 }));
 
-import { processSiemDelivery } from '../siem-delivery-worker';
+import { processSiemDelivery, resetSiemModeBannerForTests } from '../siem-delivery-worker';
 import { SIEM_SOURCES } from '../../services/siem-sources';
 import type { AuditLogSource } from '../../services/siem-adapter';
 
@@ -209,9 +214,20 @@ function findAllCallsContaining(needle: string): unknown[][] {
 describe('processSiemDelivery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // This suite exercises the LEGACY single-store worker behavior, which
+    // post-cutover (#890 Phase 2) is exactly the break-glass routing: every
+    // operation on the main pool, one client, unchanged query sequence. The
+    // dedicated-mode pool matrix has its own suite below.
+    vi.stubEnv('ADMIN_DATABASE_URL', '');
+    vi.stubEnv('ADMIN_DB_BREAK_GLASS', 'true');
+    resetSiemModeBannerForTests();
     // Default: preflight verifies clean. Individual tamper tests override this.
     mockRunChainPreflight.mockResolvedValue(null);
     mockNotifyChainPreflightFailure.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('short-circuit when SIEM disabled', async () => {
@@ -1497,6 +1513,7 @@ describe('processSiemDelivery', () => {
     stubSourceRows([makeSecurityRow('sec_clean', new Date('2026-04-10T12:05:00Z'))]);
 
     mockRunChainPreflight.mockResolvedValue({
+      kind: 'tamper',
       source: 'activity_logs',
       entryId: 'log_tampered',
       breakAtIndex: 0,
@@ -1529,6 +1546,7 @@ describe('processSiemDelivery', () => {
     stubSourceRows([]);
 
     mockRunChainPreflight.mockResolvedValue({
+      kind: 'tamper',
       source: 'activity_logs',
       entryId: 'log_tampered',
       breakAtIndex: 0,
@@ -1591,6 +1609,7 @@ describe('processSiemDelivery', () => {
     stubSourceRows([makeSecurityRow('sec_clean', new Date('2026-04-10T12:05:00Z'))]);
 
     mockRunChainPreflight.mockResolvedValue({
+      kind: 'tamper',
       source: 'activity_logs',
       entryId: 'log_tampered',
       breakAtIndex: 0,
@@ -1630,6 +1649,7 @@ describe('processSiemDelivery', () => {
     stubSourceRows([]);
 
     mockRunChainPreflight.mockResolvedValue({
+      kind: 'tamper',
       source: 'activity_logs',
       entryId: 'log_tampered',
       breakAtIndex: 0,
@@ -1720,6 +1740,7 @@ describe('processSiemDelivery', () => {
     stubSourceRows([]);
 
     mockRunChainPreflight.mockResolvedValue({
+      kind: 'tamper',
       source: 'activity_logs',
       entryId: 'log_tampered',
       breakAtIndex: 0,
@@ -1999,6 +2020,320 @@ describe('processSiemDelivery', () => {
       should: 'emit the receipt INSERT after the cursor advance UPSERT',
       actual: advanceIdx >= 0 && receiptIdx > advanceIdx,
       expected: true,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dedicated-mode pool-per-operation matrix (#890 Phase 2 leaf 7).
+//
+// These tests inject BOTH pools via deps and tag every query with the store
+// that served it, pinning the cutover matrix:
+//   advisory lock            → main (rolling-deploy serialization)
+//   cursors + receipts       → admin (both sources)
+//   activity_logs data       → main (moves in Phase 5)
+//   security_audit_log data  → admin
+// plus the flip behaviors: legacy-cursor seeding, data-store-clock init, the
+// awaiting-backfill deferral, and the fail-mode halt.
+// ---------------------------------------------------------------------------
+
+interface TaggedStore {
+  calls: { sql: string; params?: unknown[] }[];
+  released: number;
+  connects: number;
+  pool: { connect(): Promise<{ query(sql: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>; release(): void }> };
+}
+
+type StoreResponder = (sql: string, params?: unknown[]) => Record<string, unknown>[] | null;
+
+function createTaggedStore(respond: StoreResponder): TaggedStore {
+  const store: TaggedStore = {
+    calls: [],
+    released: 0,
+    connects: 0,
+    pool: {
+      connect: async () => {
+        store.connects += 1;
+        return {
+          query: async (sql: string, params?: unknown[]) => {
+            store.calls.push({ sql, params });
+            const rows = respond(sql, params);
+            if (rows === null) {
+              throw new Error(`Unhandled SQL in tagged store: ${sql.slice(0, 120)}`);
+            }
+            return { rows, rowCount: rows.length };
+          },
+          release: () => {
+            store.released += 1;
+          },
+        };
+      },
+    },
+  };
+  return store;
+}
+
+const DEDICATED_ENV = { ADMIN_DATABASE_URL: 'postgresql://admin_processor_user:pw@admin-host:5432/pagespace_admin' };
+
+const CURSOR_TS = new Date('2026-04-10T10:00:00Z');
+
+function initializedCursorRow(id: string) {
+  return { lastDeliveredId: id, lastDeliveredAt: CURSOR_TS, deliveryCount: 3 };
+}
+
+describe('processSiemDelivery dedicated-mode pool matrix', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetSiemModeBannerForTests();
+    mockLoadSiemConfig.mockReturnValue(WEBHOOK_CONFIG);
+    mockValidateSiemConfig.mockReturnValue({ valid: true, errors: [] });
+    mockRunChainPreflight.mockResolvedValue(null);
+    mockNotifyChainPreflightFailure.mockResolvedValue(undefined);
+  });
+
+  function respondMain(overrides?: StoreResponder): StoreResponder {
+    return (sql, params) => {
+      const custom = overrides?.(sql, params);
+      if (custom !== null && custom !== undefined) return custom;
+      if (sql.includes('pg_try_advisory_lock')) return [{ acquired: true }];
+      if (sql.includes('pg_advisory_unlock')) return [];
+      if (sql.includes('FROM activity_logs')) {
+        return [makeActivityRow('act_new', new Date('2026-04-10T12:00:00Z'))];
+      }
+      return null;
+    };
+  }
+
+  function respondAdmin(overrides?: StoreResponder): StoreResponder {
+    return (sql, params) => {
+      const custom = overrides?.(sql, params);
+      if (custom !== null && custom !== undefined) return custom;
+      if (sql.includes('FROM siem_delivery_cursors WHERE id =')) {
+        const source = String(params?.[0]);
+        return [initializedCursorRow(source === 'activity_logs' ? 'act_prev' : 'sec_prev')];
+      }
+      if (sql.includes('FROM security_audit_log')) {
+        return [makeSecurityRow('sec_new', new Date('2026-04-10T12:01:00Z'))];
+      }
+      if (sql === 'BEGIN' || sql === 'COMMIT') return [];
+      if (sql.includes('INSERT INTO siem_delivery_cursors')) return [];
+      if (sql.includes('INSERT INTO siem_delivery_receipts')) return [];
+      return null;
+    };
+  }
+
+  it('given a successful dual-source delivery, should route every operation to its matrix plane', async () => {
+    const main = createTaggedStore(respondMain());
+    const admin = createTaggedStore(respondAdmin());
+    mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 2 });
+
+    await processSiemDelivery({ mainPool: main.pool, adminPool: admin.pool, env: DEDICATED_ENV });
+
+    const has = (store: TaggedStore, needle: string) =>
+      store.calls.filter((c) => c.sql.includes(needle)).length;
+
+    assert({
+      given: 'dedicated mode',
+      should: 'take and release the advisory lock on MAIN only',
+      actual: {
+        lockMain: has(main, 'pg_try_advisory_lock'),
+        unlockMain: has(main, 'pg_advisory_unlock'),
+        lockAdmin: has(admin, 'pg_try_advisory_lock') + has(admin, 'pg_advisory_unlock'),
+      },
+      expected: { lockMain: 1, unlockMain: 1, lockAdmin: 0 },
+    });
+    assert({
+      given: 'dedicated mode',
+      should: 'read BOTH cursors from admin and none from main',
+      actual: {
+        admin: has(admin, 'FROM siem_delivery_cursors'),
+        main: has(main, 'FROM siem_delivery_cursors'),
+      },
+      expected: { admin: 2, main: 0 },
+    });
+    assert({
+      given: 'dedicated mode',
+      should: 'read activity_logs data from MAIN and security_audit_log data from ADMIN',
+      actual: {
+        activityOnMain: has(main, 'FROM activity_logs'),
+        activityOnAdmin: has(admin, 'FROM activity_logs'),
+        securityOnAdmin: has(admin, 'FROM security_audit_log'),
+        securityOnMain: has(main, 'FROM security_audit_log'),
+      },
+      expected: { activityOnMain: 1, activityOnAdmin: 0, securityOnAdmin: 1, securityOnMain: 0 },
+    });
+    assert({
+      given: 'dedicated mode',
+      should: 'advance cursors and write receipts inside one ADMIN transaction, nothing on main',
+      actual: {
+        beginAdmin: admin.calls.filter((c) => c.sql === 'BEGIN').length,
+        commitAdmin: admin.calls.filter((c) => c.sql === 'COMMIT').length,
+        advancesAdmin: has(admin, '"deliveryCount" = $4'),
+        receiptsAdmin: has(admin, 'INSERT INTO siem_delivery_receipts'),
+        writesOnMain:
+          has(main, 'INSERT INTO siem_delivery_cursors') +
+          has(main, 'INSERT INTO siem_delivery_receipts') +
+          main.calls.filter((c) => c.sql === 'BEGIN').length,
+      },
+      expected: { beginAdmin: 1, commitAdmin: 1, advancesAdmin: 2, receiptsAdmin: 1, writesOnMain: 0 },
+    });
+    assert({
+      given: 'the run finished',
+      should: 'release both clients exactly once',
+      actual: { main: main.released, admin: admin.released },
+      expected: { main: 1, admin: 1 },
+    });
+  });
+
+  it('given an uninitialized admin cursor and an initialized legacy cursor, should seed the admin cursor with the EXACT legacy watermark and deliver nothing that run', async () => {
+    const legacyTuple = {
+      lastDeliveredId: 'legacy_row_42',
+      lastDeliveredAt: new Date('2026-04-09T08:30:00Z'),
+      deliveryCount: 977,
+    };
+    const main = createTaggedStore((sql, params) => {
+      if (sql.includes('pg_try_advisory_lock')) return [{ acquired: true }];
+      if (sql.includes('pg_advisory_unlock')) return [];
+      if (sql.includes('FROM siem_delivery_cursors WHERE id =')) {
+        // The LEGACY cursor read during seeding.
+        return [legacyTuple];
+      }
+      return null;
+    });
+    const seedWrites: unknown[][] = [];
+    const admin = createTaggedStore((sql, params) => {
+      if (sql.includes('FROM siem_delivery_cursors WHERE id =')) return []; // uninitialized
+      if (sql.includes('INSERT INTO siem_delivery_cursors')) {
+        seedWrites.push(params ?? []);
+        return [legacyTuple];
+      }
+      return null;
+    });
+
+    await processSiemDelivery({ mainPool: main.pool, adminPool: admin.pool, env: DEDICATED_ENV });
+
+    assert({
+      given: 'both sources uninitialized on admin with legacy cursors present',
+      should: 'copy each legacy tuple into the admin cursors table verbatim',
+      actual: seedWrites,
+      expected: [
+        ['activity_logs', 'legacy_row_42', legacyTuple.lastDeliveredAt, 977],
+        ['security_audit_log', 'legacy_row_42', legacyTuple.lastDeliveredAt, 977],
+      ],
+    });
+    assert({
+      given: 'a seeding run',
+      should: 'not query source rows, deliver, or write the legacy cursor',
+      actual: {
+        delivered: mockDeliverToSiemWithRetry.mock.calls.length,
+        mainDataReads: main.calls.filter((c) => c.sql.includes('FROM activity_logs')).length,
+        adminDataReads: admin.calls.filter((c) => c.sql.includes('FROM security_audit_log')).length,
+        legacyCursorWrites: main.calls.filter((c) => c.sql.includes('INSERT INTO siem_delivery_cursors')).length,
+      },
+      expected: { delivered: 0, mainDataReads: 0, adminDataReads: 0, legacyCursorWrites: 0 },
+    });
+  });
+
+  it('given NO cursor anywhere (fresh install), should plant activity_logs at the MAIN clock and security_audit_log inline on admin', async () => {
+    const plantedAt = new Date('2026-04-10T11:11:11Z');
+    const main = createTaggedStore((sql) => {
+      if (sql.includes('pg_try_advisory_lock')) return [{ acquired: true }];
+      if (sql.includes('pg_advisory_unlock')) return [];
+      if (sql.includes('FROM siem_delivery_cursors WHERE id =')) return []; // no legacy cursor
+      if (sql.includes('statement_timestamp() AS now')) return [{ now: plantedAt }];
+      return null;
+    });
+    const inits: { sql: string; params?: unknown[] }[] = [];
+    const admin = createTaggedStore((sql, params) => {
+      if (sql.includes('FROM siem_delivery_cursors WHERE id =')) return [];
+      if (sql.includes('INSERT INTO siem_delivery_cursors')) {
+        inits.push({ sql, params });
+        return [{ lastDeliveredId: '__cursor_init__', lastDeliveredAt: plantedAt, deliveryCount: 0 }];
+      }
+      return null;
+    });
+
+    await processSiemDelivery({ mainPool: main.pool, adminPool: admin.pool, env: DEDICATED_ENV });
+
+    assert({
+      given: 'a fresh install in dedicated mode',
+      should: 'sample the MAIN clock exactly once (for the main-plane data source)',
+      actual: main.calls.filter((c) => c.sql.includes('statement_timestamp() AS now')).length,
+      expected: 1,
+    });
+    assert({
+      given: 'the two init upserts (activity first, security second)',
+      should: 'plant activity_logs with the sampled main clock and security inline via statement_timestamp()',
+      actual: {
+        count: inits.length,
+        activityUsesParamClock: inits[0]?.params?.length === 3 && inits[0]?.params?.[2] === plantedAt,
+        securityUsesInlineClock:
+          inits[1]?.params?.length === 2 && inits[1]?.sql.includes('statement_timestamp()'),
+      },
+      expected: { count: 2, activityUsesParamClock: true, securityUsesInlineClock: true },
+    });
+  });
+
+  it('given preflight reports awaiting_backfill for security, should deliver ONLY activity entries and leave the security cursor untouched', async () => {
+    const main = createTaggedStore(respondMain());
+    const admin = createTaggedStore(respondAdmin());
+    mockRunChainPreflight.mockResolvedValue({
+      kind: 'awaiting_backfill',
+      source: 'security_audit_log',
+      anchorId: 'sec_prev',
+    });
+    mockDeliverToSiemWithRetry.mockResolvedValue({ success: true, entriesDelivered: 1 });
+
+    await processSiemDelivery({ mainPool: main.pool, adminPool: admin.pool, env: DEDICATED_ENV });
+
+    const deliveredBatch = mockDeliverToSiemWithRetry.mock.calls[0]?.[1] as { source: string; id: string }[];
+    assert({
+      given: 'an awaiting-backfill deferral on the security source',
+      should: 'deliver a batch containing only activity_logs entries',
+      actual: deliveredBatch.map((e) => e.source),
+      expected: ['activity_logs'],
+    });
+
+    const advances = admin.calls.filter((c) => c.sql.includes('"deliveryCount" = $4'));
+    assert({
+      given: 'the deferral',
+      should: 'advance only the activity cursor and record NO error rows',
+      actual: {
+        advancedSources: advances.map((c) => c.params?.[0]),
+        errorWrites: admin.calls.filter((c) => c.sql.includes('"lastError" = $2')).length,
+      },
+      expected: { advancedSources: ['activity_logs'], errorWrites: 0 },
+    });
+  });
+
+  it('given fail mode (no admin URL, no break-glass), should halt before touching any pool', async () => {
+    const main = createTaggedStore(() => null);
+    const admin = createTaggedStore(() => null);
+
+    await processSiemDelivery({ mainPool: main.pool, adminPool: admin.pool, env: {} });
+
+    assert({
+      given: 'an unconfigured trust plane',
+      should: 'never connect to either store',
+      actual: { main: main.connects, admin: admin.connects },
+      expected: { main: 0, admin: 0 },
+    });
+  });
+
+  it('given the advisory lock is busy, should never open an admin connection', async () => {
+    const main = createTaggedStore((sql) => {
+      if (sql.includes('pg_try_advisory_lock')) return [{ acquired: false }];
+      return null;
+    });
+    const admin = createTaggedStore(() => null);
+
+    await processSiemDelivery({ mainPool: main.pool, adminPool: admin.pool, env: DEDICATED_ENV });
+
+    assert({
+      given: 'a lock-busy run in dedicated mode',
+      should: 'skip the admin connect entirely',
+      actual: { adminConnects: admin.connects, mainReleased: main.released },
+      expected: { adminConnects: 0, mainReleased: 1 },
     });
   });
 });

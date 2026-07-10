@@ -11,9 +11,21 @@
       "types": "./dist/admin-db.d.ts",
       "default": "./dist/admin-db.js"
     },
+    "./admin-eraser-db": {
+      "types": "./dist/admin-eraser-db.d.ts",
+      "default": "./dist/admin-eraser-db.js"
+    },
     "./admin-schema": {
       "types": "./dist/admin-schema.d.ts",
       "default": "./dist/admin-schema.js"
+    },
+    "./migrate-admin": {
+      "types": "./dist/migrate-admin.d.ts",
+      "default": "./dist/migrate-admin.js"
+    },
+    "./provision-admin-users": {
+      "types": "./dist/provision-admin-users.d.ts",
+      "default": "./dist/provision-admin-users.js"
     },
     "./operators": {
       "types": "./dist/operators.d.ts",
@@ -269,6 +281,7 @@
     "db:migrate:local": "DATABASE_URL=postgresql://user:password@localhost:5432/pagespace tsx src/migrate.ts",
     "db:generate:admin": "drizzle-kit generate --config=drizzle-admin.config.ts",
     "db:migrate:admin": "tsx src/migrate-admin.ts",
+    "db:provision:admin-users": "tsx src/provision-admin-users.ts",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/seed.ts",
     "lint": "eslint src",

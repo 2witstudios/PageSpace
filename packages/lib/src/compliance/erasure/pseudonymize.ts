@@ -53,6 +53,12 @@ export const SECURITY_AUDIT_HASHED_FIELDS: ReadonlySet<string> = new Set([
   // Stored chain columns
   'eventHash',
   'chainSeq',
+  // Admin-plane chain column (#890 Phase 2, admin 0005): NULL marks a
+  // backfilled legacy-era row, present marks a chainer-era row whose
+  // event_hash = H(emission_hash, previous_hash). Nulling it would forge an
+  // era downgrade — forbidden here as defense-in-depth beside the eraser
+  // role's column-scoped UPDATE grant.
+  'emissionHash',
 ]);
 
 export interface ActivityLogPseudonymPatch {
@@ -63,6 +69,13 @@ export interface ActivityLogPseudonymPatch {
 
 export interface SecurityAuditPseudonymPatch {
   ipAddress: null;
+  /**
+   * ip_bidx is the deterministic blind index over ip_address (equality
+   * forensics). It is derived FROM the erased PII, so it must be nulled with
+   * it — otherwise the subject's IP stays linkable by blind-index equality.
+   * It is inside the eraser role's 6-column UPDATE scope (#890 Phase 1).
+   */
+  ipBidx: null;
   userAgent: null;
   geoLocation: null;
   sessionId: null;
@@ -76,7 +89,7 @@ export function buildActivityLogPseudonymizationPatch(): ActivityLogPseudonymPat
 }
 
 export function buildSecurityAuditPseudonymizationPatch(): SecurityAuditPseudonymPatch {
-  return { ipAddress: null, userAgent: null, geoLocation: null, sessionId: null };
+  return { ipAddress: null, ipBidx: null, userAgent: null, geoLocation: null, sessionId: null };
 }
 
 /**

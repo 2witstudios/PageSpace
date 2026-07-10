@@ -111,25 +111,90 @@ describe('Root (dev/self-host) docker-compose configuration', () => {
       const url = getEnv(compose, 'migrate').ADMIN_DATABASE_URL;
       expect(url).toContain('@postgres-admin:5432/pagespace_admin');
     });
+
+    it('given the migrate service, should run db:provision:admin-users after db:migrate:admin', () => {
+      const command = String(compose.services.migrate.command);
+      expect(command).toContain('db:provision:admin-users');
+      expect(command.indexOf('db:migrate:admin')).toBeLessThan(
+        command.indexOf('db:provision:admin-users'),
+      );
+    });
+
+    it('given the migrate service, should receive all four per-service login passwords for provisioning', () => {
+      const env = getEnv(compose, 'migrate');
+      expect(env.ADMIN_APP_PASSWORD).toBeTruthy();
+      expect(env.ADMIN_PROCESSOR_PASSWORD).toBeTruthy();
+      expect(env.ADMIN_READER_PASSWORD).toBeTruthy();
+      expect(env.ADMIN_ERASER_PASSWORD).toBeTruthy();
+    });
   });
 
-  describe('ADMIN_DATABASE_URL wiring', () => {
-    const appServices = ['web', 'admin', 'processor', 'realtime'];
-
+  describe('ADMIN_DATABASE_URL wiring (per-service least-privilege LOGINs, #890 Phase 2)', () => {
     // Owner/bootstrap credentials bypass the drizzle-admin/0001 zero-trust
-    // grants, so only the migrate one-shot may hold them. Runtime services
-    // get per-service LOGIN roles with the Phase 2 audit-write cutover.
-    // (This pins the compose environment map; the dev stack's `env_file: .env`
-    // may still carry the var — the hard guarantee is the tenant stack, which
-    // uses explicit environment maps only.)
-    it.each(appServices)(
-      'given the %s runtime service, should NOT wire ADMIN_DATABASE_URL in the environment map (owner creds are migrate-only in Phase 1)',
-      (svc) => {
-        expect(getEnv(compose, svc)).not.toHaveProperty('ADMIN_DATABASE_URL');
+    // grants, so only the migrate one-shot may hold them. Each runtime
+    // service connects as its own LOGIN user attached to its role template:
+    // web → admin_app, processor → admin_chainer+admin_siem, admin → admin_reader.
+    const serviceLogins: [string, string, string][] = [
+      ['web', 'admin_app_user', 'ADMIN_APP_PASSWORD'],
+      ['processor', 'admin_processor_user', 'ADMIN_PROCESSOR_PASSWORD'],
+      ['admin', 'admin_reader_user', 'ADMIN_READER_PASSWORD'],
+    ];
+
+    it.each(serviceLogins)(
+      'given the %s service, ADMIN_DATABASE_URL should connect as %s at postgres-admin',
+      (svc, loginUser) => {
+        const url = getEnv(compose, svc).ADMIN_DATABASE_URL;
+        expect(url).toContain(`://${loginUser}:`);
+        expect(url).toContain('@postgres-admin:5432/pagespace_admin');
       },
     );
 
-    it.each(appServices)(
+    it.each(serviceLogins)(
+      'given the %s service, its login password should match the one migrate provisions via %s',
+      (svc, loginUser, passwordVar) => {
+        const url = getEnv(compose, svc).ADMIN_DATABASE_URL;
+        const provisionPassword = getEnv(compose, 'migrate')[passwordVar];
+        expect(url).toContain(`://${loginUser}:${provisionPassword}@`);
+      },
+    );
+
+    it.each(serviceLogins.map(([svc]) => svc))(
+      'given the %s service, should NOT connect to postgres-admin with the owner credentials',
+      (svc) => {
+        const url = getEnv(compose, svc).ADMIN_DATABASE_URL;
+        const ownerUrl = getEnv(compose, 'migrate').ADMIN_DATABASE_URL;
+        expect(url).not.toBe(ownerUrl);
+        expect(url).not.toContain('://user:');
+      },
+    );
+
+    it('given the realtime service, should NOT wire ADMIN_DATABASE_URL (no audit path in realtime)', () => {
+      expect(getEnv(compose, 'realtime')).not.toHaveProperty('ADMIN_DATABASE_URL');
+    });
+
+    it('given the processor service, AUDIT_CHAINER_ALLOW_GENESIS should pass through from .env — the volumes are persistent, so an upgraded stack can hold legacy rows and must NOT default to genesis chaining; fresh installs opt in via .env.example (#890 Phase 2 era-fork guard)', () => {
+      const value = String(getEnv(compose, 'processor').AUDIT_CHAINER_ALLOW_GENESIS ?? '');
+      expect(value).toContain('${AUDIT_CHAINER_ALLOW_GENESIS');
+      expect(value).not.toBe('true');
+    });
+
+    // #890 Phase 2 leaf 6: the GDPR pseudonymization route (web) erases PII
+    // on the trust plane as its own column-scoped identity.
+    it('given the web service, ADMIN_ERASER_DATABASE_URL should connect as admin_gdpr_eraser_user with the password migrate provisions', () => {
+      const url = getEnv(compose, 'web').ADMIN_ERASER_DATABASE_URL;
+      const provisionPassword = getEnv(compose, 'migrate').ADMIN_ERASER_PASSWORD;
+      expect(url).toContain(`://admin_gdpr_eraser_user:${provisionPassword}@`);
+      expect(url).toContain('@postgres-admin:5432/pagespace_admin');
+    });
+
+    it.each(['admin', 'processor', 'realtime'])(
+      'given the %s service, should NOT wire ADMIN_ERASER_DATABASE_URL (only the web GDPR route erases)',
+      (svc) => {
+        expect(getEnv(compose, svc)).not.toHaveProperty('ADMIN_ERASER_DATABASE_URL');
+      },
+    );
+
+    it.each(['web', 'admin', 'processor', 'realtime'])(
       'given the %s service, should still receive DATABASE_URL pointing at the main postgres',
       (svc) => {
         const url = getEnv(compose, svc).DATABASE_URL;

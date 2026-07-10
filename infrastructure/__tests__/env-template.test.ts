@@ -83,6 +83,10 @@ describe('Tenant env template', () => {
     expect(templateVars.get('DEPLOYMENT_MODE')).toBe('tenant');
   });
 
+  it('given AUDIT_CHAINER_ALLOW_GENESIS, should be true — the template provisions FRESH installs (empty admin chain, genesis link is correct); upgrades must never carry it (#890 Phase 2 era-fork guard)', () => {
+    expect(templateVars.get('AUDIT_CHAINER_ALLOW_GENESIS')).toBe('true');
+  });
+
   it('given IMAGE_TAG, should default to latest', () => {
     expect(templateVars.get('IMAGE_TAG')).toBe('latest');
   });

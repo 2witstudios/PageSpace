@@ -87,6 +87,7 @@ export class QueueManager {
       await this.boss.createQueue('video-process');
       await this.boss.createQueue('siem-delivery');
       await this.boss.createQueue('account-erasure');
+      await this.boss.createQueue('audit-chainer');
       console.log('PgBoss queues created/verified');
     } catch (err) {
       console.warn('Queue creation warning:', err instanceof Error ? err.message : err);
@@ -254,6 +255,21 @@ export class QueueManager {
         return { success: true };
       }
     );
+
+    // Audit chainer — single-writer drain of the Admin PG ingest queue into
+    // the security_audit_log hash chain (#890 Phase 2). Poll-based like
+    // siem-delivery (ignores job data); no-ops when ADMIN_DATABASE_URL is
+    // unset, and the run-level advisory lock serializes overlapping runs.
+    const { processAuditChainer } = await import('./audit-chainer-worker');
+    await this.boss.work('audit-chainer',
+      async () => {
+        await processAuditChainer();
+      }
+    );
+
+    // Every 30 seconds, retryLimit 0 so overlapping runs won't stack (same
+    // schedule contract as siem-delivery).
+    await this.boss.schedule('audit-chainer', '*/30 * * * * *', {}, { retryLimit: 0 });
   }
 
   async addJob<Q extends QueueName>(
@@ -307,7 +323,7 @@ export class QueueManager {
   }
 
   getQueueStatus(): Record<QueueName, QueueStats> {
-    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure'];
+    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure', 'audit-chainer'];
     const perQueue = this.cachedStates?.queues ?? {};
 
     const status = {} as Record<QueueName, QueueStats>;

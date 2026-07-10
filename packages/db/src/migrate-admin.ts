@@ -3,7 +3,7 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { runMigrations } from './migration-runner';
-import { resolveAdminMigrateDecision, type AdminDbEnv } from './admin-db-mode';
+import { resolveAdminMigrateDecision, type AdminMigrateEnv } from './admin-db-mode';
 
 /**
  * Admin PG (trust plane) migration entrypoint — db:migrate:admin (#890
@@ -21,7 +21,7 @@ export const ADMIN_MIGRATIONS_SCHEMA = 'drizzle_admin';
 export const ADMIN_MIGRATIONS_TABLE = '__drizzle_migrations';
 
 export async function migrateAdminDb(
-  env: AdminDbEnv,
+  env: AdminMigrateEnv,
   log: (message: string) => void = () => {},
 ): Promise<void> {
   const decision = resolveAdminMigrateDecision(env);
@@ -47,10 +47,15 @@ export async function migrateAdminDb(
 async function main() {
   console.log('Running admin (trust plane) migrations...');
   console.log('ADMIN_DATABASE_URL:', process.env.ADMIN_DATABASE_URL ? 'Set' : 'Not set');
+  console.log(
+    'ADMIN_DATABASE_URL_MIGRATE:',
+    process.env.ADMIN_DATABASE_URL_MIGRATE ? 'Set (preferred for migrations)' : 'Not set',
+  );
 
   await migrateAdminDb(
     {
       ADMIN_DATABASE_URL: process.env.ADMIN_DATABASE_URL,
+      ADMIN_DATABASE_URL_MIGRATE: process.env.ADMIN_DATABASE_URL_MIGRATE,
       ADMIN_DATABASE_SSL: process.env.ADMIN_DATABASE_SSL,
       ADMIN_DB_POOL_MAX: process.env.ADMIN_DB_POOL_MAX,
       ADMIN_DB_BREAK_GLASS: process.env.ADMIN_DB_BREAK_GLASS,

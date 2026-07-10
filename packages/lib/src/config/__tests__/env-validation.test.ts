@@ -213,6 +213,32 @@ describe('env-validation', () => {
       }
     });
 
+    it('given a valid ADMIN_ERASER_DATABASE_URL, should parse and expose it (GDPR eraser identity, #890 leaf 6)', () => {
+      const env = {
+        ...baseEnv,
+        ADMIN_ERASER_DATABASE_URL:
+          'postgresql://admin_gdpr_eraser_user:pw@postgres-admin:5432/pagespace_admin',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ADMIN_ERASER_DATABASE_URL).toBe(env.ADMIN_ERASER_DATABASE_URL);
+      }
+    });
+
+    it('given a non-postgres ADMIN_ERASER_DATABASE_URL, should fail; unset should parse (route-level refusal, not boot-level)', () => {
+      const bad = serverEnvSchema.safeParse({
+        ...baseEnv,
+        ADMIN_ERASER_DATABASE_URL: 'http://nope',
+      });
+      expect(bad.success).toBe(false);
+
+      const unset = serverEnvSchema.safeParse(baseEnv);
+      expect(unset.success).toBe(true);
+    });
+
     it('given ADMIN_DATABASE_URL unset with ADMIN_DB_BREAK_GLASS=true, should parse and expose the flag (degrade-loudly path)', () => {
       const env = {
         ...baseEnv,

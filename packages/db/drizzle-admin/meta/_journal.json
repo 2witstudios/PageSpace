@@ -29,6 +29,41 @@
       "when": 1783659177987,
       "tag": "0003_harden_ensure_partitions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783670331991,
+      "tag": "0004_security_audit_ingest",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783671997487,
+      "tag": "0005_emission_hash_column",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783673960814,
+      "tag": "0006_security_audit_anchors",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783677044891,
+      "tag": "0007_anchor_select_for_verifier",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783689170084,
+      "tag": "0008_revoke_app_chain_insert",
+      "breakpoints": true
     }
   ]
 }

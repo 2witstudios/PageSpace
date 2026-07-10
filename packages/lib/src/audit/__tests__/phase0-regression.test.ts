@@ -30,6 +30,15 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
+// Phase 2 (leaf 5): default readers resolve the adminDb binding; dedicated
+// mode returns getAdminDb(), pointed at the same default-db mock above.
+vi.mock('@pagespace/db/admin-db', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    getAdminDbMode: vi.fn(() => ({ mode: 'dedicated', reason: 'ADMIN_DATABASE_URL is set' })),
+    getAdminDb: vi.fn(() => db),
+  };
+});
 vi.mock('@pagespace/db/schema/security-audit', () => ({ securityAuditLog: {} }));
 vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn(),
@@ -346,21 +355,17 @@ describe('3. DI completeness sweep (no singleton fallthrough)', () => {
     expect(result.isValid).toBe(true);
   });
 
-  it('given ADMIN_DATABASE_URL is set, its presence has no effect on any audit reader (readers stay on the injected/default db until Phase 2 wires the adminDb registry)', async () => {
-    const prev = process.env.ADMIN_DATABASE_URL;
-    process.env.ADMIN_DATABASE_URL = 'postgres://not-yet-wired-up/pagespace_admin';
-    try {
-      // No deps injected -> falls back to the (mocked) default db, exactly as
-      // it would with the env var absent. Only the adminDb registry
-      // (@pagespace/db/admin-db) reads this variable, and no audit reader
-      // consults that registry yet, so its presence must be a complete no-op.
-      const result = await verifySecurityAuditChain();
-      expect(result.isValid).toBe(true);
-      expect(result.totalEntries).toBe(0);
-    } finally {
-      if (prev === undefined) delete process.env.ADMIN_DATABASE_URL;
-      else process.env.ADMIN_DATABASE_URL = prev;
-    }
+  it('PHASE 2 CUTOVER (leaf 5): given no injected deps, audit readers resolve the adminDb binding (dedicated → Admin PG client)', async () => {
+    // Phase 0 pinned the opposite ("readers stay on the default db until
+    // Phase 2 wires the adminDb registry"). This session IS that wiring: the
+    // default read path now goes through resolveAuditDbBinding(), whose
+    // dedicated mode returns getAdminDb() — mocked at the top of this file
+    // to the same default-db mock, proving the registry is consulted.
+    const result = await verifySecurityAuditChain();
+    expect(result.isValid).toBe(true);
+    expect(result.totalEntries).toBe(0);
+    const adminDbModule = await import('@pagespace/db/admin-db');
+    expect(vi.mocked(adminDbModule.getAdminDb)).toHaveBeenCalled();
   });
 });
 

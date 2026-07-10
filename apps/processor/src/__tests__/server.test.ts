@@ -217,6 +217,9 @@ vi.mock('../db', () => ({
   setPageFailed: vi.fn(),
   setPageVisual: vi.fn(),
   getPoolForWorker: vi.fn(),
+  // Unreached in this suite: no ADMIN_DATABASE_URL in the test env, so the
+  // SIEM pool routing resolves every read to the main pool.
+  getAdminPoolForWorker: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

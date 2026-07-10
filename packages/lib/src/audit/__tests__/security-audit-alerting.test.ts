@@ -47,6 +47,15 @@ vi.mock('@pagespace/db/db', () => ({
     },
   },
 }));
+// Phase 2 (leaf 5): default readers resolve the adminDb binding; dedicated
+// mode returns getAdminDb(), pointed at the same default-db mock above.
+vi.mock('@pagespace/db/admin-db', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    getAdminDbMode: vi.fn(() => ({ mode: 'dedicated', reason: 'ADMIN_DATABASE_URL is set' })),
+    getAdminDb: vi.fn(() => db),
+  };
+});
 vi.mock('@pagespace/db/schema/security-audit', () => ({
   securityAuditLog: {
     id: 'id',
@@ -72,6 +81,8 @@ import {
   setChainAlertHandler,
   getChainAlertHandler,
   verifyAndAlert,
+  notifyChainAppendVerificationFailure,
+  notifyAnchorPublishFailure,
   startPeriodicVerification,
   stopPeriodicVerification,
   isPeriodicVerificationRunning,
@@ -266,6 +277,106 @@ describe('security-audit-alerting (#544)', () => {
       stopPeriodicVerification();
       stopPeriodicVerification();
       expect(isPeriodicVerificationRunning()).toBe(false);
+    });
+  });
+
+  describe('notifyChainAppendVerificationFailure (#890 Phase 2 chainer verify-on-append)', () => {
+    const details = {
+      entryId: 'chained-row-4',
+      breakAtIndex: 4,
+      breakReason: 'hash_mismatch' as const,
+      expectedHash: 'expected-hash',
+      actualHash: 'actual-hash',
+      segmentTotalRows: 12,
+      priorHead: 'prior-head-hash',
+    };
+
+    it('given no registered handler, should be a silent no-op (processor context)', async () => {
+      await expect(notifyChainAppendVerificationFailure(details)).resolves.toBeUndefined();
+    });
+
+    it('given a registered handler, should fire an append-sourced alert with a synthetic result describing the break', async () => {
+      const handler = vi.fn();
+      setChainAlertHandler(handler);
+
+      await notifyChainAppendVerificationFailure(details);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const alert: ChainVerificationAlert = handler.mock.calls[0][0];
+      expect(alert.source).toBe('append');
+      expect(alert.result.isValid).toBe(false);
+      expect(alert.result.totalEntries).toBe(12);
+      expect(alert.result.entriesVerified).toBe(5);
+      expect(alert.result.validEntries).toBe(4);
+      expect(alert.result.invalidEntries).toBe(1);
+      expect(alert.result.breakPoint?.entryId).toBe('chained-row-4');
+      expect(alert.result.breakPoint?.storedHash).toBe('actual-hash');
+      expect(alert.result.breakPoint?.computedHash).toBe('expected-hash');
+      expect(alert.result.breakPoint?.previousHashUsed).toBe('prior-head-hash');
+      expect(alert.result.breakPoint?.description).toContain('verify-on-append');
+    });
+
+    it('given a throwing handler, should swallow the error and log it (alerting must never mask the detection)', async () => {
+      setChainAlertHandler(() => {
+        throw new Error('alert transport down');
+      });
+
+      await expect(notifyChainAppendVerificationFailure(details)).resolves.toBeUndefined();
+      expect(mockLoggers.security.error).toHaveBeenCalled();
+    });
+
+    it('given each break reason, should render a distinct human description', async () => {
+      const handler = vi.fn();
+      setChainAlertHandler(handler);
+
+      for (const breakReason of ['hash_mismatch', 'linkage_break', 'missing_emission_hash'] as const) {
+        await notifyChainAppendVerificationFailure({ ...details, breakReason });
+      }
+
+      const descriptions = handler.mock.calls.map(
+        (call) => (call[0] as ChainVerificationAlert).result.breakPoint?.description,
+      );
+      expect(new Set(descriptions).size).toBe(3);
+    });
+  });
+
+  describe('notifyAnchorPublishFailure (#890 Phase 2 anchoring — repeated witness-publish failure)', () => {
+    const details = {
+      publisherName: 's3',
+      consecutiveFailures: 3,
+      chainSeq: 128,
+      head: 'head-hash-128',
+      errorMessage: 'bucket gone',
+    };
+
+    it('given no registered handler, should be a silent no-op (processor context)', async () => {
+      await expect(notifyAnchorPublishFailure(details)).resolves.toBeUndefined();
+    });
+
+    it('given a registered handler, should fire an anchor_publish-sourced alert naming publisher, streak, and head', async () => {
+      const handler = vi.fn();
+      setChainAlertHandler(handler);
+
+      await notifyAnchorPublishFailure(details);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const alert: ChainVerificationAlert = handler.mock.calls[0][0];
+      expect(alert.source).toBe('anchor_publish');
+      expect(alert.result.isValid).toBe(false);
+      expect(alert.result.breakPoint?.storedHash).toBe('head-hash-128');
+      expect(alert.result.breakPoint?.description).toContain('s3');
+      expect(alert.result.breakPoint?.description).toContain('3 consecutive');
+      expect(alert.result.breakPoint?.description).toContain('chain_seq 128');
+      expect(alert.result.breakPoint?.description).toContain('bucket gone');
+    });
+
+    it('given a throwing handler, should swallow the error and log it (alerting must never break the chainer)', async () => {
+      setChainAlertHandler(() => {
+        throw new Error('alert transport down');
+      });
+
+      await expect(notifyAnchorPublishFailure(details)).resolves.toBeUndefined();
+      expect(mockLoggers.security.error).toHaveBeenCalled();
     });
   });
 });

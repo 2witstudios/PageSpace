@@ -91,6 +91,11 @@ describe.skipIf(!url)('zero-trust roles on the Admin PG', () => {
       `INSERT INTO security_audit_log (id, event_type, user_id, ip_address, previous_hash, event_hash)
        VALUES ('seed-row-1', 'auth.login', 'user-1', '203.0.113.7', 'GENESIS', 'hash-1')`,
     );
+    // Seed one ingest row as superuser for the queue's denial probes (0004).
+    await pool.query(
+      `INSERT INTO security_audit_ingest (id, event_type, emission_hash)
+       VALUES ('ingest-seed-1', 'auth.login', 'em-hash-1')`,
+    );
   });
 
   afterAll(async () => {
@@ -107,13 +112,14 @@ describe.skipIf(!url)('zero-trust roles on the Admin PG', () => {
   });
 
   describe('admin_app (web identity)', () => {
-    it('should INSERT into security_audit_log (incl. chain_seq sequence default)', async () => {
+    it('should be DENIED INSERT on security_audit_log and USAGE on its chain_seq sequence (post-cutover the app writes ONLY the ingest queue — 0008)', async () => {
       await asRole('admin_app', async (client) => {
-        const { rowCount } = await client.query(
+        await expectDenied(
+          client,
           `INSERT INTO security_audit_log (id, event_type, previous_hash, event_hash)
            VALUES ('app-row-1', 'auth.login', 'hash-1', 'hash-2')`,
         );
-        expect(rowCount).toBe(1);
+        await expectDenied(client, `SELECT nextval('security_audit_log_chain_seq_seq')`);
       });
     });
 
@@ -304,6 +310,134 @@ describe.skipIf(!url)('zero-trust roles on the Admin PG', () => {
     });
   });
 
+  describe('security_audit_ingest (Phase 2 emission queue, migration 0004)', () => {
+    describe('admin_app (emitter — INSERT-only, fire-and-forget)', () => {
+      it('should INSERT into security_audit_ingest', async () => {
+        await asRole('admin_app', async (client) => {
+          const { rowCount } = await client.query(
+            `INSERT INTO security_audit_ingest (id, event_type, emission_hash)
+             VALUES ('app-ingest-1', 'auth.login', 'em-hash-2')`,
+          );
+          expect(rowCount).toBe(1);
+        });
+      });
+
+      it('should be DENIED SELECT — the writer never reads back, and even INSERT … RETURNING fails', async () => {
+        await asRole('admin_app', async (client) => {
+          await expectDenied(client, `SELECT 1 FROM security_audit_ingest`);
+          await expectDenied(
+            client,
+            `INSERT INTO security_audit_ingest (id, event_type, emission_hash)
+             VALUES ('app-ingest-returning', 'auth.login', 'em-hash-x') RETURNING id`,
+          );
+        });
+      });
+
+      it('should be DENIED UPDATE, DELETE and TRUNCATE on the queue', async () => {
+        await asRole('admin_app', async (client) => {
+          await expectDenied(client, `UPDATE security_audit_ingest SET emission_hash = 'tampered' WHERE id = 'ingest-seed-1'`);
+          await expectDenied(client, `DELETE FROM security_audit_ingest WHERE id = 'ingest-seed-1'`);
+          await expectDenied(client, `TRUNCATE security_audit_ingest`);
+        });
+      });
+    });
+
+    describe('admin_chainer (drain — SELECT + DELETE here, and ONLY here)', () => {
+      it('should SELECT the queue in drain order and DELETE drained rows', async () => {
+        await asRole('admin_chainer', async (client) => {
+          const { rows } = await client.query(
+            `SELECT id, emission_hash FROM security_audit_ingest ORDER BY emitted_at, id`,
+          );
+          expect(rows.length).toBeGreaterThanOrEqual(2);
+          const { rowCount } = await client.query(
+            `DELETE FROM security_audit_ingest WHERE id = 'app-ingest-1'`,
+          );
+          expect(rowCount).toBe(1);
+        });
+      });
+
+      it('should be DENIED INSERT and UPDATE on the queue (rows enter via admin_app only, and are never rewritten)', async () => {
+        await asRole('admin_chainer', async (client) => {
+          await expectDenied(
+            client,
+            `INSERT INTO security_audit_ingest (id, event_type, emission_hash)
+             VALUES ('chainer-ingest-1', 'auth.login', 'em-hash-y')`,
+          );
+          await expectDenied(client, `UPDATE security_audit_ingest SET emission_hash = 'rewritten' WHERE id = 'ingest-seed-1'`);
+          await expectDenied(client, `TRUNCATE security_audit_ingest`);
+        });
+      });
+
+      it('should STILL be denied DELETE on security_audit_log — the drain grant does not leak to chain tables', async () => {
+        await asRole('admin_chainer', async (client) => {
+          await expectDenied(client, `DELETE FROM security_audit_log WHERE id = 'seed-row-1'`);
+        });
+      });
+    });
+
+    describe('every other role', () => {
+      it('admin_reader should SELECT only', async () => {
+        await asRole('admin_reader', async (client) => {
+          await client.query(`SELECT 1 FROM security_audit_ingest LIMIT 1`);
+          await expectDenied(
+            client,
+            `INSERT INTO security_audit_ingest (id, event_type, emission_hash)
+             VALUES ('reader-ingest-1', 'auth.login', 'em-hash-z')`,
+          );
+          await expectDenied(client, `UPDATE security_audit_ingest SET emission_hash = 'x' WHERE id = 'ingest-seed-1'`);
+          await expectDenied(client, `DELETE FROM security_audit_ingest WHERE id = 'ingest-seed-1'`);
+        });
+      });
+
+      it.each(['admin_gdpr_eraser', 'admin_siem', 'admin_maintenance'])(
+        '%s holds NOTHING on the queue (not even SELECT)',
+        async (role) => {
+          await asRole(role, async (client) => {
+            await expectDenied(client, `SELECT 1 FROM security_audit_ingest`);
+            await expectDenied(
+              client,
+              `INSERT INTO security_audit_ingest (id, event_type, emission_hash)
+               VALUES ('${role}-ingest-1', 'auth.login', 'em-hash-w')`,
+            );
+            await expectDenied(client, `DELETE FROM security_audit_ingest WHERE id = 'ingest-seed-1'`);
+          });
+        },
+      );
+
+      it('PUBLIC holds no privilege at all on the queue', async () => {
+        const { rows } = await pool.query(
+          `SELECT bool_or(has_table_privilege('public', 'security_audit_ingest'::regclass::oid, priv)) AS any_priv
+           FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) AS priv`,
+        );
+        expect(rows[0].any_priv).toBe(false);
+      });
+    });
+  });
+
+  describe('security_audit_anchors readback for the periodic verifier (migration 0007)', () => {
+    it('admin_app should SELECT anchors (the cron verifier matches them against the chain)', async () => {
+      await asRole('admin_app', async (client) => {
+        const { rows } = await client.query(
+          `SELECT version, chain_seq, head_hash, anchored_at, signature FROM security_audit_anchors`,
+        );
+        expect(Array.isArray(rows)).toBe(true);
+      });
+    });
+
+    it('admin_app should STILL be denied INSERT, UPDATE, DELETE and TRUNCATE on anchors (witness stays append-only, chainer-only writes)', async () => {
+      await asRole('admin_app', async (client) => {
+        await expectDenied(
+          client,
+          `INSERT INTO security_audit_anchors (id, version, chain_seq, head_hash, anchored_at, signature)
+           VALUES ('app-anchor-1', 1, 1, 'h', now(), 's')`,
+        );
+        await expectDenied(client, `UPDATE security_audit_anchors SET head_hash = 'tampered'`);
+        await expectDenied(client, `DELETE FROM security_audit_anchors`);
+        await expectDenied(client, `TRUNCATE security_audit_anchors`);
+      });
+    });
+  });
+
   describe('re-runnability', () => {
     it('should apply cleanly on a fresh DB where the roles ALREADY exist at cluster level', async () => {
       // Roles are cluster-scoped: a re-provisioned database in the same
@@ -314,12 +448,34 @@ describe.skipIf(!url)('zero-trust roles on the Admin PG', () => {
 
       await migrateAdminDb({ ADMIN_DATABASE_URL: url });
 
-      // Grants are back on the fresh tables.
+      // Grants are back on the fresh tables — and the 0008 revoke re-applied:
+      // admin_app never regains chain-table INSERT or the sequence.
       const { rows } = await pool.query(
         `SELECT has_table_privilege('admin_app', 'security_audit_log', 'INSERT') AS ins,
+                has_table_privilege('admin_app', 'security_audit_log', 'SELECT') AS sel,
                 has_table_privilege('admin_app', 'security_audit_log', 'DELETE') AS del`,
       );
-      expect(rows[0]).toEqual({ ins: true, del: false });
+      expect(rows[0]).toEqual({ ins: false, sel: true, del: false });
+
+      const seq = await pool.query(
+        `SELECT has_sequence_privilege('admin_app', 'security_audit_log_chain_seq_seq', 'USAGE') AS app_seq,
+                has_sequence_privilege('admin_chainer', 'security_audit_log_chain_seq_seq', 'USAGE') AS chainer_seq`,
+      );
+      expect(seq.rows[0]).toEqual({ app_seq: false, chainer_seq: true });
+
+      // ...including the ingest queue's asymmetric matrix (0004).
+      const ingest = await pool.query(
+        `SELECT has_table_privilege('admin_app', 'security_audit_ingest', 'INSERT') AS app_ins,
+                has_table_privilege('admin_app', 'security_audit_ingest', 'SELECT') AS app_sel,
+                has_table_privilege('admin_chainer', 'security_audit_ingest', 'DELETE') AS chainer_del,
+                has_table_privilege('admin_chainer', 'security_audit_log', 'DELETE') AS chainer_chain_del`,
+      );
+      expect(ingest.rows[0]).toEqual({
+        app_ins: true,
+        app_sel: false,
+        chainer_del: true,
+        chainer_chain_del: false,
+      });
     });
   });
 });

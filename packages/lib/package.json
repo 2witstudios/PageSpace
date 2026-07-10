@@ -262,6 +262,41 @@
       "import": "./dist/audit/security-audit.js",
       "require": "./dist/audit/security-audit.js"
     },
+    "./audit/emission-hash": {
+      "types": "./dist/audit/emission-hash.d.ts",
+      "import": "./dist/audit/emission-hash.js",
+      "require": "./dist/audit/emission-hash.js"
+    },
+    "./audit/chain-step": {
+      "types": "./dist/audit/chain-step.d.ts",
+      "import": "./dist/audit/chain-step.js",
+      "require": "./dist/audit/chain-step.js"
+    },
+    "./audit/anchor": {
+      "types": "./dist/audit/anchor.d.ts",
+      "import": "./dist/audit/anchor.js",
+      "require": "./dist/audit/anchor.js"
+    },
+    "./audit/audit-ingest-writer": {
+      "types": "./dist/audit/audit-ingest-writer.d.ts",
+      "import": "./dist/audit/audit-ingest-writer.js",
+      "require": "./dist/audit/audit-ingest-writer.js"
+    },
+    "./audit/co-stream": {
+      "types": "./dist/audit/co-stream.d.ts",
+      "import": "./dist/audit/co-stream.js",
+      "require": "./dist/audit/co-stream.js"
+    },
+    "./audit/co-stream-reconciliation": {
+      "types": "./dist/audit/co-stream-reconciliation.d.ts",
+      "import": "./dist/audit/co-stream-reconciliation.js",
+      "require": "./dist/audit/co-stream-reconciliation.js"
+    },
+    "./audit/full-audit-verification": {
+      "types": "./dist/audit/full-audit-verification.d.ts",
+      "import": "./dist/audit/full-audit-verification.js",
+      "require": "./dist/audit/full-audit-verification.js"
+    },
     "./audit/mask-email": {
       "types": "./dist/audit/mask-email.d.ts",
       "import": "./dist/audit/mask-email.js",
@@ -1391,6 +1426,11 @@
       "types": "./dist/compliance/erasure/pseudonymize.d.ts",
       "import": "./dist/compliance/erasure/pseudonymize.js",
       "require": "./dist/compliance/erasure/pseudonymize.js"
+    },
+    "./compliance/erasure/pseudonymize-targets": {
+      "types": "./dist/compliance/erasure/pseudonymize-targets.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize-targets.js",
+      "require": "./dist/compliance/erasure/pseudonymize-targets.js"
     },
     "./compliance/erasure/pseudonymize-repository": {
       "types": "./dist/compliance/erasure/pseudonymize-repository.d.ts",

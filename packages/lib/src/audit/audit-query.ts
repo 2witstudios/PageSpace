@@ -5,18 +5,25 @@
  * so callers don't need a class instance or initialization ceremony.
  */
 
-import { db as defaultDb } from '@pagespace/db/db';
 import { desc, and, or, gte, lte, eq } from '@pagespace/db/operators';
 import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import type { SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
 import type { QueryEventsOptions } from './security-audit';
+import type { SecurityAuditDatabase } from './security-audit-repository';
+import { resolveAuditDbBinding } from './audit-db-binding';
 import { deriveIndexKey } from '../encryption/blind-index';
 import { auditIpBlindIndex } from '../encryption/audit-ip-crypto';
 import { decryptField } from '../encryption/field-crypto';
 
 export interface AuditQueryDeps {
-  /** Drizzle client to query. Defaults to the main app db. */
-  db?: typeof defaultDb;
+  /**
+   * Drizzle client to query — the main app db or the Admin PG client.
+   * Defaults to the resolved audit binding (#890 Phase 2, leaf 5): the
+   * Admin PG when dedicated, the main db under break-glass. Until the
+   * backfill leaf migrates legacy rows, default reads in dedicated mode see
+   * only post-cutover events (transitional dual-location state).
+   */
+  db?: SecurityAuditDatabase;
 }
 
 /**
@@ -27,7 +34,7 @@ export async function queryAuditEvents(
   options: QueryEventsOptions,
   deps: AuditQueryDeps = {}
 ): Promise<SelectSecurityAuditLog[]> {
-  const db = deps.db ?? defaultDb;
+  const db = deps.db ?? resolveAuditDbBinding().db;
   const conditions = [];
 
   if (options.userId) {

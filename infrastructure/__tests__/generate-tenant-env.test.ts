@@ -95,6 +95,10 @@ describe('generate-tenant-env.sh', () => {
     it('given the output, ADMIN_POSTGRES_USER should be pagespace', () => {
       expect(env.get('ADMIN_POSTGRES_USER')).toBe('pagespace');
     });
+
+    it('given the output, AUDIT_CHAINER_ALLOW_GENESIS should be true — the generator provisions FRESH installs, where the genesis link is correct (#890 Phase 2 era-fork guard)', () => {
+      expect(env.get('AUDIT_CHAINER_ALLOW_GENESIS')).toBe('true');
+    });
   });
 
   describe('secret generation', () => {
@@ -121,12 +125,34 @@ describe('generate-tenant-env.sh', () => {
       expect(val).toMatch(/^[a-zA-Z0-9]+$/);
     });
 
+    // #890 Phase 2: per-service Admin PG LOGIN passwords. Alphanumeric is
+    // load-bearing — the compose stack embeds them in ADMIN_DATABASE_URL
+    // without URL-encoding.
+    const loginPasswords = [
+      'ADMIN_APP_PASSWORD',
+      'ADMIN_PROCESSOR_PASSWORD',
+      'ADMIN_READER_PASSWORD',
+      'ADMIN_ERASER_PASSWORD',
+    ];
+    it.each(loginPasswords)(
+      'given %s, should be at least 24 alphanumeric characters',
+      (v) => {
+        const val = env.get(v) ?? '';
+        expect(val.length).toBeGreaterThanOrEqual(24);
+        expect(val).toMatch(/^[a-zA-Z0-9]+$/);
+      },
+    );
+
     it('given all secrets, should all be unique (no reuse)', () => {
       const secrets = [
         env.get('ENCRYPTION_KEY'),
         env.get('CSRF_SECRET'),
         env.get('POSTGRES_PASSWORD'),
         env.get('ADMIN_POSTGRES_PASSWORD'),
+        env.get('ADMIN_APP_PASSWORD'),
+        env.get('ADMIN_PROCESSOR_PASSWORD'),
+        env.get('ADMIN_READER_PASSWORD'),
+        env.get('ADMIN_ERASER_PASSWORD'),
         env.get('CRON_SECRET'),
         env.get('REALTIME_BROADCAST_SECRET'),
       ];
