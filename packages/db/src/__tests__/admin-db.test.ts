@@ -1,0 +1,168 @@
+/**
+ * Shell tests for the adminDb connection registry (#890 Phase 1).
+ *
+ * createAdminDbRegistry is a factory with explicit deps — tests inject fakes
+ * for pool construction, the main db, pool-stats registration, and alerting,
+ * so no test ever touches process.env or opens a connection.
+ */
+import { describe, it, expect, vi } from 'vitest';
+import type { Pool } from 'pg';
+import {
+  createAdminDbRegistry,
+  ADMIN_POOL_NAME,
+  type AdminDatabase,
+  type AdminDbDeps,
+} from '../admin-db';
+
+const DEDICATED_ENV = {
+  ADMIN_DATABASE_URL: 'postgresql://admin:pw@host:5432/pagespace_admin',
+};
+const BREAK_GLASS_ENV = { ADMIN_DB_BREAK_GLASS: 'true' };
+
+const makeFakePool = () => ({ on: vi.fn() }) as unknown as Pool;
+
+const makeDeps = (overrides: Partial<AdminDbDeps> = {}) => {
+  const fakePool = makeFakePool();
+  const fakeMainDb = { fake: 'main-db' } as unknown as AdminDatabase;
+  const deps: AdminDbDeps = {
+    getEnv: () => DEDICATED_ENV,
+    getMainDb: vi.fn(() => fakeMainDb),
+    createPool: vi.fn(() => fakePool),
+    registerPool: vi.fn(),
+    alert: vi.fn(),
+    ...overrides,
+  };
+  return { deps, fakePool, fakeMainDb };
+};
+
+describe('createAdminDbRegistry', () => {
+  describe('dedicated mode (ADMIN_DATABASE_URL set)', () => {
+    it('should construct the pool from the resolved config', () => {
+      const { deps } = makeDeps();
+      createAdminDbRegistry(deps).getAdminDb();
+      expect(deps.createPool).toHaveBeenCalledTimes(1);
+      expect(deps.createPool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connectionString: DEDICATED_ENV.ADMIN_DATABASE_URL,
+          max: 10,
+          keepAlive: true,
+        }),
+      );
+    });
+
+    it('should register the pool with pool-stats under the admin name', () => {
+      const { deps, fakePool } = makeDeps();
+      createAdminDbRegistry(deps).getAdminDb();
+      expect(deps.registerPool).toHaveBeenCalledTimes(1);
+      expect(deps.registerPool).toHaveBeenCalledWith(fakePool, ADMIN_POOL_NAME);
+    });
+
+    it('should attach the error-swallow handler like the main pool', () => {
+      const { deps, fakePool } = makeDeps();
+      createAdminDbRegistry(deps).getAdminDb();
+      expect(fakePool.on).toHaveBeenCalledWith('error', expect.any(Function));
+    });
+
+    it('should return a drizzle client bound to the dedicated pool', () => {
+      const { deps } = makeDeps();
+      const adminDb = createAdminDbRegistry(deps).getAdminDb();
+      expect(typeof adminDb.execute).toBe('function');
+    });
+
+    it('should bind the admin schema barrel — query API exposes the trust-plane tables', () => {
+      const { deps } = makeDeps();
+      const adminDb = createAdminDbRegistry(deps).getAdminDb();
+      expect(adminDb.query.securityAuditLog).toBeDefined();
+      expect(adminDb.query.siemDeliveryCursors).toBeDefined();
+      expect(adminDb.query.siemDeliveryReceipts).toBeDefined();
+    });
+
+    it('should never touch the ambient main db or alert in the dedicated path', () => {
+      const { deps } = makeDeps();
+      createAdminDbRegistry(deps).getAdminDb();
+      expect(deps.getMainDb).not.toHaveBeenCalled();
+      expect(deps.alert).not.toHaveBeenCalled();
+    });
+
+    it('should be a single instance per registry (lazy init, one pool)', () => {
+      const { deps } = makeDeps();
+      const registry = createAdminDbRegistry(deps);
+      const first = registry.getAdminDb();
+      const second = registry.getAdminDb();
+      expect(second).toBe(first);
+      expect(deps.createPool).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not construct any pool at registry-creation time (no connection at import time)', () => {
+      const { deps } = makeDeps();
+      createAdminDbRegistry(deps);
+      expect(deps.createPool).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('break-glass mode (URL unset, flag exactly true)', () => {
+    it('should return the main db itself (adminDb === db)', () => {
+      const { deps, fakeMainDb } = makeDeps({ getEnv: () => BREAK_GLASS_ENV });
+      const adminDb = createAdminDbRegistry(deps).getAdminDb();
+      expect(adminDb).toBe(fakeMainDb);
+    });
+
+    it('should fire a loud alert naming break-glass and the missing ADMIN_DATABASE_URL', () => {
+      const { deps } = makeDeps({ getEnv: () => BREAK_GLASS_ENV });
+      createAdminDbRegistry(deps).getAdminDb();
+      expect(deps.alert).toHaveBeenCalledTimes(1);
+      const message = vi.mocked(deps.alert).mock.calls[0][0];
+      expect(message).toContain('BREAK-GLASS');
+      expect(message).toContain('ADMIN_DATABASE_URL');
+    });
+
+    it('should not construct a dedicated pool', () => {
+      const { deps } = makeDeps({ getEnv: () => BREAK_GLASS_ENV });
+      createAdminDbRegistry(deps).getAdminDb();
+      expect(deps.createPool).not.toHaveBeenCalled();
+      expect(deps.registerPool).not.toHaveBeenCalled();
+    });
+
+    it('should alert on every init — a fresh registry (new process) alerts again', () => {
+      const { deps } = makeDeps({ getEnv: () => BREAK_GLASS_ENV });
+      const registry = createAdminDbRegistry(deps);
+      registry.getAdminDb();
+      registry.getAdminDb(); // cached — same init, no second alert
+      expect(deps.alert).toHaveBeenCalledTimes(1);
+
+      createAdminDbRegistry(deps).getAdminDb(); // new init — alerts again
+      expect(deps.alert).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('fail-fast mode (URL unset, no armed flag)', () => {
+    it('should throw an actionable error naming ADMIN_DATABASE_URL and the break-glass flag', () => {
+      const { deps } = makeDeps({ getEnv: () => ({}) });
+      const registry = createAdminDbRegistry(deps);
+      expect(() => registry.getAdminDb()).toThrowError(/ADMIN_DATABASE_URL/);
+      expect(() => registry.getAdminDb()).toThrowError(/ADMIN_DB_BREAK_GLASS/);
+    });
+
+    it('should throw on every call, not just the first', () => {
+      const { deps } = makeDeps({ getEnv: () => ({}) });
+      const registry = createAdminDbRegistry(deps);
+      expect(() => registry.getAdminDb()).toThrow();
+      expect(() => registry.getAdminDb()).toThrow();
+    });
+
+    it('should not touch the main db or any pool before throwing', () => {
+      const { deps } = makeDeps({ getEnv: () => ({}) });
+      expect(() => createAdminDbRegistry(deps).getAdminDb()).toThrow();
+      expect(deps.getMainDb).not.toHaveBeenCalled();
+      expect(deps.createPool).not.toHaveBeenCalled();
+    });
+
+    it("given a non-'true' break-glass value, should still fail fast (fail-closed arming)", () => {
+      const { deps } = makeDeps({
+        getEnv: () => ({ ADMIN_DB_BREAK_GLASS: 'TRUE' }),
+      });
+      expect(() => createAdminDbRegistry(deps).getAdminDb()).toThrow();
+      expect(deps.alert).not.toHaveBeenCalled();
+    });
+  });
+});

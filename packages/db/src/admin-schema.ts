@@ -1,0 +1,33 @@
+/**
+ * Admin PG (trust plane) schema barrel (#890 Phase 1).
+ *
+ * Selects WHICH tables belong to the dedicated admin database. Per the
+ * 2026-07-09 reconciliation this is EXACTLY:
+ *   - securityAuditLog (tamper-evident chained table)
+ *   - siemDeliveryCursors
+ *   - siemDeliveryReceipts
+ * The 4 analytics tables (systemLogs, apiMetrics, userActivities, errorLogs)
+ * go to ClickHouse in Phase 3 — NOT into Admin PG. The ingest table is a
+ * Phase 2 migration; activityLogs joins in Phase 5.
+ *
+ * Source of truth stays in ./schema/* — the SIEM tables are plain re-exports,
+ * and securityAuditLog is instantiated from the shared factory WITHOUT the
+ * cross-plane FK to `users` (a cross-database FK is impossible; the admin DB
+ * holds no app tables). Columns/indexes are defined once, so the planes
+ * cannot drift. The relations from ./schema/security-audit are deliberately
+ * not included: they join to `users`, which exists in the app plane only.
+ *
+ * This module is both the drizzle-kit schema entry (drizzle-admin.config.ts)
+ * and the runtime schema bound to the adminDb client (admin-db.ts).
+ */
+import { defineSecurityAuditLogTable } from './schema/security-audit';
+
+/** Trust-plane instance of security_audit_log — identical shape, no users FK. */
+export const securityAuditLog = defineSecurityAuditLogTable({ crossPlaneUserFk: false });
+
+export type {
+  SecurityEventType,
+  InsertSecurityAuditLog,
+  SelectSecurityAuditLog,
+} from './schema/security-audit';
+export { siemDeliveryCursors, siemDeliveryReceipts } from './schema/monitoring';

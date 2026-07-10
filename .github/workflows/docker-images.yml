@@ -227,6 +227,84 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_NO_UPDATE_CHECK: "true"
 
+      # Admin PG (trust plane, #890): mirrors the main migration machine but runs
+      # db:migrate:admin. The machine runs in the pagespace-web app, so it inherits
+      # ADMIN_DATABASE_URL from that app's Fly secrets — no GitHub-side copy of the URL.
+      # GATED on the ADMIN_DB_MIGRATIONS_ENABLED repo variable: deploys must not break
+      # before the Fly pagespace-db-admin instance is provisioned. Ops flips the
+      # variable to 'true' after provisioning — see the Phase 6 runbook (issue #890).
+      - name: Run admin migrations
+        if: ${{ vars.ADMIN_DB_MIGRATIONS_ENABLED == 'true' }}
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-migrate:latest
+          docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate-admin
+          docker push registry.fly.io/pagespace-web:migrate-admin
+
+          # Same expected "desired start state" error as the main migration machine
+          # (one-shot machines exit before reaching "started"); verify via state below.
+          flyctl machine run registry.fly.io/pagespace-web:migrate-admin \
+            --app pagespace-web \
+            --region iad \
+            --restart no \
+            bun run db:migrate:admin \
+            2>&1 | tee /tmp/admin_machine_output.txt || true
+
+          MACHINE_ID=$(grep -oP 'Machine ID: \K[0-9a-f]+' /tmp/admin_machine_output.txt | head -1)
+          if [ -z "$MACHINE_ID" ]; then
+            echo "ERROR: could not parse machine ID from flyctl output"
+            cat /tmp/admin_machine_output.txt
+            exit 1
+          fi
+          echo "Admin migration machine: $MACHINE_ID"
+
+          if grep -q "Error:" /tmp/admin_machine_output.txt && ! grep -q "desired start state" /tmp/admin_machine_output.txt; then
+            echo "ERROR: unexpected flyctl error:"
+            grep "Error:" /tmp/admin_machine_output.txt
+            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+            exit 1
+          fi
+
+          # Poll for terminal state (stopped = success, failed/destroyed = failure) —
+          # same REST-API polling as the main migration step.
+          TIMEOUT=900
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            HTTP_CODE=$(curl -s -o /tmp/fly_admin_machine.json -w "%{http_code}" \
+              -H "Authorization: Bearer $FLY_API_TOKEN" \
+              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID")
+            if [ "$HTTP_CODE" = "200" ]; then
+              STATE=$(jq -r '.state // "unknown"' /tmp/fly_admin_machine.json 2>/dev/null || echo "unknown")
+            elif [ "$HTTP_CODE" = "404" ]; then
+              echo "ERROR: admin migration machine $MACHINE_ID not found (unexpectedly destroyed)"
+              exit 1
+            else
+              STATE="unknown"
+            fi
+            echo "  [${ELAPSED}s] state: $STATE"
+            if [ "$STATE" = "stopped" ]; then
+              break
+            elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
+              echo "ERROR: admin migration machine reached $STATE state (migrations failed)"
+              flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
+              flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+              exit 1
+            fi
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "ERROR: timed out after ${TIMEOUT}s waiting for admin migration machine"
+            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+            exit 1
+          fi
+
+          flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
+          echo "Admin migrations complete"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_NO_UPDATE_CHECK: "true"
+
       - name: Deploy web
         run: |
           docker pull ghcr.io/2witstudios/pagespace-web:latest

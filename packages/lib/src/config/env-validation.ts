@@ -16,6 +16,29 @@ export const serverEnvSchema = z
         'DATABASE_URL must be a valid PostgreSQL connection string'
       ),
 
+    // Admin Postgres (trust plane) — dedicated database for the tamper-evident
+    // security audit chain and related admin/audit tables, isolated from the app
+    // DB in every deployment mode. Optional at the schema level: the hard
+    // fail-fast when unset (and no break-glass flag) is enforced by the adminDb
+    // client at init, not here, so non-audit code paths can still validate env.
+    ADMIN_DATABASE_URL: z
+      .string()
+      .min(1, 'ADMIN_DATABASE_URL must not be empty when set')
+      .refine(
+        (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
+        'ADMIN_DATABASE_URL must be a valid PostgreSQL connection string'
+      )
+      .optional(),
+    ADMIN_DATABASE_SSL: z.enum(['true', 'false']).optional(),
+    ADMIN_DB_POOL_MAX: z.coerce.number().int().positive().optional(),
+
+    // Break-glass rollback ONLY: arms the fallback that permits audit writes to
+    // the main DB (which must alert loudly) when the Admin PG is unavailable.
+    // Never a supported steady state. Accept any string so a stray value (e.g.
+    // ADMIN_DB_BREAK_GLASS=1) never fails app-wide env validation; consumers
+    // arm break-glass only on the exact value 'true' (fail-closed otherwise).
+    ADMIN_DB_BREAK_GLASS: z.string().optional(),
+
     // CSRF Protection (required in production/development, optional in test)
     CSRF_SECRET: z.string().optional(),
 

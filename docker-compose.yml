@@ -21,6 +21,34 @@ services:
         limits:
           memory: 200M
 
+  # Trust plane: dedicated Admin Postgres for the tamper-evident security audit
+  # chain, isolated from the app database in every deployment mode (#890).
+  # CREDENTIAL MODEL (Phase 1): the owner/bootstrap role goes ONLY to this
+  # container and the migrate one-shot — runtime services hold no admin
+  # credentials (the owner would bypass the drizzle-admin/0001 zero-trust
+  # grants). Phase 2 wires per-service LOGIN roles with the audit cutover.
+  postgres-admin:
+    image: postgres:17.5-alpine
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_admin_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=pagespace_admin
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d pagespace_admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+
   migrate:
     build:
       context: .
@@ -28,13 +56,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-admin:
+        condition: service_healthy
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - ADMIN_DATABASE_URL=postgresql://user:password@postgres-admin:5432/pagespace_admin
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
         bun run db:migrate &&
+        echo 'Starting admin database migrations...' &&
+        bun run db:migrate:admin &&
         echo 'Migrations complete, starting services...'
       "
     healthcheck:
@@ -272,4 +305,5 @@ networks:
 
 volumes:
   postgres_data:
+  postgres_admin_data:
   cron_logs:
