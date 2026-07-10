@@ -24,6 +24,9 @@ const ROLES = [
   'admin_gdpr_eraser',
   'admin_reader',
   'admin_siem',
+  // Leaf 6: partition create-ahead maintenance — EXECUTE on
+  // admin_ensure_partitions and nothing else.
+  'admin_maintenance',
 ] as const;
 
 const TABLES = [
@@ -94,7 +97,7 @@ describe.skipIf(!url)('zero-trust roles on the Admin PG', () => {
     await pool.end();
   });
 
-  it('should create all five role templates as NOLOGIN', async () => {
+  it('should create all six role templates as NOLOGIN', async () => {
     const { rows } = await pool.query(
       `SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname = ANY($1) ORDER BY rolname`,
       [[...ROLES]],
@@ -275,6 +278,19 @@ describe.skipIf(!url)('zero-trust roles on the Admin PG', () => {
         await expectDenied(client, `TRUNCATE security_audit_log`);
       });
     });
+
+    it.each([...ROLES])(
+      'partition immutability: %s cannot DROP a chain-table partition (incl. the DEFAULT safety net)',
+      async (role) => {
+        // Partitions are owned by the migration identity; no template role —
+        // not even admin_maintenance, which CREATES partitions via the
+        // SECURITY DEFINER function — may drop one. There is no drop path.
+        await asRole(role, async (client) => {
+          await expectDenied(client, `DROP TABLE security_audit_log_default`);
+          await expectDenied(client, `DROP TABLE siem_delivery_receipts_default`);
+        });
+      },
+    );
 
     it('PUBLIC holds no privilege at all on trust-plane tables', async () => {
       for (const table of TABLES) {

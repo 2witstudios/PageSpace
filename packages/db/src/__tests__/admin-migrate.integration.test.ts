@@ -35,9 +35,14 @@ describe.skipIf(!url)('db:migrate:admin against a scratch Admin PG', () => {
   it('should reach the full admin schema from a fresh empty database in one run', async () => {
     await migrateAdminDb({ ADMIN_DATABASE_URL: url });
 
+    // Logical tables only — since leaf 6 the chain tables are partitioned
+    // parents whose monthly partitions would also show up in
+    // information_schema.tables, so filter on relispartition.
     const { rows } = await pool.query(
-      `SELECT table_name FROM information_schema.tables
-       WHERE table_schema = 'public' ORDER BY table_name`,
+      `SELECT c.relname AS table_name FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+       ORDER BY c.relname`,
     );
     expect(rows.map((r: { table_name: string }) => r.table_name)).toEqual([
       'security_audit_log',
