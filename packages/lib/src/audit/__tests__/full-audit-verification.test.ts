@@ -33,11 +33,15 @@ const { state, mockGetAdminDbMode, mockGetAdminDb, mockLoggers } = vi.hoisted(()
 const { adminDbMock, mainDbMock } = vi.hoisted(() => {
   // select() dispatch: anchors read is select().from().orderBy().limit();
   // chain-row read is select().from().where().
+  // select() dispatch: anchors read is select().from().orderBy().limit();
+  // chain-row read is select().from().where(); the zero-receipt chain probe
+  // is select().from().limit().
   const adminDbMock = {
     select: vi.fn(() => ({
       from: () => ({
         orderBy: () => ({ limit: async (n: number) => state.anchorRows.slice(0, n) }),
         where: async () => state.chainRows,
+        limit: async (n: number) => state.chainRows.slice(0, n),
       }),
     })),
   };
@@ -207,7 +211,8 @@ describe('runFullAuditVerification', () => {
     });
   });
 
-  it('given anchoring enabled but no anchors published yet, should skip (not fail) with an explicit reason', async () => {
+  it('given anchoring enabled, zero receipts, and an EMPTY chain, should skip (not fail) with an explicit reason — nothing to witness yet', async () => {
+    // state.chainRows empty → the chain probe sees no rows.
     const result = await runFullAuditVerification(
       {},
       { env: anchorEnv, verifyChain: vi.fn().mockResolvedValue(validChainResult()) },
@@ -217,6 +222,35 @@ describe('runFullAuditVerification', () => {
       skippedReason: expect.stringContaining('no anchors'),
     });
     expect(result.isValid).toBe(true);
+  });
+
+  it('given anchoring enabled, zero receipts, but a NON-EMPTY chain, should FAIL and fire the anchor_verify alert (a DB-owner purging receipts must not degrade to "not configured")', async () => {
+    state.chainRows.push({ chainSeq: 1, eventHash: 'a'.repeat(64) });
+    const handler = vi.fn();
+    setChainAlertHandler(handler);
+
+    const result = await runFullAuditVerification(
+      {},
+      { env: anchorEnv, verifyChain: vi.fn().mockResolvedValue(validChainResult()) },
+    );
+
+    expect(result.anchors).toMatchObject({
+      configured: true,
+      failure: 'no_receipts_for_nonempty_chain',
+    });
+    if (result.anchors.configured) {
+      expect(result.anchors.report.allMatch).toBe(false);
+    }
+    expect(result.isValid).toBe(false);
+    expect(mockLoggers.security.error).toHaveBeenCalledWith(
+      expect.stringContaining('zero anchor receipts'),
+      expect.anything(),
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+    const alert = handler.mock.calls[0]![0];
+    expect(alert.source).toBe('anchor_verify');
+    expect(alert.result.isValid).toBe(false);
+    expect(alert.result.breakPoint.description).toContain('zero anchor receipts');
   });
 
   it('given anchors that match the chain, should verify clean (chain AND anchors)', async () => {

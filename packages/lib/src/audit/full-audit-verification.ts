@@ -38,6 +38,7 @@ import { resolveAuditDbBinding, type AuditDbBinding } from './audit-db-binding';
 import {
   verifyAndAlert,
   notifyAnchorVerificationFailure,
+  notifyAnchorReceiptsMissing,
 } from './security-audit-alerting';
 import type { SecurityChainVerificationResult } from './security-audit-chain-verifier';
 import type { VerifySecurityChainOptions, VerifySecurityChainDeps } from './security-audit-chain-verifier';
@@ -70,7 +71,18 @@ export function anchorRowToSignedAnchor(row: StoredAnchorRow): SignedAnchor {
 
 export type AnchorCheckOutcome =
   | { configured: false; skippedReason: string }
-  | { configured: true; report: AnchorChainMatchReport };
+  | {
+      configured: true;
+      report: AnchorChainMatchReport;
+      /**
+       * Set when anchoring is enabled and the chain is non-empty but ZERO
+       * receipts exist (#890 Phase 2 FIX): the report is then the empty
+       * match (allMatch=false), and this marker names why. Under the
+       * threat model a receipt purge must fail verification, never degrade
+       * to "not configured".
+       */
+      failure?: 'no_receipts_for_nonempty_chain';
+    };
 
 export type CoStreamCheckOutcome =
   | { configured: false; skippedReason: string }
@@ -174,9 +186,25 @@ async function checkAnchors(
     .limit(anchorLimit);
 
   if (anchorRows.length === 0) {
+    // Zero receipts is benign ONLY while the chain itself is empty (fresh
+    // install, first anchor not due yet). With chain rows present it is a
+    // verification FAILURE: either the chainer never witnessed anything, or
+    // the receipts were purged — a DB-owning attacker's first move.
+    const chainProbe = await binding.db
+      .select({ chainSeq: securityAuditLog.chainSeq })
+      .from(securityAuditLog)
+      .limit(1);
+    if (chainProbe.length === 0) {
+      return {
+        configured: false,
+        skippedReason:
+          'anchoring is enabled but no anchors have been published yet (chain is empty — nothing to witness)',
+      };
+    }
     return {
-      configured: false,
-      skippedReason: 'anchoring is enabled but no anchors have been published yet',
+      configured: true,
+      failure: 'no_receipts_for_nonempty_chain',
+      report: matchAnchorsAgainstChain([], new Map(), secret),
     };
   }
 
@@ -219,7 +247,13 @@ export async function runFullAuditVerification(
   const chain = await verifyChain(options.source ?? 'manual', options.chain, { db: binding.db });
 
   const anchors = await checkAnchors(binding, env, options.anchorLimit ?? DEFAULT_ANCHOR_LIMIT);
-  if (anchors.configured && !anchors.report.allMatch) {
+  if (anchors.configured && anchors.failure === 'no_receipts_for_nonempty_chain') {
+    loggers.security.error(
+      '[FullAuditVerification] Anchor verification FAILED — anchoring is enabled and the chain is non-empty, but zero anchor receipts exist (never witnessed, or the receipt table was purged)',
+      { failure: anchors.failure },
+    );
+    await notifyAnchorReceiptsMissing({ chainRowsSeen: 1 });
+  } else if (anchors.configured && !anchors.report.allMatch) {
     const firstBad = anchors.report.results.find((r) => r.verdict !== 'match');
     loggers.security.error(
       '[FullAuditVerification] Anchor-vs-chain verification FAILED — the chain disagrees with its external witness',

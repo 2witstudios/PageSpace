@@ -415,6 +415,70 @@ export async function notifyAnchorVerificationFailure(
 }
 
 /**
+ * Details of a zero-receipt anchor verification failure (#890 Phase 2 FIX).
+ * Fired by the full audit verifier when anchoring is enabled and the chain
+ * is non-empty but NO anchor receipts exist: under the epic's threat model
+ * (attacker owns the audit DB) a purge of the receipt table must read as a
+ * failed verification, never as "anchoring not configured yet".
+ */
+export interface AnchorReceiptsMissingDetails {
+  /** How many chain rows exist while zero receipts do (probe count, ≥1). */
+  chainRowsSeen: number;
+}
+
+/**
+ * Fire a zero-receipt anchor-verification failure alert through the
+ * globally-registered handler. Same contract as the other notify helpers:
+ * no handler → no-op; handler errors are swallowed with a logged error.
+ */
+export async function notifyAnchorReceiptsMissing(
+  details: AnchorReceiptsMissingDetails
+): Promise<void> {
+  if (!alertHandler) return;
+
+  const now = new Date();
+  const syntheticResult: SecurityChainVerificationResult = {
+    isValid: false,
+    totalEntries: 0,
+    entriesVerified: 0,
+    validEntries: 0,
+    invalidEntries: 0,
+    breakPoint: {
+      entryId: 'anchor-receipts-missing',
+      timestamp: now,
+      position: 0,
+      storedHash: '',
+      computedHash: '',
+      previousHashUsed: '',
+      description:
+        `Anchor verification FAILED: anchoring is enabled and the chain is non-empty (≥${details.chainRowsSeen} row(s) seen), ` +
+        'but zero anchor receipts exist. Either the chainer has never published a witness (check its logs and the ' +
+        'AUDIT_ANCHOR_* env), or the receipt table was purged — which is exactly what a DB-owning attacker rewriting ' +
+        'the chain would do first. Verify against the S3 WORM witness before trusting this chain.',
+    },
+    firstEntryId: null,
+    lastEntryId: null,
+    verificationStartedAt: now,
+    verificationCompletedAt: now,
+    durationMs: 0,
+  };
+
+  const alert: ChainVerificationAlert = {
+    result: syntheticResult,
+    triggeredAt: now,
+    source: 'anchor_verify',
+  };
+
+  try {
+    await alertHandler(alert);
+  } catch (error) {
+    loggers.security.error('[SecurityAuditAlerting] Anchor receipts-missing alert handler failed:', {
+      error,
+    });
+  }
+}
+
+/**
  * Details of an active Admin-DB break-glass degrade (#890 Phase 2, leaf 5).
  * Fired ONCE per process by the audit write bind point when the resolved
  * mode is 'break-glass': audit writes are going to the MAIN application

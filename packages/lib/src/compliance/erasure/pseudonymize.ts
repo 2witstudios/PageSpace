@@ -53,6 +53,12 @@ export const SECURITY_AUDIT_HASHED_FIELDS: ReadonlySet<string> = new Set([
   // Stored chain columns
   'eventHash',
   'chainSeq',
+  // Admin-plane chain column (#890 Phase 2, admin 0005): NULL marks a
+  // backfilled legacy-era row, present marks a chainer-era row whose
+  // event_hash = H(emission_hash, previous_hash). Nulling it would forge an
+  // era downgrade — forbidden here as defense-in-depth beside the eraser
+  // role's column-scoped UPDATE grant.
+  'emissionHash',
 ]);
 
 export interface ActivityLogPseudonymPatch {

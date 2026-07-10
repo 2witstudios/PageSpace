@@ -64,5 +64,15 @@ describe('assertPseudonymizationPatchSafe', () => {
     expect(SECURITY_AUDIT_HASHED_FIELDS.has('eventHash')).toBe(true);
     expect(SECURITY_AUDIT_HASHED_FIELDS.has('previousHash')).toBe(true);
     expect(SECURITY_AUDIT_HASHED_FIELDS.has('details')).toBe(true);
+    // emission_hash is a chain column on the admin plane (#890 Phase 2,
+    // admin 0005): a patch nulling it must be rejected here, not only by
+    // the eraser role's column-scoped grant.
+    expect(SECURITY_AUDIT_HASHED_FIELDS.has('emissionHash')).toBe(true);
+  });
+
+  it('given a patch that nulls emissionHash, should throw loudly', () => {
+    expect(() =>
+      assertPseudonymizationPatchSafe({ emissionHash: null }, SECURITY_AUDIT_HASHED_FIELDS)
+    ).toThrow(/hash-chain/i);
   });
 });
