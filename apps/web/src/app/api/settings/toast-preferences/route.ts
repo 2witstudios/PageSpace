@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

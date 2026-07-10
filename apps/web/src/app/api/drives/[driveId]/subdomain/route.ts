@@ -1,11 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import {
-  authenticateRequestWithOptions,
-  isAuthError,
-  checkMCPDriveScope,
-  isPrincipalDriveOwnerOrAdmin,
-} from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
@@ -15,6 +9,9 @@ import { users } from '@pagespace/db/schema/auth';
 import { getPlan } from '@/lib/subscription/plans';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { changePublishSubdomain, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true }; // keep PATCH CSRF-protected
 

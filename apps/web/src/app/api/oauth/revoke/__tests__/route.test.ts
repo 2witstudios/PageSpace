@@ -22,7 +22,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('203.0.113.15'),
 }));
 

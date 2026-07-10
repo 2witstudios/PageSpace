@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -8,6 +7,9 @@ import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { addAgentToDrive } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 
 interface DriveAgentSummary {
   id: string;

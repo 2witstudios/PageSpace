@@ -98,8 +98,10 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+}));
+vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
@@ -112,7 +114,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP, appendSessionCookie } from '@/lib/auth';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const mockUser = {
   id: 'user-123',

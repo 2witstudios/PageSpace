@@ -19,8 +19,10 @@ vi.mock('@/lib/repositories/connection-invite-repository', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
@@ -58,13 +60,13 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { connectionInviteRepository } from '@/lib/repositories/connection-invite-repository';
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingConnectionInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { createNotification } from '@pagespace/lib/notifications/notifications';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const INVITER_USER_ID = 'user_inviter';
 const TARGET_USER_ID = 'user_target';

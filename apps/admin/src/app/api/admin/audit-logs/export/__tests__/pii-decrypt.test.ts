@@ -17,7 +17,7 @@ const { mockVerifyAdminAuth } = vi.hoisted(() => ({
   mockVerifyAdminAuth: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAdminAuth: mockVerifyAdminAuth,
   isAdminAuthError: (result: unknown) => result instanceof Response,
   withAdminAuth: <T>(handler: (user: unknown, request: Request, context: T) => Promise<Response>) => {

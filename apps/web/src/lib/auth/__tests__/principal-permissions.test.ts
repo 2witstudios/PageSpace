@@ -41,7 +41,6 @@ import {
   getPrincipalAccessiblePagesInDrive,
   getPrincipalBatchPagePermissions,
 } from '../principal-permissions';
-import type { AuthResult } from '../index';
 import {
   getUserAccessLevel,
   canUserViewPage,
@@ -66,6 +65,7 @@ import {
   hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
 import { manageKeysScopedAuthResult } from './manage-keys-fixture';
+import type { AuthResult } from '@/lib/auth/auth-types';
 
 const USER_ID = 'user_aaaaaaaaaaaaaaaaaaaaaa';
 const TOKEN_ID = 'tok_bbbbbbbbbbbbbbbbbbbbbb';

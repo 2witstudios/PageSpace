@@ -7,11 +7,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const mockGetActivityById = vi.hoisted(() => vi.fn());
 const mockPreviewRollback = vi.hoisted(() => vi.fn());
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   isPrincipalDriveMember: vi.fn().mockResolvedValue(true),
 }));
@@ -39,8 +43,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockUserId = 'user_123';
 const mockActivityId = 'activity-1';

@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 import { getProviderBySlug, createProvider } from '@pagespace/lib/integrations/repositories/provider-repository';
+import { verifyAdminAuth, isAdminAuthError } from '@/lib/auth/auth';
 
 const installSchema = z.object({
   builtinId: z.string().min(1),

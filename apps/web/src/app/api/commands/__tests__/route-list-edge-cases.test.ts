@@ -6,8 +6,6 @@
  * 500), and inaccessible page metadata must be suppressed, not leaked.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -53,18 +51,25 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(
     (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object)
   ),
-  canPrincipalViewPage: vi.fn(),
   filterDrivesByMCPScope: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  canPrincipalViewPage: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope } from '@/lib/auth';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
+import { filterDrivesByMCPScope } from '@/lib/auth/auth-core';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);

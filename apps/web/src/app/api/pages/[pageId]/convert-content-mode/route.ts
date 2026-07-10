@@ -7,11 +7,12 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { createPageVersion } from '@pagespace/lib/services/page-version-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import TurndownService from 'turndown';
 import { marked } from 'marked';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

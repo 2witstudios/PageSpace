@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { isSafeReturnUrl, isSafeNextPath, getClientIP } from '../auth-helpers';
+import { isSafeReturnUrl, isSafeNextPath } from '../url-utils';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 /**
  * Security-Critical: isSafeReturnUrl Open Redirect Prevention Tests

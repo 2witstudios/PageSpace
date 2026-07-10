@@ -11,8 +11,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock service boundary
 vi.mock('@/services/api', () => ({
   previewAiUndo: vi.fn(),
@@ -20,10 +18,14 @@ vi.mock('@/services/api', () => ({
 }));
 
 // Mock auth
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result),
   checkMCPPageScope: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserEditPage(auth.userId, pageId);
@@ -74,9 +76,10 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { previewAiUndo, executeAiUndo, type AiUndoPreview } from '@/services/api';
-import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
 
 const mockAuth = vi.mocked(authenticateRequestWithOptions);
 const mockCheckMCPPageScope = vi.mocked(checkMCPPageScope);

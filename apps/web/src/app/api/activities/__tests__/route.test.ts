@@ -4,11 +4,13 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
-  checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn().mockReturnValue(null),
 }));
 
@@ -69,11 +71,12 @@ vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
 });
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions, getAllowedDriveIds } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { encryptField } from '@pagespace/lib/encryption/field-crypto';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { getAllowedDriveIds } from '@/lib/auth/auth-core';
 
 const mockUserId = 'user_123';
 

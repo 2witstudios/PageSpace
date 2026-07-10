@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
@@ -49,11 +49,11 @@ vi.mock('@/lib/canvas/file-view-token', async () => {
 });
 
 import { GET } from '../route';
-import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { generatePresignedUrl } from '@/lib/presigned-url';
 import { verifyCanvasFileViewToken } from '@/lib/canvas/file-view-token';
+import { verifyAuth } from '@/lib/auth/auth';
 
 const params = (driveId = 'drive-1', pageId = 'file-1') =>
   Promise.resolve({ driveId, pageId });

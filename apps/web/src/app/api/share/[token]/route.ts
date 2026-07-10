@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { authenticateWithEnforcedContext, isEnforcedAuthError } from '@/lib/auth';
 import { resolveShareToken } from '@pagespace/lib/permissions/share-link-service';
+import { authenticateWithEnforcedContext } from '@/lib/auth/request-auth';
+import { isEnforcedAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_READ = { allow: ['session'] as const, requireCSRF: false };
 

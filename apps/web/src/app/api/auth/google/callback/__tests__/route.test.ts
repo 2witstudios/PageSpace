@@ -138,9 +138,13 @@ vi.mock('@/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: false }),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+}));
+vi.mock('@/lib/auth/url-utils', () => ({
   isSafeReturnUrl: vi.fn(() => true),
+}));
+vi.mock('@/lib/auth/device-auth-helpers', () => ({
   revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
   createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
@@ -184,13 +188,14 @@ import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { createId } from '@paralleldrive/cuid2';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
-import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import {
   consumeAnyInviteIfPresent,
   consumeAllInvitesForEmail,
 } from '@/lib/auth/native-invite-acceptance';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { isSafeReturnUrl } from '@/lib/auth/url-utils';
 
 // Helper to create signed state
 function createSignedState(
@@ -760,7 +765,7 @@ describe('GET /api/auth/google/callback', () => {
 
   describe('session management', () => {
     it('revokes existing sessions before creating new one', async () => {
-      const { revokeSessionsForLogin } = await import('@/lib/auth');
+      const { revokeSessionsForLogin } = await import('@/lib/auth/device-auth-helpers');
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);

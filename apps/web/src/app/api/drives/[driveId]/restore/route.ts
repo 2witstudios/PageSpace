@@ -7,9 +7,11 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, isMCPAuthResult, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { isScopedMCPAuth } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 

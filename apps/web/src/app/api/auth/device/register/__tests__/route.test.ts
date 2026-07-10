@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: { error?: unknown }) => 'error' in result),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+}));
+vi.mock('@/lib/auth/device-auth-helpers', () => ({
   createWebDeviceToken: vi.fn(),
 }));
 
@@ -42,9 +48,10 @@ vi.mock('@/lib/repositories/auth-repository', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions, createWebDeviceToken } from '@/lib/auth';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { createWebDeviceToken } from '@/lib/auth/device-auth-helpers';
 
 function createRequest(body: Record<string, unknown>) {
   return new Request('http://localhost/api/auth/device/register', {

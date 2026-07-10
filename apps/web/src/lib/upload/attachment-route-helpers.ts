@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateWithEnforcedContext, isEnforcedAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { and, eq, or } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -9,6 +8,8 @@ import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import type { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
 import type { AttachmentTarget } from '@pagespace/lib/services/attachment-upload-core';
+import { authenticateWithEnforcedContext } from '@/lib/auth/request-auth';
+import { isEnforcedAuthError } from '@/lib/auth/auth-core';
 
 /**
  * Shared auth + target-resolution for the direct-to-S3 attachment routes

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -8,6 +7,9 @@ import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuil
 import { builtinProviderList, isBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 import { sanitizeConnectMetadata } from '@/lib/integrations/connect-metadata';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { verifyAdminAuth } from '@/lib/auth/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

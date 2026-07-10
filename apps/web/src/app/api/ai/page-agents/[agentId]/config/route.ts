@@ -1,6 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
-
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
@@ -10,6 +8,9 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth/principal-permissions';
 
 const REMOVED_TOOL_NAMES = new Set(['import_from_github']);
 

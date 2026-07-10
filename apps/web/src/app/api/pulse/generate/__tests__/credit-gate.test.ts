@@ -9,8 +9,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // (The cron path is intentionally NOT gated and is not exercised here.)
 // ============================================================================
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: any) => r != null && typeof r === 'object' && 'error' in r),
 }));
 
@@ -76,11 +78,11 @@ vi.mock('ai', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { generateText } from 'ai';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockAuth = () => ({
   userId: 'user-1',

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { authenticateSessionRequest, isAuthError } from './index';
+import { authenticateSessionRequest } from './request-auth';
+import { isAuthError } from './auth-core';
 import { SESSION_TOKEN_PREFIX } from './token-prefixes';
 import { validateAdminAccess, type AdminValidationResult } from './admin-role';
 import { validateCSRF } from './csrf-validation';

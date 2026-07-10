@@ -6,9 +6,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { FeedbackNotificationEmail } from '@pagespace/lib/email-templates/FeedbackNotificationEmail';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { ALLOWED_IMAGE_TYPES, validateImageAttachment } from '@/lib/validation/image-validation';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const FEEDBACK_EMAIL = process.env.CONTACT_EMAIL || 'hello@pagespace.ai';
 

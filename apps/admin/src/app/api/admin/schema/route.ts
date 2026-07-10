@@ -1,7 +1,7 @@
 import { db } from '@pagespace/db/db'
 import { sql } from '@pagespace/db/operators';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { withAdminAuth } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 export const GET = withAdminAuth(async (_adminUser) => {
   try {

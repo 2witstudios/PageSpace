@@ -3,8 +3,9 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import type { SelectCommand } from '@pagespace/db/schema/commands';
-import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
 import type { CommandScope } from '@pagespace/lib/commands/command-core';
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
+import type { AuthResult } from '@/lib/auth/auth-types';
 
 export const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 export const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };

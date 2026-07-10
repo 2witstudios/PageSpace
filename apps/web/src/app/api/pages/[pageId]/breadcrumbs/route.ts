@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { sql } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 interface BreadcrumbPage {
   id: string;

@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => r !== null && typeof r === 'object' && 'error' in r),
   checkMCPCreateScope: vi.fn(() => null),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  isScopedMCPAuth: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -98,11 +102,11 @@ vi.mock('@pagespace/lib/services/upload-validation', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { updateActiveUploads, updateStorageUsage } from '@pagespace/lib/services/storage-limits';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 // Captures the values passed to tx.insert(pages).values(...) for assertion
 let capturedPageValues: Record<string, unknown> | undefined;

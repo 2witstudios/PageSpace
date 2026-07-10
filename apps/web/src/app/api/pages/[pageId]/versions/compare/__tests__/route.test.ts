@@ -12,8 +12,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
 const {
@@ -44,10 +42,14 @@ const {
 
 // ── vi.mock declarations ───────────────────────────────────────────────────
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
-  isAuthError: (result: unknown) => mockIsAuthError(result),
   checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: (result: unknown) => mockIsAuthError(result),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalViewPage: (auth: { userId: string }, pageId: string) => mockCanUserViewPage(auth.userId, pageId),
 }));
 
@@ -84,6 +86,7 @@ vi.mock('@/lib/logging/mask', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { GET } from '../../compare/route';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

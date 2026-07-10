@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock dependencies
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -54,10 +52,14 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackPageOperation: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -65,11 +67,12 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { generateCSV, sanitizeFilename } from '@pagespace/lib/content/export-utils';
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets/sheet';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({

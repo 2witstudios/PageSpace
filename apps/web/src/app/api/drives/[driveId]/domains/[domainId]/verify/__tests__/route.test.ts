@@ -9,10 +9,14 @@ vi.mock('server-only', () => ({}));
 const authenticateRequestWithOptions = vi.fn();
 const checkMCPDriveScope = vi.fn();
 const isPrincipalDriveOwnerOrAdmin = vi.fn();
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => authenticateRequestWithOptions(...args),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => typeof result === 'object' && result !== null && 'error' in result,
   checkMCPDriveScope: (...args: unknown[]) => checkMCPDriveScope(...args),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isPrincipalDriveOwnerOrAdmin: (...args: unknown[]) => isPrincipalDriveOwnerOrAdmin(...args),
 }));
 

@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock next/server before importing route
 vi.mock('next/server', () => {
   class MockNextResponse extends Response {
@@ -44,8 +42,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -66,9 +66,11 @@ vi.mock('@pagespace/db/db', () => ({
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // ============================================================================
 // Test Fixtures

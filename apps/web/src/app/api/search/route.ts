@@ -5,12 +5,12 @@ import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { userProfiles } from '@pagespace/db/schema/members';
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
-import { verifyAuth } from '@/lib/auth';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { verifyAuth } from '@/lib/auth/auth';
 
 interface SearchResult {
   id: string;

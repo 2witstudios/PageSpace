@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const mockWithAdminAuth = vi.fn(
   (_handler: unknown) => async () => new Response('admin-path', { status: 299 })
 );
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   withAdminAuth: (handler: unknown) => mockWithAdminAuth(handler),
 }));
 

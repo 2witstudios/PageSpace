@@ -8,8 +8,6 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../route';
-import type { SessionAuthResult } from '@/lib/auth';
-
 // Mock db (boundary — direct usage in this route)
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -55,10 +53,14 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 }));
 
 // Mock auth (boundary)
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(),
   checkMCPPageScope: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -78,9 +80,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@/lib/ai/core/message-utils', () => ({ convertDbMessageToUIMessage: vi.fn((m) => m) }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockUserId = 'user_123';
 const mockAgentId = 'agent_123';

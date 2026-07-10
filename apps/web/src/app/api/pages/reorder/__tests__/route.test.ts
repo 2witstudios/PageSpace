@@ -10,7 +10,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PATCH } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { ReorderResult } from '@/services/api';
 
 // Mock service boundary - this is the ONLY mock of internal implementation
@@ -22,11 +21,15 @@ vi.mock('@/services/api', () => ({
 }));
 
 // Mock external boundaries (auth, websocket)
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
-  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: () => false,
 }));
 
@@ -80,10 +83,12 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import { pageReorderService } from '@/services/api';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError, isMCPAuthResult } from '@/lib/auth/auth-core';
 
 // Test helpers
 const mockUserId = 'user_123';

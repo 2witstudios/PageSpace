@@ -56,8 +56,10 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
   atomicDeviceTokenRotation: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+}));
+vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 

@@ -1,6 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
-
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
@@ -13,6 +11,9 @@ import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-age
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth/principal-permissions';
 
 /**
  * POST /api/ai/page-agents/create

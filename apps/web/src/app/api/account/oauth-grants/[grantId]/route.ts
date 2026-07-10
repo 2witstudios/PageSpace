@@ -18,9 +18,10 @@ import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isGrantOwnedByUser } from '@pagespace/lib/auth/oauth/grant-ownership';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { findOAuthGrantById, revokeOAuthGrantFamily } from '@/lib/repositories/oauth-repository';
 import { requireStepUpGrant } from '@/app/api/auth/mcp-tokens/step-up-gate';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

@@ -6,13 +6,16 @@ import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   removeCalendarTrigger,
   upsertCalendarTriggerWorkflow,
 } from '@/lib/workflows/calendar-trigger-helpers';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
+import type { AuthResult } from '@/lib/auth/auth-types';
 
 const SESSION_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };

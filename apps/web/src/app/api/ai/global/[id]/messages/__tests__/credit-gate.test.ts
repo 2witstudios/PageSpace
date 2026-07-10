@@ -52,8 +52,10 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
   broadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
 }));
 
@@ -268,12 +270,12 @@ vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
-import type { SessionAuthResult } from '@/lib/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { streamText } from 'ai';
 import { resolveOrCreateConversation, ConversationOwnershipError } from '../resolve-or-create-conversation';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',

@@ -6,10 +6,12 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
 import { and, eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult, canPrincipalDeletePage } from '@/lib/auth';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth/auth-core';
+import { canPrincipalDeletePage } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 

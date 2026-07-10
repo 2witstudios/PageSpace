@@ -136,15 +136,15 @@ vi.mock('@/lib/auth/google-avatar', () => ({
   resolveGoogleAvatarImage: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@/lib/auth', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/auth')>('@/lib/auth');
-  return {
-    getClientIP: vi.fn(() => '127.0.0.1'),
-    revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
-    createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
-    isSafeReturnUrl: actual.isSafeReturnUrl,
-  };
-});
+vi.mock('@pagespace/lib/security/client-ip', () => ({
+  getClientIP: vi.fn(() => '127.0.0.1'),
+}));
+vi.mock('@/lib/auth/device-auth-helpers', () => ({
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+  createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+}));
+// isSafeReturnUrl now lives in the pure @/lib/auth/url-utils leaf; leave it
+// unmocked so the real open-redirect validation runs.
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';

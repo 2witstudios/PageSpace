@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../route';
-import type { SessionAuthResult } from '@/lib/auth';
-
 // ============================================================================
 // Route-level regression test for GitHub-integration/sandbox-tool suppression
 // in 'search' tool-exposure mode.
@@ -18,12 +16,16 @@ import type { SessionAuthResult } from '@/lib/auth';
 // unit test cannot observe.
 // ============================================================================
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
   isMCPAuthResult: vi.fn(() => false),
-  checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: vi.fn(() => false),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
@@ -231,9 +233,9 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
-
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { resolvePageAgentIntegrationTools } from '@/lib/ai/core/integration-tool-resolver';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockUserId = 'user_123';
 const chatId = 'page_123'; // in drive_A per db mock above

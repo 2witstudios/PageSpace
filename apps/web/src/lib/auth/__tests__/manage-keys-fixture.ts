@@ -1,4 +1,4 @@
-import type { OAuthAuthResult } from '../index';
+import type { OAuthAuthResult } from '@/lib/auth/auth-types';
 
 /**
  * A manage-keys-only OAuth credential. `parseScopeList` mints

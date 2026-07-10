@@ -33,13 +33,10 @@ vi.mock('@/lib/repositories/session-repository', () => ({
 
 // Only stub authentication — rejectScopedOAuth, isScopedOAuthAuth, and
 // isManageKeysOnly run for real.
-vi.mock('@/lib/auth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/auth')>();
-  return {
-    ...actual,
-    authenticateRequestWithOptions: vi.fn(),
-  };
-});
+vi.mock('@/lib/auth/request-auth', async (importOriginal) => ({
+  ...(await importOriginal()),
+  authenticateRequestWithOptions: vi.fn(),
+}));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -74,7 +71,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 
 import { GET } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 describe('mcp-tokens routes — manage_keys-only vs drive-scoped OAuth (real isScopedOAuthAuth/isManageKeysOnly)', () => {
   beforeEach(() => {

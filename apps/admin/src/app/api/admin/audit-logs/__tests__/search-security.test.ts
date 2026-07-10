@@ -30,10 +30,9 @@ const { mockVerifyAdminAuth, mockIsAdminAuthError } = vi.hoisted(() => ({
 }));
 
 // Mock dependencies
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAdminAuth: mockVerifyAdminAuth,
   isAdminAuthError: mockIsAdminAuthError,
-  // withAdminAuth HOF that uses the mocked verifyAdminAuth
   withAdminAuth: <T>(handler: (user: unknown, request: Request, context: T) => Promise<Response>) => {
     return async (request: Request, context: T): Promise<Response> => {
       const result = mockVerifyAdminAuth(request);

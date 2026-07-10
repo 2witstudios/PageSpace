@@ -1,7 +1,8 @@
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // Session (browser) and OAuth (CLI `pagespace login` identity confirmation,
 // ADR 0003) both resolve identity the same way; `mcp_*` tokens are scoped

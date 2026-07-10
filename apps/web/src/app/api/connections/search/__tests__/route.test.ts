@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
@@ -58,12 +58,12 @@ vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
 });
 
 import { GET } from '../route';
-import { verifyAuth } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { db } from '@pagespace/db/db';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import { encryptField } from '@pagespace/lib/encryption/field-crypto';
+import { verifyAuth } from '@/lib/auth/auth';
 
 const mockUserId = 'user_123';
 const currentEmail = 'current@test.com';

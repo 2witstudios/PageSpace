@@ -2,7 +2,6 @@ import { z } from 'zod/v4';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
-import { revokeSessionsForLogin, createDeviceToken } from '@/lib/auth';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -16,7 +15,6 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
 import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@/lib/onboarding/home-drive';
-import { getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { authRepository } from '@/lib/repositories/auth-repository';
@@ -26,6 +24,8 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { revokeSessionsForLogin, createDeviceToken } from '@/lib/auth/device-auth-helpers';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),

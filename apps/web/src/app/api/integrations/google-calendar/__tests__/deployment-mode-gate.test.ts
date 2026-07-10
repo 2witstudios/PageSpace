@@ -66,12 +66,18 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
   calendarEvents: { createdById: 'x', syncedFromGoogle: 'x', isTrashed: 'x' },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn().mockResolvedValue({ userId: 'user-1' }),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn().mockReturnValue(false),
-  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
-  validateLoginCSRFToken: vi.fn().mockReturnValue(true),
   checkMCPDriveScope: vi.fn(),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+}));
+vi.mock('@/lib/auth/login-csrf-utils', () => ({
+  validateLoginCSRFToken: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('@/lib/integrations/google-calendar/return-url', () => ({

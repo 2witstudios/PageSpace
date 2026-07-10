@@ -10,7 +10,6 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { z } from 'zod/v4';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
-import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import {
   checkDistributedRateLimit,
@@ -24,6 +23,8 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { isSafeReturnUrl } from '@/lib/auth/url-utils';
 
 const nativeAuthSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),

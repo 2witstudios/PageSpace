@@ -14,10 +14,16 @@ vi.mock('@/lib/repositories/session-repository', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedOAuthAuth: vi.fn(),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
@@ -61,8 +67,10 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 }));
 
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
 import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { isScopedOAuthAuth } from '@/lib/auth/principal-permissions';
 
 describe('/api/auth/mcp-tokens', () => {
   beforeEach(() => {

@@ -6,8 +6,8 @@ import {
   verifyEntry,
 } from '@pagespace/lib/monitoring/hash-chain-verifier';
 import { isValidId } from '@pagespace/lib/validators/id-validators';
-import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 /**
  * Hash Chain Integrity Check API Endpoint

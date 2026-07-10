@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { and, eq, lt } from '@pagespace/db/operators';
 import { messageDrafts } from '@pagespace/db/schema/drafts';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { draftExpiresAt } from '@/lib/draft/draft';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

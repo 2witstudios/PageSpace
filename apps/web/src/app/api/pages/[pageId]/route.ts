@@ -4,13 +4,15 @@ import { broadcastPageEvent, createPageEventPayload, kickUserFromPage, kickUserF
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult, canPrincipalSharePage, canPrincipalViewPage, canPrincipalEditPage, canPrincipalDeletePage } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
 import { db } from '@pagespace/db/db';
 import { and, eq, isNotNull, ne, not, exists, or, isNull, gt, inArray, sql } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, pagePermissions, driveRoles } from '@pagespace/db/schema/members';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError, isMCPAuthResult } from '@/lib/auth/auth-core';
+import { canPrincipalSharePage, canPrincipalViewPage, canPrincipalEditPage, canPrincipalDeletePage } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };

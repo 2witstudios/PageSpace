@@ -1,4 +1,3 @@
-import { withAdminAuth } from '@/lib/auth';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
@@ -8,6 +7,7 @@ import {
 import { verifyHashChain } from '@pagespace/lib/monitoring/hash-chain-verifier';
 import { verifySecurityAuditChain } from '@pagespace/lib/audit/security-audit-chain-verifier';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 /**
  * Art 17(3)(b) audit-log pseudonymization (#985).

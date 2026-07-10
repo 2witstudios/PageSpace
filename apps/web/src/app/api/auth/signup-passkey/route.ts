@@ -15,13 +15,15 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@/lib/onboarding/home-drive';
 import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { createDeviceToken } from '@/lib/auth/device-auth-helpers';
 
 const verifySchema = z.object({
   email: z.email(),

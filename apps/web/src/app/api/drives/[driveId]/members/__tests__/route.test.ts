@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { DriveAccessResult, MemberWithDetails } from '@pagespace/lib/services/drive-member-service';
 
 // ============================================================================
@@ -35,18 +34,25 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isPrincipalDriveOwnerOrAdmin: vi.fn(),
 }));
 
 import { GET } from '../route';
 import { checkDriveAccess, listDriveMembers, getDriveOwnerAsMember } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 
 // ============================================================================
 // Test Fixtures

@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 const { mockOrderBy } = vi.hoisted(() => ({ mockOrderBy: vi.fn() }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -37,8 +35,10 @@ vi.mock('@pagespace/db/schema/ai-streams', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -61,8 +61,10 @@ vi.mock('@pagespace/lib/ai/global-channel-id', () => ({
 }));
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockUserId = 'user-test-1';
 const mockChannelId = 'page-test-1';

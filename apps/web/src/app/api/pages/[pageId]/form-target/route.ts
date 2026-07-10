@@ -18,7 +18,6 @@
  */
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { formFieldsSchema } from '@pagespace/lib/forms/field-schema';
@@ -32,6 +31,9 @@ import {
   FormTargetAlreadyActiveError,
   FormTargetArchivedError,
 } from '@/services/api/form-target-service';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 

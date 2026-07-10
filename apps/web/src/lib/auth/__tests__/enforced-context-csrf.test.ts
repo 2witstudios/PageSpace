@@ -62,12 +62,12 @@ vi.mock('../origin-validation', () => ({
 vi.mock('../cookie-config', () => ({
   getSessionFromCookies: vi.fn(),
 }));
-
-import { authenticateWithEnforcedContext, isEnforcedAuthError } from '../index';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { validateCSRF } from '../csrf-validation';
 import { getSessionFromCookies } from '../cookie-config';
+import { authenticateWithEnforcedContext } from '@/lib/auth/request-auth';
+import { isEnforcedAuthError } from '@/lib/auth/auth-core';
 
 const mockSessionClaims = {
   sessionId: 'test-session-id',

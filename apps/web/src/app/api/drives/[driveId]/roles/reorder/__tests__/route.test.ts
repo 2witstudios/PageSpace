@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PATCH } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { DriveRoleAccessInfo } from '@pagespace/lib/services/drive-role-service';
 
 // ============================================================================
@@ -19,8 +18,10 @@ vi.mock('@pagespace/lib/services/drive-role-service', () => ({
     reorderDriveRoles: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -53,8 +54,10 @@ vi.mock('@pagespace/db/schema/members', () => ({
 }));
 
 import { checkDriveAccessForRoles, reorderDriveRoles } from '@pagespace/lib/services/drive-role-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // ============================================================================
 // Test Fixtures

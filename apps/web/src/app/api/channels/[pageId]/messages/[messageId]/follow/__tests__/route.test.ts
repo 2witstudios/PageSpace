@@ -9,8 +9,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r
   ),
@@ -34,9 +36,9 @@ vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
 import { POST, DELETE } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
 
 const PAGE_ID = 'page_chan';
 const MSG_ID = 'msg_root';

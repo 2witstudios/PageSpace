@@ -53,7 +53,7 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
-vi.mock('@/lib/auth/auth-helpers', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 

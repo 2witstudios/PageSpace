@@ -25,8 +25,10 @@ const {
   mockRemoveProject: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => mockIsAuthError(result),
 }));
 

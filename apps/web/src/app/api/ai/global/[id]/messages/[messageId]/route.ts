@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -10,6 +9,8 @@ import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/webso
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { isScopedOAuthAuth, isManageKeysOnly } from '@/lib/auth';
+import { isScopedOAuthAuth } from '@/lib/auth/principal-permissions';
+import { isManageKeysOnly } from '@/lib/auth/auth-core';
 
 /**
  * `isScopedOAuthAuth` covers two distinct credential shapes, which this guard

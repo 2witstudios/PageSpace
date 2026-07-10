@@ -6,8 +6,6 @@
  *   - body.agentTrigger === object    → upsert via upsertCalendarTriggerWorkflow
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 vi.mock('next/server', async () => {
   const actual = await vi.importActual<typeof import('next/server')>('next/server');
   return { ...actual, after: vi.fn((fn) => fn()) };
@@ -76,13 +74,16 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('../../../../../../lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
-  // Session auth falls through to the user-level checks.
   isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
     return isUserDriveMember(auth.userId, driveId);
@@ -104,13 +105,14 @@ vi.mock('../../../../../../lib/integrations/google-calendar/push-service', () =>
 
 import { PATCH } from '../route';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 import {
   upsertCalendarTriggerWorkflowInTx,
   removeCalendarTrigger,
   validateCalendarAgentTrigger,
   resyncCalendarTriggerTimings,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const USER_ID = 'user_creator';
 const EVENT_ID = 'event_123';

@@ -6,8 +6,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mockListUserConnections = vi.hoisted(() => vi.fn());
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
@@ -47,13 +49,13 @@ vi.mock('@pagespace/lib/integrations/oauth/oauth-state', () => ({
 }));
 
 import { GET, POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository';
 import { findUserConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler';
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockUserId = 'user_123';
 

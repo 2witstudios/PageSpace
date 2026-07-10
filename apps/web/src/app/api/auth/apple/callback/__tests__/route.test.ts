@@ -104,9 +104,13 @@ vi.mock('@/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+}));
+vi.mock('@/lib/auth/url-utils', () => ({
   isSafeReturnUrl: vi.fn().mockReturnValue(true),
+}));
+vi.mock('@/lib/auth/device-auth-helpers', () => ({
   revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
   createWebDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
@@ -151,7 +155,6 @@ import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
@@ -162,6 +165,8 @@ import {
   consumeAnyInviteIfPresent,
   consumeAllInvitesForEmail,
 } from '@/lib/auth/native-invite-acceptance';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { isSafeReturnUrl } from '@/lib/auth/url-utils';
 
 // Helper to create signed state
 function createSignedState(
@@ -792,7 +797,7 @@ describe('POST /api/auth/apple/callback', () => {
 
   describe('session management', () => {
     it('revokes existing sessions before creating new one', async () => {
-      const { revokeSessionsForLogin } = await import('@/lib/auth');
+      const { revokeSessionsForLogin } = await import('@/lib/auth/device-auth-helpers');
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({

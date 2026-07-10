@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
 import { validateLocalProviderURL } from '@pagespace/lib/security/url-validator';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 /**
  * GET /api/ai/ollama/models

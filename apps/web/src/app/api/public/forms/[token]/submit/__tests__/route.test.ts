@@ -26,7 +26,7 @@ vi.mock('@/services/api/form-target-service', () => ({
   appendFormSubmission: mockAppendFormSubmission,
 }));
 
-vi.mock('@/lib/auth/auth-helpers', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: mockGetClientIP,
 }));
 

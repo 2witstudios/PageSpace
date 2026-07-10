@@ -97,7 +97,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   createSessionCookie: vi.fn().mockReturnValue('mock-session-cookie'),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
 }));
 

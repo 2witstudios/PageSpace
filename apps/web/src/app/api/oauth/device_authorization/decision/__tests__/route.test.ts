@@ -9,9 +9,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('203.0.113.7'),
 }));
 
@@ -43,7 +47,7 @@ vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const AUTHENTICATED = {
   tokenType: 'session',

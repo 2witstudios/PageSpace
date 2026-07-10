@@ -114,8 +114,10 @@ vi.mock('@/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: false }),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+}));
+vi.mock('@/lib/auth/device-auth-helpers', () => ({
   revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
   createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
@@ -155,9 +157,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
-import { getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { createDeviceToken } from '@/lib/auth/device-auth-helpers';
 
 const mockNewUser = {
   id: 'user-123',
@@ -504,7 +507,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('revokes existing sessions before creating new one', async () => {
-      const { revokeSessionsForLogin } = await import('@/lib/auth');
+      const { revokeSessionsForLogin } = await import('@/lib/auth/device-auth-helpers');
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);

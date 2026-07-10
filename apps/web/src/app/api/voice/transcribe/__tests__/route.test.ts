@@ -23,8 +23,10 @@ const {
   mockEmitCreditsUpdated: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: mockAuth,
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: mockIsAuthError,
 }));
 vi.mock('@/lib/ai/core/ai-utils', () => ({ getManagedProviderKey: mockGetManagedKey }));

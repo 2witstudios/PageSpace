@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/integrations
 // ============================================================================
@@ -43,8 +41,10 @@ vi.mock('@pagespace/db/db', () => ({
   db: 'mock-db',
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -57,8 +57,10 @@ import { getProviderById } from '@pagespace/lib/integrations/repositories/provid
 import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials'
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler'
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // ============================================================================
 // Test Helpers

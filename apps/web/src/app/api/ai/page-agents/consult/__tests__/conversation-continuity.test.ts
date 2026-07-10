@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 // ============================================================================
 // Ephemeral vs internal ask_agent for POST /api/ai/page-agents/consult (#1769)
 //
@@ -11,13 +9,17 @@ import type { SessionAuthResult } from '@/lib/auth';
 // conversation (scoped history), not the page-wide "recent" fallback.
 // ============================================================================
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   isMCPAuthResult: vi.fn(() => false),
-  isScopedMCPAuth: vi.fn(() => false),
-  checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn(() => []),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  isScopedMCPAuth: vi.fn(() => false),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -187,7 +189,8 @@ vi.mock('ai', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',

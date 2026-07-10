@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object),
 }));
 
-vi.mock('@/lib/auth/auth-helpers', () => ({
+vi.mock('@/lib/auth/url-utils', () => ({
   isSafeNextPath: vi.fn(),
   SIGNIN_NEXT_ALLOWED_PREFIXES: ['/oauth/consent'],
 }));
@@ -24,8 +26,8 @@ vi.mock('@pagespace/lib/auth/step-up-service', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
-import { isSafeNextPath } from '@/lib/auth/auth-helpers';
+import { isSafeNextPath } from '@/lib/auth/url-utils';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const AUTHENTICATED = { tokenType: 'session', userId: 'user-1', role: 'user', tokenVersion: 0, sessionId: 'sess-1' };
 const ALLOWED = { allowed: true, attemptsRemaining: 2 };

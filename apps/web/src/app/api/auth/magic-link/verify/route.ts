@@ -16,8 +16,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { reportAuthFailure } from '@pagespace/lib/security/auth-anomaly-reporter';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP } from '@/lib/auth';
-import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveAppUrl } from '@pagespace/lib/services/email-service';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
@@ -28,6 +27,7 @@ import {
   consumeAllInvitesForEmail,
   type NativeInviteAcceptanceResult,
 } from '@/lib/auth/native-invite-acceptance';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),

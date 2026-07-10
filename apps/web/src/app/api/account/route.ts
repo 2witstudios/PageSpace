@@ -7,13 +7,14 @@ import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isValidEmail } from '@pagespace/lib/validators/email';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-disposition';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const patchBodySchema = z
   .object({

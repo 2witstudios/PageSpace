@@ -7,12 +7,8 @@ import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import {
-  authenticateSessionRequest,
-  getBearerToken,
-  isAuthError,
-  isSessionAuthResult,
-} from '@/lib/auth';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { getBearerToken, isAuthError, isSessionAuthResult } from '@/lib/auth/auth-core';
 
 const HANDOFF_TTL_SECONDS = 300;
 

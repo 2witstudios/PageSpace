@@ -37,7 +37,9 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
-vi.mock('@/lib/auth', () => ({ getClientIP: vi.fn().mockReturnValue('203.0.113.11') }));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
+  getClientIP: vi.fn().mockReturnValue('203.0.113.11'),
+}));
 
 const checkDistributedRateLimit = vi.fn();
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({

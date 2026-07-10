@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import {
@@ -10,6 +9,8 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { callerCanViewUser } from '@/lib/users/visibility';
 import { resolveFindUser } from '@/lib/users/enumeration-safe';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 

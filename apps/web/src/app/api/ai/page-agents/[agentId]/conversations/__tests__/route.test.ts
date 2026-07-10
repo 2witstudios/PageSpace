@@ -8,8 +8,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock websocket broadcast (boundary)
 vi.mock('@/lib/websocket/socket-utils', () => ({
   broadcastAiConversationAdded: vi.fn(),
@@ -46,10 +44,14 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 }));
 
 // Mock auth (boundary)
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn(),
   checkMCPPageScope: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -84,10 +86,12 @@ vi.mock('@paralleldrive/cuid2', async (importOriginal) => ({
 }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastAiConversationAdded } from '@/lib/websocket/socket-utils';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // Test fixtures
 const mockUserId = 'user_123';

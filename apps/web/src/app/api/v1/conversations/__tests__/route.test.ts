@@ -3,8 +3,10 @@ import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
 
 // --- module mocks (hoisted before imports) ---
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   getAllowedDriveIds: vi.fn(() => []),
 }));
@@ -87,10 +89,11 @@ vi.mock('@/lib/repositories/chat-message-repository', () => ({
 import { NextResponse } from 'next/server';
 import { POST, GET } from '../route';
 import { GET as getById, DELETE } from '../[id]/route';
-import { authenticateRequestWithOptions, getAllowedDriveIds } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { getAllowedDriveIds } from '@/lib/auth/auth-core';
 
 const mcpAuth = {
   userId: 'user-1',

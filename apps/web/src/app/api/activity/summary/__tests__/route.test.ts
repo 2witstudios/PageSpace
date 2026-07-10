@@ -3,8 +3,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 const { mockAuditRequest } = vi.hoisted(() => ({
   mockAuditRequest: vi.fn(),
 }));
@@ -20,8 +18,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: mockAuditRequest,
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -61,7 +61,9 @@ vi.mock('@pagespace/db/schema/social', () => ({
 }));
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,

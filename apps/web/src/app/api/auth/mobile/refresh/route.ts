@@ -12,7 +12,8 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
-import { getClientIP, appendSessionCookie } from '@/lib/auth';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const refreshSchema = z.object({
   deviceToken: z.string().min(1, 'Device token is required'),

@@ -25,11 +25,17 @@ vi.mock('@/lib/repositories/session-repository', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
-  isScopedOAuthAuth: vi.fn(),
   isManageKeysOnly: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  isScopedOAuthAuth: vi.fn(),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
@@ -61,10 +67,12 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 
 import { DELETE, PATCH } from '../route';
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth, isManageKeysOnly } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, isManageKeysOnly } from '@/lib/auth/auth-core';
+import { isScopedOAuthAuth } from '@/lib/auth/principal-permissions';
 
 const createContext = (tokenId = 'token-123') => ({
   params: Promise.resolve({ tokenId }),

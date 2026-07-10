@@ -4,7 +4,6 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository'
@@ -13,6 +12,8 @@ import { pages, drives, pageType, type PageTypeEnum } from '@pagespace/db/schema
 import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { z } from 'zod';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 /**
  * Escape LIKE pattern metacharacters (%, _) in user input

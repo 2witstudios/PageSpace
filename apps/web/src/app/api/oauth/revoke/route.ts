@@ -15,11 +15,11 @@
  * rejections.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getClientIP } from '@/lib/auth';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { ensureOAuthClientRow, revokeOAuthToken } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 function noStoreJson(body: Record<string, unknown>, status: number): NextResponse {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });

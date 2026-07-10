@@ -40,15 +40,19 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateSessionRequest: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   isSessionAuthResult: vi.fn(),
-  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
   getBearerToken: vi.fn((req: Request) => {
     const header = req.headers.get('authorization');
     return header && header.startsWith('Bearer ') ? header.slice(7) : null;
   }),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
+  getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
 import { POST } from '../route';
@@ -58,8 +62,10 @@ import { peekPasskeyRegisterHandoff, markPasskeyRegisterOptionsIssued } from '@p
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { isAuthError, isSessionAuthResult } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const createRequest = (
   headers: Record<string, string> = {},

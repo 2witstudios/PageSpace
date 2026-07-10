@@ -5,8 +5,9 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
-import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { isSafeReturnUrl } from '@/lib/auth/url-utils';
 
 // Length bounds must match verifyOAuthState's oauthStateDataSchema — otherwise
 // the server can mint a signed state it will later reject at the callback,

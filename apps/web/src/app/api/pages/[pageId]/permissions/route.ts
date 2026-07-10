@@ -1,10 +1,4 @@
 import { NextResponse } from 'next/server';
-import {
-  authenticateRequestWithOptions,
-  authenticateWithEnforcedContext,
-  isAuthError,
-  isEnforcedAuthError,
-} from '@/lib/auth';
 import { z } from 'zod/v4';
 import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -15,6 +9,8 @@ import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { kickUserFromPage, kickUserFromPageActivity, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { authenticateRequestWithOptions, authenticateWithEnforcedContext } from '@/lib/auth/request-auth';
+import { isAuthError, isEnforcedAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

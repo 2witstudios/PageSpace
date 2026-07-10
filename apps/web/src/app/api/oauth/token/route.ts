@@ -28,7 +28,6 @@
  * device_code falls back to the shared invalid_grant.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getClientIP } from '@/lib/auth';
 import { getRegisteredClient, type RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { ACCESS_TOKEN_TTL_SECONDS, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import {
@@ -40,6 +39,7 @@ import {
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 function noStoreJson(body: Record<string, unknown>, status: number): NextResponse {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });

@@ -12,7 +12,6 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { spawnBranch, killBranch, listBranches } from '@pagespace/lib/services/machines/machine-branches';
 import {
   buildMachineBranchesDeps,
@@ -22,6 +21,8 @@ import {
   resolveMachineActorContext,
 } from '@/lib/machines/machine-branches-runtime';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
@@ -60,10 +60,10 @@ vi.mock('@/lib/presigned-url', () => ({
 }));
 
 import { GET } from '../route';
-import { verifyAuth } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
+import { verifyAuth } from '@/lib/auth/auth';
 
 const mockUserId = 'user_123';
 const mockFileId = 'file-1';

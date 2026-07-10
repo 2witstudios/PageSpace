@@ -11,8 +11,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -33,9 +35,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { DELETE } from '../route';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { findOAuthGrantById, revokeOAuthGrantFamily } from '@/lib/repositories/oauth-repository';
 import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const USER_A = 'user-a';
 const createContext = (grantId = 'grant-1') => ({ params: Promise.resolve({ grantId }) });

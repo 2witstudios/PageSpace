@@ -46,16 +46,12 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 }));
 
 // Only stub authentication — checkMCPCreateScope and isManageKeysOnly run for real.
-vi.mock('@/lib/auth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/auth')>();
-  return {
-    ...actual,
-    authenticateRequestWithOptions: vi.fn(),
-  };
-});
-
-import { authenticateRequestWithOptions } from '@/lib/auth';
+vi.mock('@/lib/auth/request-auth', async (importOriginal) => ({
+  ...(await importOriginal()),
+  authenticateRequestWithOptions: vi.fn(),
+}));
 import { pageService } from '@/services/api';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 describe('POST /api/pages — manage-keys-only credential', () => {
   beforeEach(() => {

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
@@ -7,6 +6,8 @@ import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;

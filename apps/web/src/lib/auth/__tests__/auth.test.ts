@@ -4,8 +4,10 @@ import { verifyAuth, verifyAdminAuth, isAdminAuthError } from '../auth';
 import type { AdminValidationResult } from '../admin-role';
 
 // Mock the auth index module
-vi.mock('../index', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateSessionRequest: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
@@ -30,9 +32,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
-
-import { authenticateSessionRequest } from '../index';
 import { validateAdminAccess } from '../admin-role';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
 
 const mockAuthenticateWebRequest = vi.mocked(authenticateSessionRequest);
 const mockValidateAdminAccess = vi.mocked(validateAdminAccess);

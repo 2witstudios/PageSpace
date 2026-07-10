@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // withAdminAuth -> just inject a fake admin and call the handler.
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   withAdminAuth: (handler: (user: { id: string }, req: Request) => Promise<Response>) =>
     (req: Request) => handler({ id: 'admin_1' }, req),
 }));

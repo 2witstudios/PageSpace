@@ -4,9 +4,9 @@ import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
-import { withAdminAuth } from '@/lib/auth';
 import { csvField } from '@/lib/csv';
 import { format } from 'date-fns';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 /**
  * Normalizes a log value (Date, JSON column, null) to a string and escapes it

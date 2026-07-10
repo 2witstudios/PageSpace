@@ -16,9 +16,11 @@ import { serializePageContentForAI } from '@/lib/ai/core/page-serializer';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { authenticateMCPRequest } from '@/lib/auth/request-auth';
+import { isAuthError, isMCPAuthResult } from '@/lib/auth/auth-core';
+import { getPrincipalAccessLevel } from '@/lib/auth/principal-permissions';
 
 // Get drive slug from page for socket broadcasting
 async function getDriveIdFromPage(pageId: string): Promise<string | null> {

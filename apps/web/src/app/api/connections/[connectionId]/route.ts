@@ -4,11 +4,12 @@ import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { userProfiles } from '@pagespace/db/schema/members'
 import { connections } from '@pagespace/db/schema/social';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { createNotification, markConnectionRequestActioned } from '@pagespace/lib/notifications/notifications';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

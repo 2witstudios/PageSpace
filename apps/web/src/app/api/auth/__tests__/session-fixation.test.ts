@@ -200,7 +200,7 @@ describe('Session Fixation Prevention - Auth Middleware', () => {
         getSessionFromCookies: vi.fn(),
       }));
 
-      const authModule = await import('@/lib/auth/index');
+      const authModule = await import('@/lib/auth/request-auth');
 
       expect(typeof authModule.validateSessionToken).toBe('function');
     });
@@ -221,7 +221,7 @@ describe('Session Fixation Prevention - Auth Middleware', () => {
         getSessionFromCookies: vi.fn(),
       }));
 
-      const authModule = await import('@/lib/auth/index');
+      const authModule = await import('@/lib/auth/request-auth');
 
       expect(typeof authModule.authenticateSessionRequest).toBe('function');
     });

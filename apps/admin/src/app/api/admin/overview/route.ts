@@ -5,9 +5,9 @@ import { users } from '@pagespace/db/schema/auth';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { contactSubmissions } from '@pagespace/db/schema/contact';
-import { withAdminAuth } from '@/lib/auth';
 import { getApiMetrics, getUnitEconomicsSummary } from '@/lib/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 export interface OverviewSummary {
   totalUsers: number;

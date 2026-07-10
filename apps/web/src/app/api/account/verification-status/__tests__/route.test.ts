@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock at the service seam level
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
@@ -18,8 +18,8 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 }));
 
 import { GET } from '../route';
-import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
+import { verifyAuth } from '@/lib/auth/auth';
 
 // Test helpers
 const createRequest = () =>

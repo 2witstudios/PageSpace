@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, PATCH } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 
 // ============================================================================
@@ -58,17 +57,24 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isPrincipalDriveOwnerOrAdmin: vi.fn(),
 }));
 
 import { db } from '@pagespace/db/db';
 import { getPlan } from '@/lib/subscription/plans';
 import { changePublishSubdomain } from '@/lib/canvas/publish-page';
-import { authenticateRequestWithOptions, isAuthError, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,

@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth';
-
 // ============================================================================
 // Account-level-only tool listing for POST /api/ai/page-agents/consult
 //
@@ -10,12 +8,16 @@ import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth';
 // filterToolsForMcpScope (via importOriginal) rather than stubbing it away.
 // ============================================================================
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   isMCPAuthResult: vi.fn((r: { tokenType?: string }) => r?.tokenType === 'mcp'),
-  checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn((auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? []),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: vi.fn((auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
@@ -125,8 +127,9 @@ vi.mock('ai', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import type { MCPAuthResult, SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockWebAuth = (): SessionAuthResult => ({
   userId: 'user-1',

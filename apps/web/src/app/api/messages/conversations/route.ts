@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, sql } from '@pagespace/db/operators'
 import { dmConversations, connections } from '@pagespace/db/schema/social';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
@@ -11,6 +10,8 @@ import { usersShareDrive } from '@pagespace/lib/permissions/permissions';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
 import type { ConversationRow } from '@/types/messaging';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

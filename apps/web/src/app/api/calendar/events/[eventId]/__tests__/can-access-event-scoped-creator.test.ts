@@ -59,10 +59,14 @@ vi.mock('../../../../../../lib/integrations/google-calendar/push-service', () =>
   pushEventDeleteToGoogle: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../../../../../lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
   checkMCPDriveScope: vi.fn(() => null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
   isPrincipalDriveMember: vi.fn(),
@@ -71,7 +75,7 @@ vi.mock('../../../../../../lib/auth', () => ({
 
 import { GET } from '../route';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const CREATOR_ID = 'user_creator';
 const OUTSIDER_ID = 'user_outsider';

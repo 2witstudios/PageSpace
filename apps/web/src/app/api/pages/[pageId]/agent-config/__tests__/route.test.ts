@@ -12,8 +12,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
 const {
@@ -64,12 +62,14 @@ vi.mock('@/services/api/page-mutation-service', () => ({
   PageRevisionMismatchError: MockPageRevisionMismatchError,
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
-  isAuthError: (result: unknown) => mockIsAuthError(result),
   checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
-  // The route authorizes via the principal dispatch (scoped tokens use their own
-  // role); tests drive it through the same mock as the old user-level check.
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: (result: unknown) => mockIsAuthError(result),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
   isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
@@ -118,6 +118,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { GET, PATCH, PUT } from '../../agent-config/route';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

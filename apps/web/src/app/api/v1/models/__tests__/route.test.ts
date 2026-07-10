@@ -3,10 +3,14 @@ import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
 
 // --- module mocks (must be hoisted before imports) ---
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   getAllowedDriveIds: vi.fn().mockReturnValue([]),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   getPrincipalBatchPagePermissions: vi.fn(async (auth: { userId: string }, pageIds: string[]) => {
     const { getBatchPagePermissions } = await import('@pagespace/lib/permissions/permissions');
     return getBatchPagePermissions(auth.userId, pageIds);
@@ -48,10 +52,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 // --- imports after mocks ---
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import { authenticateRequestWithOptions, getAllowedDriveIds } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { inArray } from '@pagespace/db/operators';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { getAllowedDriveIds } from '@/lib/auth/auth-core';
 
 type PermLevel = { canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean };
 const allow: PermLevel = { canView: true, canEdit: false, canShare: false, canDelete: false };

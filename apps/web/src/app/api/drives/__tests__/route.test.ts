@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { DriveWithAccess } from '@pagespace/lib/services/drive-service';
 
 // ============================================================================
@@ -49,13 +48,17 @@ vi.mock('@/lib/websocket', () => ({
   createDriveEventPayload: vi.fn((driveId, event, data) => ({ driveId, event, data })),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
-  isScopedOAuthAuth: vi.fn(() => false),
   isManageKeysOnly: vi.fn(() => false),
-  checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
+  checkMCPCreateScope: vi.fn(() => null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  isScopedMCPAuth: vi.fn(() => false),
+  isScopedOAuthAuth: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
@@ -69,7 +72,9 @@ import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPCreateScope } from '@/lib/auth/auth-core';
 
 // ============================================================================
 // Test Helpers

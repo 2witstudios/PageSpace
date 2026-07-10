@@ -13,11 +13,15 @@ const mockBackfillMissingTaskItems = vi.fn();
 const mockFetchEnrichedTasks = vi.fn();
 const mockSerializeTaskItem = vi.fn();
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateMCPRequest: (...args: unknown[]) => mockAuthenticateMCPRequest(...args),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => 'error' in (result as object),
   isMCPAuthResult: (result: unknown) =>
     !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'mcp',
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   getPrincipalAccessLevel: async (_auth: unknown, _pageId: string) => ({
     canView: true,
     canEdit: false,

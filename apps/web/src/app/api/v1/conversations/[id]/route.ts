@@ -3,11 +3,6 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { chatMessages } from '@pagespace/db/schema/core';
-import {
-  authenticateRequestWithOptions,
-  isAuthError,
-  getAllowedDriveIds,
-} from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
@@ -15,6 +10,8 @@ import {
   validateConversationAccess,
   serializeMessageRowToMessages,
 } from '@/lib/ai/openai-api/v1-conversations';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, getAllowedDriveIds } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
 

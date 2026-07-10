@@ -7,8 +7,8 @@ import { planLogoutDeviceRevocation } from '@pagespace/lib/auth/token-lifecycle-
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP } from '@/lib/auth';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 export async function POST(req: Request) {
   const clientIP = getClientIP(req);

@@ -7,8 +7,6 @@
  * explicit and required.
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 vi.mock('@pagespace/db/db', () => {
   const db = {
     query: {
@@ -54,8 +52,10 @@ vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
   getAllDriveIdsForEvent: vi.fn(),
 }));
 
-vi.mock('../../../../../../../lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) =>
     typeof result === 'object' && result !== null && 'error' in result,
   ),
@@ -68,7 +68,8 @@ vi.mock('../../../../../../../lib/websocket/calendar-events', () => ({
 
 import { DELETE } from '../route';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions } from '../../../../../../../lib/auth';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const CALLER_ID = 'user_caller_A';
 const TARGET_ID = 'user_target_B';

@@ -38,16 +38,12 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 }));
 
 // Only stub authentication — checkMCPCreateScope and isManageKeysOnly run for real.
-vi.mock('@/lib/auth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/auth')>();
-  return {
-    ...actual,
-    authenticateRequestWithOptions: vi.fn(),
-  };
-});
-
-import { authenticateRequestWithOptions } from '@/lib/auth';
+vi.mock('@/lib/auth/request-auth', async (importOriginal) => ({
+  ...(await importOriginal()),
+  authenticateRequestWithOptions: vi.fn(),
+}));
 import { createDrive } from '@pagespace/lib/services/drive-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 describe('POST /api/drives — manage-keys-only credential', () => {
   beforeEach(() => {

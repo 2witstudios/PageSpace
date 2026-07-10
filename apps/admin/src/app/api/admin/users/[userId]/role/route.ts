@@ -3,10 +3,10 @@ import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { withAdminAuth } from '@/lib/auth';
 import { updateUserRole } from '@/lib/auth/admin-role';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 type RouteContext = { params: Promise<{ userId: string }> };
 

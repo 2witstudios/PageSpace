@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
@@ -37,11 +37,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { POST } from '../route';
-import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createCanvasFileViewToken } from '@/lib/canvas/file-view-token';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { verifyAuth } from '@/lib/auth/auth';
 
 const jsonRequest = (body: unknown) =>
   new Request('https://pagespace.ai/api/canvas/file-view-tokens', {

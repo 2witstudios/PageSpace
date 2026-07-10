@@ -8,8 +8,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock the repository seam (boundary)
 vi.mock('@/lib/repositories/page-agent-repository', () => ({
   pageAgentRepository: {
@@ -20,10 +18,14 @@ vi.mock('@/lib/repositories/page-agent-repository', () => ({
 }));
 
 // Mock auth (boundary)
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
@@ -112,12 +114,14 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
 
 // Test fixtures
 const mockUserId = 'user_123';

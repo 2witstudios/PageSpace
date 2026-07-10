@@ -3,7 +3,6 @@ import { db } from '@pagespace/db/db'
 import { eq, and, or, ilike, isNotNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { userProfiles } from '@pagespace/db/schema/members';
-import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { userEmailMatch, decryptUserRows } from '@pagespace/lib/auth/user-repository';
@@ -16,6 +15,7 @@ import {
   buildPublicProfileResult,
   buildExactEmailMatchResult,
 } from '@/lib/users/enumeration-safe';
+import { verifyAuth } from '@/lib/auth/auth';
 
 export async function GET(request: Request) {
   try {

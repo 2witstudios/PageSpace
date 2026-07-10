@@ -94,8 +94,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
     security: { warn: vi.fn() },
   },
 }));
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/login-csrf-utils', () => ({
   validateLoginCSRFToken: vi.fn().mockReturnValue(true),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 vi.mock('@/lib/auth/cookie-config', () => ({

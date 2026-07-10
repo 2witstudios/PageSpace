@@ -8,8 +8,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { PATCH, DELETE } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock the repository seam (boundary)
 vi.mock('@/lib/repositories/global-conversation-repository', () => ({
   globalConversationRepository: {
@@ -26,8 +24,10 @@ vi.mock('@/lib/repositories/chat-message-repository', () => ({
 }));
 
 // Mock auth (boundary)
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -61,8 +61,10 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // Test fixtures
 const mockUserId = 'user_123';

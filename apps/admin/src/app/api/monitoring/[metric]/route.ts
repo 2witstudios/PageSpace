@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { withAdminAuth } from '@/lib/auth';
 import {
   getSystemHealth,
   getUserActivity,
@@ -8,6 +7,7 @@ import {
   getDateRange
 } from '@/lib/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 type RouteContext = { params: Promise<{ metric: string }> };
 

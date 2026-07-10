@@ -1,12 +1,11 @@
 import 'server-only';
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  authenticateSessionRequest,
-  isAuthError as isAuthResultError,
-} from './index';
+import { authenticateSessionRequest } from './request-auth';
+import { isAuthError as isAuthResultError } from './auth-core';
 
-export { isSafeReturnUrl, isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from './url-utils';
-export { getClientIP } from '@pagespace/lib/security/client-ip';
+// NOTE: URL helpers (isSafeReturnUrl/isSafeNextPath/SIGNIN_NEXT_ALLOWED_PREFIXES)
+// and getClientIP are NOT re-exported here — import them from their owners
+// (`./url-utils` and `@pagespace/lib/security/client-ip`) directly (issue #1393).
 
 export interface AuthUser {
   userId: string;

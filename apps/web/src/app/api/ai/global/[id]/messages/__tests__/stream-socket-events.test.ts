@@ -52,8 +52,10 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
   broadcastGlobalConversationAdded: mockBroadcastGlobalConversationAdded,
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
 }));
 
@@ -329,9 +331,9 @@ vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
-import type { SessionAuthResult } from '@/lib/auth';
 import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',

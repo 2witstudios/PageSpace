@@ -33,8 +33,10 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/login-csrf-utils', () => ({
   validateLoginCSRFToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
@@ -43,7 +45,8 @@ import { generateRegistrationOptionsForSignup } from '@pagespace/lib/auth/passke
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const validPayload = {
   email: 'user@example.com',

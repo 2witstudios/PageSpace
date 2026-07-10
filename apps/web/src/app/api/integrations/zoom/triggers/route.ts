@@ -9,8 +9,9 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { ZOOM_TRIGGER_EVENT_TYPES } from '@/lib/integrations/zoom/webhook-event-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

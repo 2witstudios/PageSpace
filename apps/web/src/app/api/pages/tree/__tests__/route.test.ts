@@ -12,15 +12,17 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock external boundaries BEFORE imports
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => {
     return result !== null && typeof result === 'object' && 'error' in result;
   }),
   checkMCPDriveScope: vi.fn(() => null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: vi.fn(() => false),
   getPrincipalAccessiblePagesInDrive: vi.fn(),
 }));
@@ -71,10 +73,12 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions, checkMCPDriveScope } from '@/lib/auth';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { checkMCPDriveScope } from '@/lib/auth/auth-core';
 
 // Test helpers
 const mockUserId = 'user_123';

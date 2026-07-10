@@ -6,10 +6,11 @@ import {
   buildExportManifest,
 } from '@pagespace/lib/compliance/export/export-format';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDistributedRateLimit, resetDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import archiver from 'archiver';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 

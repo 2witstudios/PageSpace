@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => r !== null && typeof r === 'object' && 'error' in r),
   checkMCPCreateScope: vi.fn(() => null),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  isScopedMCPAuth: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -38,11 +42,12 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions, checkMCPCreateScope } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { getUserStorageQuota, updateActiveUploads, checkStorageQuota, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { checkMCPCreateScope } from '@/lib/auth/auth-core';
 
 const VALID_HASH = 'a'.repeat(64);
 const MOCK_URL = 'https://tigris.example.com/files/aaa.../original?X-Amz-Signature=abc';

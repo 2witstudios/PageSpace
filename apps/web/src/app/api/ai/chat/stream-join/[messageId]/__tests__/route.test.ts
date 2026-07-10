@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextResponse } from 'next/server';
 import { StreamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Fresh registry per test — module-level let, updated in beforeEach
 let testRegistry: StreamMulticastRegistry;
 
@@ -18,8 +16,10 @@ vi.mock('@/lib/ai/core/stream-multicast-registry', async () => {
   };
 });
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -32,9 +32,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockPageId = 'page-test-123';
 const mockUserId = 'user-test-456';

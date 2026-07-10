@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -10,6 +9,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { createCanvasFileViewToken } from '@/lib/canvas/file-view-token';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { verifyAuth } from '@/lib/auth/auth';
 
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]+$/);
 

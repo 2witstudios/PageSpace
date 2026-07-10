@@ -8,7 +8,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
-import { getClientIP } from '@/lib/auth';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { parseScopeList, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import { generateUserCode, normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
@@ -17,6 +16,7 @@ import { DEVICE_CODE_TTL_SECONDS, DEVICE_CODE_POLL_INTERVAL_SECONDS } from '@pag
 import { ensureOAuthClientRow, createDeviceAuthorization } from '@/lib/repositories/oauth-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 function noStoreJson(body: Record<string, unknown>, status: number): NextResponse {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });

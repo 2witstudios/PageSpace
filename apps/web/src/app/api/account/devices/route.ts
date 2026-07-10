@@ -5,10 +5,11 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserDeviceTokens, revokeAllUserDeviceTokens, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/auth/device-auth-utils';
 import { isValidTokenFormat, getTokenType } from '@pagespace/lib/auth/opaque-tokens';
 import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

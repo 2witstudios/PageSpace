@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -8,6 +7,7 @@ import { isFilePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { generatePresignedUrl } from '@/lib/presigned-url';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { verifyAuth } from '@/lib/auth/auth';
 
 interface RouteParams {
   params: Promise<{ id: string }>;

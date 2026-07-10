@@ -62,11 +62,15 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 const CREATOR_ID = 'user-creator';
 const OUTSIDER_ID = 'user-outsider';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
   checkMCPCreateScope: vi.fn(() => null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isPrincipalDriveMember: vi.fn(),
   getPrincipalDriveIds: vi.fn().mockResolvedValue([]),
   canPrincipalViewPage: vi.fn(),
@@ -100,7 +104,7 @@ vi.mock('@pagespace/db/db', () => ({
 
 import { GET } from '../route';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockScopedMcpAuth = (userId: string) => ({
   userId,

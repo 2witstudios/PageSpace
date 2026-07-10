@@ -55,19 +55,15 @@ vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => 
 
 // Only stub authentication — isScopedMCPAuth/isScopedOAuthAuth and
 // getScopedDriveMembership run for real.
-vi.mock('@/lib/auth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/auth')>();
-  return {
-    ...actual,
-    authenticateRequestWithOptions: vi.fn(),
-  };
-});
-
-import { authenticateRequestWithOptions } from '@/lib/auth';
+vi.mock('@/lib/auth/request-auth', async (importOriginal) => ({
+  ...(await importOriginal()),
+  authenticateRequestWithOptions: vi.fn(),
+}));
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { db } from '@pagespace/db/db';
 import { hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import type { DriveWithAccess } from '@pagespace/lib/services/drive-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const driveFixture = (overrides: { id: string; name: string; ownerId?: string }) => ({
   id: overrides.id,

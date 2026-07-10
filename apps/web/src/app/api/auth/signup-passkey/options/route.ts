@@ -8,7 +8,8 @@ import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const optionsSchema = z.object({
   email: z.email(),

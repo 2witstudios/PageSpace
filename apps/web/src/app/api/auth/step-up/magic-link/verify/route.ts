@@ -12,14 +12,14 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { getClientIP } from '@/lib/auth';
-import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { completeMagicLinkStepUp } from '@pagespace/lib/auth/step-up-service';
 import { parseMagicLinkStepUpNext } from '@pagespace/lib/auth/step-up-decisions';
 import { resolveAppUrl } from '@pagespace/lib/services/email-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const querySchema = z.object({ token: z.string().min(1) });
 

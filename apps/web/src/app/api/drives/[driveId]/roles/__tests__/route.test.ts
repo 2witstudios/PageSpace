@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { DriveRoleAccessInfo, DriveRole, RolePermissions } from '@pagespace/lib/services/drive-role-service';
 
 // ============================================================================
@@ -21,14 +20,18 @@ vi.mock('@pagespace/lib/services/drive-role-service', () => ({
     validateRolePermissions: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
 }));
 
 import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
 
 // ============================================================================
 // Test Fixtures

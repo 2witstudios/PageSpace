@@ -3,16 +3,13 @@ import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, and, desc, inArray } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
-import {
-  authenticateRequestWithOptions,
-  isAuthError,
-  getAllowedDriveIds,
-} from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   buildCreateConversationPayload,
   buildConversationListQuery,
 } from '@/lib/ai/openai-api/v1-conversations';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, getAllowedDriveIds } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
 

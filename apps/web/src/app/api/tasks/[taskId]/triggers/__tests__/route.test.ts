@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalEditPage: vi.fn(),
 }));
 
@@ -61,13 +65,14 @@ vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
 vi.mock('@pagespace/db/schema/tasks', () => ({ taskItems: {}, taskLists: {} }));
 vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'id', agentPageId: 'agentPageId', prompt: 'prompt', instructionPageId: 'instructionPageId', contextPageIds: 'contextPageIds' } }));
 vi.mock('@pagespace/db/schema/task-triggers', () => ({ taskTriggers: { id: 'id', taskItemId: 'taskItemId', triggerType: 'triggerType', workflowId: 'workflowId', isEnabled: 'isEnabled', nextRunAt: 'nextRunAt', lastFiredAt: 'lastFiredAt', lastFireError: 'lastFireError', createdAt: 'createdAt', updatedAt: 'updatedAt' } }));
-
-import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { createTaskTriggerWorkflow, recomputeTaskTriggerMetadata } from '@/lib/workflows/task-trigger-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { GET, PUT } from '../route';
 import { DELETE } from '../[triggerType]/route';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 
 const userId = 'user-1';
 const taskId = 'task-1';

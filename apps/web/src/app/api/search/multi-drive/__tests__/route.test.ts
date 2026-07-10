@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET } from '../route';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { getPrincipalDriveIds } from '@/lib/auth/principal-permissions';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   getPrincipalDriveIds: vi.fn(),
   getPrincipalBatchPagePermissions: vi.fn().mockResolvedValue(new Map()),
 }));
@@ -41,9 +48,6 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@/lib/utils/query-params', () => ({
   parseBoundedIntParam: vi.fn().mockReturnValue(20),
 }));
-
-import { authenticateRequestWithOptions, isAuthError, getPrincipalDriveIds } from '@/lib/auth';
-
 const mockSessionAuth = {
   userId: 'user_123',
   role: 'user' as const,

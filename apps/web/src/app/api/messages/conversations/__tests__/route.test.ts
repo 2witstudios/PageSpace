@@ -5,8 +5,10 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
@@ -66,10 +68,10 @@ vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
 import { GET, POST } from '../route';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import { encryptField } from '@pagespace/lib/encryption/field-crypto';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { usersShareDrive } from '@pagespace/lib/permissions/permissions';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const userId = 'user_self';
 const recipientId = 'user_other';

@@ -3,9 +3,10 @@ import { db } from '@pagespace/db/db'
 import { eq, and, count } from '@pagespace/db/operators'
 import { googleCalendarConnections, calendarEvents } from '@pagespace/db/schema/calendar';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 

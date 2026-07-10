@@ -3,7 +3,6 @@ import { db } from '@pagespace/db/db'
 import { eq, and, or, isNull, gt, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 // canUserViewPage below is only used for mention RECIPIENTS (other users), not
 // the requesting principal — those checks are keyed to arbitrary user ids and
 // must stay user-level.
@@ -19,6 +18,9 @@ import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import type { AttachmentMeta } from '@pagespace/lib/types';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 
 interface ChannelInboxFanoutInput {
   pageId: string;

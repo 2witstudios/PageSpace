@@ -17,12 +17,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 
 // --- Auth boundary -------------------------------------------------------------
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r
   ),
-  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -124,8 +128,8 @@ vi.mock('@/lib/channels/notify-mentioned-users', () => ({
 
 // --- Imports under test --------------------------------------------------------
 import { GET, POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
 
 // --- Fixtures ------------------------------------------------------------------
 const PAGE_ID = 'page_chan';

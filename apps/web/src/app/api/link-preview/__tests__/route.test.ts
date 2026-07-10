@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
@@ -39,9 +39,9 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { POST } from '../route';
-import { verifyAuth } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
+import { verifyAuth } from '@/lib/auth/auth';
 
 function makeRequest(body: unknown) {
   return new Request('http://localhost/api/link-preview', {

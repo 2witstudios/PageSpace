@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ============================================================================
 // Contract Tests for POST /api/pages/[pageId]/share-invite
 //
@@ -21,8 +19,10 @@ vi.mock('@/lib/repositories/page-invite-repository', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -75,12 +75,14 @@ vi.mock('@/lib/websocket', () => ({
 import { POST } from '../route';
 import { pageInviteRepository } from '@/lib/repositories/page-invite-repository';
 import { getDriveById } from '@pagespace/lib/services/drive-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { canUserSharePage } from '@pagespace/lib/permissions/permissions';
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingPageShareInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,

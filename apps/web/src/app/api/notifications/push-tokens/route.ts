@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { registerPushToken, unregisterPushToken, getUserPushTokens } from '@pagespace/lib/notifications/push-notifications';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

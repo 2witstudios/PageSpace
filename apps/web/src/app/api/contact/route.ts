@@ -11,7 +11,7 @@ import { db } from '@pagespace/db/db'
 import { contactSubmissions } from '@pagespace/db/schema/contact';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
-import { getClientIP } from '@/lib/auth/auth-helpers';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const MAX_PAYLOAD_BYTES = 5 * 1024; // 5KB
 

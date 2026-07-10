@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult } from '@/lib/auth';
-
 // Mock database
 const mockSelectWhere = vi.fn();
 const mockSelectOrderBy = vi.fn();
@@ -52,6 +50,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { GET } from '../route';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({

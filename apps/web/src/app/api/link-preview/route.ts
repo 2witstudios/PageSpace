@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { verifyAuth } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { verifyAuth } from '@/lib/auth/auth';
 
 const bodySchema = z.object({
   pageId: z.string().min(1),

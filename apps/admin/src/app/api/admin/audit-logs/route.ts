@@ -5,8 +5,8 @@ import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
-import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 export const GET = withAdminAuth(async (_adminUser, request) => {
   try {

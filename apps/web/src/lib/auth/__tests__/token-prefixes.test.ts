@@ -1,51 +1,25 @@
 /**
  * Token-prefix single-source-of-truth tests.
  *
- * middleware.ts (Edge runtime) imports the bearer prefixes from the
- * token-prefixes leaf; the '@/lib/auth' barrel re-exports the same values for
- * Node-side consumers. These tests pin both halves of that contract:
+ * middleware.ts (Edge runtime) and the Node-side token-auth engine both import
+ * the bearer prefixes from the token-prefixes leaf. These tests pin that
+ * contract:
  * 1. the leaf exports the exact prefixes the auth layer authenticates,
- * 2. the barrel's re-exports are identical (no second copy can drift),
- * 3. middleware.ts never imports the Node-only barrel (the import graph that
+ * 2. the token-auth engine (request-auth.ts) re-uses the leaf and defines no
+ *    prefix literals of its own (no second copy can drift),
+ * 3. middleware.ts never imports the Node-only auth graph (the import that
  *    500'd every request when middleware first shipped to production).
+ *
+ * Note (issue #1393): the `@/lib/auth` barrel has been deleted; prefixes are
+ * imported directly from `./token-prefixes` everywhere, so there is no longer a
+ * barrel re-export to drift.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// --- Mocks so the real barrel (Node-only import graph) can load in a unit test.
-vi.mock('next/server', () => ({
-  NextResponse: { json: vi.fn(), redirect: vi.fn(), rewrite: vi.fn(), next: vi.fn() },
-}));
-vi.mock('@pagespace/db/db', () => ({
-  db: { query: {}, insert: vi.fn(), update: vi.fn() },
-}));
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn(), isNull: vi.fn() }));
-vi.mock('@pagespace/db/schema/auth', () => ({ mcpTokens: {} }));
-vi.mock('@pagespace/db/schema/oauth', () => ({ oauthAccessTokens: {} }));
-vi.mock('@pagespace/lib/auth/token-utils', () => ({ hashToken: vi.fn() }));
-vi.mock('@pagespace/lib/auth/session-service', () => ({
-  sessionService: { validateSession: vi.fn() },
-}));
-vi.mock('@pagespace/lib/auth/token-lookup', () => ({ findOAuthAccessTokenByValue: vi.fn() }));
-vi.mock('@pagespace/lib/permissions/enforced-context', () => ({
-  EnforcedAuthContext: { fromSession: vi.fn() },
-}));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({ logSecurityEvent: vi.fn() }));
-vi.mock('../cookie-config', () => ({
-  getSessionFromCookies: vi.fn(),
-  COOKIE_CONFIG: {},
-  createSessionCookie: vi.fn(),
-  createClearSessionCookie: vi.fn(),
-  createLoggedInIndicatorCookie: vi.fn(),
-  createClearLoggedInIndicatorCookie: vi.fn(),
-  appendSessionCookie: vi.fn(),
-  appendClearCookies: vi.fn(),
-}));
-
 import * as leaf from '../token-prefixes';
-import * as barrel from '../index';
 
 describe('token-prefixes leaf', () => {
   it('exports the exact prefixes the auth layer authenticates', () => {
@@ -65,15 +39,12 @@ describe('token-prefixes leaf', () => {
   });
 });
 
-describe('@/lib/auth barrel re-export integrity', () => {
-  it('re-exports the identical leaf values (single source of truth, no drift possible)', () => {
-    expect(barrel.MCP_TOKEN_PREFIX).toBe(leaf.MCP_TOKEN_PREFIX);
-    expect(barrel.SESSION_TOKEN_PREFIX).toBe(leaf.SESSION_TOKEN_PREFIX);
-    expect(barrel.OAUTH_ACCESS_TOKEN_PREFIX).toBe(leaf.OAUTH_ACCESS_TOKEN_PREFIX);
-  });
-
-  it('defines no prefix literals of its own in index.ts', () => {
-    const source = fs.readFileSync(path.resolve(__dirname, '../index.ts'), 'utf8');
+describe('token-auth engine single source of truth', () => {
+  it('request-auth.ts imports the prefixes from the leaf and defines none of its own', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../request-auth.ts'), 'utf8');
+    // Re-uses the leaf (single source of truth).
+    expect(source).toMatch(/from ['"]\.\/token-prefixes['"]/);
+    // Never redefines the literals (a second copy could silently drift).
     expect(source).not.toMatch(/=\s*'mcp_'/);
     expect(source).not.toMatch(/=\s*'ps_sess_'/);
     expect(source).not.toMatch(/=\s*'ps_at_'/);

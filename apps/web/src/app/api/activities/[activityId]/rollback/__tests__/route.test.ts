@@ -11,7 +11,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
-import type { SessionAuthResult, AuthError } from '../../../../../../lib/auth';
 import type { ActivityActionPreview } from '../../../../../../types/activity-actions';
 
 // Mock service boundary
@@ -22,8 +21,10 @@ vi.mock('../../../../../../services/api', () => ({
 }));
 
 // Mock auth
-vi.mock('../../../../../../lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
@@ -81,8 +82,9 @@ vi.mock('../../../../../../lib/logging/mask', () => ({
 }));
 
 import { executeRollback, previewRollback } from '../../../../../../services/api';
-import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 // Test helpers
 const mockUserId = 'user_123';

@@ -75,8 +75,10 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
+}));
+vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
@@ -98,7 +100,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { appendSessionCookie } from '@/lib/auth';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 describe('/api/auth/device/refresh', () => {
   const mockUser = {

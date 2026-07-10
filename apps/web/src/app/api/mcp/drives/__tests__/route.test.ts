@@ -54,14 +54,17 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   getAppDriveMembership: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateMCPRequest: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(() => false),
   isMCPAuthResult: vi.fn(() => false),
 }));
 
 import { POST } from '../route';
-import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { authenticateMCPRequest } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockSessionAuth = (userId = 'user-1') => ({
   userId,

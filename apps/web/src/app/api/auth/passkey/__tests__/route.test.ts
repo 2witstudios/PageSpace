@@ -37,21 +37,23 @@ vi.mock('@pagespace/lib/audit/security-audit', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateSessionRequest: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
 import { GET } from '../route';
 import { listUserPasskeys } from '@pagespace/lib/auth/passkey-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import {
-  authenticateSessionRequest,
-  isAuthError,
-  getClientIP,
-} from '@/lib/auth';
 import { NextResponse } from 'next/server';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const createRequest = () =>
   new Request('http://localhost/api/auth/passkey', { method: 'GET' });

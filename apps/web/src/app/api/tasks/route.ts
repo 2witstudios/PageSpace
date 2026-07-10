@@ -7,15 +7,9 @@ import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/ta
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import {
-  authenticateRequestWithOptions,
-  isAuthError,
-  checkMCPDriveScope,
-  isScopedMCPAuth,
-  isPrincipalDriveMember,
-  getPrincipalDriveIds,
-  getPrincipalBatchPagePermissions,
-} from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { isScopedMCPAuth, isPrincipalDriveMember, getPrincipalDriveIds, getPrincipalBatchPagePermissions } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 

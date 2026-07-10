@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockSelect = vi.hoisted(() => vi.fn());
 const mockFrom = vi.hoisted(() => vi.fn());
@@ -33,8 +35,10 @@ vi.mock('@pagespace/db/schema/hotkeys', () => ({
   userHotkeyPreferences: { userId: 'userId', hotkeyId: 'hotkeyId' },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
@@ -58,9 +62,6 @@ vi.mock('@/lib/hotkeys/registry', () => ({
     return undefined;
   }),
 }));
-
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-
 // Test fixtures
 const mockSessionAuth = (userId: string): SessionAuthResult => ({
   userId,

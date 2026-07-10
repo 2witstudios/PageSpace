@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ============================================================================
 // Contract Tests for POST /api/drives/[driveId]/members/invite
 //
@@ -32,8 +30,10 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -98,7 +98,6 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 
 import { POST } from '../route';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -113,6 +112,9 @@ import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker'
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingDriveInvitationEmail } from '@pagespace/lib/services/notification-email-service';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,

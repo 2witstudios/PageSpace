@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
@@ -9,6 +8,8 @@ import {
   type CommandScope,
 } from '@pagespace/lib/commands/command-core';
 import { loadAvailableCommands } from '@/lib/commands/available-commands';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 

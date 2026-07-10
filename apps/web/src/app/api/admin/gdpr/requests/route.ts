@@ -1,6 +1,6 @@
-import { withAdminAuth } from '@/lib/auth';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { computeSlaStatus, summarizeSlaCompliance } from '@pagespace/lib/compliance/dsr/sla';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 /**
  * Admin visibility into Data Subject Requests + SLA standing (#919).

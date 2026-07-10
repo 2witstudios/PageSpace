@@ -1,25 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-/**
- * Contract tests for POST /api/auth/ws-token
- *
- * Creates long-lived WS tokens for desktop/mobile persistent connections.
- *
- * Contract:
- *   Request: POST with valid session (cookie or bearer)
- *   Response:
- *     200: { token: string }
- *     401: { error: 'Unauthorized' }
- *     429: { error: string, retryAfter: number } with Retry-After header
- *
- * Dependencies mocked at service seam:
- *   - @/lib/auth: verifyAuth, getClientIP
- *   - @pagespace/lib: sessionService.createSession
- *   - @pagespace/lib/security/distributed-rate-limit: checkDistributedRateLimit
- */
-
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
@@ -46,11 +30,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
-
-import { verifyAuth, getClientIP } from '@/lib/auth';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { POST } from '../route';
+import { verifyAuth } from '@/lib/auth/auth';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 describe('/api/auth/ws-token', () => {
   const mockUser = {

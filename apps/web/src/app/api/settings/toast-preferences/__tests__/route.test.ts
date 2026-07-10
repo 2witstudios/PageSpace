@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockFindFirst = vi.hoisted(() => vi.fn());
 const mockInsert = vi.hoisted(() => vi.fn());
@@ -26,8 +28,10 @@ vi.mock('@pagespace/db/schema/toast-notification-preferences', () => ({
   userToastNotificationPreferences: { userId: 'userId', level: 'level' },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
@@ -41,9 +45,6 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
-
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-
 const mockSessionAuth = (userId: string): SessionAuthResult => ({
   userId,
   tokenVersion: 0,

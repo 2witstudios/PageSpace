@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getValidAccessToken } from '@/lib/integrations/google-calendar/token-refresh';
 import { listCalendars } from '@/lib/integrations/google-calendar/api-client';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 

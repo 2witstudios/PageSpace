@@ -75,19 +75,10 @@ vi.mock('../cookie-config', () => ({
   appendSessionCookie: vi.fn(),
   appendClearCookies: vi.fn(),
 }));
-
-import {
-  checkMCPDriveScope,
-  checkMCPPageScope,
-  checkMCPCreateScope,
-  filterDrivesByMCPScope,
-  getAllowedDriveIds,
-  isManageKeysOnly,
-  type MCPAuthResult,
-  type SessionAuthResult,
-  type OAuthAuthResult,
-} from '../index';
 import { manageKeysScopedAuthResult } from './manage-keys-fixture';
+import { checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope, getAllowedDriveIds, isManageKeysOnly } from '@/lib/auth/auth-core';
+import { checkMCPPageScope } from '@/lib/auth/request-auth';
+import type { MCPAuthResult, SessionAuthResult, OAuthAuthResult } from '@/lib/auth/auth-types';
 
 describe('MCP Scope Enforcement', () => {
   beforeEach(() => {

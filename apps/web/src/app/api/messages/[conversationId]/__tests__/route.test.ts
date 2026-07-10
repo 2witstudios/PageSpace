@@ -12,8 +12,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 
 // --- Auth boundary --------------------------------------------------------------
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r
   ),
@@ -89,10 +91,10 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 
 // --- Imports under test (must come after vi.mock blocks) -----------------------
 import { POST, GET, PATCH } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { AttachmentMeta } from '@pagespace/lib/types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
 
 // --- Fixtures ------------------------------------------------------------------
 const SENDER_ID = 'user_sender';

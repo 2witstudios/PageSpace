@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
@@ -11,6 +10,7 @@ import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
+import { verifyAuth } from '@/lib/auth/auth';
 
 /** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
 function toContentHash(storagePath: string): string {

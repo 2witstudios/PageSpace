@@ -12,8 +12,10 @@ vi.mock('@pagespace/lib/permissions/share-link-service', () => ({
   listDriveShareLinks: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateWithEnforcedContext: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isEnforcedAuthError: vi.fn(() => false),
 }));
 
@@ -23,7 +25,8 @@ vi.mock('@/lib/share-url', () => ({
 
 import { POST } from '../route';
 import { createDriveShareLink } from '@pagespace/lib/permissions/share-link-service';
-import { authenticateWithEnforcedContext, isEnforcedAuthError } from '@/lib/auth';
+import { authenticateWithEnforcedContext } from '@/lib/auth/request-auth';
+import { isEnforcedAuthError } from '@/lib/auth/auth-core';
 
 const mockCtx = { userId: 'user-1' };
 const mockAuth = { ctx: mockCtx };

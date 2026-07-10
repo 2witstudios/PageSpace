@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -9,6 +8,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { isDangerousMimeType, sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
 import { verifyCanvasFileViewToken } from '@/lib/canvas/file-view-token';
+import { verifyAuth } from '@/lib/auth/auth';
 
 interface RouteParams {
   params: Promise<{

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
@@ -12,6 +11,9 @@ import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers'
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 
 const logger = loggers.api.child({ module: 'task-triggers-api' });
 

@@ -13,15 +13,17 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ── Mocks (before imports) ──────────────────────────────────────────────
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => result !== null && typeof result === 'object' && 'error' in (result as Record<string, unknown>)),
   getAllowedDriveIds: vi.fn(() => []),
   isMCPAuthResult: vi.fn(() => false),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalDeletePage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserDeletePage } = await import('@pagespace/lib/permissions/permissions');
     return canUserDeletePage(auth.userId, pageId);
@@ -98,13 +100,15 @@ vi.mock('@pagespace/db/schema/core', () => ({
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
 import { DELETE } from '../route';
-import { authenticateRequestWithOptions, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth/auth-core';
 
 const { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, txSelect, txSelectFrom, txSelectWhere, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;

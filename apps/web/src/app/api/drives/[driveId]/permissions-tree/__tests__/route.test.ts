@@ -71,7 +71,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: DRIVE_MEMBERS_TABLE,
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
@@ -92,9 +92,9 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 // ---------- imports (after mocks) ----------
 
 import { GET } from '../route';
-import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { verifyAuth } from '@/lib/auth/auth';
 
 // ---------- helpers ----------
 

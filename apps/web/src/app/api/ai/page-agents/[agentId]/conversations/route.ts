@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { createId, isCuid } from '@paralleldrive/cuid2';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
@@ -9,6 +8,9 @@ import {
   generateTitle,
 } from '@/lib/repositories/conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 
 // Auth options: GET is read-only, POST creates new conversations
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };

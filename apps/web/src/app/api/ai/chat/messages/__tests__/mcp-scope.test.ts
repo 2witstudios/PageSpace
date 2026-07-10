@@ -2,8 +2,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
-
 // ============================================================================
 // MCP Page Scope Enforcement Tests for GET /api/ai/chat/messages
 //
@@ -19,10 +17,14 @@ vi.mock('@/lib/repositories/chat-message-repository', () => ({
 }));
 
 // Mock auth (boundary)
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result: any) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn((result: any) => 'error' in result),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -52,10 +54,10 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
     content: msg.content,
   })),
 }));
-
-import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
 
 // ============================================================================
 // Test Fixtures

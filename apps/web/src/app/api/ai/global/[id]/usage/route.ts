@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getContextWindow } from '@pagespace/lib/monitoring/ai-monitoring';
@@ -7,6 +6,8 @@ import {
   globalConversationRepository,
   calculateUsageSummary,
 } from '@/lib/repositories/global-conversation-repository';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 

@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/agents
 // ============================================================================
@@ -56,10 +54,14 @@ vi.mock('@pagespace/db/schema/core', () => ({
     },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   getPrincipalDriveAccess: vi.fn(),
   canPrincipalViewPage: vi.fn(),
 }));
@@ -67,9 +69,12 @@ vi.mock('@/lib/auth', () => ({
 import { GET, POST } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { addAgentToDrive } from '@pagespace/lib/services/drive-agent-service';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 
 // ============================================================================
 // Test Helpers

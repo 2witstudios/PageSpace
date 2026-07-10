@@ -18,7 +18,7 @@ import { getTokenPrefix, hashToken } from '@pagespace/lib/auth/token-utils';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { buildSubmissionSchema } from '@pagespace/lib/forms/submission-schema';
 import { isHoneypotTriggered, HONEYPOT_FIELD_NAME } from '@pagespace/lib/forms/honeypot';
-import { getClientIP } from '@/lib/auth/auth-helpers';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 import { lookupActiveFormTarget, appendFormSubmission } from '@/services/api/form-target-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 

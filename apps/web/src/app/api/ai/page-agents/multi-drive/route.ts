@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth';
-
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, getAllowedDriveIds } from '@/lib/auth/auth-core';
+import { getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 
 interface AgentSummary {
   id: string;

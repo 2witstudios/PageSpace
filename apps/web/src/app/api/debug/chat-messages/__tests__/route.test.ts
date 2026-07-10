@@ -6,8 +6,6 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock next/server before importing route
 vi.mock('next/server', () => {
   class MockNextResponse extends Response {
@@ -25,8 +23,10 @@ vi.mock('next/server', () => {
 });
 
 // Mock auth (boundary)
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -80,9 +80,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // Test fixtures
 const mockUserId = 'user_123';

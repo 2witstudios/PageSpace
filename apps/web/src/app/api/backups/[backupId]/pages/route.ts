@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { driveBackups, driveBackupPages, pageVersions } from '@pagespace/db/schema/versioning';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { buildSnapshotPageTree } from '@/services/api/snapshot-pages-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const CONCURRENCY_CAP = 10;

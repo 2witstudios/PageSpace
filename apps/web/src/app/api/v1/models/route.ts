@@ -4,12 +4,9 @@ import { eq, and, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import {
-  authenticateRequestWithOptions,
-  isAuthError,
-  getAllowedDriveIds,
-  getPrincipalBatchPagePermissions,
-} from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, getAllowedDriveIds } from '@/lib/auth/auth-core';
+import { getPrincipalBatchPagePermissions } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
 

@@ -10,7 +10,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, POST, DELETE } from '../route';
-import type { SessionAuthResult, AuthError, EnforcedAuthError, EnforcedAuthSuccess } from '@/lib/auth';
 import type {
   GetPermissionsResult,
   PermissionEntry,
@@ -29,9 +28,11 @@ vi.mock('@/services/api', () => ({
 }));
 
 // Mock auth boundary - different auth for GET vs POST/DELETE
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   authenticateWithEnforcedContext: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   isEnforcedAuthError: vi.fn((result) => 'error' in result),
 }));
@@ -87,9 +88,10 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 import { permissionManagementService } from '@/services/api';
-import { authenticateRequestWithOptions, authenticateWithEnforcedContext } from '@/lib/auth';
 import { createPermissionNotification } from '@pagespace/lib/notifications/notifications';
 import { grantPagePermission, revokePagePermission } from '@pagespace/lib/permissions/permission-mutations';
+import type { SessionAuthResult, AuthError, EnforcedAuthError, EnforcedAuthSuccess } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions, authenticateWithEnforcedContext } from '@/lib/auth/request-auth';
 
 // Test helpers
 const mockUserId = 'cluser123456789012345';

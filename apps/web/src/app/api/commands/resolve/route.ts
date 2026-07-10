@@ -2,11 +2,12 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { commands } from '@pagespace/db/schema/commands';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { BUILTIN_COMMANDS } from '@pagespace/lib/commands/command-core';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 

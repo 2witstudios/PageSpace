@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { DriveWithAccess, DriveAccessInfo } from '@pagespace/lib/services/drive-service';
 
 // ============================================================================
@@ -43,15 +42,16 @@ vi.mock('@/lib/websocket', () => ({
   createDriveEventPayload: vi.fn((driveId, event, data) => ({ driveId, event, data })),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
-  // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
-  // Session auth falls through to user-level authority; derive it from the
-  // test's getDriveAccess fixture so existing fixtures keep driving 403/200.
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  isScopedMCPAuth: vi.fn(() => false),
   isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { getDriveAccess } = await import('@pagespace/lib/services/drive-service');
     const access = await getDriveAccess(driveId, auth.userId);
@@ -76,7 +76,9 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 import { getDriveById, getDriveAccess, getDriveWithAccess, updateDrive, trashDrive, isValidDriveHomePage } from '@pagespace/lib/services/drive-service'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // ============================================================================
 // Test Helpers

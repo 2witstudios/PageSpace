@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { sql } from '@pagespace/db/operators';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import type { ConversationDetailRow } from '@/types/messaging';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 

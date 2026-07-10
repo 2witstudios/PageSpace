@@ -12,7 +12,7 @@ const mockFindFirstPage = vi.fn();
 const mockApplyPageMutation = vi.fn();
 const mockGetActorInfo = vi.fn();
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateMCPRequest: vi.fn().mockResolvedValue({
     userId: 'user_123',
     tokenType: 'mcp',
@@ -22,8 +22,12 @@ vi.mock('@/lib/auth', () => ({
     adminRoleVersion: 0,
     allowedDriveIds: [],
   }),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => 'error' in (result as object),
   isMCPAuthResult: () => true,
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   getPrincipalAccessLevel: vi.fn().mockResolvedValue({
     canView: true,
     canEdit: true,

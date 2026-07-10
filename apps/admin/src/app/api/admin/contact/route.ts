@@ -4,8 +4,8 @@ import { contactSubmissions } from '@pagespace/db/schema/contact';
 import { users } from '@pagespace/db/schema/auth';
 import { userEmailInListMatch, decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { withAdminAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 export const GET = withAdminAuth(async (_adminUser, request) => {
   try {

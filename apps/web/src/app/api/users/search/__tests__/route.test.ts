@@ -23,7 +23,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
@@ -106,10 +106,10 @@ vi.mock('@/lib/utils/query-params', () => ({
 import { GET } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { and, isNotNull } from '@pagespace/db/operators';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import { verifyAuth } from '@/lib/auth/auth';
 
 // ============================================================================
 // Test Helpers

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth } from '@/lib/auth';
 import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
 import {
   validateContentHash,
@@ -13,6 +12,9 @@ import { checkStorageQuota, getUserStorageQuota, updateActiveUploads, userRefere
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPCreateScope } from '@/lib/auth/auth-core';
+import { isScopedMCPAuth } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const PRESIGN_TTL = 900;

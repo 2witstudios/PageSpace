@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -29,8 +27,10 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn(),
   getBatchPagePermissions: vi.fn(),
 }));
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(
     (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object)
   ),
@@ -39,7 +39,8 @@ vi.mock('@/lib/auth', () => ({
 import { GET } from '../suggest/route';
 import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);

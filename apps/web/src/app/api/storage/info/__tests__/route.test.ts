@@ -8,7 +8,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
@@ -50,10 +50,10 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import { GET } from '../route';
-import { verifyAuth } from '@/lib/auth';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { reconcileStorageUsage } from '@pagespace/lib/services/storage-limits';
+import { verifyAuth } from '@/lib/auth/auth';
 
 describe('GET /api/storage/info', () => {
   beforeEach(() => {

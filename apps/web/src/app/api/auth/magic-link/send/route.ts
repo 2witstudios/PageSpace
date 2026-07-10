@@ -11,9 +11,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
-import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const sendMagicLinkSchema = z.object({
   email: z.email({ message: 'Please enter a valid email address' }),

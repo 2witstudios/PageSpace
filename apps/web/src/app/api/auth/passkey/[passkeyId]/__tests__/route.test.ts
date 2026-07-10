@@ -34,10 +34,14 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateSessionRequest: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   isSessionAuthResult: vi.fn(),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
@@ -47,8 +51,10 @@ import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateSessionRequest, isAuthError, isSessionAuthResult, getClientIP } from '@/lib/auth';
 import { NextResponse } from 'next/server';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { isAuthError, isSessionAuthResult } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const createContext = (passkeyId = 'test-passkey-id') => ({
   params: Promise.resolve({ passkeyId }),

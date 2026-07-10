@@ -3,10 +3,10 @@ import { db } from '@pagespace/db/db'
 import { eq, and, isNotNull } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core'
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
-import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { verifyAuth } from '@/lib/auth/auth';
 
 interface PageNode {
   id: string;

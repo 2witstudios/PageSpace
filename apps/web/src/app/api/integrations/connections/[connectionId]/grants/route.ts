@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -7,6 +6,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
 import { listGrantsByConnection } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 

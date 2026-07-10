@@ -4,7 +4,6 @@ import { db } from '@pagespace/db/db'
 import { eq, and, inArray, desc } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
-import { withAdminAuth } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
 import { getUserFriendlyStripeError } from '@/lib/stripe-errors';
@@ -13,6 +12,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 type RouteContext = { params: Promise<{ userId: string }> };
 

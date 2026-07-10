@@ -10,8 +10,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
-import { withAdminAuth } from '@/lib/auth';
 import { parseListUsersParams, matchesSearch, compareUsers, isDormant } from './list-params';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 /**
  * GET /api/admin/users — paginated users list.

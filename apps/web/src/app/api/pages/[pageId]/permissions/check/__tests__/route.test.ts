@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock dependencies
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     getUserAccessLevel: vi.fn(),
@@ -23,13 +21,15 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
-
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({

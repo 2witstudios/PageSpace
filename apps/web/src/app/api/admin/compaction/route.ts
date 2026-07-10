@@ -1,10 +1,10 @@
-import { withAdminAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { conversationCompactions } from '@pagespace/db/schema/ai-compaction';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, desc, eq, gte, isNotNull, sql } from '@pagespace/db/operators';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildAdminReadAuditEvent } from '@pagespace/lib/audit/admin-read-audit';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 async function handleCompactionStats(adminUserId: string, request: Request): Promise<Response> {
   // GDPR Art 32(1)(b) (#954): operator read of cross-user AI conversation /

@@ -14,7 +14,8 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP, appendSessionCookie } from '@/lib/auth';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),

@@ -6,7 +6,6 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
-import { authenticateRequestWithOptions, isAuthError, filterDrivesByMCPScope, checkMCPDriveScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -24,6 +23,9 @@ import {
   isUniqueViolation,
   validateEntryPage,
 } from './command-route-helpers';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, filterDrivesByMCPScope, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 
 /** Drives where the user is owner or an accepted member (page-level access does not count). */
 async function getMemberDriveIds(userId: string): Promise<string[]> {

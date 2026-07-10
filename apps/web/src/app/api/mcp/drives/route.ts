@@ -10,9 +10,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { eq } from '@pagespace/db/operators';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
-import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+import { authenticateMCPRequest } from '@/lib/auth/request-auth';
+import { isAuthError, isMCPAuthResult } from '@/lib/auth/auth-core';
 
 // Schema for drive creation
 const createDriveSchema = z.object({

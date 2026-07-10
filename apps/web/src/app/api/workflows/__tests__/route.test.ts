@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { DriveAccessResult } from '@pagespace/lib/services/drive-member-service';
 
 // ============================================================================
@@ -42,10 +41,14 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isPrincipalDriveOwnerOrAdmin: vi.fn(),
 }));
 
@@ -93,8 +96,11 @@ vi.mock('@pagespace/db/schema/workflow-runs', () => ({
 
 import { GET, POST } from '../route';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 
 // ============================================================================
 // Fixtures

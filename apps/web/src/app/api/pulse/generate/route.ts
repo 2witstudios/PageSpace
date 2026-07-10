@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { generateText } from 'ai';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildTimestampSystemPrompt, getUserTimeOfDay, getStartOfTodayInTimezone, isValidTimezone, normalizeTimezone, formatDateInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { BACKGROUND_LIGHT_MODEL } from '@/lib/ai/core/ai-providers-config';
@@ -40,6 +39,8 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 

@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { getUserNotifications, getUnreadNotificationCount } from '@pagespace/lib/notifications/notifications';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 

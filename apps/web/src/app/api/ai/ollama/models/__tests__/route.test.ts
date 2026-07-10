@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // Mock dependencies
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -17,8 +15,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateSessionRequest: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -31,8 +31,10 @@ vi.mock('@pagespace/lib/security/url-validator', () => ({
 }));
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({

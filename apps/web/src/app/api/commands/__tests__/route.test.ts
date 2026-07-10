@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import { encryptField } from '@pagespace/lib/encryption/field-crypto';
 
 vi.mock('@pagespace/db/db', () => ({
@@ -48,14 +47,18 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isDriveOwnerOrAdmin: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(
     (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object)
   ),
-  canPrincipalViewPage: vi.fn(),
   filterDrivesByMCPScope: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  canPrincipalViewPage: vi.fn(),
 }));
 
 // Wrap (not replace) the real decryptUsersByIdOnce so call counts can be
@@ -74,8 +77,11 @@ import { GET, POST } from '../route';
 import { db } from '@pagespace/db/db';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
-import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope, checkMCPDriveScope } from '@/lib/auth';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
+import { filterDrivesByMCPScope, checkMCPDriveScope } from '@/lib/auth/auth-core';
 
 const mockedAuth = vi.mocked(authenticateRequestWithOptions);
 const mockedDb = vi.mocked(db, true);

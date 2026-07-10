@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -8,6 +7,8 @@ import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activi
 import { generateToken } from '@pagespace/lib/auth/token-utils';
 import { validateDriveScopeAccess } from '@pagespace/lib/services/drive-service';
 import { rejectScopedOAuth } from './scope-guard';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // 'oauth' lets the pagespace CLI (which never holds a session cookie —
 // `pagespace keys list` authenticates with an OAuth access token from

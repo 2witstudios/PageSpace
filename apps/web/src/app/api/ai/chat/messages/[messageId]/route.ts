@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -15,6 +14,9 @@ import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/webso
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 

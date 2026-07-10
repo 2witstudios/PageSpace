@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Use inferred types to avoid export issues
 type DriveSearchInfo = NonNullable<Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-search-service').checkDriveAccessForSearch>>>;
 type RegexSearchResponse = Awaited<ReturnType<typeof import('@pagespace/lib/services/drive-search-service').regexSearchPages>>;
@@ -32,11 +31,15 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
-  checkMCPDriveScope: vi.fn(() => null), // Allow all drives by default
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+  checkMCPDriveScope: vi.fn(() => null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  isScopedMCPAuth: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
@@ -44,7 +47,9 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 }));
 
 import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/services/drive-search-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 // ============================================================================
 // Test Fixtures

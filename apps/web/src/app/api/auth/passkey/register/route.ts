@@ -10,13 +10,9 @@ import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import {
-  authenticateSessionRequest,
-  getBearerToken,
-  isAuthError,
-  isSessionAuthResult,
-  getClientIP,
-} from '@/lib/auth';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { getBearerToken, isAuthError, isSessionAuthResult } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const verifySchema = z.object({
   response: z.any(), // WebAuthn response - validated by simplewebauthn

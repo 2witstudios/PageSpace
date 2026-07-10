@@ -20,10 +20,14 @@ const mockGetFormTargetById = vi.hoisted(() => vi.fn());
 const mockCreateFormTarget = vi.hoisted(() => vi.fn());
 const mockUpdateFormTargetStatus = vi.hoisted(() => vi.fn());
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: mockAuthenticate,
-  isAuthError: (result: { error?: unknown }) => 'error' in result,
   checkMCPPageScope: mockCheckMCPPageScope,
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: (result: { error?: unknown }) => 'error' in result,
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalEditPage: mockCanPrincipalEditPage,
 }));
 

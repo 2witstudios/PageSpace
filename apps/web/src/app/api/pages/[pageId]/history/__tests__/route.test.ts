@@ -11,8 +11,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { SessionAuthResult, AuthError } from '../../../../../../lib/auth';
-
 // Mock service boundary
 vi.mock('../../../../../../services/api', () => ({
   getPageVersionHistory: vi.fn(),
@@ -20,10 +18,14 @@ vi.mock('../../../../../../services/api', () => ({
 }));
 
 // Mock auth
-vi.mock('../../../../../../lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserViewPage(auth.userId, pageId);
@@ -41,9 +43,10 @@ vi.mock('@pagespace/lib/permissions/rollback-permissions', () => ({
 }));
 
 import { getPageVersionHistory, getUserRetentionDays } from '../../../../../../services/api';
-import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 // Test helpers
 const mockUserId = 'user_123';

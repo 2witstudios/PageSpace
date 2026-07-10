@@ -6,9 +6,11 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
-import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import crypto from 'crypto';
 import { normalizeGoogleCalendarReturnPath } from '@/lib/integrations/google-calendar/return-url';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

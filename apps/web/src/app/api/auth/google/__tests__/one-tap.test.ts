@@ -115,8 +115,10 @@ vi.mock('@/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+}));
+vi.mock('@/lib/auth/device-auth-helpers', () => ({
   revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
   createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
@@ -270,7 +272,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('should revoke existing sessions on login (session fixation prevention)', async () => {
-      const { revokeSessionsForLogin } = await import('@/lib/auth');
+      const { revokeSessionsForLogin } = await import('@/lib/auth/device-auth-helpers');
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 

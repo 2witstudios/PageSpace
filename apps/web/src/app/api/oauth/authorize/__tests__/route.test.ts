@@ -8,9 +8,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('203.0.113.9'),
 }));
 
@@ -49,13 +53,13 @@ vi.mock('@/lib/repositories/session-repository', () => ({
 }));
 
 import { GET, POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createAuthorizationCode } from '@/lib/repositories/oauth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { nextConfig } from '../../../../../../next.config';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const REDIRECT_URI = 'http://127.0.0.1:51234/callback';
 const CODE_CHALLENGE = 'a'.repeat(43);

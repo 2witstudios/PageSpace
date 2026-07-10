@@ -6,10 +6,12 @@ import { getCreatablePageTypes } from '@pagespace/lib/content/page-types.config'
 import { PageType } from '@pagespace/lib/utils/enums'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult, isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth';
 import { pageService, type CreatePageParams } from '@/services/api';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPCreateScope, isMCPAuthResult } from '@/lib/auth/auth-core';
+import { isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const creatablePageTypes = [

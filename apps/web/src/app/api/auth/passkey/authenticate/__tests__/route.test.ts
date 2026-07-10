@@ -80,9 +80,13 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/login-csrf-utils', () => ({
   validateLoginCSRFToken: vi.fn(),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+}));
+vi.mock('@/lib/auth/device-auth-helpers', () => ({
   createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
 }));
 
@@ -126,8 +130,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { createDeviceToken } from '@/lib/auth/device-auth-helpers';
 
 const validPayload = {
   response: { id: 'cred-1', rawId: 'raw', type: 'public-key' },

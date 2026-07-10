@@ -3,10 +3,14 @@ import { NextResponse } from 'next/server';
 
 // ---------- Mocks (must precede route import) ----------
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn((result) => 'error' in result),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalEditPage: async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
     return canUserEditPage(auth.userId, pageId);
@@ -119,10 +123,10 @@ vi.mock('@/lib/websocket', () => ({
 // ---------- Imports (after mocks) ----------
 
 import { GET, POST, PUT, DELETE } from '../route';
-import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
 
 // ---------- Helpers ----------
 

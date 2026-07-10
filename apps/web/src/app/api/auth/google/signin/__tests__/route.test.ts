@@ -43,15 +43,18 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+}));
+vi.mock('@/lib/auth/url-utils', () => ({
   isSafeReturnUrl: vi.fn(() => true),
 }));
 
 import { POST, GET } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { isSafeReturnUrl } from '@/lib/auth/url-utils';
 
 const createPostRequest = (
   payload: Record<string, unknown>,

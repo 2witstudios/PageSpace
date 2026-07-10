@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AdminValidationResult } from '../admin-role';
 
 // Mock the auth index module
-vi.mock('../index', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateSessionRequest: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
 }));
 
@@ -30,9 +32,9 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { withAdminAuth } from '../auth';
-import { authenticateSessionRequest } from '../index';
 import { validateAdminAccess } from '../admin-role';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
 
 const mockAuthenticateRequest = vi.mocked(authenticateSessionRequest);
 const mockValidateAdminAccess = vi.mocked(validateAdminAccess);

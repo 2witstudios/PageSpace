@@ -88,9 +88,13 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: vi.fn().mockResolvedValue({ isMember: true, isOwner: true, isAdmin: true }),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn().mockResolvedValue({ userId: 'user-1' }),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/auth/url-utils', () => ({
   isSafeReturnUrl: vi.fn().mockReturnValue(true),
 }));
 

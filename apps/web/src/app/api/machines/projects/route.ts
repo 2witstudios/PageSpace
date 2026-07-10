@@ -14,7 +14,6 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { addProject, listProjects, removeProject } from '@pagespace/lib/services/machines/machine-projects';
 import {
   buildMachineProjectsDeps,
@@ -22,6 +21,8 @@ import {
   canViewMachine,
   resolveMachineActorContext,
 } from '@/lib/machines/machine-projects-runtime';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateWithEnforcedContext, isEnforcedAuthError, getClientIP } from '@/lib/auth';
 import {
   redeemDriveShareLink,
   redeemPageShareLink,
@@ -8,6 +7,9 @@ import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 import { emitAcceptanceSideEffects } from '@pagespace/lib/services/invites';
 import type { AcceptedInviteData } from '@pagespace/lib/services/invites';
+import { authenticateWithEnforcedContext } from '@/lib/auth/request-auth';
+import { isEnforcedAuthError } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const AUTH_WRITE = { allow: ['session'] as const, requireCSRF: true };
 

@@ -32,8 +32,10 @@ const h = vi.hoisted(() => ({
   accessiblePageIds: [] as string[],
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
 }));
 
@@ -98,12 +100,12 @@ vi.mock('@pagespace/db/schema/automation-preferences', () => ({
 }));
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { users } from '@pagespace/db/schema/auth';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { dmConversations } from '@pagespace/db/schema/social';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const USER_ID = 'user-1';
 const PAGE_ID = 'page-1';

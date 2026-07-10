@@ -8,16 +8,6 @@ import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import {
-  authenticateRequestWithOptions,
-  isAuthError,
-  isMCPAuthResult,
-  checkMCPPageScope,
-  getAllowedDriveIds,
-  isScopedMCPAuth,
-  canPrincipalViewPage,
-  canPrincipalEditPage,
-} from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
@@ -48,6 +38,9 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError, isMCPAuthResult, getAllowedDriveIds } from '@/lib/auth/auth-core';
+import { isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 
 export const maxDuration = 300;
 

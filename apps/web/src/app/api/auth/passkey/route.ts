@@ -2,11 +2,9 @@ import { NextResponse } from 'next/server';
 import { listUserPasskeys } from '@pagespace/lib/auth/passkey-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
-import {
-  authenticateSessionRequest,
-  isAuthError,
-  getClientIP,
-} from '@/lib/auth';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 /**
  * GET /api/auth/passkey

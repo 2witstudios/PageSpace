@@ -9,11 +9,15 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r
   ),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalEditPage: vi.fn(),
 }));
 
@@ -46,8 +50,9 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 }));
 
 import { DELETE } from '../route';
-import { authenticateRequestWithOptions, canPrincipalEditPage } from '@/lib/auth';
-import type { SessionAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
 
 const PAGE_ID = 'page_chan';
 const MESSAGE_ID = 'msg_1';

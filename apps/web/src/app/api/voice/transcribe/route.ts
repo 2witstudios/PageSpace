@@ -8,7 +8,6 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -23,6 +22,8 @@ import { calculateVoiceCostDollars } from '@pagespace/lib/monitoring/voice-prici
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 

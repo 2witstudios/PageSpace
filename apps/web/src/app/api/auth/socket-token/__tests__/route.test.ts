@@ -22,7 +22,7 @@ vi.mock('@/lib/auth/auth-helpers', () => ({
   isAuthError: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 

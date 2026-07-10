@@ -11,8 +11,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
 const {
@@ -51,8 +49,10 @@ vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: (...args: unknown[]) => mockApplyPageMutation(...args),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => mockIsAuthError(result),
 }));
 
@@ -108,6 +108,7 @@ vi.mock('marked', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { POST } from '../../convert-content-mode/route';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

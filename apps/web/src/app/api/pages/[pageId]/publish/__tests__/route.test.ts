@@ -16,10 +16,14 @@ import { getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
 vi.mock('server-only', () => ({}));
 
 const authenticateRequestWithOptions = vi.fn();
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => authenticateRequestWithOptions(...args),
-  isAuthError: (result: unknown) => typeof result === 'object' && result !== null && 'error' in result,
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: (result: unknown) => typeof result === 'object' && result !== null && 'error' in result,
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalEditPage: (auth: { userId: string }, pageId: string) => canUserEditPage(auth.userId, pageId),
 }));
 

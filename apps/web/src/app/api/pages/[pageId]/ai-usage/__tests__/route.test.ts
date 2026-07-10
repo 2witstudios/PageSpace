@@ -10,8 +10,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
 const {
@@ -34,8 +32,10 @@ const {
 
 // ── vi.mock declarations ───────────────────────────────────────────────────
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => mockIsAuthError(result),
 }));
 
@@ -93,6 +93,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { GET } from '../../ai-usage/route';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

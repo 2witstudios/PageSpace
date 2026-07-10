@@ -10,8 +10,10 @@ const mockFindGrant = vi.hoisted(() => vi.fn());
 const mockGetConnectionWithProvider = vi.hoisted(() => vi.fn());
 const mockGetDriveAccess = vi.hoisted(() => vi.fn());
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
 }));
 
@@ -52,9 +54,9 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 }));
 
 import { GET, POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockUserId = 'user_123';
 const mockAgentId = 'agent-1';

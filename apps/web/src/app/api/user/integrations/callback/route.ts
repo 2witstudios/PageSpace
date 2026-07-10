@@ -12,7 +12,7 @@ import { resolveProviderConfig } from '@pagespace/lib/integrations/providers/bui
 import { createConnection, findUserConnection, findDriveConnection, updateConnectionCredentials, updateConnectionStatus } from '@pagespace/lib/integrations/repositories/connection-repository';
 import type { OAuth2Config } from '@pagespace/lib/integrations/types';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
-import { isSafeReturnUrl } from '@/lib/auth';
+import { isSafeReturnUrl } from '@/lib/auth/url-utils';
 
 const integrationCallbackSchema = z.object({
   code: z.string().min(1, 'Authorization code is required').max(4096),

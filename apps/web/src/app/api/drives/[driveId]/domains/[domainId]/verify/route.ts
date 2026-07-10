@@ -1,10 +1,4 @@
 import { NextResponse } from 'next/server';
-import {
-  authenticateRequestWithOptions,
-  isAuthError,
-  checkMCPDriveScope,
-  isPrincipalDriveOwnerOrAdmin,
-} from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildDnsInstructions, verifyDnsRecords } from '@pagespace/lib/validators/custom-domain';
@@ -13,6 +7,9 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { mirrorDriveToCustomHost, clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 

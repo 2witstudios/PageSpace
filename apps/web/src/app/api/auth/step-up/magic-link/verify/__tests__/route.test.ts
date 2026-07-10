@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('203.0.113.7'),
 }));
 
-vi.mock('@/lib/auth/auth-helpers', () => ({
+vi.mock('@/lib/auth/url-utils', () => ({
   isSafeNextPath: vi.fn(),
   SIGNIN_NEXT_ALLOWED_PREFIXES: ['/oauth/consent'],
 }));
@@ -36,7 +36,7 @@ vi.mock('@pagespace/lib/services/email-service', () => ({
 }));
 
 import { GET } from '../route';
-import { isSafeNextPath } from '@/lib/auth/auth-helpers';
+import { isSafeNextPath } from '@/lib/auth/url-utils';
 import { parseMagicLinkStepUpNext } from '@pagespace/lib/auth/step-up-decisions';
 
 const ALLOWED = { allowed: true, attemptsRemaining: 9 };

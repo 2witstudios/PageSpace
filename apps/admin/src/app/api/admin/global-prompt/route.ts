@@ -1,5 +1,5 @@
-import { withAdminAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 export const GET = withAdminAuth(async (adminUser, request) => {
   const webUrl = process.env.WEB_APP_INTERNAL_URL ?? process.env.NEXT_PUBLIC_WEB_APP_URL;

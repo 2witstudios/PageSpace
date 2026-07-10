@@ -5,13 +5,14 @@ import { eq, and } from '@pagespace/db/operators';
 import { calendarEvents } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import {
   isUserMemberOfAnyEventDrive,
   shareEventWithDrive,
   unshareEventFromDrive,
   listEventDrives,
 } from '@pagespace/lib/services/calendar-event-drive-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };

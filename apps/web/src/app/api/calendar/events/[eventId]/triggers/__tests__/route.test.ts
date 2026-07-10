@@ -3,8 +3,6 @@
  * (GET / PUT / DELETE) — the calendar twin of /api/tasks/[taskId]/triggers.
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 vi.mock('@pagespace/db/db', () => {
   const db = {
     query: { calendarEvents: { findFirst: vi.fn() } },
@@ -36,10 +34,14 @@ vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
   removeCalendarTrigger: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
     return isDriveOwnerOrAdmin(auth.userId, driveId);
@@ -58,11 +60,12 @@ vi.mock('@/lib/websocket/calendar-events', () => ({
 
 import { GET, PUT, DELETE } from '../route';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import {
   upsertCalendarTriggerWorkflow,
   removeCalendarTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const USER_ID = 'user_creator';
 const OUTSIDER_ID = 'user_outsider';

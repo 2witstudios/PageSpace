@@ -12,11 +12,12 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { getProviderBySlug } from '@pagespace/lib/integrations/repositories/provider-repository';
 import { findUserConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
 import { createConfiguredToolExecutor } from '@pagespace/lib/integrations/saga/create-configured-executor';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 

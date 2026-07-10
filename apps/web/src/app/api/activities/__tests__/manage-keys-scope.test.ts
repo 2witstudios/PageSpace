@@ -52,16 +52,13 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 // Only stub authentication — getAllowedDriveIds and isManageKeysOnly run for real.
-vi.mock('@/lib/auth', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/auth')>();
-  return {
-    ...actual,
-    authenticateRequestWithOptions: vi.fn(),
-  };
-});
+vi.mock('@/lib/auth/request-auth', async (importOriginal) => ({
+  ...(await importOriginal()),
+  authenticateRequestWithOptions: vi.fn(),
+}));
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 describe('GET /api/activities — manage-keys-only credential', () => {
   beforeEach(() => {

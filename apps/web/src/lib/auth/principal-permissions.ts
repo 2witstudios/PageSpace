@@ -44,7 +44,8 @@ import {
   getScopedAccessiblePagesInDrive,
   hasScopedDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
-import { isMCPAuthResult, isOAuthAuthResult, isManageKeysOnly, type AuthResult, type MCPAuthResult, type OAuthAuthResult } from './index';
+import { isMCPAuthResult, isOAuthAuthResult, isManageKeysOnly } from './auth-core';
+import type { AuthResult, MCPAuthResult, OAuthAuthResult } from './auth-types';
 
 /**
  * A scoped MCP token acts as an app member (its allowedDriveIds are exactly its

@@ -12,8 +12,6 @@
  * when a driveId is actually supplied.
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 vi.mock('next/server', async () => {
   const actual = await vi.importActual<typeof import('next/server')>('next/server');
   return { ...actual, after: vi.fn((fn) => fn()) };
@@ -98,13 +96,17 @@ const checkMCPCreateScope = vi.fn((_auth: unknown, targetDriveId: string | null)
   return null;
 });
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
   checkMCPCreateScope: (...args: [unknown, string | null]) => checkMCPCreateScope(...args),
-  isScopedMCPAuth: vi.fn(() => true),
   filterDrivesByMCPScope: vi.fn((_: unknown, ids: string[]) => ids),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  isScopedMCPAuth: vi.fn(() => true),
   isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
     return isUserDriveMember(auth.userId, driveId);
@@ -150,7 +152,8 @@ vi.mock('cron-parser', () => ({ CronExpressionParser: { parse: vi.fn() } }));
 
 import { POST } from '../route';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const USER_ID = 'user-1';
 

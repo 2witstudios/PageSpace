@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
-import { verifyAuth, getClientIP } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getWsTokenPolicy } from '@pagespace/lib/auth/token-lifecycle-policy';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import { verifyAuth } from '@/lib/auth/auth';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 // SECURITY (L5): ws-tokens are narrow, user-scoped, short-lived tokens dedicated
 // to desktop websocket auth — NOT a 90-day `type:'service'` `mcp:*` token (which

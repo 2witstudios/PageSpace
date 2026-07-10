@@ -8,8 +8,6 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 vi.mock('@/lib/repositories/ai-settings-repository', () => ({
   aiSettingsRepository: {
     getUserSettings: vi.fn(),
@@ -17,8 +15,10 @@ vi.mock('@/lib/repositories/ai-settings-repository', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -55,9 +55,11 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
 
 import { GET, POST, PATCH, DELETE } from '../route';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { requiresProSubscription, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const ENV_KEYS = [
   'OPENROUTER_DEFAULT_API_KEY',

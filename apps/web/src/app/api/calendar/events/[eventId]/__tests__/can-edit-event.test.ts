@@ -6,8 +6,6 @@
  * Tested through the PATCH handler since canEditEvent is a private function.
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 // Mock next/server (must come before route import)
 vi.mock('next/server', async () => {
   const actual = await vi.importActual<typeof import('next/server')>('next/server');
@@ -96,16 +94,18 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('../../../../../../lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => {
     return typeof result === 'object' && result !== null && 'error' in result;
   }),
-  checkMCPDriveScope: vi.fn(() => null), // Default: MCP scope check passes
+  checkMCPDriveScope: vi.fn(() => null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
     auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
-  // Principal dispatch: session auth falls through to the user-level checks,
-  // so delegate to the mocked permissions fns to keep call-arg assertions.
   isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
     return isUserDriveMember(auth.userId, driveId);
@@ -128,7 +128,8 @@ vi.mock('../../../../../../lib/integrations/google-calendar/push-service', () =>
 import { PATCH } from '../route';
 import { db } from '@pagespace/db/db';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
-import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 // ============================================================================
 // Test Helpers

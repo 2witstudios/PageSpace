@@ -10,7 +10,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET, PATCH, DELETE } from '../route';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
 import type { GetPageResult, UpdatePageResult, TrashPageResult, PageWithDetails } from '@/services/api';
 
 // Mock service boundary - this is the ONLY mock of internal implementation
@@ -23,12 +22,15 @@ vi.mock('@/services/api', () => ({
 }));
 
 // Mock external boundaries
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result) => 'error' in result),
-  // MCP scope check - returns null (allowed) by default for session auth tests
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn((result) => 'error' in result),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalSharePage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -116,12 +118,15 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
 }));
 
 import { pageService } from '@/services/api';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult, canPrincipalSharePage } from '@/lib/auth';
 import { broadcastPageEvent, createPageEventPayload, kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { db } from '@pagespace/db/db';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError, isMCPAuthResult } from '@/lib/auth/auth-core';
+import { canPrincipalSharePage } from '@/lib/auth/principal-permissions';
 
 // Test helpers
 const mockUserId = 'user_123';

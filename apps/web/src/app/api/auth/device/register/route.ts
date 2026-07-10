@@ -1,5 +1,4 @@
 import { z } from 'zod/v4';
-import { authenticateRequestWithOptions, isAuthError, getClientIP, createWebDeviceToken } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import {
@@ -8,6 +7,10 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { createWebDeviceToken } from '@/lib/auth/device-auth-helpers';
 
 const registerDeviceSchema = z.object({
   deviceId: z.string().min(1, 'Device ID is required').max(128),

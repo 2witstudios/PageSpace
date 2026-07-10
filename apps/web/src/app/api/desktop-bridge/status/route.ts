@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { authenticateSessionRequest, isAuthError } from '@/lib/auth';
 import { isFetchBridgeInitialized, getFetchBridge } from '@/lib/fetch-bridge';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 /**
  * GET /api/desktop-bridge/status

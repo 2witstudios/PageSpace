@@ -14,9 +14,10 @@ import { parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
 import { describeGrantScopes, type GrantScopeNameResolvers } from '@pagespace/lib/auth/oauth/grant-scope-summary';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { listActiveOAuthGrantsForUser, type ActiveOAuthGrantRow } from '@/lib/repositories/oauth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 

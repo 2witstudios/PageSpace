@@ -4,7 +4,6 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import {
   buildAutomationView,
   validateAutomationPatch,
@@ -12,6 +11,8 @@ import {
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

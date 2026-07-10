@@ -1,18 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import {
-  authenticateSessionRequest,
-  authenticateMCPRequest,
-  authenticateHybridRequest,
-  authenticateRequestWithOptions,
-  validateMCPToken,
-  validateOAuthAccessToken,
-  validateSessionToken,
-  isAuthError,
-  isMCPAuthResult,
-  isSessionAuthResult,
-  isOAuthAuthResult,
-} from '../index';
-
 // Mock dependencies
 vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn().mockReturnValue('mocked-hash'),
@@ -85,6 +71,8 @@ import { db } from '@pagespace/db/db';
 import { validateCSRF } from '../csrf-validation';
 import { validateOrigin } from '../origin-validation';
 import { getSessionFromCookies } from '../cookie-config';
+import { authenticateSessionRequest, authenticateMCPRequest, authenticateHybridRequest, authenticateRequestWithOptions, validateMCPToken, validateOAuthAccessToken, validateSessionToken } from '@/lib/auth/request-auth';
+import { isAuthError, isMCPAuthResult, isSessionAuthResult, isOAuthAuthResult } from '@/lib/auth/auth-core';
 
 describe('Auth Middleware', () => {
   const mockSessionClaims = {
@@ -1099,7 +1087,7 @@ describe('Auth Middleware', () => {
       it('returns true for error result', () => {
         const errorResult = {
           error: Response.json({ error: 'Test' }, { status: 401 }),
-        } as unknown as import('@/lib/auth').AuthError;
+        } as unknown as import('@/lib/auth/auth-types').AuthError;
         expect(isAuthError(errorResult)).toBe(true);
       });
 

@@ -4,7 +4,6 @@ import { eq, and, or } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { userProfiles } from '@pagespace/db/schema/members'
 import { connections } from '@pagespace/db/schema/social';
-import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { userEmailMatch, decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
@@ -17,6 +16,7 @@ import {
   type ConnectionStatus,
   type ConnectionSearchProfile,
 } from '@/lib/users/enumeration-safe';
+import { verifyAuth } from '@/lib/auth/auth';
 
 // GET /api/connections/search - Search for users by email to connect with
 export async function GET(request: Request) {

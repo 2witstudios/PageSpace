@@ -6,8 +6,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
@@ -45,10 +47,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { listActiveOAuthGrantsForUser } from '@/lib/repositories/oauth-repository';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { db } from '@pagespace/db/db';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const USER_ID = 'user-a';
 const NOW = new Date('2026-01-01T00:00:00Z');

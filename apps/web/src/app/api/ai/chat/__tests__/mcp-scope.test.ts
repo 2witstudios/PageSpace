@@ -2,7 +2,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
-import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
+import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
 
 // ============================================================================
 // MCP Page Scope Enforcement Tests for POST /api/ai/chat
@@ -13,11 +14,15 @@ import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
 
 // Mock all heavy dependencies to isolate scope enforcement logic
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
-  isAuthError: vi.fn((result: any) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
+  isAuthError: vi.fn((result: any) => 'error' in result),
   getAllowedDriveIds: vi.fn(() => []),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: vi.fn(() => false),
 }));
 
@@ -205,9 +210,6 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   hasVisionCapability: vi.fn().mockReturnValue(true),
 }));
-
-import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
-
 // ============================================================================
 // Test Fixtures
 // ============================================================================

@@ -18,7 +18,6 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { spawnAgentTerminal, killAgentTerminal, listAgentTerminals } from '@pagespace/lib/services/machines/agent-terminals';
 import {
   buildSpawnAgentTerminalDeps,
@@ -27,6 +26,8 @@ import {
   canAccessMachine,
   canViewMachine,
 } from '@/lib/machines/agent-terminals-runtime';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };

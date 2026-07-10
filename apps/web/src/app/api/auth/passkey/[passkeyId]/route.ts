@@ -5,12 +5,9 @@ import { validateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import {
-  authenticateSessionRequest,
-  isAuthError,
-  isSessionAuthResult,
-  getClientIP,
-} from '@/lib/auth';
+import { authenticateSessionRequest } from '@/lib/auth/request-auth';
+import { isAuthError, isSessionAuthResult } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const updateNameSchema = z.object({
   name: z.string().min(1).max(255),

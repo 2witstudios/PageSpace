@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ============================================================================
 // Contract Tests for /api/drives/[driveId]/access
 //
@@ -28,8 +26,10 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   updateDriveLastAccessed: vi.fn(),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
 }));
@@ -38,7 +38,9 @@ vi.mock('@/lib/auth', () => ({
 import { POST } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { updateDriveLastAccessed } from '@pagespace/lib/services/drive-service';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
 
 // ============================================================================
 // Test Helpers

@@ -10,8 +10,6 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError, MCPAuthResult } from '@/lib/auth';
-
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
 const {
@@ -61,11 +59,15 @@ vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: (...args: unknown[]) => mockApplyPageMutation(...args),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
+  checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: (result: unknown) => mockIsAuthError(result),
   isMCPAuthResult: (result: unknown) => mockIsMCPAuthResult(result),
-  checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   canPrincipalDeletePage: (auth: { userId: string }, pageId: string) => mockCanUserDeletePage(auth.userId, pageId),
 }));
 
@@ -128,6 +130,7 @@ vi.mock('@pagespace/lib/monitoring/change-group', () => ({
 
 import { POST } from '../../restore/route';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import type { SessionAuthResult, AuthError, MCPAuthResult } from '@/lib/auth/auth-types';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

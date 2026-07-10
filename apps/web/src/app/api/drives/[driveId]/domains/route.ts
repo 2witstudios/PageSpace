@@ -1,11 +1,5 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import {
-  authenticateRequestWithOptions,
-  isAuthError,
-  checkMCPDriveScope,
-  isPrincipalDriveOwnerOrAdmin,
-} from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { normalizeHostname, validateCustomDomain, PLATFORM_OWNED_DOMAINS } from '@pagespace/lib/validators/custom-domain';
@@ -18,6 +12,9 @@ import { getPlan } from '@/lib/subscription/plans';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { reconcileCustomDomainCert } from '@/lib/canvas/reconcile-cert';
 import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 
 /** Statuses whose cert is still advancing — worth a lazy reconcile on read. */
 const CERT_NON_TERMINAL = new Set(['verified', 'provisioning']);

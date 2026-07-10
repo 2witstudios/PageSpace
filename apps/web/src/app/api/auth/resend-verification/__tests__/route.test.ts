@@ -14,12 +14,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies BEFORE imports
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn().mockResolvedValue({
     userId: 'test-user-id',
     tokenType: 'session',
     sessionId: 'mock-session-id',
   }),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn().mockReturnValue(false),
 }));
 
@@ -63,12 +65,13 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { NextResponse } from 'next/server';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const createResendRequest = () =>
   new Request('http://localhost/api/auth/resend-verification', {

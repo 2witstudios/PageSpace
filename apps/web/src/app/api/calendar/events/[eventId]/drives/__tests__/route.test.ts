@@ -7,8 +7,6 @@
  * - DELETE: unshares event from a drive, 400 on home drive, 404 when not shared
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 vi.mock('@pagespace/db/db', () => {
   const db = {
     select: vi.fn(),
@@ -40,8 +38,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
-vi.mock('../../../../../../../lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) =>
     typeof result === 'object' && result !== null && 'error' in result,
   ),
@@ -57,13 +57,15 @@ vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
 
 import { GET, POST, DELETE } from '../route';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions, checkMCPDriveScope } from '../../../../../../../lib/auth';
 import {
   isUserMemberOfAnyEventDrive,
   shareEventWithDrive,
   unshareEventFromDrive,
   listEventDrives,
 } from '@pagespace/lib/services/calendar-event-drive-service';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { checkMCPDriveScope } from '@/lib/auth/auth-core';
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -94,8 +94,10 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
+}));
+vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
@@ -108,7 +110,7 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 describe('/api/auth/mobile/refresh', () => {
   const mockUser = {
@@ -655,7 +657,7 @@ describe('/api/auth/mobile/refresh', () => {
 
   describe('IP address handling', () => {
     it('normalizes unknown IP to undefined for activity tracking', async () => {
-      const { getClientIP } = await import('@/lib/auth');
+      const { getClientIP } = await import('@pagespace/lib/security/client-ip');
       vi.mocked(getClientIP).mockReturnValue('unknown');
 
       const request = new Request('http://localhost/api/auth/mobile/refresh', {

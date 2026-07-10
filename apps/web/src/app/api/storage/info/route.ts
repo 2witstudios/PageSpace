@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
@@ -12,6 +11,7 @@ import {
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { verifyAuth } from '@/lib/auth/auth';
 
 export async function GET(request: NextRequest) {
   try {

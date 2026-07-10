@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionAuthResult } from '@/lib/auth';
-
 // ============================================================================
 // Contract tests for /api/drives/[driveId]/agents/[agentPageId] (PATCH/DELETE)
 // ============================================================================
@@ -28,15 +26,19 @@ vi.mock('@pagespace/db/schema/members', () => ({
   },
   driveRoles: { id: 'col_roles_id', driveId: 'col_roles_driveId' },
 }));
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
 }));
 
 import { PATCH } from '../route';
 import { db } from '@pagespace/db/db';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import type { SessionAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,

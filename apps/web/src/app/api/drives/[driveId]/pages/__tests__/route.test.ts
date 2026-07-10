@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
-
 // ============================================================================
 // Contract Tests for GET /api/drives/[driveId]/pages
 //
@@ -96,20 +94,26 @@ vi.mock('@pagespace/lib/utils/api-utils', () => ({
   jsonResponse: vi.fn((data: unknown) => NextResponse.json(data, { status: 200 })),
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
-  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
+  isScopedMCPAuth: vi.fn(() => false),
   getPrincipalAccessiblePagesInDrive: vi.fn(),
 }));
 
 // ---------- imports (after mocks) ----------
 
 import { GET } from '../route';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
 
 // ---------- helpers ----------
 

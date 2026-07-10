@@ -67,8 +67,10 @@ vi.mock('@pagespace/lib/audit/mask-email', () => ({
   },
 }));
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/login-csrf-utils', () => ({
   validateLoginCSRFToken: vi.fn().mockReturnValue(true),
+}));
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
@@ -80,8 +82,9 @@ import { POST } from '../route';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { parse } from 'cookie';
+import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 const createMagicLinkRequest = (
   body: Record<string, unknown> | string = { email: 'test@example.com', tosAccepted: true },

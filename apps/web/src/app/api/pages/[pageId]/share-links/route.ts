@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateWithEnforcedContext, isEnforcedAuthError } from '@/lib/auth';
 import {
   createPageShareLink,
   listPageShareLinks,
@@ -7,6 +6,8 @@ import {
 import type { ShareLinkPermission } from '@pagespace/db/schema/share-links';
 import { getShareUrl } from '@/lib/share-url';
 import { z } from 'zod/v4';
+import { authenticateWithEnforcedContext } from '@/lib/auth/request-auth';
+import { isEnforcedAuthError } from '@/lib/auth/auth-core';
 
 const AUTH_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_WRITE = { allow: ['session'] as const, requireCSRF: true };

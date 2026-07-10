@@ -1,15 +1,3 @@
-/**
- * Admin API Route: Global Prompt Viewer
- *
- * Returns the COMPLETE context window sent to the AI, exactly as the LLM receives it.
- * Includes:
- * - Full system prompt with all inline instructions
- * - Tool definitions with JSON schemas
- * - Experimental context
- * - Token estimates
- */
-
-import { withAdminAuth } from '@/lib/auth';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -27,6 +15,7 @@ import { eq, and, asc } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 interface PromptSection {
   name: string;

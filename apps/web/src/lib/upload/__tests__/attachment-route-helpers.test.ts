@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateWithEnforcedContext: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isEnforcedAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
 }));
 
@@ -25,11 +27,11 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({ isEmailVerified: vi.f
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
 import { resolveChannelTarget, resolveConversationTarget } from '../attachment-route-helpers';
-import { authenticateWithEnforcedContext } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
 import type { SessionClaims } from '@pagespace/lib/auth/session-service';
+import { authenticateWithEnforcedContext } from '@/lib/auth/request-auth';
 
 function ctx(userId = 'user-1'): EnforcedAuthContext {
   const claims = {

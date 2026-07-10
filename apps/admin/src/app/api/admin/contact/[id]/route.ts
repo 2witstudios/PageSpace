@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { contactSubmissions } from '@pagespace/db/schema/contact';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { withAdminAuth } from '@/lib/auth';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 type RouteContext = { params: Promise<{ id: string }> };
 

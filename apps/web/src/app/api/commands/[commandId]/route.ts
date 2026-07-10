@@ -3,7 +3,6 @@ import { db } from '@pagespace/db/db';
 import { and, eq, ne } from '@pagespace/db/operators';
 import { commands } from '@pagespace/db/schema/commands';
 import type { SelectCommand } from '@pagespace/db/schema/commands';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, type AuthResult } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -20,6 +19,9 @@ import {
   isUniqueViolation,
   validateEntryPage,
 } from '../command-route-helpers';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
+import type { AuthResult } from '@/lib/auth/auth-types';
 
 type RouteContext = { params: Promise<{ commandId: string }> };
 

@@ -47,7 +47,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
 }));
 
 // Mock client IP extraction
-vi.mock('@/lib/auth', () => ({
+vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('unknown'),
 }));
 
@@ -78,9 +78,9 @@ import {
   revokeDeviceTokensByDevice,
 } from '@pagespace/lib/auth/device-auth-utils';
 import { getSessionFromCookies, appendClearCookies } from '@/lib/auth/cookie-config';
-import { getClientIP } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 describe('/api/auth/logout', () => {
   beforeEach(() => {

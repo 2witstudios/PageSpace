@@ -13,8 +13,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r
   ),
@@ -40,8 +42,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 import { DELETE, PATCH } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
-import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import type { SessionAuthResult, AuthError } from '@/lib/auth/auth-types';
 
 const SENDER_ID = 'user_sender';
 const OTHER_ID = 'user_other';

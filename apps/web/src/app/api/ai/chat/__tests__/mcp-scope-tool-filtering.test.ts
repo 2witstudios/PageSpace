@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { POST } from '../route';
-import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
-
 // ============================================================================
 // Account-level-only tool listing tests for POST /api/ai/chat
 //
@@ -13,12 +11,16 @@ import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
 // without needing to mock the entire downstream streaming pipeline.
 // ============================================================================
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
   isMCPAuthResult: vi.fn((result: { tokenType?: string }) => result?.tokenType === 'mcp'),
-  checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn((auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? []),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: vi.fn((auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
@@ -225,9 +227,9 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
-
-import { authenticateRequestWithOptions } from '@/lib/auth';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 
 const mockUserId = 'user_123';
 const chatId = 'page_123'; // in drive_A per db mock above

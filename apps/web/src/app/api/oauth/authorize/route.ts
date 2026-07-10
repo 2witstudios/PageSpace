@@ -18,7 +18,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import {
   validateAuthorizeRequest,
   type AuthorizeRequestParams,
@@ -33,6 +32,9 @@ import { sessionRepository } from '@/lib/repositories/session-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 function rateLimitedResponse(retryAfter: number): NextResponse {
   return NextResponse.json({ error: 'rate_limited', retryAfter }, { status: 429 });

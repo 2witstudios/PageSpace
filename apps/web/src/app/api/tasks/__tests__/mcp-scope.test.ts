@@ -2,8 +2,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
-import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth';
-
 // ============================================================================
 // MCP Drive Scope + App-Member RBAC Enforcement Tests for GET /api/tasks
 //
@@ -75,25 +73,25 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 const FULL_PERMS = { canView: true, canEdit: true, canShare: true, canDelete: true };
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: any) => 'error' in result),
   checkMCPDriveScope: vi.fn(() => null),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: vi.fn((auth: any) => auth.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0),
   isPrincipalDriveMember: vi.fn(),
   getPrincipalDriveIds: vi.fn(),
   getPrincipalBatchPagePermissions: vi.fn(async (_auth: any, pageIds: string[]) =>
     new Map(pageIds.map((id) => [id, { ...FULL_PERMS }]))),
 }));
-
-import {
-  authenticateRequestWithOptions,
-  checkMCPDriveScope,
-  isPrincipalDriveMember,
-  getPrincipalDriveIds,
-  getPrincipalBatchPagePermissions,
-} from '@/lib/auth';
 import { db } from '@pagespace/db/db';
+import type { SessionAuthResult, MCPAuthResult } from '@/lib/auth/auth-types';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { checkMCPDriveScope } from '@/lib/auth/auth-core';
+import { isPrincipalDriveMember, getPrincipalDriveIds, getPrincipalBatchPagePermissions } from '@/lib/auth/principal-permissions';
 
 // ============================================================================
 // Test Fixtures

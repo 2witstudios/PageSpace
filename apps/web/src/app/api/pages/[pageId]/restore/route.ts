@@ -7,12 +7,14 @@ import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, canPrincipalDeletePage } from '@/lib/auth';
 import { canRestorePage } from './restore-authorization';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError, isMCPAuthResult } from '@/lib/auth/auth-core';
+import { canPrincipalDeletePage } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 

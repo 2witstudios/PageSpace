@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { withAdminAuth } from '@/lib/auth';
 import {
   getDateRange,
   getUnitEconomicsSummary,
@@ -27,6 +26,7 @@ import {
 } from '@pagespace/lib/billing/credit-pricing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toCsv } from '@/lib/csv';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 type Range = '24h' | '7d' | '30d' | 'all';
 

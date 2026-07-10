@@ -6,7 +6,9 @@ import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError, checkMCPDriveScope, getAllowedDriveIds } from '@/lib/auth/auth-core';
+import { canPrincipalViewPage, isPrincipalDriveMember } from '@/lib/auth/principal-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 

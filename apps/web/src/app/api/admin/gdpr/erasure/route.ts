@@ -1,10 +1,10 @@
-import { withAdminAuth } from '@/lib/auth';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
 import { enqueueAccountErasure } from '@/lib/erasure/enqueue';
+import { withAdminAuth } from '@/lib/auth/auth';
 
 /**
  * Admin-gated Right-to-Erasure escalation (#908).

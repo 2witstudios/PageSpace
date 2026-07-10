@@ -8,12 +8,16 @@
 // on its actual isScoped argument and return value.
 import { describe, test, beforeEach, vi, expect } from 'vitest';
 
-vi.mock('@/lib/auth', () => ({
+vi.mock('@/lib/auth/request-auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
   isMCPAuthResult: vi.fn((r: unknown) => (r as { tokenType?: string })?.tokenType === 'mcp'),
-  checkMCPPageScope: vi.fn().mockResolvedValue(null),
   getAllowedDriveIds: vi.fn((auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? []),
+}));
+vi.mock('@/lib/auth/principal-permissions', () => ({
   isScopedMCPAuth: vi.fn((auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
@@ -175,11 +179,12 @@ vi.mock('ai', async (importOriginal) => {
 
 // --- imports after mocks ---
 import { POST } from '../route';
-import { authenticateRequestWithOptions, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
+import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 
 const agentPage = {
   id: 'page-123',

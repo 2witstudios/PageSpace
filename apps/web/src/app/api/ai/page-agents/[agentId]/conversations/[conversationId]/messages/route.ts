@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, sql } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core';
@@ -8,6 +7,9 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
+import { isAuthError } from '@/lib/auth/auth-core';
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
