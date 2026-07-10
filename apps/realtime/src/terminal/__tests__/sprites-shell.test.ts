@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { openPtyShell } from '../sprites-shell';
+import { openPtyShell, planReconnect, liveShellSessionIds } from '../sprites-shell';
+
+// riteway-style assertion (given/should/actual/expected) on top of vitest — the
+// repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
+// a handful of pure-function cases, so keep the contract, drop the package.
+function assert<T>({ given, should, actual, expected }: { given: string; should: string; actual: T; expected: T }): void {
+  it(`given ${given}, should ${should}`, () => {
+    expect(actual).toEqual(expected);
+  });
+}
 import type {
   SpriteInstanceLike,
   SpriteCommandLike,
@@ -57,6 +66,74 @@ function buildFakeSprite(
 }
 
 const liveSession: SpriteSessionInfo = { id: 'sess-1', command: 'bash', isActive: true, tty: true };
+
+describe('planReconnect (pure)', () => {
+  const MAX = 5;
+
+  assert({
+    given: 'a known persisted id still present in the live sessions',
+    should: 'attach to it (reattach + replay scrollback)',
+    actual: planReconnect({ knownId: 'sess-1', liveSessionIds: ['sess-1'], consecutiveFailures: 1, maxAttempts: MAX }),
+    expected: { action: 'attach', id: 'sess-1' } as const,
+  });
+
+  assert({
+    given: 'a known persisted id absent from the live sessions (dangling after a pause)',
+    should: 'create a fresh session',
+    actual: planReconnect({ knownId: 'sess-dead', liveSessionIds: ['sess-9'], consecutiveFailures: 1, maxAttempts: MAX }),
+    expected: { action: 'create' } as const,
+  });
+
+  assert({
+    given: 'a known persisted id and an empty live-session list',
+    should: 'create a fresh session (the persisted id is gone)',
+    actual: planReconnect({ knownId: 'sess-dead', liveSessionIds: [], consecutiveFailures: 1, maxAttempts: MAX }),
+    expected: { action: 'create' } as const,
+  });
+
+  assert({
+    given: 'no known id but a live shell session exists',
+    should: 'attach to the first live session',
+    actual: planReconnect({ knownId: undefined, liveSessionIds: ['sess-1'], consecutiveFailures: 1, maxAttempts: MAX }),
+    expected: { action: 'attach', id: 'sess-1' } as const,
+  });
+
+  assert({
+    given: 'no known id and no live sessions',
+    should: 'be fatal (the shell is genuinely gone)',
+    actual: planReconnect({ knownId: undefined, liveSessionIds: [], consecutiveFailures: 1, maxAttempts: MAX }),
+    expected: { action: 'fatal' } as const,
+  });
+
+  assert({
+    given: 'the consecutive failures exceed the bounded budget, even with a live known id',
+    should: 'be fatal (never an infinite loop)',
+    actual: planReconnect({ knownId: 'sess-1', liveSessionIds: ['sess-1'], consecutiveFailures: MAX + 1, maxAttempts: MAX }),
+    expected: { action: 'fatal' } as const,
+  });
+});
+
+describe('liveShellSessionIds (pure)', () => {
+  assert({
+    given: 'a mix of tty and non-tty sessions',
+    should: 'return only the tty (shell) session ids',
+    actual: liveShellSessionIds([
+      { id: 'shell-1', command: 'bash', isActive: true, tty: true },
+      { id: 'exec-1', command: 'ls', isActive: true, tty: false },
+    ]),
+    expected: ['shell-1'],
+  });
+
+  assert({
+    given: 'an active and an inactive shell session',
+    should: 'order the active shell first (mirrors pickShellSession)',
+    actual: liveShellSessionIds([
+      { id: 'shell-inactive', command: 'bash', isActive: false, tty: true },
+      { id: 'shell-active', command: 'bash', isActive: true, tty: true },
+    ]),
+    expected: ['shell-active', 'shell-inactive'],
+  });
+});
 
 describe('openPtyShell', () => {
   beforeEach(() => { vi.useFakeTimers(); });
@@ -350,6 +427,68 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(500);
 
       expect(sprite.attachSession).not.toHaveBeenCalled();
+    });
+
+    it('given a persisted id ABSENT from listSessions, creates a fresh session and reports the new id (not exit -1)', async () => {
+      // Sprite paused: the persisted 'sess-dead' is dangling. Initial attach
+      // errors; reconnect must verify against listSessions, see it's gone, and
+      // fall back to a fresh session — overwriting the stale streamSessionId.
+      const attachCmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const newSession: SpriteSessionInfo = { id: 'sess-fresh', command: 'bash', isActive: true, tty: true };
+      const sprite = buildFakeSprite(freshCmd);
+      sprite.attachSession.mockReturnValue(attachCmd);
+      sprite.createSession.mockReturnValue(freshCmd);
+      sprite.listSessions
+        .mockResolvedValueOnce([])            // reconnect verification: sess-dead is gone
+        .mockResolvedValueOnce([newSession]); // fresh session's background id capture
+      const onExit = vi.fn();
+      const onSessionId = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-dead', onOutput: vi.fn(), onExit, onSessionId });
+      expect(sprite.attachSession).toHaveBeenCalledWith('sess-dead', { cols: 80, rows: 24 });
+
+      attachCmd._emitter.emit('error', new Error('lost connection to shell'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.createSession).toHaveBeenCalledTimes(1);
+      expect(onSessionId).toHaveBeenCalledWith('sess-fresh');
+      expect(onExit).not.toHaveBeenCalled();
+    });
+
+    it('given output flows from the fresh fallback session, forwards it to onOutput', async () => {
+      const attachCmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(freshCmd);
+      sprite.attachSession.mockReturnValue(attachCmd);
+      sprite.createSession.mockReturnValue(freshCmd);
+      sprite.listSessions.mockResolvedValue([]); // sess-dead never returns; fresh id unresolved is fine
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-dead', onOutput, onExit: vi.fn() });
+      attachCmd._emitter.emit('error', new Error('lost connection to shell'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      freshCmd._stdout.emit('data', 'fresh prompt\r\n');
+      expect(onOutput).toHaveBeenCalledWith('fresh prompt\r\n');
+    });
+
+    it('given a known id STILL present in listSessions, reattaches to it and does NOT create a fresh session', async () => {
+      const attachInitial = buildFakeCommand();
+      const attachAgain = buildFakeCommand();
+      const sprite = buildFakeSprite(buildFakeCommand(), { sessions: [liveSession] });
+      sprite.attachSession
+        .mockReturnValueOnce(attachInitial)
+        .mockReturnValueOnce(attachAgain);
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-1', onOutput: vi.fn(), onExit });
+      attachInitial._emitter.emit('error', new Error('keepalive'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.attachSession).toHaveBeenLastCalledWith('sess-1', { cols: 80, rows: 24 });
+      expect(sprite.createSession).not.toHaveBeenCalled();
+      expect(onExit).not.toHaveBeenCalled();
     });
 
     it('given the session id is unknown at reconnect, resolves the live session via listSessions and attaches', async () => {

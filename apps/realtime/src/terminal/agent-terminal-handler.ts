@@ -455,6 +455,17 @@ export function buildAgentTerminalHandlers({
             // Clears all of the session's timers (re-auth, settle heartbeat, idle).
             endAgentTerminalSession(billing, sessionMap, session, sessionKey);
           },
+          // The fresh-session fallback fired: the persisted streamSessionId was
+          // dangling (Sprite paused then cold-woke), so overwrite it with the new
+          // live session's id — otherwise the NEXT reconnect targets the dead id.
+          onSessionId: (sessionId) => {
+            session.sessionId = sessionId;
+            void persistStreamSessionId({ agentTerminalId: authResult.agentTerminalId, sessionId }).catch((error) => {
+              loggers.realtime.error('Failed to persist reconnect session id', error instanceof Error ? error : new Error(String(error)), {
+                sessionKey,
+              });
+            });
+          },
         });
       } catch {
         authResult.releaseSlot();
