@@ -7,6 +7,10 @@
       "types": "./dist/db.d.ts",
       "default": "./dist/db.js"
     },
+    "./admin-db": {
+      "types": "./dist/admin-db.d.ts",
+      "default": "./dist/admin-db.js"
+    },
     "./operators": {
       "types": "./dist/operators.d.ts",
       "default": "./dist/operators.js"
