@@ -169,9 +169,13 @@ the admin chain head is. Run the backfill BEFORE the chainer's first run and
 the eras link seamlessly; let the chainer run first and it chains from
 `'genesis'`, which can never be joined to the legacy history (chain columns
 are append-only by design — no role can re-link them). The script refuses
-that state (`unlinked_emission_era`); prevention is this run order:
+that state (`unlinked_emission_era`), and the chainer itself refuses the
+genesis link outright: on an empty admin head it logs
+`REFUSING to chain … from a GENESIS head` and leaves the ingest rows
+buffered until the backfill plants the legacy head
+(`AUDIT_CHAINER_ALLOW_GENESIS` gate, below). Prevention is this run order:
 
-1. **Prereqs.** Admin PG provisioned + migrated through `drizzle-admin/0007`,
+1. **Prereqs.** Admin PG provisioned + migrated through `drizzle-admin/0008`,
    login users provisioned (previous sections). `ADMIN_DB_BREAK_GLASS` must
    NOT be set — the script refuses while break-glass is armed.
 2. **Stop the processor** (tenant: `docker compose stop processor`; Fly:
@@ -223,6 +227,21 @@ that state (`unlinked_emission_era`); prevention is this run order:
    PII columns, so the dual-store GDPR pseudonymization route keeps working
    against the retained legacy rows (Art 17 outlives the freeze).
 
+### `AUDIT_CHAINER_ALLOW_GENESIS` — fresh installs ONLY
+
+The chainer refuses to chain from a `'genesis'` (empty) admin head unless
+the processor has `AUDIT_CHAINER_ALLOW_GENESIS=true`:
+
+- **Fresh install** (no legacy `security_audit_log` rows anywhere): set it on
+  the processor — there is no legacy history, so the genesis link is correct
+  and there is nothing to backfill.
+- **Upgrade** (legacy rows exist in the main db): NEVER set it. The head
+  stays empty until step 4 above plants the legacy rows; the chainer's
+  refusal (`genesis_refused` outcome, loud log every 30s cycle) is the guard
+  that keeps a processor started too early from forking the eras. Once the
+  backfill lands, the head is non-genesis and chaining resumes on its own —
+  the flag is not needed afterwards on either path.
+
 ### Notes
 
 - **Break-glass after the freeze can no longer append to the legacy table.**
@@ -231,7 +250,9 @@ that state (`unlinked_emission_era`); prevention is this run order:
   history. Emergency unfreeze (owner, document the incident):
   `DROP TRIGGER security_audit_log_freeze ON security_audit_log;`
   `DROP TRIGGER security_audit_log_freeze_truncate ON security_audit_log;`
-- **If the chainer ran first** (`unlinked_emission_era` refusal): while the
+- **If the chainer ran first** (`unlinked_emission_era` refusal — only
+  reachable when `AUDIT_CHAINER_ALLOW_GENESIS=true` was wrongly set on an
+  upgrade): while the
   seeded SIEM cursor is still deferring, nothing external consumed the
   genesis-era rows — the owner can move them back into
   `security_audit_ingest` and delete them from the chained table, then run

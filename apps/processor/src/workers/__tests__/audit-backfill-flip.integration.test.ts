@@ -604,8 +604,20 @@ describe.skipIf(!url)('leaf-8 backfill flip with real chainer + SIEM workers (wi
           emittedAt: T(60),
         },
       ]);
-      const chained = await processAuditChainer({ pool: procPool });
-      expect(chained).toMatchObject({ outcome: 'chained', drained: 1 });
+      // The era-fork guard (#890 Phase 2 FIX) REFUSES this exact scenario —
+      // an upgrade deployment must never chain from genesis. Rows stay
+      // buffered in ingest.
+      const refused = await processAuditChainer({ pool: procPool });
+      expect(refused).toMatchObject({ outcome: 'genesis_refused', drained: 0 });
+      // Forcing the fork (a fresh-install flag wrongly set on an upgrade) is
+      // what the backfill script's precondition abort below defends against.
+      process.env.AUDIT_CHAINER_ALLOW_GENESIS = 'true';
+      try {
+        const chained = await processAuditChainer({ pool: procPool });
+        expect(chained).toMatchObject({ outcome: 'chained', drained: 1 });
+      } finally {
+        delete process.env.AUDIT_CHAINER_ALLOW_GENESIS;
+      }
     });
 
     it('the script ABORTS unlinked_emission_era and plants nothing', async () => {

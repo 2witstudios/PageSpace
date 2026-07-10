@@ -135,6 +135,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
       ADMIN_DATABASE_URL: postgresql://admin_processor_user:${ADMIN_PROCESSOR_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
+      # Fresh installs set true in .env (generator/template); upgrades leave it
+      # unset so the chainer refuses to fork the eras pre-backfill (UPGRADE.md).
+      AUDIT_CHAINER_ALLOW_GENESIS: ${AUDIT_CHAINER_ALLOW_GENESIS:-}
       FILE_STORAGE_PATH: /data/files
       CACHE_PATH: /data/cache
       PORT: "3003"

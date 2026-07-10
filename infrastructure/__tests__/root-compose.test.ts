@@ -172,6 +172,10 @@ describe('Root (dev/self-host) docker-compose configuration', () => {
       expect(getEnv(compose, 'realtime')).not.toHaveProperty('ADMIN_DATABASE_URL');
     });
 
+    it('given the processor service, AUDIT_CHAINER_ALLOW_GENESIS should be true — the local stack is always a fresh install (empty admin chain, nothing to backfill; #890 Phase 2 era-fork guard)', () => {
+      expect(getEnv(compose, 'processor').AUDIT_CHAINER_ALLOW_GENESIS).toBe('true');
+    });
+
     // #890 Phase 2 leaf 6: the GDPR pseudonymization route (web) erases PII
     // on the trust plane as its own column-scoped identity.
     it('given the web service, ADMIN_ERASER_DATABASE_URL should connect as admin_gdpr_eraser_user with the password migrate provisions', () => {

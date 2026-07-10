@@ -585,7 +585,9 @@ describe.skipIf(!url)('SIEM delivery worker across the admin store flip (wire-co
 
       // New-era events land in the admin store BEFORE any backfill ran —
       // the exact transitional window leaf 5 flagged. (Fresh store, so this
-      // chain starts at genesis; leaf 8 reconciles the two chains.)
+      // chain starts at genesis; leaf 8 reconciles the two chains.) The
+      // era-fork guard refuses this on upgrades, so simulating the window
+      // requires the fresh-install flag (#890 Phase 2 FIX).
       await seedIngestRows(appPool, [
         {
           id: 'g1',
@@ -594,8 +596,13 @@ describe.skipIf(!url)('SIEM delivery worker across the admin store flip (wire-co
           emittedAt: T(60),
         },
       ]);
-      const chained = await processAuditChainer({ pool: procPool });
-      expect(chained).toMatchObject({ outcome: 'chained', drained: 1 });
+      process.env.AUDIT_CHAINER_ALLOW_GENESIS = 'true';
+      try {
+        const chained = await processAuditChainer({ pool: procPool });
+        expect(chained).toMatchObject({ outcome: 'chained', drained: 1 });
+      } finally {
+        delete process.env.AUDIT_CHAINER_ALLOW_GENESIS;
+      }
     });
 
     it('defers the security source (no delivery, no error, cursor pinned) while activity keeps flowing', async () => {

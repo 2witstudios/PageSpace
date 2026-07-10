@@ -71,6 +71,10 @@ ADMIN_APP_PASSWORD=$(alnum_secret 32)
 ADMIN_PROCESSOR_PASSWORD=$(alnum_secret 32)
 ADMIN_READER_PASSWORD=$(alnum_secret 32)
 ADMIN_ERASER_PASSWORD=$(alnum_secret 32)
+# Fresh install: the audit chainer may start its chain from genesis. An
+# UPGRADED stack must never carry this flag (see infrastructure/UPGRADE.md,
+# Phase 2 backfill — era-fork guard).
+AUDIT_CHAINER_ALLOW_GENESIS=true
 
 # --- Security Secrets ---
 ENCRYPTION_KEY=$(hex_secret 32)

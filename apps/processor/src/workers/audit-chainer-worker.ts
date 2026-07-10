@@ -23,6 +23,13 @@
  * production write path stays on the advisory-lock repository until leaf 5
  * cuts emission over, so the queue is simply empty until then.
  *
+ * ERA-FORK GUARD: chaining from a 'genesis' head is refused unless
+ * AUDIT_CHAINER_ALLOW_GENESIS=true — set ONLY on fresh installs. On upgrades
+ * the head is empty until the legacy backfill runs, and chaining new events
+ * from genesis there would fork the eras irrecoverably (see UPGRADE.md
+ * Phase 2); the ingest queue buffers losslessly until the backfill plants
+ * the legacy head.
+ *
  * ANCHORING (leaf 3): after a 'chained' run whose verify-on-append is green,
  * the fresh head (newHead + its chain_seq) is signed (pure core:
  * @pagespace/lib/audit/anchor) and published to the configured witness
@@ -89,7 +96,8 @@ const INGEST_COLUMNS = `id,
 // because the processor build is self-contained (see ../db).
 interface PgClient {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>;
-  release(): void;
+  /** pg semantics: release(err) DESTROYS the connection instead of pooling it. */
+  release(destroyWithError?: Error): void;
 }
 
 interface PgPool {
@@ -117,7 +125,7 @@ export interface AnchorPublishSummary {
 }
 
 export interface AuditChainerRunResult {
-  outcome: 'disabled' | 'lock_busy' | 'idle' | 'chained';
+  outcome: 'disabled' | 'lock_busy' | 'idle' | 'genesis_refused' | 'chained';
   drained: number;
   verification?: SegmentVerificationResult;
   /** event_hash of the last appended row — the anchored head. */
@@ -359,6 +367,26 @@ export async function processAuditChainer(
 
     const ingestRows = ingest.rows as unknown as ChainableIngestRow[];
     const priorHead = await readChainHead(client);
+
+    // Era-fork guard (#890 Phase 2 FIX): an empty admin head means either a
+    // fresh install (nothing to backfill — chaining from genesis is correct)
+    // or an UPGRADE whose backfill has not run yet — chaining from genesis
+    // there forks the eras irrecoverably (chain columns are append-only;
+    // remediation is owner-level surgery, worse once anchors are published).
+    // Only the operator can tell the two apart, so a genesis link requires
+    // the explicit fresh-install flag; the ingest queue is a lossless buffer
+    // and simply holds the rows until the backfill plants the legacy head.
+    if (priorHead === GENESIS_PREVIOUS_HASH && process.env.AUDIT_CHAINER_ALLOW_GENESIS !== 'true') {
+      console.error(
+        `[audit-chainer] REFUSING to chain ${ingestRows.length} ingest row(s) from a GENESIS head: ` +
+          'the admin chain is empty. On a fresh install set AUDIT_CHAINER_ALLOW_GENESIS=true; on an ' +
+          'upgrade run the legacy backfill (scripts/backfill-audit-db.ts) first — the head becomes ' +
+          'non-genesis and chaining resumes on its own. Chaining now would fork the legacy and ' +
+          'emission eras irrecoverably. Ingest rows are buffered, not lost.',
+      );
+      return { outcome: 'genesis_refused', drained: 0 };
+    }
+
     const { chainedRowPayloads, newHead } = assignChainBatch(ingestRows, { prevHash: priorHead });
     const drainedIds = chainedRowPayloads.map((p) => p.id);
 
@@ -452,10 +480,23 @@ export async function processAuditChainer(
     throw error;
   } finally {
     if (lockAcquired) {
-      await client
-        .query('SELECT pg_advisory_unlock(hashtext($1))', [ADVISORY_LOCK_KEY])
-        .catch(() => undefined);
+      try {
+        await client.query('SELECT pg_advisory_unlock(hashtext($1))', [ADVISORY_LOCK_KEY]);
+        client.release();
+      } catch (unlockError) {
+        // A session that failed to unlock may still hold the session-level
+        // advisory lock; returned to the pool alive it would leak the lock
+        // permanently (every future run lock_busy). Destroy it instead —
+        // Postgres releases session advisory locks when the backend dies.
+        const err =
+          unlockError instanceof Error ? unlockError : new Error(String(unlockError));
+        console.error(
+          `[audit-chainer] Advisory unlock failed — destroying the connection so the session lock cannot leak into the pool: ${err.message}`,
+        );
+        client.release(err);
+      }
+    } else {
+      client.release();
     }
-    client.release();
   }
 }

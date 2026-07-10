@@ -71,6 +71,9 @@ describe('processAuditChainer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+    // These wiring tests exercise fresh-install (genesis) chains — the
+    // era-fork guard is pinned by its own describe block below.
+    vi.stubEnv('AUDIT_CHAINER_ALLOW_GENESIS', 'true');
   });
 
   it('given no ADMIN_DATABASE_URL and no injected pool, should no-op as disabled (trust plane unconfigured)', async () => {
@@ -193,6 +196,33 @@ describe('processAuditChainer', () => {
     await processAuditChainer({ pool: mockPool, batchSize: 42 });
 
     expect(mockQuery.mock.calls[1][1]).toEqual([42]);
+  });
+
+  it('given pg_advisory_unlock fails, should DESTROY the connection (release with the error) so a poisoned session cannot leak the session lock into the pool', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    stubLock(true);
+    stub([]); // ingest — empty → idle
+    mockQuery.mockRejectedValueOnce(new Error('unlock exploded')); // unlock
+
+    const result = await processAuditChainer({ pool: mockPool });
+
+    expect(result).toEqual({ outcome: 'idle', drained: 0 });
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+    // pg destroys the connection when release() receives an error — the
+    // still-locked session must never return to the pool alive.
+    expect(mockRelease.mock.calls[0][0]).toBeInstanceOf(Error);
+    consoleError.mockRestore();
+  });
+
+  it('given a clean unlock, should release the connection back to the pool ALIVE (no destroy)', async () => {
+    stubLock(true);
+    stub([]); // ingest — empty → idle
+    stub([]); // unlock — ok
+
+    await processAuditChainer({ pool: mockPool });
+
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+    expect(mockRelease.mock.calls[0][0]).toBeUndefined();
   });
 
   it('given the transaction fails, should ROLLBACK, rethrow, and still unlock + release', async () => {
@@ -338,6 +368,7 @@ describe('processAuditChainer anchoring hook (#890 Phase 2 leaf 3)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+    vi.stubEnv('AUDIT_CHAINER_ALLOW_GENESIS', 'true');
     resetAnchorPublishStateForTests();
   });
 
@@ -550,5 +581,96 @@ describe('processAuditChainer anchoring hook (#890 Phase 2 leaf 3)', () => {
       consoleError.mock.calls.some((c) => String(c[0]).includes('AUDIT_ANCHOR_SECRET')),
     ).toBe(true);
     consoleError.mockRestore();
+  });
+});
+
+describe('processAuditChainer genesis-era guard (#890 Phase 2 FIX)', () => {
+  // On an UPGRADE deployment the admin head is empty until the backfill
+  // plants the legacy rows: a chainer run in that window would chain new
+  // events from 'genesis', forking the eras irrecoverably (chain columns are
+  // append-only — nobody holds UPDATE). Chaining from a genesis head is
+  // therefore refused unless AUDIT_CHAINER_ALLOW_GENESIS=true, which ONLY a
+  // fresh install (no legacy rows to backfill) may set.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    resetAnchorPublishStateForTests();
+  });
+
+  it('given ingest rows and a GENESIS head without the flag, should REFUSE to chain: loud log, nothing written, lock released', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    stubLock(true);
+    stub(makeIngestRows(2)); // ingest SELECT
+    stub([]); // head SELECT — empty chain → genesis
+    stub([]); // unlock
+
+    const result = await processAuditChainer({ pool: mockPool });
+
+    expect(result).toEqual({ outcome: 'genesis_refused', drained: 0 });
+    const calls = mockQuery.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((c) => c.includes('BEGIN'))).toBe(false);
+    expect(calls.some((c) => c.includes('INSERT INTO security_audit_log'))).toBe(false);
+    expect(calls.some((c) => c.includes('DELETE FROM security_audit_ingest'))).toBe(false);
+    // The queue is a lossless buffer — the rows stay put for after backfill.
+    expect(calls[calls.length - 1]).toContain('pg_advisory_unlock');
+    expect(
+      consoleError.mock.calls.some((c) => String(c[0]).includes('AUDIT_CHAINER_ALLOW_GENESIS')),
+    ).toBe(true);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+    consoleError.mockRestore();
+  });
+
+  it('given AUDIT_CHAINER_ALLOW_GENESIS=true (fresh install), should chain from genesis normally', async () => {
+    vi.stubEnv('AUDIT_CHAINER_ALLOW_GENESIS', 'true');
+    const rows = makeIngestRows(1);
+    const expected = assignChainBatch(rows, { prevHash: GENESIS_PREVIOUS_HASH });
+    stubLock(true);
+    stub(rows);
+    stub([]); // head — genesis
+    stub(); // BEGIN
+    stub([], 1); // INSERT
+    stub([], 1); // DELETE
+    stub(); // COMMIT
+    stub(
+      expected.chainedRowPayloads.map((p) => ({
+        id: p.id,
+        emissionHash: p.emissionHash,
+        previousHash: p.previousHash,
+        eventHash: p.eventHash,
+      })),
+    );
+    stub([]); // unlock
+
+    const result = await processAuditChainer({ pool: mockPool });
+
+    expect(result.outcome).toBe('chained');
+    expect(result.verification).toEqual({ valid: true, verified: 1 });
+  });
+
+  it('given a NON-genesis head without the flag, should chain normally (the guard binds only the genesis link)', async () => {
+    const rows = makeIngestRows(1);
+    const priorHead = 'legacy-backfilled-head';
+    const expected = assignChainBatch(rows, { prevHash: priorHead });
+    stubLock(true);
+    stub(rows);
+    stub([{ event_hash: priorHead }]); // head — legacy rows planted
+    stub(); // BEGIN
+    stub([], 1); // INSERT
+    stub([], 1); // DELETE
+    stub(); // COMMIT
+    stub(
+      expected.chainedRowPayloads.map((p) => ({
+        id: p.id,
+        emissionHash: p.emissionHash,
+        previousHash: p.previousHash,
+        eventHash: p.eventHash,
+      })),
+    );
+    stub([]); // unlock
+
+    const result = await processAuditChainer({ pool: mockPool });
+
+    expect(result.outcome).toBe('chained');
+    expect(result.verification).toEqual({ valid: true, verified: 1 });
   });
 });

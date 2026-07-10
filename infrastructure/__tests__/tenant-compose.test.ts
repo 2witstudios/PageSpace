@@ -407,6 +407,14 @@ describe('Tenant docker-compose configuration', () => {
       },
     );
 
+    it('given the processor service, should pass AUDIT_CHAINER_ALLOW_GENESIS through from .env (fresh installs set it true; upgrades leave it unset — era-fork guard)', () => {
+      const value = String(getEnv('processor').AUDIT_CHAINER_ALLOW_GENESIS ?? '');
+      expect(value).toContain('${AUDIT_CHAINER_ALLOW_GENESIS');
+      // Optional on purpose: an unset var must not fail compose interpolation
+      // on upgraded stacks whose .env predates the flag.
+      expect(value).toContain(':-');
+    });
+
     it('given the realtime service, should NOT receive ADMIN_DATABASE_URL (no audit path in realtime)', () => {
       expect(getEnv('realtime')).not.toHaveProperty('ADMIN_DATABASE_URL');
     });

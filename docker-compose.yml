@@ -183,6 +183,9 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - ADMIN_DATABASE_URL=postgresql://admin_processor_user:admin-processor-password@postgres-admin:5432/pagespace_admin
+      # The local stack is always a fresh install — empty admin chain, genesis
+      # link is correct (#890 Phase 2 era-fork guard).
+      - AUDIT_CHAINER_ALLOW_GENESIS=true
       - PORT=3003
       - NODE_OPTIONS=--max-old-space-size=1024
       - ENABLE_OCR=${ENABLE_OCR:-false}

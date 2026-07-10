@@ -122,6 +122,10 @@ describe.skipIf(!url)('audit chainer drain cycle as admin_processor_user (wire-c
   let procPool: PgPool;
 
   beforeAll(async () => {
+    // This suite IS the fresh-install scenario: an empty admin chain with no
+    // legacy rows to backfill, so the genesis link is legitimate (#890
+    // Phase 2 FIX era-fork guard).
+    process.env.AUDIT_CHAINER_ALLOW_GENESIS = 'true';
     owner = new Pool({ connectionString: url, max: 3 });
     // Fresh-DB guarantee on the SCRATCH db — same reset as the db package's
     // admin integration suites, including LOGIN users so provisioning runs.
@@ -157,6 +161,7 @@ describe.skipIf(!url)('audit chainer drain cycle as admin_processor_user (wire-c
   });
 
   afterAll(async () => {
+    delete process.env.AUDIT_CHAINER_ALLOW_GENESIS;
     await Promise.all([owner?.end(), appPool?.end(), procPool?.end()]);
   });
 

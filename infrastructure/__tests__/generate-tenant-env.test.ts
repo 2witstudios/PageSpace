@@ -95,6 +95,10 @@ describe('generate-tenant-env.sh', () => {
     it('given the output, ADMIN_POSTGRES_USER should be pagespace', () => {
       expect(env.get('ADMIN_POSTGRES_USER')).toBe('pagespace');
     });
+
+    it('given the output, AUDIT_CHAINER_ALLOW_GENESIS should be true — the generator provisions FRESH installs, where the genesis link is correct (#890 Phase 2 era-fork guard)', () => {
+      expect(env.get('AUDIT_CHAINER_ALLOW_GENESIS')).toBe('true');
+    });
   });
 
   describe('secret generation', () => {
