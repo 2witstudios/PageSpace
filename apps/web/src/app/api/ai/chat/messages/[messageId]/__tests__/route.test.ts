@@ -113,6 +113,8 @@ type PageLookupResult = {
   userScopedAccess: boolean;
   terminalAccess: boolean;
   machines: unknown;
+  description: string | null;
+  allowPageAgents: boolean;
   fileSize: number | null;
   mimeType: string | null;
   originalFileName: string | null;
@@ -159,6 +161,8 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   userScopedAccess: false,
   terminalAccess: false,
   machines: null,
+  description: null,
+  allowPageAgents: true,
   fileSize: null,
   mimeType: null,
   originalFileName: null,
