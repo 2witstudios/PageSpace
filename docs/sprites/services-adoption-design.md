@@ -128,11 +128,15 @@ export interface DetectedDevServer {
 export function classifyDetectedDevServer(recentOutput: string): DetectedDevServer | null;
 ```
 
-#### (b) Exposure — private by default
+#### (b) Exposure — private by default, and auth is **Sprite-URL-scoped, not per-service**
+
+**Critical correction (Codex P1):** In Sprites, URL auth (private vs public) is a property of the **Sprite URL itself**, not of an individual service (docs §1.3: *"A Sprite URL is private by default … reachable only by members of your org"* — the setting is on the URL). Since only one service per Sprite can bind the HTTP port (§1.1), the Sprite URL always points at exactly one HTTP service at a time, so visibility is really a property of **the Sprite's single HTTP-port slot**, not of any service row. Modelling visibility per-service is a security bug: make service A public, then stop/remove/replace it with service B, and the *Sprite URL* stays public while B is stored/rendered as "private" — silently exposing B. So:
 
 - Create the service with `--http-port <p>` so the sprite URL routes to it.
-- **Keep the sprite URL private by default** (org-token / browser-auth). The docs are explicit that public means *"anyone with the URL can reach it"* and warn against exposing internal endpoints. A dev server is an internal, in-progress artifact — default private.
-- Offer an explicit, clearly-labelled "Make public" toggle for the webhook/demo case, gated on the same permission that lets a user run code on the machine. Public exposure is an outward-facing action → it must be a deliberate, per-service opt-in, never a default.
+- **Keep the Sprite URL private by default** (org-token / browser-auth). The docs are explicit that public means *"anyone with the URL can reach it"* and warn against exposing internal endpoints. A dev server is an internal, in-progress artifact — default private.
+- Track visibility **once per Sprite (the HTTP-port slot), not per service.** Store it on the machine (or a dedicated `sprite_http_exposure` row keyed by `sandboxId`), never on the `machine_services` row.
+- Offer an explicit, clearly-labelled "Make Sprite URL public" toggle for the webhook/demo case, gated on the same permission that lets a user run code on the machine. Public exposure is an outward-facing action → it must be a deliberate opt-in, never a default. The UI must present it as *"expose this Sprite's URL"*, not *"expose this service"*, so the blast radius is clear.
+- **Reset URL auth to private whenever the public HTTP service is stopped, removed, or replaced by a different service.** Publicness must never outlive the specific service the user consciously exposed — the service lifecycle drives the auth reset. This is the one behavior that closes the P1 hole.
 - For arbitrary non-HTTP TCP (a database client, a second port), point power users at `sprite proxy` rather than trying to route it through the sprite URL — the URL only carries the one HTTP service port.
 
 ```ts
@@ -145,23 +149,44 @@ export function classifyDetectedDevServer(recentOutput: string): DetectedDevServ
  */
 export function resolveSpriteServiceUrl(args: { spriteName: string; orgId: string }): string | null;
 
-export type ServiceVisibility = 'private' | 'public';
+export type SpriteUrlVisibility = 'private' | 'public';
 
 /**
- * Pure decision: is the requested visibility change permitted, and what warning
- * copy (if any) should the UI show? Public always warns; private never does.
+ * Pure decision: is the requested Sprite-URL visibility change permitted, which
+ * service (if any) it is bound to, and what warning copy the UI should show?
+ * Scoped to the SPRITE URL / HTTP-port slot — NOT an individual service.
+ * Public always warns; private never does. `boundServiceName` records which
+ * service the public exposure is tied to, so the caller can auto-reset to
+ * private when that service is later stopped/removed/replaced.
  */
-export function planServiceVisibilityChange(args: {
-  requested: ServiceVisibility;
+export function planSpriteUrlVisibilityChange(args: {
+  requested: SpriteUrlVisibility;
+  boundServiceName: string | null;   // the HTTP-port service being exposed, if any
   actorCanExposePublicly: boolean;
-}): { ok: true; visibility: ServiceVisibility; warn: boolean } | { ok: false; reason: 'forbidden' };
+}): { ok: true; visibility: SpriteUrlVisibility; boundServiceName: string | null; warn: boolean } | { ok: false; reason: 'forbidden' };
+
+/**
+ * Pure decision: given the current public-exposure binding and a service that
+ * just stopped/was removed/was replaced, must the Sprite URL be reset to
+ * private? True iff the departing service is the one the public exposure was
+ * bound to. This is what prevents a stale public URL outliving its service.
+ */
+export function shouldResetSpriteUrlToPrivate(args: {
+  currentVisibility: SpriteUrlVisibility;
+  boundServiceName: string | null;
+  departingServiceName: string;
+}): boolean;
 ```
 
 #### (c) Surface the URL in the PageSpace UI
 
-- Persist a lightweight `machine_services` tracking row (scope-keyed exactly like `machine_agent_terminals`: `terminalId` + optional `projectName`/`machineBranchId`, plus `name`, `httpPort`, `visibility`, `createdBy`). This mirrors the existing agent-terminal store pattern and needs a Drizzle migration (`bun run db:generate`, never hand-edited SQL) — **that migration is a follow-up implementation leaf, not this design leaf.**
-- The Machine/Navigator panel lists services under the scope with their URL (copy button), status (running / paused-will-start-on-request), and a stop/remove control.
-- Because start-on-request means "paused" is the normal steady state, the UI should render "paused" as healthy (a green "will wake on request" state), **not** an error — otherwise we recreate today's "banner every 45s means something's wrong" confusion.
+- Persist a lightweight `machine_services` tracking row (scope-keyed exactly like `machine_agent_terminals`: `terminalId` + optional `projectName`/`machineBranchId`, plus `name`, `httpPort`, `stoppedByUser` (see below), `createdBy`). **Visibility is NOT on this row** — it lives once per Sprite (§3b, the P1 fix). This mirrors the existing agent-terminal store pattern and needs a Drizzle migration (`bun run db:generate`, never hand-edited SQL) — **that migration is a follow-up implementation leaf, not this design leaf.**
+- The Machine/Navigator panel lists services under the scope with their URL (copy button), a status label (running / will-wake-on-request / **stopped**), and a start/stop/remove control.
+- **Distinguish "idle/paused" from "explicitly stopped" (Codex P2).** Start-on-request only fires for a service the runtime considers *live-but-paused*; a **sticky-stopped** service (the user clicked Stop) *stays stopped* and will NOT auto-start on a request until `start` is called (docs §1.1: *"A stopped service stays stopped. The runtime won't restart it behind your back."*). The API's `status: 'stopped'` collapses both, so we track the user's explicit intent ourselves in `stoppedByUser` and derive the label from both:
+  - `running` → live.
+  - `httpPort` set, API `stopped`, `stoppedByUser === false` → **"will wake on request"** (healthy green — the normal idle steady state).
+  - `stoppedByUser === true` → **"stopped"** (neutral/grey, with a Start button) — never shown as wakeable, because a request will 502/idle rather than auto-start it.
+  This prevents the UI from promising a wakeable URL for a service the user deliberately turned off.
 
 ---
 
@@ -261,7 +286,29 @@ export interface MachineHandle {
 Notes:
 - The `sprite-machine-host.ts` wrapper composes these straight through (it already reaches the raw `sprite` via `sdk.getSprite` for the PTY path — same trick for services).
 - The `ExecSandboxClient` seam does **not** change: services are a `MachineHandle`/`SpriteInstanceLike` concern, orthogonal to `getOrCreate`/`get`/`stop`. Note the client's `stop` still `deleteSprite`s (destroys); a Sprite with services is destroyed with them — acceptable, since our services are user dev servers tied to the machine's lifetime, not infra we must preserve.
-- `SpriteServiceInfo.status` collapses "paused/will-start-on-request" into `stopped` because the REST surface (`/v1/sprites/{name}/services`) does not distinguish them in the RC SDK; the UI derives "will wake on request" from `httpPort !== undefined && status === 'stopped'` (a pure helper, `describeServiceState`).
+- `SpriteServiceInfo.status` collapses "paused/will-start-on-request" and "sticky-stopped" into a single `stopped` because the REST surface (`/v1/sprites/{name}/services`) does not distinguish them in the RC SDK. **We therefore do NOT infer wakeability from `status` alone** — a request only auto-starts a paused service, never a sticky-stopped one (docs §1.1). The `stoppedByUser` flag we persist in `machine_services` (§3c) carries the user's explicit-stop intent, and `describeServiceState` takes both:
+
+```ts
+// packages/lib/src/services/machines/service-state.ts  (new, pure)
+
+export type ServiceDisplayState =
+  | 'running'
+  | 'will-wake-on-request'   // httpPort bound, paused, NOT user-stopped → healthy
+  | 'stopped';               // user clicked Stop → stays stopped until Start
+
+/**
+ * Pure: derive the UI display state. A service is only "will-wake-on-request"
+ * when it binds the HTTP port, is currently stopped at the runtime level, AND
+ * was NOT explicitly stopped by the user — because start-on-request does not
+ * revive a sticky-stopped service (docs §1.1). Without `stoppedByUser` we would
+ * wrongly promise a wakeable URL for a service the user deliberately turned off.
+ */
+export function describeServiceState(args: {
+  status: 'running' | 'stopped';
+  httpPort?: number;
+  stoppedByUser: boolean;
+}): ServiceDisplayState;
+```
 
 **Pure decision function for creating a dev-server service:**
 
@@ -327,11 +374,11 @@ Each is scoped to one session, TDD + pure-function-first, same protocol as this 
 | # | Title | One-line scope |
 |---|-------|----------------|
 | 5-3a | `[sprites 5-3a]` Sprite services SDK surface | Add `SpriteServicesApi`/`SpriteServiceInfo` to `SpriteInstanceLike` + mirror onto `MachineHandle`/`sprite-machine-host`; verify against live SDK; fake-driven unit tests. No caller yet. |
-| 5-3b | `[sprites 5-3b]` Dev-server pure decision core | Implement + unit-test `planDevServerService`, `isHttpPortSlotFree`, `classifyDetectedDevServer`, `resolveSpriteServiceUrl`, `planServiceVisibilityChange`, `describeServiceState` (all pure, no mocks). |
-| 5-3c | `[sprites 5-3c]` `machine_services` store + migration | New scope-keyed table (mirrors `machine_agent_terminals`), Drizzle migration via `db:generate`, store CRUD + tests. |
+| 5-3b | `[sprites 5-3b]` Dev-server pure decision core | Implement + unit-test `planDevServerService`, `isHttpPortSlotFree`, `classifyDetectedDevServer`, `resolveSpriteServiceUrl`, `planSpriteUrlVisibilityChange`, `shouldResetSpriteUrlToPrivate`, `describeServiceState` (all pure, no mocks). |
+| 5-3c | `[sprites 5-3c]` `machine_services` store + migration | New scope-keyed table (mirrors `machine_agent_terminals`), with `stoppedByUser`; Drizzle migration via `db:generate`, store CRUD + tests. Visibility is NOT stored here (see 5-3f). |
 | 5-3d | `[sprites 5-3d]` Realtime dev-server detection + "Publish as service" | Wire `classifyDetectedDevServer` into `terminal-activity.ts`; non-blocking "expose port?" prompt; explicit publish action creates the service via `MachineHandle.services()`. Behind `MACHINE_SERVICES_ENABLED`. |
-| 5-3e | `[sprites 5-3e]` Service URL surfacing in Machine/Navigator UI | List services under scope with private URL (copy), "will wake on request" state, stop/remove control. |
-| 5-3f | `[sprites 5-3f]` Public-exposure toggle | Per-service private→public toggle behind its own stricter gate, with the docs' warning copy; permission-checked. |
+| 5-3e | `[sprites 5-3e]` Service URL surfacing in Machine/Navigator UI | List services under scope with private URL (copy), `describeServiceState`-driven label (running / will-wake-on-request / stopped), start/stop/remove control. |
+| 5-3f | `[sprites 5-3f]` Sprite-URL public-exposure toggle | **Sprite-URL-scoped** (not per-service) private→public toggle behind its own stricter gate, stored per-Sprite (`sprite_http_exposure` keyed by `sandboxId`), with the docs' warning copy; auto-reset to private via `shouldResetSpriteUrlToPrivate` when the bound service stops/is removed/is replaced; permission-checked. |
 | 5-3g | `[sprites 5-3g]` `selectRuntimePrimitive` + agent Session/Task boundary | Pure `runtime-primitive.ts` classifying every `AgentRuntimeType` as `session-with-task-hold`; document the boundary contract with leaf 5-1's `acquireWorkHold`/`releaseWorkHold`. (Consumes 5-1; do not duplicate the hold impl.) |
 
 > `MACHINE_SERVICES_ENABLED` gate wiring lands with 5-3d (its first real consumer). 5-3a–c are inert plumbing that can land ungated.
