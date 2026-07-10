@@ -64,7 +64,7 @@ export const globalTerminalConfigRepository = {
   },
 
   /**
-   * Verify every 'existing' machineId resolves to a non-trashed TERMINAL
+   * Verify every 'existing' machineId resolves to a non-trashed MACHINE
    * page in the user's Home drive that they can access — mirrors
    * agent-config/route.ts's scoping, substituting the Home drive for "the
    * agent's own drive".
