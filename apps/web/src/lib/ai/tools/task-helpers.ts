@@ -10,6 +10,7 @@ import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity
 import { createTaskTriggerWorkflow, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
 import type { AgentTriggerInput } from '@/lib/workflows/task-trigger-helpers';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 
 /**
  * The Drizzle transaction handle passed to `db.transaction(async (tx) => ...)`.
@@ -172,7 +173,7 @@ export async function syncTaskAssignees(
 }
 
 export async function fetchEnrichedTasks(parentPageId: string) {
-  return db.query.taskItems.findMany({
+  const tasks = await db.query.taskItems.findMany({
     where: inArray(taskItems.pageId, db.select({ id: pages.id }).from(pages).where(and(
       eq(pages.parentId, parentPageId),
       eq(pages.type, 'TASK_LIST'),
@@ -191,6 +192,7 @@ export async function fetchEnrichedTasks(parentPageId: string) {
       },
     },
   });
+  return decryptTaskUserRelations(tasks);
 }
 
 type EnrichedTaskItem = Awaited<ReturnType<typeof fetchEnrichedTasks>>[number];
