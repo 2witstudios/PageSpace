@@ -73,6 +73,7 @@ import {
   getChainAlertHandler,
   verifyAndAlert,
   notifyChainAppendVerificationFailure,
+  notifyAnchorPublishFailure,
   startPeriodicVerification,
   stopPeriodicVerification,
   isPeriodicVerificationRunning,
@@ -327,6 +328,46 @@ describe('security-audit-alerting (#544)', () => {
         (call) => (call[0] as ChainVerificationAlert).result.breakPoint?.description,
       );
       expect(new Set(descriptions).size).toBe(3);
+    });
+  });
+
+  describe('notifyAnchorPublishFailure (#890 Phase 2 anchoring — repeated witness-publish failure)', () => {
+    const details = {
+      publisherName: 's3',
+      consecutiveFailures: 3,
+      chainSeq: 128,
+      head: 'head-hash-128',
+      errorMessage: 'bucket gone',
+    };
+
+    it('given no registered handler, should be a silent no-op (processor context)', async () => {
+      await expect(notifyAnchorPublishFailure(details)).resolves.toBeUndefined();
+    });
+
+    it('given a registered handler, should fire an anchor_publish-sourced alert naming publisher, streak, and head', async () => {
+      const handler = vi.fn();
+      setChainAlertHandler(handler);
+
+      await notifyAnchorPublishFailure(details);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const alert: ChainVerificationAlert = handler.mock.calls[0][0];
+      expect(alert.source).toBe('anchor_publish');
+      expect(alert.result.isValid).toBe(false);
+      expect(alert.result.breakPoint?.storedHash).toBe('head-hash-128');
+      expect(alert.result.breakPoint?.description).toContain('s3');
+      expect(alert.result.breakPoint?.description).toContain('3 consecutive');
+      expect(alert.result.breakPoint?.description).toContain('chain_seq 128');
+      expect(alert.result.breakPoint?.description).toContain('bucket gone');
+    });
+
+    it('given a throwing handler, should swallow the error and log it (alerting must never break the chainer)', async () => {
+      setChainAlertHandler(() => {
+        throw new Error('alert transport down');
+      });
+
+      await expect(notifyAnchorPublishFailure(details)).resolves.toBeUndefined();
+      expect(mockLoggers.security.error).toHaveBeenCalled();
     });
   });
 });

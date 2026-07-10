@@ -23,8 +23,13 @@
  * production write path stays on the advisory-lock repository until leaf 5
  * cuts emission over, so the queue is simply empty until then.
  *
- * ANCHORING HOOK (leaf 3): readChainHead below is the head the anchor
- * publisher signs; after a 'chained' run, result.newHead is the fresh head.
+ * ANCHORING (leaf 3): after a 'chained' run whose verify-on-append is green,
+ * the fresh head (newHead + its chain_seq) is signed (pure core:
+ * @pagespace/lib/audit/anchor) and published to the configured witness
+ * surfaces (S3 Object-Lock + the security_audit_anchors receipt table) per
+ * the interval policy (AUDIT_ANCHOR_EVERY_RUNS / AUDIT_ANCHOR_MIN_INTERVAL_S).
+ * Publish failure NEVER blocks or corrupts chaining — loud logging plus an
+ * alert on a repeated-failure streak.
  */
 
 import {
@@ -36,11 +41,29 @@ import {
   type AppendedChainRow,
   type SegmentVerificationResult,
 } from '@pagespace/lib/audit/chain-step';
-import { notifyChainAppendVerificationFailure } from '@pagespace/lib/audit/security-audit-alerting';
+import { buildAnchorPayload } from '@pagespace/lib/audit/anchor';
+import {
+  notifyChainAppendVerificationFailure,
+  notifyAnchorPublishFailure,
+} from '@pagespace/lib/audit/security-audit-alerting';
+import {
+  loadAnchorConfig,
+  validateAnchorConfig,
+  createS3AnchorPublisher,
+  createAnchorReceiptPublisher,
+  type AnchorConfig,
+  type AnchorPublisher,
+} from '../services/anchor-publishers';
+import { createS3Client } from '../s3-client';
 import { getAdminPoolForWorker } from '../db';
 
 const ADVISORY_LOCK_KEY = 'audit-chainer';
 const DEFAULT_BATCH_SIZE = 500;
+
+// Alert every time a publisher's consecutive-failure streak reaches a
+// multiple of this — a chain appending unwitnessed for long is exactly the
+// window a tamper needs.
+const ANCHOR_FAILURE_ALERT_STREAK = 3;
 
 // Column list for the drain SELECT — aliased to the camelCase shape the pure
 // core consumes (ChainableIngestRow). emitted_at is drain ordering only and
@@ -78,14 +101,51 @@ export interface AuditChainerOverrides {
   pool?: PgPool;
   /** Drain batch size (default AUDIT_CHAINER_BATCH_SIZE env or 500). */
   batchSize?: number;
+  /** Injected anchor config (default: loadAnchorConfig() from env). */
+  anchorConfig?: AnchorConfig;
+  /** Injected witness publishers (default: receipt + S3 when configured). */
+  anchorPublishers?: AnchorPublisher[];
+}
+
+/** What the anchoring hook did after a chained run (absent when anchoring is off). */
+export interface AnchorPublishSummary {
+  attempted: boolean;
+  skippedReason?: 'invalid_config' | 'missing_head_seq' | 'every_runs' | 'min_interval';
+  chainSeq?: number;
+  published?: string[];
+  failed?: string[];
 }
 
 export interface AuditChainerRunResult {
   outcome: 'disabled' | 'lock_busy' | 'idle' | 'chained';
   drained: number;
   verification?: SegmentVerificationResult;
-  /** event_hash of the last appended row — the anchor publisher's input (leaf 3). */
+  /** event_hash of the last appended row — the anchored head. */
   newHead?: string;
+  /** chain_seq of the last appended row (as stored by the table sequence). */
+  newHeadSeq?: number;
+  anchor?: AnchorPublishSummary;
+}
+
+// Anchor scheduling is process-level state: the interval policy spans runs,
+// and the single-writer lock means at most one live chainer per Admin PG —
+// module scope IS the right home for it.
+interface AnchorScheduleState {
+  runsSinceAnchor: number;
+  lastAnchorAtMs: number | null;
+  failureStreaks: Map<string, number>;
+}
+
+const anchorState: AnchorScheduleState = {
+  runsSinceAnchor: 0,
+  lastAnchorAtMs: null,
+  failureStreaks: new Map(),
+};
+
+export function resetAnchorPublishStateForTests(): void {
+  anchorState.runsSinceAnchor = 0;
+  anchorState.lastAnchorAtMs = null;
+  anchorState.failureStreaks.clear();
 }
 
 function resolveBatchSize(override: number | undefined): number {
@@ -106,6 +166,111 @@ async function readChainHead(client: PgClient): Promise<string> {
     'SELECT event_hash FROM security_audit_log ORDER BY chain_seq DESC LIMIT 1',
   );
   return (result.rows[0] as { event_hash: string } | undefined)?.event_hash ?? GENESIS_PREVIOUS_HASH;
+}
+
+/** Default witness surfaces: the receipt table always; S3 when configured. */
+function buildDefaultAnchorPublishers(config: AnchorConfig, pool: PgPool): AnchorPublisher[] {
+  const publishers: AnchorPublisher[] = [createAnchorReceiptPublisher({ pool })];
+  if (config.s3) {
+    publishers.push(createS3AnchorPublisher({ s3Client: createS3Client(), ...config.s3 }));
+  }
+  return publishers;
+}
+
+/**
+ * Anchor the verified head per the interval policy. Fire-and-forget contract:
+ * this function NEVER throws — a witness surface being down must not block
+ * chaining (the queue drain already committed). Failures log loudly and, on a
+ * repeated streak, escalate through the chain-alert surface.
+ */
+async function maybePublishAnchor(
+  head: string,
+  chainSeq: number | undefined,
+  pool: PgPool,
+  overrides: AuditChainerOverrides,
+): Promise<AnchorPublishSummary | undefined> {
+  const config = overrides.anchorConfig ?? loadAnchorConfig();
+  if (!config.enabled) {
+    return undefined;
+  }
+
+  const validation = validateAnchorConfig(config);
+  if (!validation.valid) {
+    console.error(
+      `[audit-chainer] Anchoring skipped — invalid config: ${validation.errors.join('; ')}`,
+    );
+    return { attempted: false, skippedReason: 'invalid_config' };
+  }
+
+  if (chainSeq === undefined || !Number.isFinite(chainSeq)) {
+    console.error('[audit-chainer] Anchoring skipped — appended head chain_seq unavailable');
+    return { attempted: false, skippedReason: 'missing_head_seq' };
+  }
+
+  anchorState.runsSinceAnchor += 1;
+  if (anchorState.runsSinceAnchor < config.everyRuns) {
+    return { attempted: false, skippedReason: 'every_runs' };
+  }
+  const nowMs = Date.now();
+  if (
+    config.minIntervalS > 0 &&
+    anchorState.lastAnchorAtMs !== null &&
+    nowMs - anchorState.lastAnchorAtMs < config.minIntervalS * 1000
+  ) {
+    return { attempted: false, skippedReason: 'min_interval' };
+  }
+
+  const publishers = overrides.anchorPublishers ?? buildDefaultAnchorPublishers(config, pool);
+  const anchor = buildAnchorPayload({
+    head,
+    chainSeq,
+    anchoredAt: new Date(nowMs),
+    secret: config.secret,
+  });
+
+  const published: string[] = [];
+  const failed: string[] = [];
+  for (const publisher of publishers) {
+    try {
+      await publisher.publish(anchor);
+      published.push(publisher.name);
+      anchorState.failureStreaks.delete(publisher.name);
+    } catch (error) {
+      failed.push(publisher.name);
+      const streak = (anchorState.failureStreaks.get(publisher.name) ?? 0) + 1;
+      anchorState.failureStreaks.set(publisher.name, streak);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[audit-chainer] ANCHOR PUBLISH FAILED publisher=${publisher.name} chainSeq=${chainSeq} head=${head} streak=${streak}: ${message}`,
+      );
+      if (streak % ANCHOR_FAILURE_ALERT_STREAK === 0) {
+        try {
+          await notifyAnchorPublishFailure({
+            publisherName: publisher.name,
+            consecutiveFailures: streak,
+            chainSeq,
+            head,
+            errorMessage: message,
+          });
+        } catch (alertError) {
+          const alertMessage = alertError instanceof Error ? alertError.message : String(alertError);
+          console.warn(`[audit-chainer] Anchor failure alert failed: ${alertMessage}`);
+        }
+      }
+    }
+  }
+
+  if (published.length > 0) {
+    // Only a witnessed head resets the schedule: on total failure the next
+    // chained run retries immediately instead of waiting out the interval.
+    anchorState.runsSinceAnchor = 0;
+    anchorState.lastAnchorAtMs = nowMs;
+    console.log(
+      `[audit-chainer] Anchored head chain_seq=${chainSeq} (${head.slice(0, 12)}…) to ${published.join('+')}`,
+    );
+  }
+
+  return { attempted: true, chainSeq, published, failed };
 }
 
 /** Build the multi-row parameterized INSERT for a chained batch, in payload order. */
@@ -215,11 +380,13 @@ export async function processAuditChainer(
 
     // Verify-on-append: re-read the segment AS STORED (not the in-memory
     // payloads) and recompute every link from the persisted emission hashes.
+    // chain_seq rides along so the anchor signs the head's stored seq.
     const appended = await client.query(
       `SELECT id,
               emission_hash AS "emissionHash",
               previous_hash AS "previousHash",
-              event_hash AS "eventHash"
+              event_hash AS "eventHash",
+              chain_seq AS "chainSeq"
        FROM security_audit_log
        WHERE id = ANY($1::text[])
        ORDER BY chain_seq ASC`,
@@ -258,11 +425,26 @@ export async function processAuditChainer(
       );
     }
 
+    // The head's stored chain_seq — pg returns bigint as string.
+    const lastAppended = appended.rows[appended.rows.length - 1] as
+      | { chainSeq?: string | number }
+      | undefined;
+    const newHeadSeq =
+      lastAppended?.chainSeq === undefined ? undefined : Number(lastAppended.chainSeq);
+
+    // Anchor only a head that just verified — a witness signature on a
+    // segment that failed verify-on-append would attest tampered data.
+    const anchor = verification.valid
+      ? await maybePublishAnchor(newHead.prevHash, newHeadSeq, pool, overrides)
+      : undefined;
+
     return {
       outcome: 'chained',
       drained: chainedRowPayloads.length,
       verification,
       newHead: newHead.prevHash,
+      ...(newHeadSeq === undefined ? {} : { newHeadSeq }),
+      ...(anchor === undefined ? {} : { anchor }),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

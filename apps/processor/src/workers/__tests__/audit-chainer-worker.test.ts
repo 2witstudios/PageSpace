@@ -15,10 +15,11 @@ import {
   type ChainableIngestRow,
 } from '@pagespace/lib/audit/chain-step';
 
-const { mockQuery, mockRelease, mockNotifyAppendFailure } = vi.hoisted(() => ({
+const { mockQuery, mockRelease, mockNotifyAppendFailure, mockNotifyAnchorFailure } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockRelease: vi.fn(),
   mockNotifyAppendFailure: vi.fn(),
+  mockNotifyAnchorFailure: vi.fn(),
 }));
 
 vi.mock('../../db', () => ({
@@ -29,9 +30,12 @@ vi.mock('../../db', () => ({
 
 vi.mock('@pagespace/lib/audit/security-audit-alerting', () => ({
   notifyChainAppendVerificationFailure: mockNotifyAppendFailure,
+  notifyAnchorPublishFailure: mockNotifyAnchorFailure,
 }));
 
-import { processAuditChainer } from '../audit-chainer-worker';
+import { verifyAnchorSignature, ANCHOR_SOURCE, ANCHOR_VERSION, type SignedAnchor } from '@pagespace/lib/audit/anchor';
+import type { AnchorConfig, AnchorPublisher } from '../../services/anchor-publishers';
+import { processAuditChainer, resetAnchorPublishStateForTests } from '../audit-chainer-worker';
 
 const mockPool = {
   connect: vi.fn(async () => ({ query: mockQuery, release: mockRelease })),
@@ -282,6 +286,269 @@ describe('processAuditChainer', () => {
     const result = await processAuditChainer({ pool: mockPool });
 
     expect(result.verification?.valid).toBe(false);
+    consoleError.mockRestore();
+  });
+});
+
+describe('processAuditChainer anchoring hook (#890 Phase 2 leaf 3)', () => {
+  const SECRET = 'unit-anchor-secret';
+  const enabledConfig: AnchorConfig = {
+    enabled: true,
+    secret: SECRET,
+    everyRuns: 1,
+    minIntervalS: 0,
+    s3: undefined,
+  };
+
+  const makePublisher = (
+    name: string,
+    impl?: () => Promise<void>,
+  ): AnchorPublisher & { publish: ReturnType<typeof vi.fn> } => ({
+    name,
+    publish: vi.fn(impl ?? (async () => undefined)),
+  });
+
+  /** Stub one full successful chained run; returns the expected head + seq. */
+  function stubChainedRun(count: number, priorHead: string | null, startSeq: number) {
+    const rows = makeIngestRows(count);
+    const expected = assignChainBatch(rows, { prevHash: priorHead ?? GENESIS_PREVIOUS_HASH });
+    stubLock(true);
+    stub(rows); // ingest SELECT
+    stub(priorHead === null ? [] : [{ event_hash: priorHead }]); // head SELECT
+    stub(); // BEGIN
+    stub([], count); // INSERT
+    stub([], count); // DELETE
+    stub(); // COMMIT
+    stub(
+      expected.chainedRowPayloads.map((p, i) => ({
+        id: p.id,
+        emissionHash: p.emissionHash,
+        previousHash: p.previousHash,
+        eventHash: p.eventHash,
+        chainSeq: String(startSeq + i), // pg returns bigint as string
+      })),
+    ); // verify re-read
+    stub([]); // unlock
+    return {
+      head: expected.newHead.prevHash,
+      headSeq: startSeq + count - 1,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    resetAnchorPublishStateForTests();
+  });
+
+  it('given anchoring unconfigured (env unset), should chain WITHOUT attempting any publish', async () => {
+    vi.stubEnv('AUDIT_ANCHOR_ENABLED', '');
+    const publisher = makePublisher('s3');
+    stubChainedRun(2, null, 1);
+
+    const result = await processAuditChainer({ pool: mockPool, anchorPublishers: [publisher] });
+
+    expect(result.outcome).toBe('chained');
+    expect(result.anchor).toBeUndefined();
+    expect(publisher.publish).not.toHaveBeenCalled();
+  });
+
+  it('given an enabled config, should publish the signed head to every publisher after a chained run', async () => {
+    const s3 = makePublisher('s3');
+    const receipt = makePublisher('receipt');
+    const { head, headSeq } = stubChainedRun(3, null, 1);
+
+    const result = await processAuditChainer({
+      pool: mockPool,
+      anchorConfig: enabledConfig,
+      anchorPublishers: [s3, receipt],
+    });
+
+    expect(result.newHead).toBe(head);
+    expect(result.newHeadSeq).toBe(headSeq);
+    expect(result.anchor).toEqual({
+      attempted: true,
+      chainSeq: headSeq,
+      published: ['s3', 'receipt'],
+      failed: [],
+    });
+    expect(s3.publish).toHaveBeenCalledTimes(1);
+    expect(receipt.publish).toHaveBeenCalledTimes(1);
+    const anchor = s3.publish.mock.calls[0][0] as SignedAnchor;
+    expect(anchor).toMatchObject({
+      version: ANCHOR_VERSION,
+      source: ANCHOR_SOURCE,
+      chainSeq: headSeq,
+      head,
+    });
+    // The shell signs with the configured secret — the pure core verifies it.
+    expect(verifyAnchorSignature(anchor, SECRET)).toBe(true);
+    // Both publishers receive the SAME anchor object (one statement, two witnesses).
+    expect(receipt.publish.mock.calls[0][0]).toBe(anchor);
+  });
+
+  it('given a publisher that throws, should NEVER block or corrupt chaining: run stays chained, other witness still published, loud log', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const s3 = makePublisher('s3', async () => {
+      throw new Error('bucket gone');
+    });
+    const receipt = makePublisher('receipt');
+    stubChainedRun(2, null, 1);
+
+    const result = await processAuditChainer({
+      pool: mockPool,
+      anchorConfig: enabledConfig,
+      anchorPublishers: [s3, receipt],
+    });
+
+    expect(result.outcome).toBe('chained');
+    expect(result.drained).toBe(2);
+    expect(result.verification).toEqual({ valid: true, verified: 2 });
+    expect(result.anchor).toEqual({
+      attempted: true,
+      chainSeq: 2,
+      published: ['receipt'],
+      failed: ['s3'],
+    });
+    // The queue drain committed before any publish — verify the transaction ran.
+    const calls = mockQuery.mock.calls.map((c) => String(c[0]));
+    expect(calls).toContain('COMMIT');
+    expect(receipt.publish).toHaveBeenCalledTimes(1);
+    expect(
+      consoleError.mock.calls.some((c) => String(c[0]).includes('ANCHOR PUBLISH FAILED')),
+    ).toBe(true);
+    consoleError.mockRestore();
+  });
+
+  it('given EVERY publisher throws on EVERY run, should keep chaining and alert on the 3rd consecutive failure', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const failing = makePublisher('receipt', async () => {
+      throw new Error('receipt table gone');
+    });
+
+    let priorHead: string | null = null;
+    let seq = 1;
+    for (let run = 0; run < 3; run++) {
+      const { head, headSeq } = stubChainedRun(1, priorHead, seq);
+      const result = await processAuditChainer({
+        pool: mockPool,
+        anchorConfig: enabledConfig,
+        anchorPublishers: [failing],
+      });
+      expect(result.outcome).toBe('chained');
+      expect(result.anchor).toMatchObject({ attempted: true, failed: ['receipt'] });
+      priorHead = head;
+      seq = headSeq + 1;
+    }
+
+    expect(failing.publish).toHaveBeenCalledTimes(3);
+    expect(mockNotifyAnchorFailure).toHaveBeenCalledTimes(1);
+    expect(mockNotifyAnchorFailure.mock.calls[0][0]).toMatchObject({
+      publisherName: 'receipt',
+      consecutiveFailures: 3,
+      errorMessage: 'receipt table gone',
+    });
+    consoleError.mockRestore();
+  });
+
+  it('given everyRuns=2, should skip the first chained run and publish on the second (interval policy)', async () => {
+    const publisher = makePublisher('receipt');
+    const config: AnchorConfig = { ...enabledConfig, everyRuns: 2 };
+
+    const first = stubChainedRun(1, null, 1);
+    const resultA = await processAuditChainer({
+      pool: mockPool,
+      anchorConfig: config,
+      anchorPublishers: [publisher],
+    });
+    const second = stubChainedRun(1, first.head, 2);
+    const resultB = await processAuditChainer({
+      pool: mockPool,
+      anchorConfig: config,
+      anchorPublishers: [publisher],
+    });
+
+    expect(resultA.anchor).toEqual({ attempted: false, skippedReason: 'every_runs' });
+    expect(resultB.anchor).toMatchObject({ attempted: true, published: ['receipt'] });
+    expect(publisher.publish).toHaveBeenCalledTimes(1);
+    expect((publisher.publish.mock.calls[0][0] as SignedAnchor).head).toBe(second.head);
+  });
+
+  it('given minIntervalS not yet elapsed since the last anchor, should skip publishing (time policy)', async () => {
+    const publisher = makePublisher('receipt');
+    const config: AnchorConfig = { ...enabledConfig, minIntervalS: 3600 };
+
+    const first = stubChainedRun(1, null, 1);
+    const resultA = await processAuditChainer({
+      pool: mockPool,
+      anchorConfig: config,
+      anchorPublishers: [publisher],
+    });
+    stubChainedRun(1, first.head, 2);
+    const resultB = await processAuditChainer({
+      pool: mockPool,
+      anchorConfig: config,
+      anchorPublishers: [publisher],
+    });
+
+    expect(resultA.anchor).toMatchObject({ attempted: true, published: ['receipt'] });
+    expect(resultB.anchor).toEqual({ attempted: false, skippedReason: 'min_interval' });
+    expect(publisher.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('given verify-on-append failed, should NOT anchor the head (never witness-sign an unverified head)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const publisher = makePublisher('receipt');
+    const rows = makeIngestRows(1);
+    const expected = assignChainBatch(rows, { prevHash: GENESIS_PREVIOUS_HASH });
+
+    stubLock(true);
+    stub(rows);
+    stub([]); // head — genesis
+    stub(); // BEGIN
+    stub([], 1); // INSERT
+    stub([], 1); // DELETE
+    stub(); // COMMIT
+    stub([
+      {
+        id: expected.chainedRowPayloads[0].id,
+        emissionHash: expected.chainedRowPayloads[0].emissionHash,
+        previousHash: expected.chainedRowPayloads[0].previousHash,
+        eventHash: 'tampered-hash',
+        chainSeq: '1',
+      },
+    ]);
+    stub([]); // unlock
+
+    const result = await processAuditChainer({
+      pool: mockPool,
+      anchorConfig: enabledConfig,
+      anchorPublishers: [publisher],
+    });
+
+    expect(result.verification?.valid).toBe(false);
+    expect(result.anchor).toBeUndefined();
+    expect(publisher.publish).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it('given an enabled config missing its secret, should skip with invalid_config and a loud log (misconfiguration is visible, not fatal)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const publisher = makePublisher('receipt');
+    stubChainedRun(1, null, 1);
+
+    const result = await processAuditChainer({
+      pool: mockPool,
+      anchorConfig: { ...enabledConfig, secret: '' },
+      anchorPublishers: [publisher],
+    });
+
+    expect(result.outcome).toBe('chained');
+    expect(result.anchor).toEqual({ attempted: false, skippedReason: 'invalid_config' });
+    expect(publisher.publish).not.toHaveBeenCalled();
+    expect(
+      consoleError.mock.calls.some((c) => String(c[0]).includes('AUDIT_ANCHOR_SECRET')),
+    ).toBe(true);
     consoleError.mockRestore();
   });
 });

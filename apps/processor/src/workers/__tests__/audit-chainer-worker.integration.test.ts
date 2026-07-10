@@ -25,7 +25,14 @@ import {
   GENESIS_PREVIOUS_HASH,
 } from '@pagespace/lib/audit/chain-step';
 import type { AuditEvent } from '@pagespace/lib/audit/security-audit';
-import { processAuditChainer } from '../audit-chainer-worker';
+import { verifyAnchorSignature, serializeSignedAnchor, type SignedAnchor } from '@pagespace/lib/audit/anchor';
+import type { PutObjectCommand } from '@aws-sdk/client-s3';
+import { processAuditChainer, resetAnchorPublishStateForTests } from '../audit-chainer-worker';
+import {
+  createS3AnchorPublisher,
+  createAnchorReceiptPublisher,
+  type AnchorConfig,
+} from '../../services/anchor-publishers';
 
 // Minimal pg surface (this workspace ships no @types/pg — see ../../db.ts).
 interface PgClient {
@@ -275,6 +282,159 @@ describe.skipIf(!url)('audit chainer drain cycle as admin_processor_user (wire-c
     const afterUnlock = await processAuditChainer({ pool: procPool });
     expect(afterUnlock).toMatchObject({ outcome: 'chained', drained: 1 });
     expect(afterUnlock.verification?.valid).toBe(true);
+  });
+
+  const anchorConfig: AnchorConfig = {
+    enabled: true,
+    secret: 'integration-anchor-secret',
+    everyRuns: 1,
+    minIntervalS: 0,
+    s3: undefined,
+  };
+
+  it('given anchoring enabled with the DEFAULT publishers, should write a verifiable receipt row AS admin_processor_user (wire-connected grant)', async () => {
+    resetAnchorPublishStateForTests();
+    await seedIngestRows(appPool, [
+      {
+        id: 'anchor-a-0',
+        event: { eventType: 'data.read', userId: 'user-anchor', resourceType: 'page', resourceId: 'p-a' } as AuditEvent,
+        timestamp: t(30),
+        emittedAt: t(30),
+      },
+    ]);
+
+    const result = await processAuditChainer({ pool: procPool, anchorConfig });
+
+    expect(result.outcome).toBe('chained');
+    expect(result.verification?.valid).toBe(true);
+    expect(result.anchor).toEqual({
+      attempted: true,
+      chainSeq: result.newHeadSeq,
+      published: ['receipt'],
+      failed: [],
+    });
+
+    const receipts = await owner.query(
+      'SELECT version, chain_seq, head_hash, anchored_at, signature FROM security_audit_anchors ORDER BY created_at DESC LIMIT 1',
+    );
+    expect(receipts.rows).toHaveLength(1);
+    const row = receipts.rows[0] as {
+      version: number;
+      chain_seq: string;
+      head_hash: string;
+      anchored_at: Date | string;
+      signature: string;
+    };
+    expect(row.head_hash).toBe(result.newHead);
+    expect(Number(row.chain_seq)).toBe(result.newHeadSeq);
+    // The stored row reconstitutes into a SignedAnchor that verifies — the
+    // receipt surface is a real witness, not just a log line.
+    const reconstituted: SignedAnchor = {
+      version: row.version,
+      source: 'pagespace-audit-chain',
+      chainSeq: Number(row.chain_seq),
+      head: row.head_hash,
+      anchoredAt: new Date(row.anchored_at).toISOString(),
+      signature: row.signature,
+    };
+    expect(verifyAnchorSignature(reconstituted, anchorConfig.secret)).toBe(true);
+  });
+
+  it('given an S3 double beside the receipt publisher, should PutObject the exact serialized anchor with Object-Lock params', async () => {
+    resetAnchorPublishStateForTests();
+    const sent: PutObjectCommand[] = [];
+    const s3Double = {
+      send: async (command: PutObjectCommand) => {
+        sent.push(command);
+        return {};
+      },
+    };
+
+    await seedIngestRows(appPool, [
+      {
+        id: 'anchor-b-0',
+        event: { eventType: 'data.read', userId: 'user-anchor', resourceType: 'page', resourceId: 'p-b' } as AuditEvent,
+        timestamp: t(31),
+        emittedAt: t(31),
+      },
+    ]);
+
+    const result = await processAuditChainer({
+      pool: procPool,
+      anchorConfig,
+      anchorPublishers: [
+        createAnchorReceiptPublisher({ pool: procPool }),
+        createS3AnchorPublisher({ s3Client: s3Double, bucket: 'anchors-it', retentionDays: 7, objectLock: true }),
+      ],
+    });
+
+    expect(result.anchor).toMatchObject({ attempted: true, published: ['receipt', 's3'], failed: [] });
+    expect(sent).toHaveLength(1);
+    const input = sent[0].input;
+    expect(input.Bucket).toBe('anchors-it');
+    expect(input.Key).toMatch(new RegExp(`^anchors/${result.newHeadSeq}-\\d+\\.json$`));
+    expect(input.ObjectLockMode).toBe('COMPLIANCE');
+    expect(input.ObjectLockRetainUntilDate).toBeInstanceOf(Date);
+    // Body round-trips: the WORM object verifies byte-for-byte.
+    const stored = JSON.parse(String(input.Body)) as SignedAnchor;
+    expect(stored.head).toBe(result.newHead);
+    expect(verifyAnchorSignature(stored, anchorConfig.secret)).toBe(true);
+    expect(serializeSignedAnchor(stored)).toBe(String(input.Body));
+  });
+
+  it('given a publisher that throws, should still chain and drain on the REAL database (failure never blocks chaining)', async () => {
+    resetAnchorPublishStateForTests();
+    await seedIngestRows(appPool, [
+      {
+        id: 'anchor-c-0',
+        event: { eventType: 'auth.logout', userId: 'user-anchor' } as AuditEvent,
+        timestamp: t(32),
+        emittedAt: t(32),
+      },
+    ]);
+
+    const result = await processAuditChainer({
+      pool: procPool,
+      anchorConfig,
+      anchorPublishers: [
+        {
+          name: 'receipt',
+          publish: async () => {
+            throw new Error('witness down');
+          },
+        },
+      ],
+    });
+
+    expect(result.outcome).toBe('chained');
+    expect(result.verification?.valid).toBe(true);
+    expect(result.anchor).toMatchObject({ attempted: true, published: [], failed: ['receipt'] });
+    const queued = await owner.query('SELECT count(*)::int AS n FROM security_audit_ingest');
+    expect(queued.rows[0].n).toBe(0);
+    const chainedRow = await owner.query(
+      `SELECT id FROM security_audit_log WHERE id = 'anchor-c-0'`,
+    );
+    expect(chainedRow.rows).toHaveLength(1);
+  });
+
+  it('given the anchors grant matrix, the witness surface is append-only over the wire (42501 for every mutation)', async () => {
+    // admin_processor_user (chainer): INSERT only — no SELECT, UPDATE, DELETE.
+    await expect(
+      procPool.query('SELECT * FROM security_audit_anchors'),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(
+      procPool.query(`UPDATE security_audit_anchors SET head_hash = 'forged'`),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(
+      procPool.query('DELETE FROM security_audit_anchors'),
+    ).rejects.toMatchObject({ code: '42501' });
+    // admin_app_user: nothing at all on the witness surface.
+    await expect(
+      appPool.query(
+        `INSERT INTO security_audit_anchors (id, version, chain_seq, head_hash, anchored_at, signature)
+         VALUES ('forged', 1, 1, 'h', now(), 's')`,
+      ),
+    ).rejects.toMatchObject({ code: '42501' });
   });
 
   it('given the drain grant matrix, admin_processor_user still cannot UPDATE/DELETE the chain or INSERT into the queue (42501)', async () => {

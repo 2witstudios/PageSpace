@@ -43,6 +43,13 @@
       "when": 1783671997487,
       "tag": "0005_emission_hash_column",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783673960814,
+      "tag": "0006_security_audit_anchors",
+      "breakpoints": true
     }
   ]
 }

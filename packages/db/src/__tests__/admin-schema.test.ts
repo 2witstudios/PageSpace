@@ -29,8 +29,9 @@ const exportedTables = Object.entries(adminSchema).filter(([, value]) =>
 );
 
 describe('admin-schema barrel', () => {
-  it('should export exactly the four trust-plane tables', () => {
+  it('should export exactly the five trust-plane tables', () => {
     expect(exportedTables.map(([key]) => key).sort()).toEqual([
+      'securityAuditAnchors',
       'securityAuditIngest',
       'securityAuditLog',
       'siemDeliveryCursors',
@@ -128,6 +129,31 @@ describe('admin-schema barrel', () => {
     });
   });
 
+  describe('securityAuditAnchors (Phase 2 anchor receipts)', () => {
+    it('should target security_audit_anchors and exist ONLY in the admin barrel (never the main schema)', async () => {
+      expect(getTableName(adminSchema.securityAuditAnchors)).toBe('security_audit_anchors');
+      const mainSchema = await import('../schema');
+      expect(Object.keys(mainSchema)).not.toContain('securityAuditAnchors');
+    });
+
+    it('should carry every signed anchor field NOT NULL and no foreign keys', () => {
+      expect(getTableConfig(adminSchema.securityAuditAnchors).foreignKeys).toHaveLength(0);
+      const columns = getTableColumns(adminSchema.securityAuditAnchors);
+      expect(Object.keys(columns).sort()).toEqual([
+        'anchoredAt',
+        'chainSeq',
+        'createdAt',
+        'headHash',
+        'id',
+        'signature',
+        'version',
+      ]);
+      for (const key of ['version', 'chainSeq', 'headHash', 'anchoredAt', 'signature'] as const) {
+        expect(columns[key].notNull, `${key} must be NOT NULL`).toBe(true);
+      }
+    });
+  });
+
   describe('SIEM tables carry no cross-plane FKs', () => {
     it('siemDeliveryCursors has no foreign keys', () => {
       expect(getTableConfig(adminSchema.siemDeliveryCursors).foreignKeys).toHaveLength(0);
@@ -144,12 +170,13 @@ describe('admin-schema barrel', () => {
       // (Record<string, never> ⇒ keyof query is never ⇒ excess properties) or
       // if the barrel gains/loses a table without this contract being updated.
       const querySurface: Record<keyof AdminDatabase['query'], true> = {
+        securityAuditAnchors: true,
         securityAuditIngest: true,
         securityAuditLog: true,
         siemDeliveryCursors: true,
         siemDeliveryReceipts: true,
       };
-      expect(Object.keys(querySurface)).toHaveLength(4);
+      expect(Object.keys(querySurface)).toHaveLength(5);
     });
   });
 });

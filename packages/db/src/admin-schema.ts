@@ -7,6 +7,7 @@
  *   - siemDeliveryCursors
  *   - siemDeliveryReceipts
  *   - securityAuditIngest (Phase 2 lock-free emission queue, trust-plane only)
+ *   - securityAuditAnchors (Phase 2 anchor receipts, trust-plane only)
  * The 4 analytics tables (systemLogs, apiMetrics, userActivities, errorLogs)
  * go to ClickHouse in Phase 3 — NOT into Admin PG. activityLogs joins in
  * Phase 5.
@@ -41,3 +42,8 @@ export {
   type InsertSecurityAuditIngest,
   type SelectSecurityAuditIngest,
 } from './schema/security-audit-ingest';
+export {
+  securityAuditAnchors,
+  type InsertSecurityAuditAnchor,
+  type SelectSecurityAuditAnchor,
+} from './schema/security-audit-anchors';

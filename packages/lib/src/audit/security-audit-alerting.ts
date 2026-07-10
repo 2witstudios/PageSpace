@@ -29,7 +29,7 @@ import {
 export interface ChainVerificationAlert {
   result: SecurityChainVerificationResult;
   triggeredAt: Date;
-  source: 'periodic' | 'manual' | 'preflight' | 'append';
+  source: 'periodic' | 'manual' | 'preflight' | 'append' | 'anchor_publish';
 }
 
 /**
@@ -251,6 +251,80 @@ export async function notifyChainAppendVerificationFailure(
     await alertHandler(alert);
   } catch (error) {
     loggers.security.error('[SecurityAuditAlerting] Append verification alert handler failed:', {
+      error,
+    });
+  }
+}
+
+/**
+ * Details of a repeated anchor-publish failure (#890 Phase 2, leaf 3). Fired
+ * by the chainer's anchor hook when a witness surface (S3 Object-Lock or the
+ * receipt table) keeps rejecting publishes — chaining itself is unaffected
+ * (publish failure never blocks it), but a chain running unwitnessed for long
+ * is exactly the window a tamper needs, so operators must hear about it.
+ */
+export interface AnchorPublishFailureDetails {
+  /** Which publisher kept failing ('s3' | 'receipt'). */
+  publisherName: string;
+  /** Length of the current consecutive-failure streak for that publisher. */
+  consecutiveFailures: number;
+  /** chain_seq of the head that could not be anchored. */
+  chainSeq: number;
+  /** event_hash of the head that could not be anchored. */
+  head: string;
+  /** Message of the most recent publish error. */
+  errorMessage: string;
+}
+
+/**
+ * Fire a repeated anchor-publish failure alert through the globally-registered
+ * handler. Same contract as the other notify helpers: no handler → no-op;
+ * handler errors are swallowed with a logged error so a broken alert surface
+ * never breaks the chainer.
+ *
+ * The synthetic result reuses the chain-verification alert shape (the one
+ * registered handler surface): isValid=false marks "the trust plane needs
+ * attention", and the breakPoint description carries the anchor specifics —
+ * handlers distinguish via source='anchor_publish'.
+ */
+export async function notifyAnchorPublishFailure(
+  details: AnchorPublishFailureDetails
+): Promise<void> {
+  if (!alertHandler) return;
+
+  const now = new Date();
+  const syntheticResult: SecurityChainVerificationResult = {
+    isValid: false,
+    totalEntries: 0,
+    entriesVerified: 0,
+    validEntries: 0,
+    invalidEntries: 0,
+    breakPoint: {
+      entryId: `anchor-${details.chainSeq}`,
+      timestamp: now,
+      position: 0,
+      storedHash: details.head,
+      computedHash: '',
+      previousHashUsed: '',
+      description: `Anchor publish to '${details.publisherName}' failed ${details.consecutiveFailures} consecutive times for head at chain_seq ${details.chainSeq}: ${details.errorMessage}. The chain is appending unwitnessed.`,
+    },
+    firstEntryId: null,
+    lastEntryId: null,
+    verificationStartedAt: now,
+    verificationCompletedAt: now,
+    durationMs: 0,
+  };
+
+  const alert: ChainVerificationAlert = {
+    result: syntheticResult,
+    triggeredAt: now,
+    source: 'anchor_publish',
+  };
+
+  try {
+    await alertHandler(alert);
+  } catch (error) {
+    loggers.security.error('[SecurityAuditAlerting] Anchor publish alert handler failed:', {
       error,
     });
   }
