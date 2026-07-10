@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useRef } from 'react';
+import useSWR from 'swr';
 import { cn } from '@/lib/utils';
 import { usePageTree } from '@/hooks/usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { PageType } from '@pagespace/lib/utils/enums';
 import TerminalView from './page-views/terminal/TerminalView';
 import {
@@ -14,19 +16,17 @@ import {
 /** Default LRU bound: keep the 3 most-recent terminal subtrees alive. */
 const MAX_MOUNTED_TERMINALS = 3;
 
+const pageFetcher = (url: string) =>
+  fetchWithAuth(url).then((r) => {
+    if (!r.ok) throw new Error('Failed to fetch page');
+    return r.json();
+  });
+
 interface TerminalKeepAliveHostProps {
   /** The active drive whose page tree we resolve terminal pages from. */
   driveId: string | undefined;
   /** The currently-active page id (may be any page type, or null). */
   activePageId: string | null;
-}
-
-function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
 }
 
 /**
@@ -45,33 +45,50 @@ function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
 export default function TerminalKeepAliveHost({ driveId, activePageId }: TerminalKeepAliveHostProps) {
   const { tree } = usePageTree(driveId);
 
-  // Is the active page a terminal? If so it becomes the pinned "current".
+  // Resolve the active page from the tree. On fresh creation / deep links the
+  // tree can lag (the page exists server-side but hasn't been merged in yet).
+  // PageContent handles that with a direct /api/pages fetch; terminals must get
+  // the same fallback or a just-created terminal would render blank until the
+  // tree revalidates. Same SWR key as PageContent's fallback, so it's deduped
+  // into a single request.
+  const treeNode = useMemo(
+    () => (activePageId ? findNodeAndParent(tree, activePageId) : null),
+    [tree, activePageId],
+  );
+  const { data: fallbackPage } = useSWR<{ type?: string }>(
+    activePageId && !treeNode ? `/api/pages/${activePageId}` : null,
+    pageFetcher,
+  );
+
   const currentTerminalId = useMemo(() => {
     if (!activePageId) return null;
-    const found = findNodeAndParent(tree, activePageId);
-    return found?.node.type === PageType.TERMINAL ? activePageId : null;
-  }, [tree, activePageId]);
+    const type = treeNode?.node.type ?? fallbackPage?.type;
+    return type === PageType.TERMINAL ? activePageId : null;
+  }, [activePageId, treeNode, fallbackPage]);
 
-  // Stable key of all terminal ids present in the tree — drives eviction of
-  // trashed/closed terminals without depending on the mounted set itself.
+  // Terminal ids present in the current drive's tree — drives eviction of
+  // trashed/closed terminals. NOTE: this is per-drive, so switching drives
+  // evicts (and disconnects) the previous drive's warm terminals — intentional,
+  // so a terminal's PTY stream never leaks across drive contexts.
   const terminalIds = useMemo(() => collectTerminalPageIds(tree), [tree]);
   const validKey = useMemo(() => [...terminalIds].sort().join('|'), [terminalIds]);
 
-  const [mounted, setMounted] = useState<string[]>([]);
-
-  useEffect(() => {
-    const valid = new Set(terminalIds);
-    setMounted((prev) => {
-      const next = planMountedTerminals({
-        current: currentTerminalId,
-        visited: prev,
-        max: MAX_MOUNTED_TERMINALS,
-        valid,
-      });
-      return arraysEqual(prev, next) ? prev : next;
+  // Derive the mounted set synchronously (ref-backed LRU) so tabbing to a
+  // terminal mounts it in the SAME render — no blank frame. planMountedTerminals
+  // is idempotent for an unchanged `current` (already pinned to the front), so
+  // recomputing under StrictMode's double-invoke yields the identical result.
+  const lruRef = useRef<string[]>([]);
+  const mounted = useMemo(() => {
+    const next = planMountedTerminals({
+      current: currentTerminalId,
+      visited: lruRef.current,
+      max: MAX_MOUNTED_TERMINALS,
+      valid: new Set(terminalIds),
     });
-    // `terminalIds` intentionally excluded — `validKey` is its stable digest,
-    // and `valid` is rebuilt from the current `terminalIds` inside the effect.
+    lruRef.current = next;
+    return next;
+    // validKey is the stable digest of terminalIds; currentTerminalId covers the
+    // active pin. Together with the ref they fully determine `next`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTerminalId, validKey]);
 
