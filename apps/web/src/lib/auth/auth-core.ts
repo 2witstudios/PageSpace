@@ -35,14 +35,19 @@ export function unauthorized(message: string, status = 401): NextResponse {
   return NextResponse.json({ error: message }, { status });
 }
 
-function manageKeysOnlyDeniedResponse(): NextResponse {
+export function manageKeysOnlyDeniedResponse(): NextResponse {
   return NextResponse.json(
     { error: 'This credential is management-only and has no drive content access' },
     { status: 403 }
   );
 }
 
-export { manageKeysOnlyDeniedResponse };
+function driveAccessDeniedResponse(): NextResponse {
+  return NextResponse.json(
+    { error: 'This token does not have access to this drive' },
+    { status: 403 }
+  );
+}
 
 // ─── Header parsing ───────────────────────────────────────────────────────────
 
@@ -318,10 +323,7 @@ export function checkMCPDriveScope(
   }
 
   // Drive not in scope - return 403
-  return NextResponse.json(
-    { error: 'This token does not have access to this drive' },
-    { status: 403 }
-  );
+  return driveAccessDeniedResponse();
 }
 
 /**
@@ -378,10 +380,7 @@ export function checkMCPCreateScope(
 
   // Check if target drive is in scope
   if (!allowedDriveIds.includes(targetDriveId)) {
-    return NextResponse.json(
-      { error: 'This token does not have access to this drive' },
-      { status: 403 }
-    );
+    return driveAccessDeniedResponse();
   }
 
   return null;
