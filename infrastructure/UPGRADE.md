@@ -152,3 +152,108 @@ fast if `ADMIN_DATABASE_URL_MIGRATE` is missing.
 Without `ADMIN_ERASER_DATABASE_URL`, the admin GDPR pseudonymization
 endpoint refuses with 503 (it never silently skips the Admin PG or falls
 back to another identity) — everything else is unaffected.
+
+## 2026-07 — Phase 2 security_audit_log backfill & legacy freeze (issue #890)
+
+Post-cutover, NEW security audit events chain in the Admin PG while all
+pre-cutover history still sits in the MAIN db — invisible to the default
+readers and to SIEM until it is backfilled. `scripts/backfill-audit-db.ts`
+copies every legacy row admin-ward byte-for-byte (id, `chain_seq`,
+`previous_hash`, `event_hash`, timestamp, encrypted PII columns preserved;
+`emission_hash` stays NULL as the legacy-era marker), proves the WHOLE chain
+genesis→head in the admin store, then — as a separate, explicitly confirmed
+step — write-freezes the legacy table.
+
+**ORDER IS LOAD-BEARING.** The chainer links its first batch onto whatever
+the admin chain head is. Run the backfill BEFORE the chainer's first run and
+the eras link seamlessly; let the chainer run first and it chains from
+`'genesis'`, which can never be joined to the legacy history (chain columns
+are append-only by design — no role can re-link them). The script refuses
+that state (`unlinked_emission_era`); prevention is this run order:
+
+1. **Prereqs.** Admin PG provisioned + migrated through `drizzle-admin/0007`,
+   login users provisioned (previous sections). `ADMIN_DB_BREAK_GLASS` must
+   NOT be set — the script refuses while break-glass is armed.
+2. **Stop the processor** (tenant: `docker compose stop processor`; Fly:
+   `fly scale count 0 -a pagespace-processor`). Web STAYS UP: with the
+   Phase 2 cutover live, its audit events buffer losslessly in
+   `security_audit_ingest`, which only the (stopped) chainer drains. SIEM
+   delivery is also paused with the processor — nothing advances cursors.
+3. **Dry-run** with the owner identities (never runtime roles — planting
+   rows, `setval`, and historical-partition DDL exceed their grants on
+   purpose):
+
+   ```bash
+   DATABASE_URL=<main owner url> \
+   ADMIN_DATABASE_URL_MIGRATE=<admin owner url> \
+     bun scripts/backfill-audit-db.ts
+   ```
+
+   Sanity-check the plan line: main row count, admin legacy/emission counts,
+   the anchor row (the SIEM cursor watermark, committed last).
+4. **Apply**: same command with `--apply`. The script holds the chainer's own
+   advisory lock for the whole run (a forgotten-running chainer no-ops
+   `lock_busy`), creates historical monthly partitions, copies in `chain_seq`
+   order (batched, resumable; reruns are idempotent via ON CONFLICT), aligns
+   `security_audit_log_chain_seq_seq` PAST the max legacy seq BEFORE the
+   chainer can run again, plants the SIEM anchor row LAST (so when the
+   deferral gate sees it, every legacy row is already visible), then asserts
+   row-count parity, head-hash equality, era-boundary linkage, and a FULL
+   era-aware genesis→head `verifySecurityAuditChain`. Exit 0 = all green;
+   anything else: fix, re-run (safe), do NOT proceed.
+5. **Start the processor.** Watch for `[audit-chainer] Chained N events
+   (verify-on-append ok…)` — the first batch links onto the legacy head —
+   and confirm SIEM: the `awaiting_backfill` deferral log line stops and the
+   security source resumes delivery exactly once from its watermark.
+6. **Soak**: the `verify-audit-chain` cron must be green (composite: chain +
+   anchors), and forensic queries now see full history.
+7. **Freeze** (separate invocation, deliberately not combinable with
+   `--apply`):
+
+   ```bash
+   AUDIT_FREEZE_CONFIRMED=true \
+   DATABASE_URL=<main owner url> \
+   ADMIN_DATABASE_URL_MIGRATE=<admin owner url> \
+     bun scripts/backfill-audit-db.ts --freeze
+   ```
+
+   Re-proves parity + genesis→head first, then revokes INSERT/DELETE/TRUNCATE
+   on the main table and installs guard triggers that raise on every write —
+   owner connections included — EXCEPT UPDATEs confined to the 6 eraser-scope
+   PII columns, so the dual-store GDPR pseudonymization route keeps working
+   against the retained legacy rows (Art 17 outlives the freeze).
+
+### Notes
+
+- **Break-glass after the freeze can no longer append to the legacy table.**
+  This is accepted by design: break-glass is an emergency-degraded mode, and
+  post-freeze its audit writes fail loudly instead of silently forking
+  history. Emergency unfreeze (owner, document the incident):
+  `DROP TRIGGER security_audit_log_freeze ON security_audit_log;`
+  `DROP TRIGGER security_audit_log_freeze_truncate ON security_audit_log;`
+- **If the chainer ran first** (`unlinked_emission_era` refusal): while the
+  seeded SIEM cursor is still deferring, nothing external consumed the
+  genesis-era rows — the owner can move them back into
+  `security_audit_ingest` and delete them from the chained table, then run
+  the backfill and let the chainer re-chain them onto the legacy head (exact
+  SQL in the script header). DO NOT do this if anchoring
+  (`AUDIT_ANCHOR_ENABLED`) was already on: published anchors are append-only
+  witnesses (receipts table + S3 Object-Lock) and would attest tamper
+  forever. In that case escalate; do not improvise.
+- **Legacy cursor still `__cursor_init__`** (SIEM initialized but never
+  delivered pre-flip): the seed copies the sentinel and there is no anchor
+  row to gate on — the run order above (backfill before the processor
+  starts) is the only protection. The script warns when it finds no anchor.
+- **DROP of the legacy table is deliberately NOT part of this procedure** —
+  it stays read-only through the soak period and is dropped by a Phase 6
+  follow-up (tracked on the #890 board) once the admin store has soaked.
+- **Rehearsal** (never against production): the wire-connected suites are the
+  runbook in test form —
+  `scripts/__tests__/backfill-audit-db.integration.test.ts` (plant/parity/
+  verify/freeze) and
+  `apps/processor/src/workers/__tests__/audit-backfill-flip.integration.test.ts`
+  (real chainer + SIEM choreography). Start a scratch PG16
+  (`docker run --rm -d --name pagespace-admin-smoke -p 55432:5432 -e
+  POSTGRES_USER=admin -e POSTGRES_PASSWORD=admin -e
+  POSTGRES_DB=pagespace_admin postgres:16`) and run both with
+  `ADMIN_DATABASE_URL=postgresql://admin:admin@localhost:55432/pagespace_admin`.
