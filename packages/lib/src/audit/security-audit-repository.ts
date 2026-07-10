@@ -19,8 +19,7 @@ import { computeSecurityEventHash, type AuditEvent } from './security-audit';
 /**
  * Advisory lock key for serializing hash chain writes. Fixed bigint derived
  * from the string 'security_audit_chain'. pg_advisory_xact_lock holds the
- * lock until the transaction commits/rolls back. Must match
- * SecurityAuditService.CHAIN_LOCK_KEY.
+ * lock until the transaction commits/rolls back.
  */
 export const SECURITY_AUDIT_CHAIN_LOCK_KEY = 8370291546;
 

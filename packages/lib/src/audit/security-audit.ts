@@ -95,12 +95,10 @@ export function computeSecurityEventHash(
 }
 
 /**
- * Advisory lock key for serializing hash chain writes.
- * Uses a fixed bigint derived from the string 'security_audit_chain'.
- * pg_advisory_xact_lock holds the lock until the transaction commits/rolls back.
- * Must match SECURITY_AUDIT_CHAIN_LOCK_KEY in security-audit-repository.ts.
+ * Advisory lock key for serializing hash chain writes. Re-exported from the
+ * repository (single source of truth) under the name existing tests expect.
  */
-export const CHAIN_LOCK_KEY = 8370291546;
+export { SECURITY_AUDIT_CHAIN_LOCK_KEY as CHAIN_LOCK_KEY } from './security-audit-repository';
 
 export interface SecurityAuditServiceDeps {
   repository: SecurityAuditRepository;
