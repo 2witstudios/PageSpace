@@ -3,7 +3,8 @@
  *
  * The barrel selects which tables belong to the trust plane. Contract:
  *   - EXACTLY securityAuditLog + siemDeliveryCursors + siemDeliveryReceipts
- *     (analytics tables go to ClickHouse in Phase 3, activityLogs in Phase 5).
+ *     + securityAuditIngest (Phase 2 emission queue, trust-plane only —
+ *     analytics tables go to ClickHouse in Phase 3, activityLogs in Phase 5).
  *   - Single source of truth: the SIEM tables are the same objects as the
  *     main schema's; securityAuditLog shares one column/index definition via
  *     the defineSecurityAuditLogTable factory.
@@ -28,8 +29,9 @@ const exportedTables = Object.entries(adminSchema).filter(([, value]) =>
 );
 
 describe('admin-schema barrel', () => {
-  it('should export exactly the three trust-plane tables', () => {
+  it('should export exactly the four trust-plane tables', () => {
     expect(exportedTables.map(([key]) => key).sort()).toEqual([
+      'securityAuditIngest',
       'securityAuditLog',
       'siemDeliveryCursors',
       'siemDeliveryReceipts',
@@ -82,6 +84,39 @@ describe('admin-schema barrel', () => {
     });
   });
 
+  describe('securityAuditIngest (Phase 2 emission queue)', () => {
+    it('should target security_audit_ingest and exist ONLY in the admin barrel (never the main schema)', async () => {
+      expect(getTableName(adminSchema.securityAuditIngest)).toBe('security_audit_ingest');
+      const mainSchema = await import('../schema');
+      expect(Object.keys(mainSchema)).not.toContain('securityAuditIngest');
+    });
+
+    it('should carry no foreign keys and no chain columns (emission_hash/emitted_at instead)', () => {
+      expect(getTableConfig(adminSchema.securityAuditIngest).foreignKeys).toHaveLength(0);
+      const columns = getTableColumns(adminSchema.securityAuditIngest);
+      expect(Object.keys(columns)).not.toContain('chainSeq');
+      expect(Object.keys(columns)).not.toContain('previousHash');
+      expect(Object.keys(columns)).not.toContain('eventHash');
+      expect(columns.emissionHash.notNull).toBe(true);
+      expect(columns.emittedAt.notNull).toBe(true);
+    });
+
+    it('should mirror security_audit_log event-column shapes exactly (encryption columns included)', () => {
+      const ingestColumns = getTableColumns(adminSchema.securityAuditIngest);
+      const chainColumns = getTableColumns(mainSecurityAuditLog);
+      const eventColumnKeys = Object.keys(chainColumns).filter(
+        (key) => !['chainSeq', 'previousHash', 'eventHash'].includes(key),
+      );
+      for (const key of eventColumnKeys) {
+        const ingest = ingestColumns[key as keyof typeof ingestColumns];
+        const chain = chainColumns[key as keyof typeof chainColumns];
+        expect(ingest, `missing event column ${key}`).toBeDefined();
+        expect(ingest.name).toBe(chain.name);
+        expect(ingest.columnType).toBe(chain.columnType);
+      }
+    });
+  });
+
   describe('SIEM tables carry no cross-plane FKs', () => {
     it('siemDeliveryCursors has no foreign keys', () => {
       expect(getTableConfig(adminSchema.siemDeliveryCursors).foreignKeys).toHaveLength(0);
@@ -98,11 +133,12 @@ describe('admin-schema barrel', () => {
       // (Record<string, never> ⇒ keyof query is never ⇒ excess properties) or
       // if the barrel gains/loses a table without this contract being updated.
       const querySurface: Record<keyof AdminDatabase['query'], true> = {
+        securityAuditIngest: true,
         securityAuditLog: true,
         siemDeliveryCursors: true,
         siemDeliveryReceipts: true,
       };
-      expect(Object.keys(querySurface)).toHaveLength(3);
+      expect(Object.keys(querySurface)).toHaveLength(4);
     });
   });
 });

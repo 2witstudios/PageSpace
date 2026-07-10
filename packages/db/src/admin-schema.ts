@@ -6,9 +6,10 @@
  *   - securityAuditLog (tamper-evident chained table)
  *   - siemDeliveryCursors
  *   - siemDeliveryReceipts
+ *   - securityAuditIngest (Phase 2 lock-free emission queue, trust-plane only)
  * The 4 analytics tables (systemLogs, apiMetrics, userActivities, errorLogs)
- * go to ClickHouse in Phase 3 — NOT into Admin PG. The ingest table is a
- * Phase 2 migration; activityLogs joins in Phase 5.
+ * go to ClickHouse in Phase 3 — NOT into Admin PG. activityLogs joins in
+ * Phase 5.
  *
  * Source of truth stays in ./schema/* — the SIEM tables are plain re-exports,
  * and securityAuditLog is instantiated from the shared factory WITHOUT the
@@ -31,3 +32,8 @@ export type {
   SelectSecurityAuditLog,
 } from './schema/security-audit';
 export { siemDeliveryCursors, siemDeliveryReceipts } from './schema/monitoring';
+export {
+  securityAuditIngest,
+  type InsertSecurityAuditIngest,
+  type SelectSecurityAuditIngest,
+} from './schema/security-audit-ingest';

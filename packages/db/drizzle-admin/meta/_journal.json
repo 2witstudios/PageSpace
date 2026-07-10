@@ -29,6 +29,13 @@
       "when": 1783659177987,
       "tag": "0003_harden_ensure_partitions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783670331991,
+      "tag": "0004_security_audit_ingest",
+      "breakpoints": true
     }
   ]
 }

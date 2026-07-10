@@ -45,6 +45,7 @@ describe.skipIf(!url)('db:migrate:admin against a scratch Admin PG', () => {
        ORDER BY c.relname`,
     );
     expect(rows.map((r: { table_name: string }) => r.table_name)).toEqual([
+      'security_audit_ingest',
       'security_audit_log',
       'siem_delivery_cursors',
       'siem_delivery_receipts',

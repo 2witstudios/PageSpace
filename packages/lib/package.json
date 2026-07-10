@@ -262,6 +262,16 @@
       "import": "./dist/audit/security-audit.js",
       "require": "./dist/audit/security-audit.js"
     },
+    "./audit/emission-hash": {
+      "types": "./dist/audit/emission-hash.d.ts",
+      "import": "./dist/audit/emission-hash.js",
+      "require": "./dist/audit/emission-hash.js"
+    },
+    "./audit/audit-ingest-writer": {
+      "types": "./dist/audit/audit-ingest-writer.d.ts",
+      "import": "./dist/audit/audit-ingest-writer.js",
+      "require": "./dist/audit/audit-ingest-writer.js"
+    },
     "./audit/mask-email": {
       "types": "./dist/audit/mask-email.d.ts",
       "import": "./dist/audit/mask-email.js",
