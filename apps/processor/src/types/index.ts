@@ -103,6 +103,7 @@ export type JobDataMap = {
   'pull-verify': PullVerifyJobData;
   'siem-delivery': Record<string, never>;
   'account-erasure': AccountErasureJobData;
+  'audit-chainer': Record<string, never>;
 };
 
 export type QueueName = keyof JobDataMap;

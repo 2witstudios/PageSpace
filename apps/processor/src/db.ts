@@ -30,6 +30,23 @@ export function getPoolForWorker(): PgPool {
   return getPool();
 }
 
+// Admin PG (trust plane) pool — separate server, separate identity: the
+// processor connects as admin_processor_user (admin_chainer + admin_siem)
+// via its service-scoped ADMIN_DATABASE_URL (#890 Phase 2). Small max: the
+// only consumer is the single-writer audit chainer.
+let adminPool: PgPool | null = null;
+
+export function getAdminPoolForWorker(): PgPool {
+  if (!adminPool) {
+    const connectionString = process.env.ADMIN_DATABASE_URL;
+    if (!connectionString) {
+      throw new Error('ADMIN_DATABASE_URL is not configured');
+    }
+    adminPool = new Pool({ connectionString, max: 2 });
+  }
+  return adminPool;
+}
+
 export async function setPageProcessing(pageId: string): Promise<void> {
   const client = await getPool().connect();
   try {

@@ -21,10 +21,14 @@
  * This module is both the drizzle-kit schema entry (drizzle-admin.config.ts)
  * and the runtime schema bound to the adminDb client (admin-db.ts).
  */
-import { defineSecurityAuditLogTable } from './schema/security-audit';
+import { defineAdminSecurityAuditLogTable } from './schema/security-audit';
 
-/** Trust-plane instance of security_audit_log — identical shape, no users FK. */
-export const securityAuditLog = defineSecurityAuditLogTable({ crossPlaneUserFk: false });
+/**
+ * Trust-plane instance of security_audit_log — identical shape, no users FK,
+ * plus the nullable emission_hash column (chainer verify-on-append input;
+ * NULL = legacy-era row). See defineAdminSecurityAuditLogTable.
+ */
+export const securityAuditLog = defineAdminSecurityAuditLogTable();
 
 export type {
   SecurityEventType,

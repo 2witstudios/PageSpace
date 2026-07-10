@@ -15,6 +15,14 @@
       "types": "./dist/admin-schema.d.ts",
       "default": "./dist/admin-schema.js"
     },
+    "./migrate-admin": {
+      "types": "./dist/migrate-admin.d.ts",
+      "default": "./dist/migrate-admin.js"
+    },
+    "./provision-admin-users": {
+      "types": "./dist/provision-admin-users.d.ts",
+      "default": "./dist/provision-admin-users.js"
+    },
     "./operators": {
       "types": "./dist/operators.d.ts",
       "default": "./dist/operators.js"

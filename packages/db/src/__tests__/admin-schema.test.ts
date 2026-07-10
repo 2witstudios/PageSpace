@@ -51,10 +51,13 @@ describe('admin-schema barrel', () => {
       expect(getTableName(adminSchema.securityAuditLog)).toBe('security_audit_log');
     });
 
-    it('should have the identical column set as the main instance (single source of truth)', () => {
+    it('should have the identical column set as the main instance plus ONLY emission_hash (single source of truth)', () => {
       const adminColumns = getTableColumns(adminSchema.securityAuditLog);
       const mainColumns = getTableColumns(mainSecurityAuditLog);
-      expect(Object.keys(adminColumns)).toEqual(Object.keys(mainColumns));
+      // The one deliberate plane-only delta (#890 Phase 2 leaf 2): the chained
+      // table stores the emission hash so verify-on-append recomputes from
+      // storage. Everything else must stay in lockstep with the main plane.
+      expect(Object.keys(adminColumns)).toEqual([...Object.keys(mainColumns), 'emissionHash']);
       for (const key of Object.keys(mainColumns)) {
         expect(adminColumns[key as keyof typeof adminColumns].name).toBe(
           mainColumns[key as keyof typeof mainColumns].name,
@@ -63,6 +66,14 @@ describe('admin-schema barrel', () => {
           mainColumns[key as keyof typeof mainColumns].columnType,
         );
       }
+    });
+
+    it('should keep emission_hash NULLABLE text (NULL = legacy-era row) on the admin plane only', () => {
+      const adminColumns = getTableColumns(adminSchema.securityAuditLog);
+      expect(adminColumns.emissionHash.name).toBe('emission_hash');
+      expect(adminColumns.emissionHash.columnType).toBe('PgText');
+      expect(adminColumns.emissionHash.notNull).toBe(false);
+      expect(Object.keys(getTableColumns(mainSecurityAuditLog))).not.toContain('emissionHash');
     });
 
     it('should have the identical index set as the main instance', () => {

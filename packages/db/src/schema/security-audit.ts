@@ -19,6 +19,7 @@ import {
   jsonb,
   index,
   bigserial,
+  type ExtraConfigColumn,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
@@ -85,8 +86,7 @@ export type SecurityEventType =
  * exactly once so the two instances can never drift. Only `crossPlaneUserFk`
  * differs between them.
  */
-export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean }) =>
-  pgTable('security_audit_log', {
+const securityAuditLogColumns = (opts: { crossPlaneUserFk: boolean }) => ({
   id: text('id').primaryKey().$defaultFn(() => createId()),
 
   // Event classification
@@ -132,7 +132,25 @@ export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean })
   // Hash chain integrity
   previousHash: text('previous_hash').notNull(),
   eventHash: text('event_hash').notNull(),
-}, (table) => ({
+});
+
+/** The columns the shared index set touches — structural so both planes' tables fit. */
+type SecurityAuditLogIndexColumns = Record<
+  | 'timestamp'
+  | 'userId'
+  | 'eventType'
+  | 'resourceType'
+  | 'resourceId'
+  | 'ipAddress'
+  | 'ipBidx'
+  | 'eventHash'
+  | 'chainSeq'
+  | 'riskScore'
+  | 'sessionId',
+  Partial<ExtraConfigColumn>
+>;
+
+const securityAuditLogIndexes = (table: SecurityAuditLogIndexColumns) => ({
   // Time-based queries (most common access pattern)
   timestampIdx: index('idx_security_audit_timestamp').on(table.timestamp),
   // User activity forensics
@@ -153,7 +171,37 @@ export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean })
   riskScoreIdx: index('idx_security_audit_risk_score').on(table.riskScore),
   // Session tracking
   sessionIdx: index('idx_security_audit_session').on(table.sessionId, table.timestamp),
-}));
+});
+
+export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean }) =>
+  pgTable('security_audit_log', securityAuditLogColumns(opts), securityAuditLogIndexes);
+
+/**
+ * Trust-plane (Admin PG) instance of security_audit_log (#890 Phase 2).
+ *
+ * Identical to the app-plane shape (columns + indexes come from the same
+ * builders above, so the planes cannot drift) with two deliberate deltas the
+ * shared factory cannot express:
+ *   - no cross-plane FK to `users` (the admin DB holds no app tables), and
+ *   - an extra NULLABLE `emission_hash` column: the chainer copies each
+ *     drained ingest row's emission hash here so verify-on-append can
+ *     recompute chainHash = H(emissionHash, prevHash) from storage. NULL
+ *     marks a legacy-era row (pre-cutover / backfilled) whose event_hash was
+ *     computed by the advisory-lock path. Verification reads walk chain_seq
+ *     (already indexed), so the column itself needs no index.
+ *
+ * This exists ONLY in src/admin-schema.ts / the drizzle-admin pipeline — the
+ * main-plane table above keeps its shape and main db:generate stays no-drift.
+ */
+export const defineAdminSecurityAuditLogTable = () =>
+  pgTable(
+    'security_audit_log',
+    {
+      ...securityAuditLogColumns({ crossPlaneUserFk: false }),
+      emissionHash: text('emission_hash'),
+    },
+    securityAuditLogIndexes,
+  );
 
 /**
  * Security Audit Log table - tamper-evident security event tracking.
