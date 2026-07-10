@@ -226,6 +226,54 @@ describe('measureMachineStorageOpportunistically', () => {
     });
   });
 
+  it('resolveHandle path: lazily attaches and measures when due + row exists', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: async () => [{ storageMeasuredAt: null }] }) }),
+    });
+    mockDb.update.mockReturnValue({ set: () => ({ where: async () => {} }) });
+    const exec = vi.fn(async (_args: { cmd: string }) => ({ exitCode: 0, stdout: DU_OK, stderr: '' }));
+    const resolveHandle = vi.fn(async () => ({ exec }));
+
+    await measureMachineStorageOpportunistically({ pageId: 'lazy-due', resolveHandle });
+
+    expect(resolveHandle).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolveHandle path: does NOT attach when the page has no terminal_sessions row (no wasted network attach)', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: async () => [] }) }),
+    });
+    const resolveHandle = vi.fn(async () => ({ exec: vi.fn() }));
+
+    await measureMachineStorageOpportunistically({ pageId: 'lazy-no-row', resolveHandle });
+
+    assert({
+      given: 'a lazy resolveHandle caller and a page with no billing row',
+      should: 'never invoke resolveHandle (attach is gated behind the row check)',
+      actual: resolveHandle.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('resolveHandle path: does NOT attach on a throttled second call within the window', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: async () => [{ storageMeasuredAt: null }] }) }),
+    });
+    mockDb.update.mockReturnValue({ set: () => ({ where: async () => {} }) });
+    const resolveHandle = vi.fn(async () => ({ exec: vi.fn(async () => ({ exitCode: 0, stdout: DU_OK, stderr: '' })) }));
+
+    await measureMachineStorageOpportunistically({ pageId: 'lazy-throttle', resolveHandle });
+    await measureMachineStorageOpportunistically({ pageId: 'lazy-throttle', resolveHandle });
+
+    assert({
+      given: 'a second lazy measurement attempt within the throttle window',
+      should: 'resolve the handle only once (no wasted attach on the throttled call)',
+      actual: resolveHandle.mock.calls.length,
+      expected: 1,
+    });
+  });
+
   it('skips (no exec, no write) when the page has no terminal_sessions row', async () => {
     mockDb.select.mockReturnValue({
       from: () => ({ where: () => ({ limit: async () => [] }) }),

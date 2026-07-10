@@ -113,18 +113,22 @@ const lastMeasureAttemptAtMs = new Map<string, number>();
  * already live because real work is happening on it. Skips silently when the
  * page has no `terminal_sessions` row.
  *
- * Currently wired at the agent tool-runner (`sandbox-tools-runtime.ts`'s
- * `measureStorage` seam). Any other genuine wake path (e.g. the realtime PTY
- * connect) can call this too — it is idempotent and throttled, so multiple wake
- * sources are safe.
+ * Provide the live `handle` directly when the caller already holds one (the
+ * agent tool-runner), or a lazy `resolveHandle` when obtaining one costs a
+ * network attach (the realtime PTY connect) — `resolveHandle` is called ONLY
+ * after the in-process throttle and the row-existence check pass, so a throttled
+ * wake pays nothing. Wired at the agent tool-runner (`sandbox-tools-runtime.ts`)
+ * and the realtime terminal-connect path (`apps/realtime/src/index.ts`); safe to
+ * call from any wake source since it is idempotent and throttled.
  */
 export async function measureMachineStorageOpportunistically(input: {
-  handle: Pick<MachineHandle, 'exec'>;
   pageId: string;
+  handle?: Pick<MachineHandle, 'exec'>;
+  resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
 }): Promise<void> {
   const nowMs = Date.now();
-  // Cheap in-process gate: skip entirely (no DB, no exec) if THIS instance
-  // already attempted a measurement for this page within the throttle window.
+  // Cheap in-process gate: skip entirely (no DB, no attach, no exec) if THIS
+  // instance already attempted a measurement for this page within the window.
   const lastAttempt = lastMeasureAttemptAtMs.get(input.pageId);
   if (lastAttempt !== undefined && nowMs - lastAttempt < STORAGE_MEASUREMENT_THROTTLE_MS) {
     return;
@@ -140,8 +144,13 @@ export async function measureMachineStorageOpportunistically(input: {
     // No billing row for this page → nothing to attribute the measurement to.
     if (!row) return;
 
+    // Resolve the handle only now that we know a measurement is actually due,
+    // so a lazy caller's network attach is never paid on a throttled wake.
+    const handle = input.handle ?? (input.resolveHandle ? await input.resolveHandle() : null);
+    if (!handle) return;
+
     await refreshStorageMeasurement({
-      handle: input.handle,
+      handle,
       pageId: input.pageId,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(nowMs),
