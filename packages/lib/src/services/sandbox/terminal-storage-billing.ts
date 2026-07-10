@@ -111,6 +111,16 @@ export const persistStorageMeasurement: PersistStorageMeasurement = async ({
 const MEASURE_CACHE_MAX = 10_000;
 const lastMeasureAttemptAtMs = new Map<string, number>();
 
+/**
+ * Pages with a measurement IN FLIGHT on this instance right now. The window
+ * clock above is only stamped on a definitive OUTCOME (after the awaits), so it
+ * cannot collapse a synchronous BURST — N parallel ops for the same page fired
+ * in one tick would all pass the window gate and each spawn a DB read + attach +
+ * `du` walk. This set is added-to synchronously before the first await and
+ * cleared in `finally`, so all-but-the-first concurrent call short-circuits.
+ */
+const measurementInFlight = new Set<string>();
+
 function noteMeasureAttempt(pageId: string, nowMs: number): void {
   // delete-then-set moves the key to the end so eviction is oldest-first (LRU-ish).
   lastMeasureAttemptAtMs.delete(pageId);
@@ -119,6 +129,12 @@ function noteMeasureAttempt(pageId: string, nowMs: number): void {
     const oldest = lastMeasureAttemptAtMs.keys().next().value;
     if (oldest !== undefined) lastMeasureAttemptAtMs.delete(oldest);
   }
+}
+
+/** Test-only: clear the in-process measurement caches so cases don't bleed state. */
+export function __resetStorageMeasurementCachesForTests(): void {
+  lastMeasureAttemptAtMs.clear();
+  measurementInFlight.clear();
 }
 
 /**
@@ -151,6 +167,11 @@ export async function measureMachineStorageOpportunistically(input: {
   if (lastAttempt !== undefined && nowMs - lastAttempt < STORAGE_MEASUREMENT_THROTTLE_MS) {
     return;
   }
+  // Synchronous concurrent-dedup: a burst of parallel ops for the same page in
+  // one tick must collapse to a single measurement (the window clock above only
+  // stamps AFTER the awaits, so it can't dedup within a tick).
+  if (measurementInFlight.has(input.pageId)) return;
+  measurementInFlight.add(input.pageId);
 
   try {
     const [row] = await db
@@ -205,5 +226,7 @@ export async function measureMachineStorageOpportunistically(input: {
       pageId: input.pageId,
       error: error instanceof Error ? error.message : String(error),
     });
+  } finally {
+    measurementInFlight.delete(input.pageId);
   }
 }

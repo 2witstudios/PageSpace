@@ -130,9 +130,10 @@ export interface RefreshStorageMeasurementResult {
 
 /**
  * Opportunistically measure and persist a machine's used storage bytes IF the
- * throttle window has elapsed. Fully non-fatal: any exec failure / non-zero
- * exit / unparseable output leaves the last good measurement untouched and
- * returns `{ measured: false }`. Runs at most one `du -sxB1` per call.
+ * throttle window has elapsed. Fully non-fatal: an exec throw or unparseable
+ * output leaves the last good measurement untouched and returns
+ * `{ measured: false }`; a parseable total is persisted even on a non-zero `du`
+ * exit (see below). Runs at most one `du -sxB1` per call.
  *
  * `du -sxB1 <path>`: `-s` summary, `-x` stay on one filesystem (don't descend
  * into other mounts), `-B1` report ACTUAL allocated bytes (not `-b`/apparent
@@ -158,12 +159,21 @@ export async function refreshStorageMeasurement(
     return { measured: false };
   }
 
-  // Only trust a clean walk: `du` exits non-zero when it couldn't read part of
-  // the tree, in which case the printed total is an UNDER-count. Persisting that
-  // as authoritative would silently under-bill, so skip and retry next window
-  // (the workspace is normally fully readable by the measuring process, so a
-  // clean exit 0 is the common case).
-  if (run.exitCode !== 0) return { measured: false };
+  // Trust any PARSEABLE total, even on a non-zero exit. `du -s` always prints a
+  // valid cumulative total of what it COULD read; a non-zero exit only means it
+  // skipped some unreadable entries, so the printed total is a conservative
+  // LOWER BOUND (never garbage), not an over-count. Persisting it is strictly
+  // better than the alternative of never persisting: a permanently-unreadable
+  // subtree (chmod 000, a root-owned path) would otherwise leave a genuinely
+  // large footprint billing the 0 floor / a stale value forever, AND — because
+  // the caller only caches on `measured` — turn every tool op into a fresh full
+  // `du` walk of the live machine for the whole window. A slight under-count
+  // (missing only the unreadable part, which self-corrects once readable) is the
+  // right conservative trade-off, consistent with the never-measured 0 floor.
+  //
+  // A truly failed measurement — exec threw (handled above) or stdout has no
+  // numeric total (empty / error-only output) — returns not-measured so the
+  // caller leaves the page retryable instead of caching a bad value.
   const bytes = parseDuBytes(run.stdout);
   if (bytes === null) return { measured: false };
 

@@ -25,6 +25,7 @@ import {
   defaultReconcileTerminalStorageDeps,
   persistStorageMeasurement,
   measureMachineStorageOpportunistically,
+  __resetStorageMeasurementCachesForTests,
 } from '../terminal-storage-billing';
 import { TERMINAL_MARKUP_BPS } from '../../../billing/credit-pricing';
 
@@ -32,6 +33,8 @@ beforeEach(() => {
   mockDb.select.mockReset();
   mockDb.update.mockReset();
   mockTrackUsage.mockReset();
+  // Clear the module-level in-process caches so cases don't bleed state.
+  __resetStorageMeasurementCachesForTests();
 });
 
 describe('defaultReconcileTerminalStorageDeps.listMachines', () => {
@@ -314,6 +317,26 @@ describe('measureMachineStorageOpportunistically', () => {
       should: 'retry on the next call within the window (resolveHandle invoked twice, measured on the second)',
       actual: { resolves: resolveHandle.mock.calls.length, execs: exec.mock.calls.length },
       expected: { resolves: 2, execs: 1 },
+    });
+  });
+
+  it('concurrent-dedup: a burst of parallel calls for the same page collapses to ONE measurement', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: async () => [{ storageMeasuredAt: null }] }) }),
+    });
+    mockDb.update.mockReturnValue({ set: () => ({ where: async () => {} }) });
+    const exec = vi.fn(async (_args: { cmd: string }) => ({ exitCode: 0, stdout: DU_OK, stderr: '' }));
+
+    // Fire five in parallel in the same tick.
+    await Promise.all(
+      Array.from({ length: 5 }, () => measureMachineStorageOpportunistically({ pageId: 'burst', handle: { exec } })),
+    );
+
+    assert({
+      given: 'five parallel measurement calls for one page in the same tick',
+      should: 'run exactly one du (the in-flight guard collapses the rest)',
+      actual: exec.mock.calls.length,
+      expected: 1,
     });
   });
 

@@ -139,19 +139,28 @@ describe('refreshStorageMeasurement', () => {
     expect(out).toEqual({ measured: false });
   });
 
-  it('does NOT persist a partial total when du exits non-zero (cannot-read → under-count is untrustworthy)', async () => {
-    // du exits 1 when it couldn't read part of the tree; the printed total then
-    // excludes the unreadable part, so it must not be persisted as authoritative.
+  it('persists the readable-portion total when du exits non-zero (valid lower bound, not never-measured)', async () => {
+    // du exits 1 on an unreadable subtree but still prints a valid cumulative
+    // total of what it read — persist that conservative lower bound rather than
+    // billing $0 forever (and re-walking the tree on every op).
     const { handle } = fakeHandle({ exitCode: 1, stdout: '4096\t/workspace', stderr: 'du: cannot read /workspace/x' });
-    const persist = vi.fn();
+    const persisted: Array<{ measuredBytes: number }> = [];
 
-    const out = await refreshStorageMeasurement({ handle, pageId: 'p', lastMeasuredAt: null, now, persist });
+    const out = await refreshStorageMeasurement({
+      handle,
+      pageId: 'p',
+      lastMeasuredAt: null,
+      now,
+      persist: async (p) => {
+        persisted.push({ measuredBytes: p.measuredBytes });
+      },
+    });
 
-    expect(persist).not.toHaveBeenCalled();
-    expect(out).toEqual({ measured: false });
+    expect(out).toEqual({ measured: true, bytes: 4096 });
+    expect(persisted).toEqual([{ measuredBytes: 4096 }]);
   });
 
-  it('does not persist when du output is unparseable', async () => {
+  it('does not persist when du output has no numeric total (true failure → retryable)', async () => {
     const { handle } = fakeHandle({ exitCode: 1, stdout: 'du: cannot access /workspace' });
     const persist = vi.fn();
 
