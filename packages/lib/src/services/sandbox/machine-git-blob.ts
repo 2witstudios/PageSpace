@@ -19,6 +19,22 @@
  * same DI shape `runGitInSandbox` itself takes, mirroring how
  * `machine-branches.ts` drives clone/checkout — so this is unit-testable
  * against a fake deps object with zero real Sprite/git calls.
+ *
+ * KNOWN TRUNCATION TRADEOFF: `runGitInSandbox` caps stdout at
+ * `SANDBOX_MAX_OUTPUT_BYTES` (256 KB) via `truncateToBytes`, which is
+ * DELIBERATELY lossy at the byte boundary (a split multi-byte UTF-8 sequence
+ * decodes to a trailing replacement character) — correct for that helper's
+ * primary use (arbitrary command stdout/stderr, i.e. untrusted log-like
+ * output shared by every `runGitInSandbox`/bash-tool caller), but it means a
+ * >256 KB blob with non-ASCII content near the cut can show a corrupted
+ * trailing character here, unlike `machine-fs.ts`'s `readMachineFile` (whose
+ * 2 MB cap decodes via `StringDecoder` and withholds an incomplete trailing
+ * sequence instead of corrupting it). Byte-perfect truncation here would
+ * require plumbing raw bytes through the shared exec/audit/injection-screening
+ * pipeline that every other `runGitInSandbox` caller also depends on being a
+ * plain string — out of scope for this primitive; revisit only if the Diff
+ * tab needs an exact match with the Files tab's truncation guarantee for
+ * large blobs.
  */
 
 import { runGitInSandbox, type GitSandboxRunDeps } from './git-tool-runners';

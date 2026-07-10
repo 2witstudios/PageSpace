@@ -3,6 +3,7 @@ import { readMachineGitBlob } from '../machine-git-blob';
 import type { GitSandboxRunDeps } from '../git-tool-runners';
 import type { SandboxActorContext } from '../tool-runners';
 import type { ExecutableSandbox, RunCommandArgs, SandboxRunResult } from '../sandbox-client/types';
+import { SANDBOX_MAX_OUTPUT_BYTES } from '../execution-policy';
 
 /**
  * `readMachineGitBlob` drives the real `runGitInSandbox` (not mocked — it's
@@ -122,27 +123,25 @@ describe('readMachineGitBlob', () => {
     expect(result).toEqual({ ok: false, reason: 'exec_failed', detail: 'Code execution is disabled.' });
   });
 
-  it('reports content truncation from runGitInSandbox through to the caller', async () => {
-    const deps: GitSandboxRunDeps = {
-      isEnabled: () => true,
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
-      reconnect: async () => ({
-        sandboxId: 'sbx-1',
-        runCommand: async () => ({ exitCode: 0, stdout: 'x'.repeat(10), stderr: '' }),
-        writeFiles: async () => {},
-        readFileToBuffer: async () => Buffer.from(''),
-      }),
-      quota: { acquireSlot: () => true, releaseSlot: () => {} },
-      buildEnv: () => ({}),
-      audit: async () => {},
-      now: () => new Date(),
-      resolveGitHubToken: async () => null,
-    };
-    // SANDBOX_MAX_OUTPUT_BYTES is large in real config; instead assert the
-    // pass-through wiring by checking the untruncated case reports false, and
-    // trust git-tool-runners.test.ts to cover the truncation boundary itself.
+  it('reports content truncation from runGitInSandbox through to the caller (small, untruncated case)', async () => {
+    const { deps } = makeDeps(async () => ({ exitCode: 0, stdout: 'x'.repeat(10), stderr: '' }));
     const result = await readMachineGitBlob({ ref: 'HEAD', path: 'file.txt', cwd: '/workspace/repo', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ ok: true, truncated: false });
+  });
+
+  it('reports truncated for a blob over SANDBOX_MAX_OUTPUT_BYTES and keeps content within the byte cap', async () => {
+    // '€' is 3 UTF-8 bytes; enough repeats to comfortably exceed the real cap.
+    // The exact byte-boundary behavior (a split multi-byte sequence may decode
+    // to a lossy replacement char) is `truncateToBytes`'s own documented,
+    // separately-tested contract (output-limit.test.ts) — see
+    // machine-git-blob.ts's "KNOWN TRUNCATION TRADEOFF" note for why this
+    // primitive inherits it rather than re-deriving byte-perfect truncation.
+    const { deps } = makeDeps(async () => ({ exitCode: 0, stdout: '€'.repeat(SANDBOX_MAX_OUTPUT_BYTES), stderr: '' }));
+    const result = await readMachineGitBlob({ ref: 'HEAD', path: 'big.bin', cwd: '/workspace/repo', ctx: makeCtx(), deps });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(SANDBOX_MAX_OUTPUT_BYTES);
   });
 
   describe('ref validation — argument-injection guard', () => {
