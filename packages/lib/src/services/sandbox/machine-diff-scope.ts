@@ -9,8 +9,15 @@
  * The three scopes and their exact semantics:
  *
  *   uncommitted — working tree vs the last commit.
- *     File list: `git status --porcelain -z -uall` (see STATUS_PORCELAIN_ARGS
- *     for why `-uall`).
+ *     File list: `git diff --name-status -z HEAD` (HEAD tree vs the WORKING
+ *     TREE — the net of staged + unstaged, which is exactly what the rendered
+ *     HEAD-vs-working-tree pair shows) UNIONED with untracked working-tree
+ *     files from `git status --porcelain -z -uall` (see STATUS_PORCELAIN_ARGS
+ *     for `-uall`). Deliberately NOT `git status` for the tracked list: status
+ *     reports the index column too, so a staged-then-reverted file (`MM` then
+ *     restore) or a staged-add-then-delete (`AD`) would appear in the list yet
+ *     render as unchanged / 404 in the pair — the diff-vs-HEAD list can't
+ *     drift from the rendered sides that way.
  *     original = blob at HEAD, modified = working-tree file.
  *
  *   committed — the branch's own commits vs where it forked from the main
@@ -51,9 +58,12 @@
  * the main branch?" — matching the default-branch naming convention used
  * elsewhere in this codebase; there is deliberately no schema flag for it.
  *
- * Both file-list commands use `-z` (NUL-separated) output: with `-z` git never
+ * Every git command here uses `-z` (NUL-separated) output: with `-z` git never
  * C-quotes pathnames, so the parsers below handle spaces, quotes, and
  * non-ASCII filenames with one code path instead of a C-unquoting fallback.
+ * All three scopes' tracked lists are `git diff --name-status` (parsed by
+ * `parseNameStatusZ`); only the untracked supplement is porcelain-formatted
+ * (parsed by `parseUntrackedPorcelainZ`).
  */
 
 export type MachineDiffScope = 'uncommitted' | 'committed' | 'branch';
@@ -72,13 +82,15 @@ export function isMachineDiffScope(value: string): value is MachineDiffScope {
 export const DIFF_BASE_REF = 'origin/HEAD';
 
 /**
- * The `git status` argv shared by the uncommitted scope's file list and the
- * branch scope's untracked supplement. `-uall` (`--untracked-files=all`) is
- * REQUIRED, not cosmetic: the default (`normal`) mode collapses a brand-new
- * untracked directory into a single `dir/` entry, which the per-file pair
- * route would then try to `readMachineFile` as a file (→ null/404) instead of
- * showing the files inside. `-uall` expands the directory into its individual
- * untracked files. `-z` keeps NUL framing so paths are never C-quoted.
+ * The `git status` argv for the untracked-file supplement shared by the
+ * uncommitted and branch scopes (both diff against a base into the working
+ * tree, and `git diff` omits untracked files). `-uall`
+ * (`--untracked-files=all`) is REQUIRED, not cosmetic: the default (`normal`)
+ * mode collapses a brand-new untracked directory into a single `dir/` entry,
+ * which the per-file pair route would then try to `readMachineFile` as a file
+ * (→ null/404) instead of showing the files inside. `-uall` expands the
+ * directory into its individual untracked files. `-z` keeps NUL framing so
+ * paths are never C-quoted.
  */
 const STATUS_PORCELAIN_ARGS: readonly string[] = ['status', '--porcelain', '-z', '-uall'];
 
@@ -127,7 +139,10 @@ export function resolveDiffScope(
   }
   switch (requestedScope) {
     case 'uncommitted':
-      return { gitArgs: [...STATUS_PORCELAIN_ARGS] };
+      return {
+        gitArgs: ['diff', '--name-status', '-z', 'HEAD'],
+        untrackedArgs: [...STATUS_PORCELAIN_ARGS],
+      };
     case 'committed':
       return { gitArgs: ['diff', '--name-status', '-z', `${DIFF_BASE_REF}...HEAD`] };
     case 'branch':
@@ -185,15 +200,6 @@ export interface MachineDiffFile {
   previousPath?: string;
 }
 
-function statusFromPorcelainXY(x: string, y: string): MachineDiffFileStatus {
-  if (x === '?' && y === '?') return 'added';
-  if (x === 'D' || y === 'D') return 'deleted';
-  if (x === 'R' || y === 'R') return 'renamed';
-  // 'C' (copy): the target is a NEW file — the source still exists.
-  if (x === 'A' || y === 'A' || x === 'C') return 'added';
-  return 'modified';
-}
-
 /**
  * Every complete `-z` entry ends in NUL, so complete output always splits to
  * a trailing '' — a non-empty final token is a field the 256 KB
@@ -208,46 +214,12 @@ function splitZDroppingTruncatedTail(stdout: string): string[] {
 }
 
 /**
- * Parse `git status --porcelain -z` output into the uncommitted-scope file
- * list. Entry format: `XY<SP><path>NUL`, and for a rename/copy the SOURCE
- * path follows as its own NUL-terminated field: `XY<SP><target>NUL<source>NUL`
- * (note: target FIRST — the reverse of `git diff --name-status -z`).
- *
- * A malformed or partial trailing entry (see `splitZDroppingTruncatedTail`)
- * is dropped rather than guessed at.
- */
-export function parseStatusPorcelainZ(stdout: string): MachineDiffFile[] {
-  const tokens = splitZDroppingTruncatedTail(stdout);
-  const files: MachineDiffFile[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    // Shortest valid entry is 'XY p' (4 chars); anything shorter is the empty
-    // trailing split or a truncated tail.
-    if (token.length < 4 || token[2] !== ' ') continue;
-    const x = token[0];
-    const y = token[1];
-    const path = token.slice(3);
-    let previousPath: string | undefined;
-    if (x === 'R' || x === 'C') {
-      previousPath = tokens[i + 1];
-      i++;
-      if (previousPath === undefined || previousPath.length === 0) continue; // truncated tail
-    }
-    files.push({
-      path,
-      status: statusFromPorcelainXY(x, y),
-      ...(previousPath !== undefined ? { previousPath } : {}),
-    });
-  }
-  return files;
-}
-
-/**
  * Parse ONLY the untracked (`?? <path>`) entries from `git status
- * --porcelain -z`, each as an 'added' file. This is the 'branch' scope's
- * untracked-file supplement: `git diff --merge-base` lists every TRACKED
- * difference from the merge-base but omits untracked working-tree files, so
- * these are appended to complete the scope (see the module docstring).
+ * --porcelain -z`, each as an 'added' file. This is the untracked-file
+ * supplement shared by the uncommitted and branch scopes: their `git diff`
+ * lists every TRACKED difference from the base but omits untracked
+ * working-tree files, so these are appended to complete the scope (see the
+ * module docstring).
  *
  * Tracked entries (modified/deleted/added/renamed) are skipped — they are
  * already covered by the diff. A rename/copy entry (never untracked) carries a

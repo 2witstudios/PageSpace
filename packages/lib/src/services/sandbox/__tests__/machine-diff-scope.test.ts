@@ -5,7 +5,6 @@ import {
   isMachineDiffScope,
   isMainBranchName,
   parseNameStatusZ,
-  parseStatusPorcelainZ,
   parseUntrackedPorcelainZ,
   resolveDiffScope,
   DIFF_BASE_REF,
@@ -29,18 +28,24 @@ describe('resolveDiffScope', () => {
     expected: MachineDiffScopeResolution;
   }> = [
     {
-      name: 'uncommitted on a feature branch → git status --porcelain -z',
+      name: 'uncommitted on a feature branch → git diff --name-status -z HEAD plus an untracked-file supplement',
       branchName: 'feature/x',
       isMainBranch: false,
       scope: 'uncommitted',
-      expected: { gitArgs: ['status', '--porcelain', '-z', '-uall'] },
+      expected: {
+        gitArgs: ['diff', '--name-status', '-z', 'HEAD'],
+        untrackedArgs: ['status', '--porcelain', '-z', '-uall'],
+      },
     },
     {
       name: 'uncommitted on the main branch stays applicable (working tree vs last commit is always meaningful)',
       branchName: 'master',
       isMainBranch: true,
       scope: 'uncommitted',
-      expected: { gitArgs: ['status', '--porcelain', '-z', '-uall'] },
+      expected: {
+        gitArgs: ['diff', '--name-status', '-z', 'HEAD'],
+        untrackedArgs: ['status', '--porcelain', '-z', '-uall'],
+      },
     },
     {
       name: 'committed on a feature branch → three-dot diff (merge-base..HEAD) against the default branch',
@@ -98,13 +103,13 @@ describe('resolveDiffScope', () => {
     }
   });
 
-  it('attaches untrackedArgs ONLY to branch scope (the diff-omits-untracked supplement)', () => {
-    const branch = resolveDiffScope('feature/x', false, 'branch');
-    expect('gitArgs' in branch && branch.untrackedArgs).toEqual(['status', '--porcelain', '-z', '-uall']);
-    for (const scope of ['uncommitted', 'committed'] as const) {
+  it('attaches untrackedArgs to the working-tree scopes (uncommitted, branch) but NOT committed', () => {
+    for (const scope of ['uncommitted', 'branch'] as const) {
       const resolution = resolveDiffScope('feature/x', false, scope);
-      expect('gitArgs' in resolution && resolution.untrackedArgs).toBeUndefined();
+      expect('gitArgs' in resolution && resolution.untrackedArgs).toEqual(['status', '--porcelain', '-z', '-uall']);
     }
+    const committed = resolveDiffScope('feature/x', false, 'committed');
+    expect('gitArgs' in committed && committed.untrackedArgs).toBeUndefined();
   });
 });
 
@@ -155,55 +160,6 @@ describe('diffScopeSides', () => {
 
   it.each(table)('$scope → original from $expected.original, modified from $expected.modified', ({ scope, expected }) => {
     expect(diffScopeSides(scope)).toEqual(expected);
-  });
-});
-
-describe('parseStatusPorcelainZ', () => {
-  it('returns [] for empty output (clean working tree)', () => {
-    expect(parseStatusPorcelainZ('')).toEqual([]);
-  });
-
-  it('parses modified / staged / untracked / deleted entries', () => {
-    const stdout = ' M src/a.ts\0M  src/b.ts\0?? new.ts\0 D gone.ts\0D  staged-gone.ts\0A  added.ts\0';
-    expect(parseStatusPorcelainZ(stdout)).toEqual([
-      { path: 'src/a.ts', status: 'modified' },
-      { path: 'src/b.ts', status: 'modified' },
-      { path: 'new.ts', status: 'added' },
-      { path: 'gone.ts', status: 'deleted' },
-      { path: 'staged-gone.ts', status: 'deleted' },
-      { path: 'added.ts', status: 'added' },
-    ]);
-  });
-
-  it('parses a rename entry — target path first, NUL-separated source second', () => {
-    const stdout = 'R  renamed-to.ts\0renamed-from.ts\0 M other.ts\0';
-    expect(parseStatusPorcelainZ(stdout)).toEqual([
-      { path: 'renamed-to.ts', status: 'renamed', previousPath: 'renamed-from.ts' },
-      { path: 'other.ts', status: 'modified' },
-    ]);
-  });
-
-  it('reports a rename that was then deleted in the worktree as deleted (D wins over R)', () => {
-    expect(parseStatusPorcelainZ('RD new.ts\0old.ts\0')).toEqual([
-      { path: 'new.ts', status: 'deleted', previousPath: 'old.ts' },
-    ]);
-  });
-
-  it('handles paths with spaces and non-ASCII without quoting (-z never C-quotes)', () => {
-    const stdout = ' M dir with space/naïve file.ts\0?? über.md\0';
-    expect(parseStatusPorcelainZ(stdout)).toEqual([
-      { path: 'dir with space/naïve file.ts', status: 'modified' },
-      { path: 'über.md', status: 'added' },
-    ]);
-  });
-
-  it('drops a truncated trailing entry instead of guessing (output-cap cut)', () => {
-    // every complete -z entry ends in NUL, so a non-empty final token is a cut field:
-    expect(parseStatusPorcelainZ(' M full.ts\0 M par')).toEqual([{ path: 'full.ts', status: 'modified' }]);
-    expect(parseStatusPorcelainZ(' M full.ts\0 M')).toEqual([{ path: 'full.ts', status: 'modified' }]);
-    // a rename cut before its source field is dropped:
-    expect(parseStatusPorcelainZ(' M full.ts\0R  new.ts\0old')).toEqual([{ path: 'full.ts', status: 'modified' }]);
-    expect(parseStatusPorcelainZ(' M full.ts\0R  new.ts\0')).toEqual([{ path: 'full.ts', status: 'modified' }]);
   });
 });
 

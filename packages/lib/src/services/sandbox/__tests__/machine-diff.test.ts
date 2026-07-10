@@ -119,9 +119,14 @@ describe('resolveMachineMergeBase', () => {
 });
 
 describe('listMachineDiffFiles', () => {
-  it('uncommitted: runs status --porcelain -z only (no merge-base) and parses the working-tree list', async () => {
+  it('uncommitted: runs diff --name-status -z HEAD then the untracked supplement (no merge-base) and unions them', async () => {
     const { deps, calls } = makeDeps(
-      scriptGit({ 'status --porcelain -z -uall': { exitCode: 0, stdout: ' M src/a.ts\0?? new.ts\0', stderr: '' } }),
+      scriptGit({
+        // HEAD-vs-working-tree tracked diff (net of staged + unstaged) — matches the rendered pair.
+        'diff --name-status -z HEAD': { exitCode: 0, stdout: 'M\0src/a.ts\0', stderr: '' },
+        // untracked supplement; the ` M src/a.ts` tracked line is ignored, only ?? new.ts is added.
+        'status --porcelain -z -uall': { exitCode: 0, stdout: ' M src/a.ts\0?? new.ts\0', stderr: '' },
+      }),
     );
     const result = await listMachineDiffFiles({
       branchName: 'feature/x',
@@ -131,7 +136,10 @@ describe('listMachineDiffFiles', () => {
       ctx: makeCtx(),
       deps,
     });
-    expect(calls).toEqual([{ cmd: 'git', args: ['status', '--porcelain', '-z', '-uall'] }]);
+    expect(calls.map((c) => c.args)).toEqual([
+      ['diff', '--name-status', '-z', 'HEAD'],
+      ['status', '--porcelain', '-z', '-uall'],
+    ]);
     expect(result).toEqual({
       ok: true,
       notApplicable: false,
@@ -316,7 +324,7 @@ describe('listMachineDiffFiles', () => {
   it('maps a failing diff command to exec_failed with stderr detail', async () => {
     const { deps } = makeDeps(
       scriptGit({
-        'status --porcelain -z -uall': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n' },
+        'diff --name-status -z HEAD': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n' },
       }),
     );
     const result = await listMachineDiffFiles({

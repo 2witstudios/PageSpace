@@ -37,7 +37,6 @@ import type { SandboxActorContext } from './tool-runners';
 import {
   diffScopeSides,
   parseNameStatusZ,
-  parseStatusPorcelainZ,
   parseUntrackedPorcelainZ,
   resolveDiffScope,
   DIFF_BASE_REF,
@@ -134,13 +133,13 @@ export async function listMachineDiffFiles({
   if (run.exitCode !== 0) {
     return { ok: false, reason: 'exec_failed', detail: run.stderr.trim() || undefined };
   }
-  const files = scope === 'uncommitted' ? parseStatusPorcelainZ(run.stdout) : parseNameStatusZ(run.stdout);
+  const files = parseNameStatusZ(run.stdout);
   let truncated = run.truncated;
 
-  // 'branch' scope: `git diff --merge-base` lists only tracked differences, so
-  // append the untracked working-tree files (a second run) — otherwise a
-  // brand-new never-added file is invisible in a scope documented to include
-  // all uncommitted working-tree changes. Untracked paths normally can't
+  // uncommitted / branch scopes: their `git diff` lists only tracked
+  // differences, so append the untracked working-tree files (a second run) —
+  // otherwise a brand-new never-added file is invisible in a scope documented
+  // to include untracked working-tree changes. Untracked paths normally can't
   // collide with the diff's tracked paths, but a path deleted from the index
   // yet still present untracked on disk can appear in both; dedup so the
   // tracked diff entry always wins and no path is listed twice.

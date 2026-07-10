@@ -74,12 +74,12 @@ export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
 
-  const url = new URL(request.url);
-  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
+  const { searchParams } = new URL(request.url);
+  const terminalId = requireString(searchParams.get('terminalId'), 'terminalId');
   if (!terminalId.ok) return terminalId.error;
-  const projectName = requireString(url.searchParams.get('projectName'), 'projectName');
+  const projectName = requireString(searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
-  const branchName = requireString(url.searchParams.get('branchName'), 'branchName');
+  const branchName = requireString(searchParams.get('branchName'), 'branchName');
   if (!branchName.ok) return branchName.error;
 
   // Authorize BEFORE parsing scope/path, so a user without view access gets a
@@ -88,7 +88,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
-  const scope = url.searchParams.get('scope');
+  const scope = searchParams.get('scope');
   if (scope === null || !isMachineDiffScope(scope)) {
     return NextResponse.json({ error: "scope must be 'uncommitted', 'committed', or 'branch'" }, { status: 400 });
   }
@@ -104,7 +104,7 @@ export async function GET(request: Request) {
   // so confine its working-tree resolution under the checkout root before any
   // filesystem access (blob sides resolve inside a ref's own git tree and
   // cannot escape by construction).
-  const rawPath = url.searchParams.get('path');
+  const rawPath = searchParams.get('path');
   const workingTreePath = rawPath !== null && rawPath.length > 0 ? resolvePathWithinSync(BRANCH_REPO_PATH, rawPath) : null;
   if (rawPath !== null && rawPath.length > 0 && workingTreePath === null) {
     return NextResponse.json({ error: 'path escapes the branch checkout root' }, { status: 400 });
@@ -114,7 +114,7 @@ export async function GET(request: Request) {
   // via git's `<ref>:<path>` syntax, which resolves inside the ref's own tree
   // and cannot escape onto the host filesystem — so it needs no working-tree
   // confinement (unlike `path`, whose working-tree side is a real fs path).
-  const rawPreviousPath = url.searchParams.get('previousPath');
+  const rawPreviousPath = searchParams.get('previousPath');
   const previousPath = rawPreviousPath !== null && rawPreviousPath.length > 0 ? rawPreviousPath : undefined;
 
   // `status` (the file's status from the changed-file list) lets the pair
@@ -122,7 +122,7 @@ export async function GET(request: Request) {
   // working-tree modified side, which could otherwise surface an untracked
   // file masquerading at the same path (e.g. after `git rm --cached`). Optional
   // but validated when present so a bad value fails fast rather than silently.
-  const rawStatus = url.searchParams.get('status');
+  const rawStatus = searchParams.get('status');
   if (rawStatus !== null && rawStatus.length > 0 && !isMachineDiffFileStatus(rawStatus)) {
     return NextResponse.json(
       { error: "status must be 'added', 'modified', 'deleted', or 'renamed'" },
