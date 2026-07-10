@@ -7,12 +7,12 @@
  * measured usage the reconcile cron needs a persisted byte figure — but it must
  * NEVER wake a paused sprite to get one (that would recreate the Phase-3
  * keep-awake billing bug). So measurement is captured HERE, opportunistically,
- * only while a sprite is ALREADY awake for real work (terminal connect, agent
- * run, file browse), and throttled so a burst of real work costs at most one
- * cheap `df` per machine per window.
+ * only while a sprite is ALREADY awake for real work (agent tool run today; any
+ * other genuine wake path may call in too), and throttled so a burst of real
+ * work costs at most one `du -sbx` of the workspace per machine per window.
  *
  * Pure core (parse/convert/throttle) + a thin DI'd shell (`refreshStorageMeasurement`)
- * that runs one cheap `df` through an injected `MachineHandle.exec` and persists
+ * that runs one `du -sbx` through an injected `MachineHandle.exec` and persists
  * via an injected writer — unit-tested against a fake handle with zero real
  * sprite calls.
  *
@@ -41,35 +41,44 @@ function envInt(name: string, fallback: number): number {
 export const STORAGE_MEASUREMENT_THROTTLE_MS = envInt('TERMINAL_STORAGE_MEASURE_THROTTLE_MS', 60 * 60 * 1000);
 
 /**
- * The mount whose usage we bill — the persistent workspace root. Its used-bytes
- * ARE the persistent footprint that survives hibernation and accrues cost.
+ * The workspace SUBTREE whose written bytes we bill. We measure this subtree
+ * (`du`) rather than the whole filesystem (`df`) on purpose: `df` of the mount
+ * containing the workspace would also count the read-only OS/base-image bytes if
+ * the workspace is a directory on the root overlay rather than a dedicated
+ * mount — over-billing every machine by the base-image size, which is exactly
+ * the "bill the allocation, not what was written" bug this leaf removes. `du` of
+ * the workspace counts only what the workload actually wrote. Trade-off: bytes a
+ * workload writes OUTSIDE the workspace (e.g. package caches under $HOME) are not
+ * counted — a deliberate conservative under-count, consistent with the
+ * never-measured 0 floor; revisit if the platform exposes exact per-volume usage.
  */
 export const STORAGE_MEASURE_PATH = SANDBOX_ROOT;
 
-/** Wall-clock cap on the measurement exec — a `df` is instant, so a hang means the sprite is unhealthy; bail fast rather than block real work. */
-const MEASURE_EXEC_TIMEOUT_MS = 5_000;
+/**
+ * Wall-clock cap on the measurement exec. `du -sbx` walks the workspace subtree,
+ * so it is not instant on a large checkout; this is generous enough for a normal
+ * tree yet bounded so a pathological one can't run unbounded. On expiry the
+ * driver SIGKILLs `du` and the run fails → no persist (retried next window).
+ */
+const MEASURE_EXEC_TIMEOUT_MS = 20_000;
 
 /**
- * Pure: parse `df -kP <path>` output → used bytes. POSIX `-P` guarantees a
- * single data line (no wrapping) whose fields are:
- *   Filesystem  1024-blocks  Used  Available  Capacity  Mounted-on
- * so the Used column (index 2), in 1024-byte blocks, × 1024 = bytes. Returns
- * null for empty / header-only / malformed output (caller then persists nothing).
+ * Pure: parse `du -sbx <path>` output → used bytes. `du -sb` prints a single
+ * summary line `"<bytes>\t<path>"` (apparent size in bytes); the leading integer
+ * is the total. Returns null for empty / malformed output (caller persists nothing).
  */
-export function parseDfUsedBytes(stdout: string): number | null {
-  const lines = stdout
+export function parseDuBytes(stdout: string): number | null {
+  const firstLine = stdout
     .split('\n')
     .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  // Need a header + at least one data row.
-  if (lines.length < 2) return null;
-  const dataLine = lines[lines.length - 1];
-  const fields = dataLine.split(/\s+/);
-  // Filesystem 1024-blocks Used Available Capacity Mounted-on → 6 fields.
-  if (fields.length < 6) return null;
-  const usedBlocks = Number(fields[2]);
-  if (!Number.isInteger(usedBlocks) || usedBlocks < 0) return null;
-  return usedBlocks * 1024;
+    .find((line) => line.length > 0);
+  if (firstLine === undefined) return null;
+  // Leading token is the byte count; the rest is the path (may contain spaces).
+  const token = firstLine.split(/\s+/, 1)[0];
+  if (!/^\d+$/.test(token)) return null;
+  const bytes = Number(token);
+  if (!Number.isSafeInteger(bytes) || bytes < 0) return null;
+  return bytes;
 }
 
 /**
@@ -121,7 +130,12 @@ export interface RefreshStorageMeasurementResult {
  * Opportunistically measure and persist a machine's used storage bytes IF the
  * throttle window has elapsed. Fully non-fatal: any exec failure / non-zero
  * exit / unparseable output leaves the last good measurement untouched and
- * returns `{ measured: false }`. Runs at most one cheap `df` per call.
+ * returns `{ measured: false }`. Runs at most one `du -sbx` per call.
+ *
+ * `du -sbx <path>`: `-s` summary, `-b` apparent size in bytes, `-x` stay on one
+ * filesystem (don't descend into other mounts), `--` so a path starting with `-`
+ * is never read as a flag. The spawned `du` runs as its own process on the VM,
+ * so it does not serialize with the primary op that woke the sprite.
  */
 export async function refreshStorageMeasurement(
   input: RefreshStorageMeasurementInput,
@@ -134,15 +148,17 @@ export async function refreshStorageMeasurement(
   const path = input.measurePath ?? STORAGE_MEASURE_PATH;
   let run: { exitCode: number; stdout: string; stderr: string };
   try {
-    run = await input.handle.exec({ cmd: 'df', args: ['-kP', path], timeoutMs: MEASURE_EXEC_TIMEOUT_MS });
+    run = await input.handle.exec({ cmd: 'du', args: ['-sbx', '--', path], timeoutMs: MEASURE_EXEC_TIMEOUT_MS });
   } catch {
     // Measurement is best-effort — a dead/unreachable sprite must never break
     // the real work that woke it.
     return { measured: false };
   }
 
-  if (run.exitCode !== 0) return { measured: false };
-  const bytes = parseDfUsedBytes(run.stdout);
+  // `du` exits non-zero on partial "cannot read" errors even when it printed a
+  // valid total on stdout, so parse the total regardless of exit code and only
+  // treat unparseable output as a failure.
+  const bytes = parseDuBytes(run.stdout);
   if (bytes === null) return { measured: false };
 
   await input.persist({ pageId: input.pageId, measuredBytes: bytes, measuredAt: input.now });

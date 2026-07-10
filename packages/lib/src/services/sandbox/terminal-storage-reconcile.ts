@@ -14,8 +14,25 @@
  * keep-awake billing bug. The cron reads only what real-work wakes have already
  * persisted; a machine that has never been measured bills a conservative 0
  * floor (NOT the provisioned cap) for that window, and its watermark still
- * advances so the un-measured span is never billed retroactively once a
- * measurement lands (clean cutover from the old allocation-billing).
+ * advances so the un-measured span is not billed retroactively when a
+ * measurement lands (clean cutover from the old allocation-billing). Bounded
+ * exception: the FIRST measured window spans from the last watermark advance to
+ * now, so at most ONE reconcile interval of pre-measurement time is billed once,
+ * at the measured rate — a deliberate, bounded, one-time residual (a single
+ * watermark carries no separate "measurement started here" marker).
+ *
+ * Known trade-offs of the "never wake to measure" rule (favouring the platform's
+ * hard no-keep-awake constraint over perfect accuracy):
+ *   • Coverage: measurement is captured only on wake paths that call
+ *     `measureMachineStorageOpportunistically` (the agent tool-runner today). A
+ *     machine exercised ONLY through a wake path that doesn't yet measure (e.g.
+ *     interactive-PTY-only) stays never-measured and bills the 0 floor until such
+ *     a path wires measurement in — an under-count, strictly better than the old
+ *     flat-cap over-bill, and closed by wiring more wake paths (follow-up).
+ *   • Shrink lag: a machine that frees storage then hibernates without any
+ *     further real-work wake keeps billing its last (higher) measured footprint;
+ *     it self-corrects on the next wake. `staleMeasurements` surfaces how many
+ *     rows are billing on an ageing measurement so this is observable.
  *
  * `terminal_sessions` already enumerates every known machine: a row is only
  * ever deleted on explicit session-end/crash, NOT on idle — persistent
@@ -163,15 +180,29 @@ export async function reconcileTerminalStorage(
       const gbMonths = computeElapsedGbMonths({ measuredGB: gb, elapsedMs });
       const costDollars = calculateTerminalStorageCostDollars(gbMonths);
 
-      // Nothing to charge this window: zero elapsed, zero measured usage, or a
-      // never-measured machine (0 floor). Still advance the watermark past this
-      // SETTLED window (only when real time elapsed) so a later measurement can
-      // never bill these bytes retroactively — this is what keeps the cutover
-      // from the old allocation-billing clean: existing never-measured rows
-      // settle to $0 forward with no double/over-bill. A back-to-back rerun
-      // (elapsedMs === 0) advances nothing, staying a pure no-op.
+      // Nothing to charge this window. Two cases, handled differently:
+      //
+      //  • NEVER-MEASURED (measuredBytes === null): advance the watermark past
+      //    this un-measured window (when real time elapsed) so that once a
+      //    measurement finally lands it is not billed retroactively over the
+      //    whole idle span — this is what keeps the cutover from the old
+      //    allocation-billing clean. (One-time residual: the first measured
+      //    window still spans from the last advance to now, i.e. AT MOST one
+      //    reconcile interval of pre-measurement time — bounded and one-time,
+      //    the deliberate cost of a single watermark with no separate
+      //    measurement-start marker.)
+      //
+      //  • MEASURED but sub-charge (a tiny footprint whose per-window cost
+      //    rounds to $0, or a genuine zero-byte footprint): do NOT advance.
+      //    Leaving the watermark lets the residual accumulate across windows
+      //    until it crosses the pricing rounding floor and actually bills —
+      //    otherwise a small machine on a frequent cron would be billed $0
+      //    forever, discarding real (if tiny) storage cost every run.
+      //
+      // A back-to-back rerun (elapsedMs === 0) advances nothing either way,
+      // staying a pure no-op.
       if (costDollars <= 0) {
-        if (elapsedMs > 0) {
+        if (machine.measuredBytes === null && elapsedMs > 0) {
           await deps.advanceWatermark({ pageId: machine.pageId, billedThrough: now });
         }
         continue;

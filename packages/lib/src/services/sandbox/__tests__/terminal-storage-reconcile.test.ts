@@ -283,6 +283,44 @@ describe('reconcileTerminalStorage', () => {
     expect(result).toMatchObject({ processed: 1, charged: 0 });
   });
 
+  it('a MEASURED tiny footprint whose window cost rounds to $0 does NOT advance the watermark (residual accrues, not discarded)', async () => {
+    const now = new Date('2026-07-01T01:00:00.000Z');
+    const advanceCalls: Array<{ pageId: string; billedThrough: Date }> = [];
+    const chargeCalls: Array<unknown> = [];
+
+    const deps: ReconcileTerminalStorageDeps = {
+      listMachines: async () => [
+        {
+          pageId: 'tiny',
+          // One hour elapsed at a ~1KB footprint prices to well below the
+          // 6-decimal rounding floor → costDollars === 0.
+          storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z'),
+          measuredBytes: 1_000, // MEASURED (not null), tiny
+          measuredAt: new Date('2026-06-30T23:30:00.000Z'),
+          lastActiveAt: new Date('2026-06-30T23:30:00.000Z'),
+        },
+      ],
+      lookupPageOwnerId: async () => 'owner-1',
+      chargeStorage: async (input) => {
+        chargeCalls.push(input);
+      },
+      advanceWatermark: async (input) => {
+        advanceCalls.push(input);
+      },
+      now: () => now,
+    };
+
+    const result = await reconcileTerminalStorage(deps);
+
+    assert({
+      given: 'a measured sub-cent footprint on a frequent cron',
+      should: 'neither charge nor advance the watermark, so the residual accrues toward a future charge',
+      actual: { charged: chargeCalls.length, advanced: advanceCalls.length },
+      expected: { charged: 0, advanced: 0 },
+    });
+    expect(result).toMatchObject({ processed: 1, charged: 0 });
+  });
+
   it('CUTOVER continuity: after the watermark advances, the FIRST measured window bills only from the advanced mark (no over-bill)', async () => {
     let watermark = new Date('2026-05-01T00:00:00.000Z');
     let measuredBytes: number | null = null;

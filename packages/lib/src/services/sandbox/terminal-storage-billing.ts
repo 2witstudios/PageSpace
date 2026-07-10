@@ -19,6 +19,7 @@ import { loggers } from '../../logging/logger-config';
 import type { MachineHandle } from './machine-host';
 import {
   refreshStorageMeasurement,
+  STORAGE_MEASUREMENT_THROTTLE_MS,
   type PersistStorageMeasurement,
 } from './terminal-storage-measure';
 import type { ReconcileTerminalStorageDeps } from './terminal-storage-reconcile';
@@ -91,17 +92,45 @@ export const persistStorageMeasurement: PersistStorageMeasurement = async ({
 };
 
 /**
+ * In-process "last attempted a real measurement" clock per pageId. The tool
+ * runner calls the helper below on EVERY bash/read/write/edit op, but a machine
+ * only needs measuring once per throttle window — this cache lets the common
+ * case (within-window) short-circuit BEFORE touching the DB, so a 30-tool-call
+ * agent turn does one measurement attempt, not 30 wasted `SELECT`s. It is a
+ * best-effort hint only: the authoritative throttle is still the PERSISTED
+ * `storageMeasuredAt` re-checked inside `refreshStorageMeasurement` (which
+ * survives a process restart and is shared across web instances), so a cold
+ * cache simply falls through to the DB read exactly as before.
+ */
+const lastMeasureAttemptAtMs = new Map<string, number>();
+
+/**
  * Opportunistically measure a machine's used storage bytes while it is ALREADY
- * awake for real work (terminal connect, agent run, file browse), throttled and
- * fully non-fatal. Reads the row's last measurement time for the throttle,
- * measures via a cheap `df`, and persists. Never throws to the caller and never
- * wakes a paused sprite — the handle is already live because real work is
- * happening on it. Skips silently when the page has no `terminal_sessions` row.
+ * awake for real work, throttled and fully non-fatal. Fast-paths on an
+ * in-process per-page clock to avoid a DB read on every tool op; on a due page
+ * it reads the persisted measurement time, measures via `du -sbx`, and persists.
+ * Never throws to the caller and never wakes a paused sprite — the handle is
+ * already live because real work is happening on it. Skips silently when the
+ * page has no `terminal_sessions` row.
+ *
+ * Currently wired at the agent tool-runner (`sandbox-tools-runtime.ts`'s
+ * `measureStorage` seam). Any other genuine wake path (e.g. the realtime PTY
+ * connect) can call this too — it is idempotent and throttled, so multiple wake
+ * sources are safe.
  */
 export async function measureMachineStorageOpportunistically(input: {
   handle: Pick<MachineHandle, 'exec'>;
   pageId: string;
 }): Promise<void> {
+  const nowMs = Date.now();
+  // Cheap in-process gate: skip entirely (no DB, no exec) if THIS instance
+  // already attempted a measurement for this page within the throttle window.
+  const lastAttempt = lastMeasureAttemptAtMs.get(input.pageId);
+  if (lastAttempt !== undefined && nowMs - lastAttempt < STORAGE_MEASUREMENT_THROTTLE_MS) {
+    return;
+  }
+  lastMeasureAttemptAtMs.set(input.pageId, nowMs);
+
   try {
     const [row] = await db
       .select({ storageMeasuredAt: terminalSessions.storageMeasuredAt })
@@ -115,7 +144,7 @@ export async function measureMachineStorageOpportunistically(input: {
       handle: input.handle,
       pageId: input.pageId,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
-      now: new Date(),
+      now: new Date(nowMs),
       persist: persistStorageMeasurement,
     });
   } catch (error) {

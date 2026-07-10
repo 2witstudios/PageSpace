@@ -1,44 +1,39 @@
 import { describe, it, expect, vi } from 'vitest';
 import { assert } from './riteway';
 import {
-  parseDfUsedBytes,
+  parseDuBytes,
   bytesToGB,
   shouldRefreshMeasurement,
   refreshStorageMeasurement,
   STORAGE_MEASUREMENT_THROTTLE_MS,
 } from '../terminal-storage-measure';
 
-describe('parseDfUsedBytes', () => {
-  it('parses POSIX `df -kP` output → used bytes (used-blocks × 1024)', () => {
-    const stdout = [
-      'Filesystem     1024-blocks   Used Available Capacity Mounted on',
-      '/dev/vda1        104857600 204800 104652800       1% /workspace',
-    ].join('\n');
+describe('parseDuBytes', () => {
+  it('parses `du -sbx` output → the leading byte total', () => {
     assert({
-      given: 'df -kP output showing 204800 used 1K-blocks',
-      should: 'return 204800 * 1024 bytes',
-      actual: parseDfUsedBytes(stdout),
-      expected: 204800 * 1024,
+      given: 'du -sbx output "209715200\\t/workspace"',
+      should: 'return 209715200 bytes',
+      actual: parseDuBytes('209715200\t/workspace'),
+      expected: 209_715_200,
     });
   });
 
-  it('tolerates a trailing newline and extra whitespace', () => {
-    const stdout = 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda1 100 50 50 50% /\n\n';
-    expect(parseDfUsedBytes(stdout)).toBe(50 * 1024);
+  it('tolerates leading/trailing whitespace and a path containing spaces', () => {
+    expect(parseDuBytes('  52428800   /workspace/my repo\n')).toBe(52_428_800);
   });
 
-  it('returns null for empty / header-only / malformed output', () => {
-    assert({ given: 'empty output', should: 'return null', actual: parseDfUsedBytes(''), expected: null });
+  it('reads only the FIRST line (du -s prints one summary line)', () => {
+    // Defensive: even if a stray warning line follows, the total is line 1.
+    expect(parseDuBytes('1024\t/workspace\ndu: cannot read: /workspace/x')).toBe(1024);
+  });
+
+  it('returns null for empty / non-numeric output', () => {
+    assert({ given: 'empty output', should: 'return null', actual: parseDuBytes(''), expected: null });
+    assert({ given: 'whitespace-only output', should: 'return null', actual: parseDuBytes('   \n  '), expected: null });
     assert({
-      given: 'header-only output',
+      given: 'a leading non-numeric token',
       should: 'return null',
-      actual: parseDfUsedBytes('Filesystem 1024-blocks Used Available Capacity Mounted on'),
-      expected: null,
-    });
-    assert({
-      given: 'a data line with a non-numeric Used field',
-      should: 'return null',
-      actual: parseDfUsedBytes('Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda1 100 NaN 50 50% /'),
+      actual: parseDuBytes('du: cannot access /workspace'),
       expected: null,
     });
   });
@@ -87,17 +82,21 @@ describe('shouldRefreshMeasurement', () => {
 });
 
 function fakeHandle(result: { exitCode: number; stdout: string; stderr?: string }) {
-  const exec = vi.fn(async () => ({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr ?? '' }));
+  const exec = vi.fn(async (_args: { cmd: string; args?: string[] }) => ({
+    exitCode: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr ?? '',
+  }));
   return { handle: { exec }, exec };
 }
 
-const DF_OK = 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda1 104857600 204800 104652800 1% /workspace';
+const DU_OK = '209715200\t/workspace';
 
 describe('refreshStorageMeasurement', () => {
   const now = new Date('2026-07-01T00:00:00.000Z');
 
-  it('measures via df, parses bytes, and persists {pageId, measuredBytes, measuredAt}', async () => {
-    const { handle, exec } = fakeHandle({ exitCode: 0, stdout: DF_OK });
+  it('measures via `du -sbx`, parses bytes, and persists {pageId, measuredBytes, measuredAt}', async () => {
+    const { handle, exec } = fakeHandle({ exitCode: 0, stdout: DU_OK });
     const persisted: Array<{ pageId: string; measuredBytes: number; measuredAt: Date }> = [];
 
     const out = await refreshStorageMeasurement({
@@ -111,12 +110,14 @@ describe('refreshStorageMeasurement', () => {
     });
 
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(out).toEqual({ measured: true, bytes: 204800 * 1024 });
-    expect(persisted).toEqual([{ pageId: 'page-1', measuredBytes: 204800 * 1024, measuredAt: now }]);
+    // Measures the workspace SUBTREE (du), not the whole filesystem (df).
+    expect(exec.mock.calls[0][0]).toMatchObject({ cmd: 'du', args: ['-sbx', '--', '/workspace'] });
+    expect(out).toEqual({ measured: true, bytes: 209_715_200 });
+    expect(persisted).toEqual([{ pageId: 'page-1', measuredBytes: 209_715_200, measuredAt: now }]);
   });
 
   it('is throttled: a recent measurement short-circuits WITHOUT any sprite exec', async () => {
-    const { handle, exec } = fakeHandle({ exitCode: 0, stdout: DF_OK });
+    const { handle, exec } = fakeHandle({ exitCode: 0, stdout: DU_OK });
     const persist = vi.fn();
 
     const out = await refreshStorageMeasurement({
@@ -137,18 +138,27 @@ describe('refreshStorageMeasurement', () => {
     expect(out).toEqual({ measured: false });
   });
 
-  it('does not persist when df fails (non-zero exit) — leaves the last good measurement in place', async () => {
-    const { handle } = fakeHandle({ exitCode: 1, stdout: '', stderr: 'df: /workspace: No such file' });
-    const persist = vi.fn();
+  it('still persists a valid total even when du exits non-zero (partial cannot-read but printed the sum)', async () => {
+    // du -sbx exits 1 on an unreadable child yet prints the total on stdout.
+    const { handle } = fakeHandle({ exitCode: 1, stdout: '4096\t/workspace', stderr: 'du: cannot read /workspace/x' });
+    const persisted: Array<{ pageId: string; measuredBytes: number; measuredAt: Date }> = [];
 
-    const out = await refreshStorageMeasurement({ handle, pageId: 'p', lastMeasuredAt: null, now, persist });
+    const out = await refreshStorageMeasurement({
+      handle,
+      pageId: 'p',
+      lastMeasuredAt: null,
+      now,
+      persist: async (p) => {
+        persisted.push(p);
+      },
+    });
 
-    expect(persist).not.toHaveBeenCalled();
-    expect(out).toEqual({ measured: false });
+    expect(out).toEqual({ measured: true, bytes: 4096 });
+    expect(persisted).toEqual([{ pageId: 'p', measuredBytes: 4096, measuredAt: now }]);
   });
 
-  it('does not persist when df output is unparseable', async () => {
-    const { handle } = fakeHandle({ exitCode: 0, stdout: 'garbage output' });
+  it('does not persist when du output is unparseable', async () => {
+    const { handle } = fakeHandle({ exitCode: 1, stdout: 'du: cannot access /workspace' });
     const persist = vi.fn();
 
     const out = await refreshStorageMeasurement({ handle, pageId: 'p', lastMeasuredAt: null, now, persist });

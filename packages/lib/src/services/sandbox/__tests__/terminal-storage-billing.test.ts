@@ -177,9 +177,11 @@ describe('persistStorageMeasurement', () => {
 });
 
 describe('measureMachineStorageOpportunistically', () => {
-  const DF_OK = 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda1 104857600 204800 104652800 1% /workspace';
+  // Each test uses a UNIQUE pageId: the helper keeps a module-scoped in-process
+  // throttle cache keyed by pageId that persists across tests in this run.
+  const DU_OK = '209715200\t/workspace';
 
-  it('measures via the live handle and persists when the throttle window has elapsed', async () => {
+  it('measures via the live handle (du) and persists when the throttle window has elapsed', async () => {
     // Row exists, never measured (null measuredAt) → not throttled.
     mockDb.select.mockReturnValue({
       from: () => ({ where: () => ({ limit: async () => [{ storageMeasuredAt: null }] }) }),
@@ -191,13 +193,37 @@ describe('measureMachineStorageOpportunistically', () => {
         return { where: async () => {} };
       },
     });
-    const exec = vi.fn(async () => ({ exitCode: 0, stdout: DF_OK, stderr: '' }));
+    const exec = vi.fn(async (_args: { cmd: string; args?: string[] }) => ({ exitCode: 0, stdout: DU_OK, stderr: '' }));
 
-    await measureMachineStorageOpportunistically({ handle: { exec }, pageId: 'page-1' });
+    await measureMachineStorageOpportunistically({ handle: { exec }, pageId: 'measure-elapsed' });
 
     expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec.mock.calls[0][0]).toMatchObject({ cmd: 'du' });
     expect(setCalls).toHaveLength(1);
-    expect(setCalls[0]).toMatchObject({ storageMeasuredBytes: 204800 * 1024 });
+    expect(setCalls[0]).toMatchObject({ storageMeasuredBytes: 209_715_200 });
+  });
+
+  it('in-process throttle: a second call for the same page within the window does NO DB read and NO exec', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: async () => [{ storageMeasuredAt: null }] }) }),
+    });
+    mockDb.update.mockReturnValue({ set: () => ({ where: async () => {} }) });
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: DU_OK, stderr: '' }));
+
+    // First call warms the cache + measures.
+    await measureMachineStorageOpportunistically({ handle: { exec }, pageId: 'throttle-page' });
+    const selectsAfterFirst = mockDb.select.mock.calls.length;
+    const execsAfterFirst = exec.mock.calls.length;
+
+    // Second immediate call must short-circuit before any DB/exec work.
+    await measureMachineStorageOpportunistically({ handle: { exec }, pageId: 'throttle-page' });
+
+    assert({
+      given: 'a second measurement attempt for the same page within the throttle window',
+      should: 'issue no additional DB SELECT and no additional sprite exec',
+      actual: { selects: mockDb.select.mock.calls.length - selectsAfterFirst, execs: exec.mock.calls.length - execsAfterFirst },
+      expected: { selects: 0, execs: 0 },
+    });
   });
 
   it('skips (no exec, no write) when the page has no terminal_sessions row', async () => {
@@ -206,7 +232,7 @@ describe('measureMachineStorageOpportunistically', () => {
     });
     const exec = vi.fn();
 
-    await measureMachineStorageOpportunistically({ handle: { exec }, pageId: 'missing' });
+    await measureMachineStorageOpportunistically({ handle: { exec }, pageId: 'missing-row' });
 
     assert({
       given: 'a page with no billing row',
@@ -224,7 +250,7 @@ describe('measureMachineStorageOpportunistically', () => {
     const exec = vi.fn();
 
     await expect(
-      measureMachineStorageOpportunistically({ handle: { exec }, pageId: 'page-1' }),
+      measureMachineStorageOpportunistically({ handle: { exec }, pageId: 'throws-page' }),
     ).resolves.toBeUndefined();
   });
 });
