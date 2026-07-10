@@ -24,7 +24,7 @@ export function collectTerminalPageIds(
   const walk = (nodes: readonly TerminalTreeNode[] | null | undefined) => {
     if (!nodes) return;
     for (const node of nodes) {
-      if (node.type === PageType.TERMINAL) ids.push(node.id);
+      if (node.type === PageType.MACHINE) ids.push(node.id);
       if (node.children) walk(node.children);
     }
   };
