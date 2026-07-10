@@ -69,61 +69,49 @@ export function usePushNotifications(): PushNotificationState & PushNotification
           const { PushNotifications } = await import('@capacitor/push-notifications');
           pushNotificationsRef.current = PushNotifications;
 
-          // Registration success
-          const registrationListener = await PushNotifications.addListener(
-            'registration',
-            (token: { value: string }) => {
-              console.log('[PushNotifications] Registered with token:', token.value.substring(0, 20) + '...');
-              tokenRef.current = token.value;
-              registerTokenWithServerRef.current(token.value);
-            }
-          );
-          listenersRef.current.push(() => registrationListener.remove());
-
-          // Registration error
-          const registrationErrorListener = await PushNotifications.addListener(
-            'registrationError',
-            (error: { error: string }) => {
-              console.error('[PushNotifications] Registration error:', error);
-              setState(prev => ({
-                ...prev,
-                error: error.error,
-                isLoading: false,
-              }));
-            }
-          );
-          listenersRef.current.push(() => registrationErrorListener.remove());
-
-          // Notification received while app is in foreground
-          const receivedListener = await PushNotifications.addListener(
-            'pushNotificationReceived',
-            (notification: PushNotificationSchema) => {
-              console.log('[PushNotifications] Received:', notification);
-              // Handle foreground notification
-              // Could dispatch an event or update state here
-              if (typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('push:received', {
-                  detail: notification,
+          // Four independent listeners — register concurrently rather than
+          // sequentially awaiting each native-bridge round trip.
+          const [registrationListener, registrationErrorListener, receivedListener, actionListener] =
+            await Promise.all([
+              PushNotifications.addListener('registration', (token: { value: string }) => {
+                console.log('[PushNotifications] Registered with token:', token.value.substring(0, 20) + '...');
+                tokenRef.current = token.value;
+                registerTokenWithServerRef.current(token.value);
+              }),
+              PushNotifications.addListener('registrationError', (error: { error: string }) => {
+                console.error('[PushNotifications] Registration error:', error);
+                setState(prev => ({
+                  ...prev,
+                  error: error.error,
+                  isLoading: false,
                 }));
-              }
-            }
-          );
-          listenersRef.current.push(() => receivedListener.remove());
+              }),
+              // Notification received while app is in foreground
+              PushNotifications.addListener('pushNotificationReceived', (notification: PushNotificationSchema) => {
+                console.log('[PushNotifications] Received:', notification);
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('push:received', {
+                    detail: notification,
+                  }));
+                }
+              }),
+              // Notification tapped
+              PushNotifications.addListener('pushNotificationActionPerformed', (action: ActionPerformed) => {
+                console.log('[PushNotifications] Action performed:', action);
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('push:action', {
+                    detail: action,
+                  }));
+                }
+              }),
+            ]);
 
-          // Notification tapped
-          const actionListener = await PushNotifications.addListener(
-            'pushNotificationActionPerformed',
-            (action: ActionPerformed) => {
-              console.log('[PushNotifications] Action performed:', action);
-              // Handle notification tap
-              if (typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('push:action', {
-                  detail: action,
-                }));
-              }
-            }
+          listenersRef.current.push(
+            () => registrationListener.remove(),
+            () => registrationErrorListener.remove(),
+            () => receivedListener.remove(),
+            () => actionListener.remove(),
           );
-          listenersRef.current.push(() => actionListener.remove());
 
           setState(prev => ({ ...prev, isSupported: true }));
         } catch {
