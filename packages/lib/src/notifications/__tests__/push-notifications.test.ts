@@ -49,6 +49,77 @@ vi.mock('crypto', async (importOriginal) => {
 });
 
 // ---------------------------------------------------------------------------
+// node:http2 mock — APNs is HTTP/2-only, so the sender talks to it over a
+// cached ClientHttp2Session instead of fetch(). The shared `h2` state lets each
+// test drive a fake session/stream: capture the request headers + body, and
+// script the response (or a transport error) the fake stream emits.
+// ---------------------------------------------------------------------------
+const h2 = vi.hoisted(() => {
+  type FakeStream = import('node:events').EventEmitter;
+  const state: {
+    behavior: (stream: FakeStream) => void;
+    lastRequestHeaders: Record<string, unknown> | null;
+    lastRequestBody: string | null;
+    connectedHosts: string[];
+    sessionCloseCount: number;
+  } = {
+    behavior: () => {},
+    lastRequestHeaders: null,
+    lastRequestBody: null,
+    connectedHosts: [],
+    sessionCloseCount: 0,
+  };
+  return state;
+});
+
+vi.mock('node:http2', async () => {
+  const { EventEmitter } = await import('node:events');
+
+  const makeStream = () => {
+    const stream = new EventEmitter() as InstanceType<typeof EventEmitter> & {
+      write: (chunk: string) => boolean;
+      end: () => void;
+      close: (code?: number) => void;
+      setTimeout: (ms: number, cb: () => void) => void;
+    };
+    stream.write = vi.fn((chunk: string) => {
+      h2.lastRequestBody = String(chunk);
+      return true;
+    });
+    stream.end = vi.fn();
+    stream.close = vi.fn();
+    stream.setTimeout = vi.fn();
+    return stream;
+  };
+
+  const connect = vi.fn((url: string) => {
+    h2.connectedHosts.push(String(url));
+    const session = new EventEmitter() as InstanceType<typeof EventEmitter> & {
+      closed: boolean;
+      destroyed: boolean;
+      socket: { unref: () => void };
+      close: () => void;
+      request: (headers: Record<string, unknown>) => InstanceType<typeof EventEmitter>;
+    };
+    session.closed = false;
+    session.destroyed = false;
+    session.socket = { unref: vi.fn() };
+    session.close = vi.fn(() => { h2.sessionCloseCount += 1; });
+    session.request = vi.fn((headers: Record<string, unknown>) => {
+      h2.lastRequestHeaders = headers;
+      const stream = makeStream();
+      // Emit on a microtask so performApnsRequest's listeners are attached first.
+      Promise.resolve().then(() => h2.behavior(stream));
+      return stream;
+    });
+    return session;
+  });
+
+  const constants = { NGHTTP2_CANCEL: 8 };
+  return { connect, constants, default: { connect, constants } };
+});
+
+// ---------------------------------------------------------------------------
 // Imports after mocks
 // ---------------------------------------------------------------------------
 
@@ -99,6 +170,55 @@ const payload = {
   title: 'Hello',
   body: 'World',
 };
+
+// Script the fake APNs stream to emit a full response: `:status` + optional
+// `apns-id` headers, an optional body (object → JSON, string → raw), then end.
+function apnsRespond(status: number, body?: unknown, apnsId: string | null = 'apns-test-id') {
+  h2.behavior = (stream) => {
+    const headers: Record<string, unknown> = { ':status': status };
+    if (apnsId) headers['apns-id'] = apnsId;
+    stream.emit('response', headers);
+    if (body !== undefined) {
+      const chunk = typeof body === 'string' ? body : JSON.stringify(body);
+      stream.emit('data', Buffer.from(chunk));
+    }
+    stream.emit('end');
+  };
+}
+
+// Script the fake stream to emit a transport-level error (the `fetch failed`
+// class of failure that motivated the HTTP/2 rewrite).
+function apnsStreamError(error: Error = new Error('fetch failed')) {
+  h2.behavior = (stream) => {
+    stream.emit('error', error);
+  };
+}
+
+// Reset the shared h2 mock state between tests and default to an accepted (200)
+// response. The module-level session cache persists across tests, so state must
+// be cleared explicitly rather than relying on vi.clearAllMocks().
+function resetH2() {
+  h2.connectedHosts = [];
+  h2.lastRequestHeaders = null;
+  h2.lastRequestBody = null;
+  h2.sessionCloseCount = 0;
+  apnsRespond(200, {});
+}
+
+// Force getApnsJwtToken() to produce a token by returning a well-formed DER
+// signature from crypto.createSign (used when the module JWT cache is cold).
+function primeApnsSign() {
+  const fakeSignature = Buffer.alloc(72, 0);
+  fakeSignature[0] = 0x30; fakeSignature[1] = 70;
+  fakeSignature[2] = 0x02; fakeSignature[3] = 32;
+  fakeSignature[36] = 0x02; fakeSignature[37] = 32;
+  const mockSign = {
+    update: vi.fn().mockReturnThis(),
+    end: vi.fn().mockReturnThis(),
+    sign: vi.fn().mockReturnValue(fakeSignature),
+  };
+  vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
+}
 
 // ---------------------------------------------------------------------------
 // registerPushToken
@@ -229,7 +349,7 @@ describe('getUserPushTokens', () => {
 describe('sendPushNotification', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    global.fetch = vi.fn();
+    resetH2();
   });
 
   afterEach(() => {
@@ -326,8 +446,7 @@ describe('sendPushNotification', () => {
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios', failedAttempts: '2' })] as never);
 
-    // Mock a successful APNs response
-    vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
+    // Default h2 behavior (beforeEach) already scripts a 200 accepted response.
 
     // Mock crypto sign to return a valid buffer
     const fakeSignature = Buffer.alloc(72, 0); // DER-like buffer
@@ -364,33 +483,67 @@ describe('sendPushNotification', () => {
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
 
-    vi.mocked(global.fetch).mockResolvedValue({
-      ok: false,
-      json: vi.fn().mockResolvedValue({ reason: 'BadDeviceToken' }),
-    } as unknown as Response);
-
-    const fakeSignature = Buffer.alloc(72, 0);
-    fakeSignature[0] = 0x30;
-    fakeSignature[1] = 70;
-    fakeSignature[2] = 0x02;
-    fakeSignature[3] = 32;
-    fakeSignature[36] = 0x02;
-    fakeSignature[37] = 32;
-
-    const mockSign = {
-      update: vi.fn().mockReturnThis(),
-      end: vi.fn().mockReturnThis(),
-      sign: vi.fn().mockReturnValue(fakeSignature),
-    };
-    vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
+    apnsRespond(400, { reason: 'BadDeviceToken' });
+    primeApnsSign();
 
     const { setFn } = setupUpdateChain();
 
     const result = await sendPushNotification('user-1', payload);
 
     expect(result.failed).toBe(1);
+    expect(result.errors).toContain('BadDeviceToken');
     // When shouldRemoveToken is true, we set isActive: false directly
     expect(setFn).toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('keeps token active when APNs rejects with a non-removal reason', async () => {
+    process.env.APNS_TEAM_ID = 'team-id';
+    process.env.APNS_KEY_ID = 'key-id';
+    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios', failedAttempts: '0' })] as never);
+
+    apnsRespond(413, { reason: 'PayloadTooLarge' });
+    primeApnsSign();
+
+    const { setFn } = setupUpdateChain();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors).toContain('PayloadTooLarge');
+    // Not an invalid-token reason → increment failedAttempts, keep token active.
+    expect(setFn).toHaveBeenCalledWith(expect.objectContaining({
+      failedAttempts: '1',
+      isActive: true,
+    }));
+  });
+
+  it('reports a transport failure without removing the token (stream error)', async () => {
+    process.env.APNS_TEAM_ID = 'team-id';
+    process.env.APNS_KEY_ID = 'key-id';
+    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios', failedAttempts: '0' })] as never);
+
+    apnsStreamError(new Error('fetch failed'));
+    primeApnsSign();
+
+    const { setFn } = setupUpdateChain();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors).toContain('fetch failed');
+    // Transport errors must NOT deactivate the token (it may be fine); the
+    // failedAttempts counter increments instead of a direct isActive:false.
+    expect(setFn).toHaveBeenCalledWith(expect.objectContaining({
+      failedAttempts: '1',
+      isActive: true,
+    }));
+    // The poisoned session must be closed (not just uncached) so its HTTP/2
+    // socket is released and doesn't leak on repeated stalls.
+    expect(h2.sessionCloseCount).toBeGreaterThan(0);
   });
 });
 
@@ -404,7 +557,7 @@ describe('sendPushNotification', () => {
 describe('APNs JWT token generation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    global.fetch = vi.fn();
+    resetH2();
   });
 
   afterEach(() => {
@@ -428,10 +581,21 @@ describe('APNs JWT token generation', () => {
       throw new Error('APNs configuration missing');
     });
 
-    const result = await sendPushNotification('user-1', payload);
-    expect(result.failed).toBe(1);
-    // Error will be caught by the catch block in sendToApns
-    expect(result.errors.length).toBeGreaterThan(0);
+    // Earlier tests warm the module-level JWT cache; advance past its expiry so
+    // getApnsJwtToken actually re-signs (and throws) rather than reusing a token.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2099-12-01T00:00:00Z'));
+    try {
+      const result = await sendPushNotification('user-1', payload);
+      expect(result.failed).toBe(1);
+      // Error will be caught by the catch block in sendToApns
+      expect(result.errors.length).toBeGreaterThan(0);
+      // A signing failure happens before any connection is opened, so it must
+      // not evict/close a (possibly healthy) cached session.
+      expect(h2.sessionCloseCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('wraps bare PEM key in BEGIN/END block during signing', async () => {
@@ -456,7 +620,7 @@ describe('APNs JWT token generation', () => {
       sign: vi.fn().mockReturnValue(fakeSignature),
     };
     vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
-    vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
+    // Default h2 behavior (beforeEach) scripts a 200 accepted response.
     setupUpdateChain();
 
     await sendPushNotification('user-1', payload);
@@ -478,28 +642,14 @@ describe('APNs JWT token generation', () => {
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
 
-    vi.mocked(global.fetch).mockResolvedValue({
-      ok: false,
-      json: vi.fn().mockResolvedValue({ reason: 'ServiceUnavailable' }),
-    } as unknown as Response);
-
-    const fakeSignature = Buffer.alloc(72, 0);
-    fakeSignature[0] = 0x30; fakeSignature[1] = 70;
-    fakeSignature[2] = 0x02; fakeSignature[3] = 32;
-    fakeSignature[36] = 0x02; fakeSignature[37] = 32;
-
-    const mockSign = {
-      update: vi.fn().mockReturnThis(),
-      end: vi.fn().mockReturnThis(),
-      sign: vi.fn().mockReturnValue(fakeSignature),
-    };
-    vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
+    apnsRespond(503, { reason: 'ServiceUnavailable' });
+    primeApnsSign();
     setupUpdateChain();
 
     const result = await sendPushNotification('user-1', payload);
     expect(result.failed).toBe(1);
     // Error reason from APNs
-    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors).toContain('ServiceUnavailable');
   });
 
   it('handles malformed APNs error response json', async () => {
@@ -509,28 +659,15 @@ describe('APNs JWT token generation', () => {
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
 
-    vi.mocked(global.fetch).mockResolvedValue({
-      ok: false,
-      json: vi.fn().mockRejectedValue(new Error('invalid json')),
-    } as unknown as Response);
-
-    const fakeSignature = Buffer.alloc(72, 0);
-    fakeSignature[0] = 0x30; fakeSignature[1] = 70;
-    fakeSignature[2] = 0x02; fakeSignature[3] = 32;
-    fakeSignature[36] = 0x02; fakeSignature[37] = 32;
-
-    const mockSign = {
-      update: vi.fn().mockReturnThis(),
-      end: vi.fn().mockReturnThis(),
-      sign: vi.fn().mockReturnValue(fakeSignature),
-    };
-    vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
+    // Non-JSON error body → JSON.parse throws → reason falls back to 'Unknown error'.
+    apnsRespond(500, '<html>Internal Server Error</html>');
+    primeApnsSign();
     setupUpdateChain();
 
     const result = await sendPushNotification('user-1', payload);
     expect(result.failed).toBe(1);
-    // Falls back to 'Unknown error' when json() throws
-    expect(result.errors.length).toBeGreaterThan(0);
+    // Falls back to 'Unknown error' when the body is not JSON.
+    expect(result.errors).toContain('Unknown error');
   });
 
   // DER trim branches need a stale JWT cache so crypto.createSign actually
@@ -560,7 +697,7 @@ describe('APNs JWT token generation', () => {
       sign: vi.fn().mockReturnValue(der),
     };
     vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
-    vi.mocked(global.fetch).mockResolvedValue({ ok: true, headers: new Headers() } as Response);
+    // Default h2 behavior (beforeEach) scripts a 200 accepted response.
     setupUpdateChain();
 
     vi.useFakeTimers();
@@ -598,7 +735,7 @@ describe('APNs JWT token generation', () => {
       sign: vi.fn().mockReturnValue(der),
     };
     vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
-    vi.mocked(global.fetch).mockResolvedValue({ ok: true, headers: new Headers() } as Response);
+    // Default h2 behavior (beforeEach) scripts a 200 accepted response.
     setupUpdateChain();
 
     vi.useFakeTimers();
@@ -619,7 +756,7 @@ describe('APNs JWT token generation', () => {
 describe('silent push payload', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    global.fetch = vi.fn();
+    resetH2();
   });
 
   afterEach(() => {
@@ -630,19 +767,6 @@ describe('silent push payload', () => {
     delete process.env.NODE_ENV;
   });
 
-  function primeApnsSign() {
-    const fakeSignature = Buffer.alloc(72, 0);
-    fakeSignature[0] = 0x30; fakeSignature[1] = 70;
-    fakeSignature[2] = 0x02; fakeSignature[3] = 32;
-    fakeSignature[36] = 0x02; fakeSignature[37] = 32;
-    const mockSign = {
-      update: vi.fn().mockReturnThis(),
-      end: vi.fn().mockReturnThis(),
-      sign: vi.fn().mockReturnValue(fakeSignature),
-    };
-    vi.mocked(crypto.createSign).mockReturnValue(mockSign as unknown as ReturnType<typeof crypto.createSign>);
-  }
-
   it('sends content-available silent payload with background priority', async () => {
     process.env.APNS_TEAM_ID = 'team-id';
     process.env.APNS_KEY_ID = 'key-id';
@@ -650,19 +774,17 @@ describe('silent push payload', () => {
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
     primeApnsSign();
-    vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
     setupUpdateChain();
 
     await sendPushNotification('user-1', { silent: true, badge: 3 });
 
-    const fetchMock = vi.mocked(global.fetch);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, init] = fetchMock.mock.calls[0]!;
-    const headers = (init as RequestInit).headers as Record<string, string>;
+    const headers = h2.lastRequestHeaders as Record<string, string>;
     expect(headers['apns-push-type']).toBe('background');
     expect(headers['apns-priority']).toBe('5');
+    expect(headers[':method']).toBe('POST');
+    expect(headers[':path']).toBe('/3/device/push-token-abc');
 
-    const body = JSON.parse((init as RequestInit).body as string);
+    const body = JSON.parse(h2.lastRequestBody as string);
     expect(body.aps['content-available']).toBe(1);
     expect(body.aps.badge).toBe(3);
     expect(body.aps.alert).toBeUndefined();
@@ -676,13 +798,11 @@ describe('silent push payload', () => {
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
     primeApnsSign();
-    vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
     setupUpdateChain();
 
     await sendPushNotification('user-1', { silent: true });
 
-    const fetchMock = vi.mocked(global.fetch);
-    const body = JSON.parse(((fetchMock.mock.calls[0]![1]) as RequestInit).body as string);
+    const body = JSON.parse(h2.lastRequestBody as string);
     expect(body.aps['content-available']).toBe(1);
     expect('badge' in body.aps).toBe(false);
   });
@@ -695,14 +815,11 @@ describe('silent push payload', () => {
 
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'ios' })] as never);
     primeApnsSign();
-    vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);
     setupUpdateChain();
 
     await sendPushNotification('user-1', payload);
 
-    const fetchMock = vi.mocked(global.fetch);
-    const [url] = fetchMock.mock.calls[0]!;
-    expect(String(url)).toContain('api.push.apple.com');
-    expect(String(url)).not.toContain('sandbox');
+    expect(h2.connectedHosts).toContain('https://api.push.apple.com');
+    expect(h2.connectedHosts.some((host) => host.includes('sandbox'))).toBe(false);
   });
 });
