@@ -411,8 +411,19 @@ async function start() {
       if (shuttingDown) return;
       shuttingDown = true;
       console.log(`${signal} received, shutting down gracefully...`);
-      await drainAnalyticsInserts();
-      await queueManager.shutdown();
+      // Each step is guarded so a rejection can never skip process.exit(0) —
+      // otherwise the process would hang until the runtime SIGKILLs it (mirrors
+      // the per-step guards in packages/lib graceful-shutdown.ts).
+      try {
+        await drainAnalyticsInserts();
+      } catch (error) {
+        console.error('Analytics drain failed during shutdown:', error);
+      }
+      try {
+        await queueManager.shutdown();
+      } catch (error) {
+        console.error('Queue manager shutdown failed:', error);
+      }
       process.exit(0);
     };
     // Return the shutdown promise so callers/tests can await the full

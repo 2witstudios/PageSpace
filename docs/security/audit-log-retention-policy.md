@@ -25,16 +25,25 @@ deployment (including tenant deployments) without a code change. See
 
 With `CLICKHOUSE_ENABLED=true`, new rows for the 4 analytics tables
 (`api_metrics`, `system_logs`, `user_activities`, `error_logs`) land only in
-ClickHouse, where retention is enforced by the table TTLs above
-(`packages/lib/src/observability/clickhouse-ddl.ts`). In that mode
+ClickHouse. Retention for **three** of them (`api_metrics` 90d, `system_logs`
+30d, `user_activities` 180d) is enforced by the table TTLs above
+(`packages/lib/src/observability/clickhouse-ddl.ts`); `error_logs` carries **NO
+TTL by design** and is erased solely by GDPR mutations (see its row above and
+`observability/analytics-gdpr.ts`). In that mode
 `runMonitoringRetentionCleanup` is a no-op for those tables — the PG copies
 hold only frozen pre-cutover history until the deferred Phase 6 drop
 (`scripts/deferred-migrations/0890-phase6-drop-analytics-pg-tables.sql`).
 GDPR Art 15 export unions both stores and Art 17 erasure deletes from both
 stores while that transition window is open (`gdpr-export.ts`,
-`monitoring-purge.ts`). ClickHouse TTLs apply at insert time: rows older than
-the TTL horizon are silently dropped on insert, which constrains any future
-history backfill.
+`monitoring-purge.ts`).
+
+**TTL timing.** ClickHouse removes TTL-expired *stored* rows lazily, during
+background part merges (or an explicit `OPTIMIZE TABLE … FINAL`) — an aged row
+can stay queryable until its part is next merged, so the windows above are
+upper bounds on visibility, not exact. Separately, because `optimize_on_insert`
+is on by default, a row **inserted** with a timestamp already past the table's
+TTL horizon is dropped at insert time — which is what constrains any future
+PG→CH history backfill (backfilled rows older than the horizon silently vanish).
 
 ## Archival (`activity_logs` hot→cold tier)
 
