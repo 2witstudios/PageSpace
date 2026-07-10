@@ -112,13 +112,14 @@ describe.skipIf(!url)('zero-trust roles on the Admin PG', () => {
   });
 
   describe('admin_app (web identity)', () => {
-    it('should INSERT into security_audit_log (incl. chain_seq sequence default)', async () => {
+    it('should be DENIED INSERT on security_audit_log and USAGE on its chain_seq sequence (post-cutover the app writes ONLY the ingest queue — 0008)', async () => {
       await asRole('admin_app', async (client) => {
-        const { rowCount } = await client.query(
+        await expectDenied(
+          client,
           `INSERT INTO security_audit_log (id, event_type, previous_hash, event_hash)
            VALUES ('app-row-1', 'auth.login', 'hash-1', 'hash-2')`,
         );
-        expect(rowCount).toBe(1);
+        await expectDenied(client, `SELECT nextval('security_audit_log_chain_seq_seq')`);
       });
     });
 
@@ -447,12 +448,20 @@ describe.skipIf(!url)('zero-trust roles on the Admin PG', () => {
 
       await migrateAdminDb({ ADMIN_DATABASE_URL: url });
 
-      // Grants are back on the fresh tables.
+      // Grants are back on the fresh tables — and the 0008 revoke re-applied:
+      // admin_app never regains chain-table INSERT or the sequence.
       const { rows } = await pool.query(
         `SELECT has_table_privilege('admin_app', 'security_audit_log', 'INSERT') AS ins,
+                has_table_privilege('admin_app', 'security_audit_log', 'SELECT') AS sel,
                 has_table_privilege('admin_app', 'security_audit_log', 'DELETE') AS del`,
       );
-      expect(rows[0]).toEqual({ ins: true, del: false });
+      expect(rows[0]).toEqual({ ins: false, sel: true, del: false });
+
+      const seq = await pool.query(
+        `SELECT has_sequence_privilege('admin_app', 'security_audit_log_chain_seq_seq', 'USAGE') AS app_seq,
+                has_sequence_privilege('admin_chainer', 'security_audit_log_chain_seq_seq', 'USAGE') AS chainer_seq`,
+      );
+      expect(seq.rows[0]).toEqual({ app_seq: false, chainer_seq: true });
 
       // ...including the ingest queue's asymmetric matrix (0004).
       const ingest = await pool.query(

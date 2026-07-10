@@ -57,6 +57,13 @@
       "when": 1783677044891,
       "tag": "0007_anchor_select_for_verifier",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783689170084,
+      "tag": "0008_revoke_app_chain_insert",
+      "breakpoints": true
     }
   ]
 }

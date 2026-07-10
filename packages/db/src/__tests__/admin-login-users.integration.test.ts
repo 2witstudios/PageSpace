@@ -146,18 +146,32 @@ describe.skipIf(!url)('per-service Admin PG LOGIN users (db:provision:admin-user
   });
 
   describe('admin_app_user (web identity, connected over the wire)', () => {
-    it('should INSERT into security_audit_log and SELECT the chain head', async () => {
+    it('should be DENIED INSERT on security_audit_log + the chain_seq sequence (0008 — post-cutover the app writes ONLY the ingest queue) yet still SELECT the chain head', async () => {
       await asLoginUser('admin_app_user', PASSWORDS.ADMIN_APP_PASSWORD, async (pool) => {
-        const { rowCount } = await pool.query(
-          `INSERT INTO security_audit_log (id, event_type, previous_hash, event_hash)
-           VALUES ('login-app-row-1', 'auth.login', 'hash-1', 'hash-app-1')`,
-        );
-        expect(rowCount).toBe(1);
+        await expect(
+          pool.query(
+            `INSERT INTO security_audit_log (id, event_type, previous_hash, event_hash)
+             VALUES ('login-app-row-1', 'auth.login', 'hash-1', 'hash-app-1')`,
+          ),
+        ).rejects.toMatchObject({ code: '42501' });
+        await expect(
+          pool.query(`SELECT nextval('security_audit_log_chain_seq_seq')`),
+        ).rejects.toMatchObject({ code: '42501' });
 
         const head = await pool.query(
           'SELECT event_hash FROM security_audit_log ORDER BY chain_seq DESC LIMIT 1',
         );
-        expect(head.rows[0].event_hash).toBe('hash-app-1');
+        expect(head.rows[0].event_hash).toBe('hash-1');
+      });
+    });
+
+    it('should still INSERT into security_audit_ingest (the one write the app keeps)', async () => {
+      await asLoginUser('admin_app_user', PASSWORDS.ADMIN_APP_PASSWORD, async (pool) => {
+        const { rowCount } = await pool.query(
+          `INSERT INTO security_audit_ingest (id, event_type, emission_hash)
+           VALUES ('login-app-ingest-1', 'auth.login', 'em-login-app-1')`,
+        );
+        expect(rowCount).toBe(1);
       });
     });
 
@@ -189,7 +203,7 @@ describe.skipIf(!url)('per-service Admin PG LOGIN users (db:provision:admin-user
       await asLoginUser('admin_processor_user', PASSWORDS.ADMIN_PROCESSOR_PASSWORD, async (pool) => {
         const { rowCount } = await pool.query(
           `INSERT INTO security_audit_log (id, event_type, previous_hash, event_hash)
-           VALUES ('login-proc-row-1', 'auth.login', 'hash-app-1', 'hash-proc-1')`,
+           VALUES ('login-proc-row-1', 'auth.login', 'hash-1', 'hash-proc-1')`,
         );
         expect(rowCount).toBe(1);
         await expect(
