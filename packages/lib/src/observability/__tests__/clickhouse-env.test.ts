@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveClickHouseMode,
+  resolveClickHouseGdprMode,
   isClickHouseEnabledFlag,
   type ClickHouseEnv,
 } from '../clickhouse-env';
@@ -136,5 +137,48 @@ describe('resolveClickHouseMode — three-state gating (#890 Phase 3)', () => {
       });
       expect(decision.mode).toBe('misconfigured');
     });
+  });
+});
+
+describe('resolveClickHouseGdprMode — where subject data COULD live (#890 Phase 3 FIX, flag-rollback fail-open)', () => {
+  // GDPR export/erasure must consult CH whenever it is configured AT ALL —
+  // not only when the write-cutover flag is on. Toggling the flag off after
+  // rows landed in CH must not orphan them from Art 15/17.
+  it('given no CH env at all, should be unconfigured (CH never in play)', () => {
+    const decision = resolveClickHouseGdprMode({});
+    expect(decision.mode).toBe('unconfigured');
+  });
+
+  it('given full connection config with the flag OFF (rollback window), should be configured with the resolved config', () => {
+    const decision = resolveClickHouseGdprMode(enabledEnv({ CLICKHOUSE_ENABLED: undefined }));
+    expect(decision.mode).toBe('configured');
+    if (decision.mode === 'configured') {
+      expect(decision.config.url).toBe('https://my-cluster.clickhouse.cloud:8443');
+      expect(decision.config.database).toBe('pagespace_analytics');
+    }
+  });
+
+  it('given full connection config with the flag ON, should be configured', () => {
+    expect(resolveClickHouseGdprMode(enabledEnv()).mode).toBe('configured');
+  });
+
+  it('given the flag ON but connection config missing, should be misconfigured (fail-closed)', () => {
+    const decision = resolveClickHouseGdprMode({ CLICKHOUSE_ENABLED: 'true' });
+    expect(decision.mode).toBe('misconfigured');
+  });
+
+  it('given PARTIAL connection config with the flag OFF, should be misconfigured — CH may hold subject rows we cannot reach', () => {
+    const decision = resolveClickHouseGdprMode({
+      CLICKHOUSE_HOST: 'my-cluster.clickhouse.cloud',
+    });
+    expect(decision.mode).toBe('misconfigured');
+    expect(decision.reason).toMatch(/CLICKHOUSE_PASSWORD/);
+  });
+
+  it('given an invalid scheme with the flag OFF, should be misconfigured, never unconfigured', () => {
+    const decision = resolveClickHouseGdprMode(
+      enabledEnv({ CLICKHOUSE_ENABLED: undefined, CLICKHOUSE_HOST: 'tcp://localhost:9000' }),
+    );
+    expect(decision.mode).toBe('misconfigured');
   });
 });

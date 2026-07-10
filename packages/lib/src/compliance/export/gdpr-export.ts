@@ -14,7 +14,7 @@ import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { decryptUserRow } from '../../auth/user-repository';
-import { isClickHouseEnabled, getClickHouseClient } from '../../observability/clickhouse-client';
+import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
 import {
   collectChUserSystemLogs,
   collectChUserApiMetrics,
@@ -24,13 +24,15 @@ import {
 type DB = NodePgDatabase<Record<string, unknown>>;
 
 /**
- * Analytics collectors below export the UNION of both stores while the
- * CLICKHOUSE_ENABLED transition window is open: writers gate on the same
- * flag, so pre-cutover rows live only in main PG and post-cutover rows only
- * in ClickHouse — the union is complete with no overlap (#890 Phase 3).
- * CH read failures propagate: an Art 15 export must be complete or fail.
+ * Analytics collectors below export the UNION of both stores. The CH leg
+ * gates on CH being configured at ALL (getClickHouseGdprClient), not on the
+ * write-cutover flag — a flag rollback after rows landed in CH must not omit
+ * them from an Art 15 export (#890 Phase 3). No dedup is needed: at any
+ * moment the flag routes each new row to exactly one store, and ids are
+ * per-store cuid2s. CH read failures propagate (including the misconfigured
+ * throw): an Art 15 export must be complete or fail.
  */
-const clickHouseClientOrNull = () => (isClickHouseEnabled() ? getClickHouseClient() : null);
+const clickHouseClientOrNull = () => getClickHouseGdprClient();
 
 export interface UserProfileExport {
   id: string;

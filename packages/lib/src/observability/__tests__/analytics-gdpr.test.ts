@@ -7,9 +7,11 @@ import {
   parseUserSystemLogExportRows,
   parseUserApiMetricExportRows,
   parseUserErrorLogExportRows,
+  buildUserErrorIdsQuery,
   collectChUserSystemLogs,
   collectChUserApiMetrics,
   collectChUserErrorLogs,
+  collectChUserErrorIds,
   deleteChUserAnalytics,
 } from '../analytics-gdpr';
 
@@ -215,5 +217,40 @@ describe('CH shells — export reads and erasure deletes', () => {
       command: vi.fn().mockRejectedValue(new Error('mutation rejected')),
     };
     await expect(deleteChUserAnalytics(client as never, 'victim-1')).rejects.toThrow('mutation rejected');
+  });
+});
+
+describe('subject error ids — join keys for error_resolutions cleanup (#890 Phase 3 FIX)', () => {
+  // Erasure destroys the CH error rows, so their ids must be collected FIRST
+  // to delete the matching error_resolutions PG rows — afterwards the join
+  // key is gone and the resolutions become unreachable orphans.
+  it('given a userId, buildUserErrorIdsQuery should select only id with a bound param', () => {
+    const built = buildUserErrorIdsQuery("u'; DROP TABLE error_logs; --");
+    const sql = flat(built.query);
+    expect(sql).toMatch(/^SELECT id FROM error_logs WHERE user_id = \{userId: String\}$/);
+    expect(built.query).not.toContain('DROP TABLE error_logs; --');
+    expect(built.query_params).toEqual({ userId: "u'; DROP TABLE error_logs; --" });
+  });
+
+  it('given a client, collectChUserErrorIds should return the plain id list', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({
+        json: vi.fn().mockResolvedValue([{ id: 'e1' }, { id: 'e2' }]),
+      }),
+      command: vi.fn(),
+    };
+    const ids = await collectChUserErrorIds(client as never, 'u1');
+    expect(ids).toEqual(['e1', 'e2']);
+    expect(client.query).toHaveBeenCalledWith(
+      expect.objectContaining({ format: 'JSONEachRow', query_params: { userId: 'u1' } }),
+    );
+  });
+
+  it('given a read failure, collectChUserErrorIds should PROPAGATE (fail-closed like the rest of the GDPR path)', async () => {
+    const client = {
+      query: vi.fn().mockRejectedValue(new Error('CH unreachable')),
+      command: vi.fn(),
+    };
+    await expect(collectChUserErrorIds(client as never, 'u1')).rejects.toThrow('CH unreachable');
   });
 });

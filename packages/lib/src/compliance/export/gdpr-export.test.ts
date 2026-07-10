@@ -101,8 +101,7 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
   errorResolutions: mockTable('errorResolutions'),
 }));
 vi.mock('../../observability/clickhouse-client', () => ({
-  isClickHouseEnabled: vi.fn(() => false),
-  getClickHouseClient: vi.fn(() => null),
+  getClickHouseGdprClient: vi.fn(() => null),
 }));
 vi.mock('../../observability/analytics-gdpr', () => ({
   collectChUserSystemLogs: vi.fn(),
@@ -158,7 +157,7 @@ import {
   collectUserPersonalization,
   collectAllUserData,
 } from './gdpr-export';
-import { isClickHouseEnabled, getClickHouseClient } from '../../observability/clickhouse-client';
+import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
 import {
   collectChUserSystemLogs,
   collectChUserApiMetrics,
@@ -490,20 +489,34 @@ describe('collectUserErrorLogs', () => {
   });
 });
 
-describe('analytics collectors with CLICKHOUSE_ENABLED (union of both stores — #890 Phase 3 leaf 4)', () => {
+describe('analytics collectors with CH configured (union of both stores — #890 Phase 3 leaf 4 + FIX)', () => {
   const chClient = { query: vi.fn() };
 
   beforeEach(() => {
-    vi.mocked(isClickHouseEnabled).mockReturnValue(true);
-    vi.mocked(getClickHouseClient).mockReturnValue(chClient as never);
+    // getClickHouseGdprClient returns a client whenever CH is configured at
+    // ALL — including the flag-rollback window (CLICKHOUSE_ENABLED toggled
+    // off after rows landed in CH). The export union must not depend on the
+    // write-cutover flag; the flag→client logic is unit-tested in
+    // clickhouse-client/clickhouse-env.
+    vi.mocked(getClickHouseGdprClient).mockReturnValue(chClient as never);
     vi.mocked(collectChUserSystemLogs).mockResolvedValue([]);
     vi.mocked(collectChUserApiMetrics).mockResolvedValue([]);
     vi.mocked(collectChUserErrorLogs).mockResolvedValue([]);
   });
 
   afterEach(() => {
-    vi.mocked(isClickHouseEnabled).mockReturnValue(false);
-    vi.mocked(getClickHouseClient).mockReturnValue(null);
+    vi.mocked(getClickHouseGdprClient).mockReturnValue(null);
+  });
+
+  it('given_aMisconfiguredCh_exportPropagates_theGdprClientAccessorThrow', async () => {
+    vi.mocked(getClickHouseGdprClient).mockImplementation(() => {
+      throw new Error('ClickHouse misconfigured: GDPR client unavailable');
+    });
+    const db = createChainDb([[]]);
+
+    await expect(collectUserSystemLogs(db as never, 'user-1')).rejects.toThrow(
+      'ClickHouse misconfigured',
+    );
   });
 
   it('given_rowsInBothStores_systemLogsExportReturnsTheUnion', async () => {

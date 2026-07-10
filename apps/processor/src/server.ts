@@ -17,6 +17,8 @@ import { authenticateService, requireScope } from './middleware/auth';
 import { requireResourceBinding, requirePageBinding } from './middleware/resource-binding';
 import { validateCorsOrigin } from './utils/cors-validation';
 import { loadSiemConfig, type AuditLogSource } from './services/siem-adapter';
+import { probeClickHouseStartup } from '@pagespace/lib/observability/clickhouse-client';
+import { drainAnalyticsInserts } from '@pagespace/lib/observability/analytics-inserts';
 import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from './services/siem-sources';
 import { buildSiemHealth, type SiemHealthResponse } from './services/siem-health-builder';
 import { readCursorSnapshots } from './workers/siem-cursor-reader';
@@ -368,6 +370,13 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 // Initialize and start server
 async function start() {
   try {
+    // Fail-fast: a half-configured ClickHouse deploy (flag on, creds missing)
+    // must crash here — the insert adapters absorb per-row errors by design,
+    // so a running process would silently drop all 4 analytics tables'
+    // telemetry (#890 Phase 3). Throws into the catch below → process.exit(1).
+    const chMode = probeClickHouseStartup();
+    console.log(`✓ ClickHouse analytics tier: ${chMode.mode}`);
+
     // Initialize content store
     await contentStore.initialize();
     console.log('✓ Content store initialized');
@@ -394,11 +403,23 @@ async function start() {
       }
     }, 60 * 60 * 1000);
 
-    // Graceful shutdown
-    process.on('SIGTERM', async () => {
-      console.log('SIGTERM received, shutting down gracefully...');
+    // Graceful shutdown: drain the CH insert buffers first (workers write
+    // analytics rows through them — up to 500 rows/table sit in memory),
+    // then stop the queue manager.
+    let shuttingDown = false;
+    const shutdown = async (signal: string) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`${signal} received, shutting down gracefully...`);
+      await drainAnalyticsInserts();
       await queueManager.shutdown();
       process.exit(0);
+    };
+    process.on('SIGTERM', () => {
+      void shutdown('SIGTERM');
+    });
+    process.on('SIGINT', () => {
+      void shutdown('SIGINT');
     });
 
   } catch (error) {

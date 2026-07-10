@@ -3,6 +3,7 @@ import {
   createAnalyticsInserters,
   type AnalyticsInsertClient,
 } from '../analytics-inserts';
+import { ClickHouseMisconfiguredError } from '../clickhouse-env';
 
 const assignedDeps = {
   createId: () => 'fixed-id',
@@ -132,6 +133,27 @@ describe('createAnalyticsInserters — pure (row) → void adapters over the buf
       const allLogged = logError.mock.calls.flat().join(' ');
       expect(allLogged).toContain('error_logs');
       expect(allLogged).not.toContain('SECRET-ERROR-DETAIL');
+    });
+
+    it('given getClient throws ClickHouseMisconfiguredError, the log message should name the misconfiguration — NOT read as a transient drop (#890 Phase 3 FIX)', () => {
+      const logError = vi.fn();
+      const inserters = createAnalyticsInserters({
+        getClient: () => {
+          throw new ClickHouseMisconfiguredError(
+            "CLICKHOUSE_ENABLED='true' but CLICKHOUSE_PASSWORD is not set.",
+          );
+        },
+        logError,
+        ...assignedDeps,
+      });
+
+      inserters.insertSystemLog({ level: 'error', message: 'SECRET-PAYLOAD' });
+
+      expect(logError).toHaveBeenCalledTimes(1);
+      const logged = logError.mock.calls[0][0] as string;
+      expect(logged).toMatch(/MISCONFIGURED/);
+      expect(logged).toContain('system_logs');
+      expect(logged).not.toContain('SECRET-PAYLOAD');
     });
 
     it('given unserializable metadata (circular), the adapter should drop the row without throwing', () => {

@@ -42,6 +42,31 @@ describe('deferred analytics drop migration (#890 Phase 3 leaf 4)', () => {
     expect(guardIndex).toBeLessThan(firstDropIndex);
   });
 
+  it('given psql -f autocommit semantics, the guard and ALL drops must live in ONE DO block — separate statements would run the drops anyway (#890 Phase 3 FIX)', () => {
+    // psql's default ON_ERROR_STOP=off reports a failed statement then
+    // CONTINUES; a guard that is its own statement blocks nothing. Inside a
+    // single DO block, RAISE EXCEPTION makes the drops genuinely unreachable.
+    const doStart = sql.indexOf('DO $$');
+    const doEnd = sql.indexOf('$$;', doStart);
+    expect(doStart).toBeGreaterThan(-1);
+    expect(doEnd).toBeGreaterThan(doStart);
+
+    const guardIndex = sql.indexOf('RAISE EXCEPTION');
+    expect(guardIndex).toBeGreaterThan(doStart);
+    expect(guardIndex).toBeLessThan(doEnd);
+
+    let dropIndex = sql.indexOf('DROP TABLE');
+    expect(dropIndex).toBeGreaterThan(-1);
+    while (dropIndex !== -1) {
+      expect(dropIndex, 'every DROP must be inside the guarded DO block').toBeGreaterThan(guardIndex);
+      expect(dropIndex, 'every DROP must be inside the guarded DO block').toBeLessThan(doEnd);
+      dropIndex = sql.indexOf('DROP TABLE', dropIndex + 1);
+    }
+
+    // Exactly one DO block — a second one would reintroduce statement splits.
+    expect(sql.indexOf('DO $$', doStart + 1)).toBe(-1);
+  });
+
   it('given the cutover set, should drop exactly the 4 analytics tables', () => {
     const drops = sql.match(/DROP TABLE IF EXISTS "(\w+)"/g) ?? [];
     const dropped = drops.map((d) => /"(\w+)"/.exec(d)?.[1]).sort();

@@ -18,6 +18,7 @@ import {
   type ClickHouseBuffer,
 } from './clickhouse-buffer';
 import { getClickHouseClient } from './clickhouse-client';
+import { ClickHouseMisconfiguredError } from './clickhouse-env';
 import {
   ANALYTICS_TABLES,
   mapApiMetricToRow,
@@ -107,7 +108,14 @@ export function createAnalyticsInserters(deps: AnalyticsInsertersDeps): Analytic
       buffer.insert(buildRow());
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      logError(`analytics-inserts: dropped a "${table}" row: ${message}`);
+      // A misconfigured deploy is not a transient drop — the startup probe
+      // (probeClickHouseStartup at each composition root) should have crashed
+      // this process; name the state so it can never read as routine noise.
+      logError(
+        error instanceof ClickHouseMisconfiguredError
+          ? `analytics-inserts: MISCONFIGURED ClickHouse — dropping "${table}" rows; the startup probe should have crashed this process: ${message}`
+          : `analytics-inserts: dropped a "${table}" row: ${message}`,
+      );
     }
   };
 

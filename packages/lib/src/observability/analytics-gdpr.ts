@@ -92,6 +92,20 @@ export const buildUserErasureDeletes = (userId: string): ChQuery[] =>
     query_params: { userId },
   }));
 
+/**
+ * The subject's error ids — the join keys into the error_resolutions PG
+ * mini-table. Erasure must collect these BEFORE deleting the CH error rows:
+ * the delete destroys the only link, leaving the resolution notes as
+ * unreachable orphans (#890 Phase 3 FIX).
+ */
+export const buildUserErrorIdsQuery = (userId: string): ChQuery => ({
+  query: `SELECT id FROM ${ANALYTICS_TABLES.errorLogs} WHERE user_id = {userId: String}`,
+  query_params: { userId },
+});
+
+export const parseUserErrorIdRows = (rows: unknown[]): string[] =>
+  (rows as Array<{ id: string }>).map((r) => r.id);
+
 // ── Pure core: parsers ───────────────────────────────────────────────────────
 
 export const parseUserSystemLogExportRows = (rows: unknown[]): ChUserSystemLogRow[] =>
@@ -170,6 +184,12 @@ export const collectChUserErrorLogs = async (
   userId: string,
 ): Promise<ChUserErrorLogRow[]> =>
   parseUserErrorLogExportRows(await selectRows(client, buildUserErrorLogsExportQuery(userId)));
+
+export const collectChUserErrorIds = async (
+  client: ClickHouseClient,
+  userId: string,
+): Promise<string[]> =>
+  parseUserErrorIdRows(await selectRows(client, buildUserErrorIdsQuery(userId)));
 
 /** Art 17 erasure across all 4 analytics tables. Sequential and fail-closed. */
 export const deleteChUserAnalytics = async (

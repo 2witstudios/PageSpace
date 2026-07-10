@@ -39,17 +39,22 @@
 -- untouchable by design: infinite retention, create-ahead-only partitions,
 -- no drop path exists (Art 17(3)(b); drizzle-admin/0002).
 
--- Guard: makes an accidental execution fail loudly. Remove ONLY as part of
--- the Phase 6 task above, with the preconditions checked off.
+-- Guard: makes an accidental execution fail loudly. The DROPs live INSIDE
+-- this single DO block, after the RAISE — deliberately. psql's default
+-- ON_ERROR_STOP=off reports a failed statement then CONTINUES, so a guard
+-- that is its own statement would not stop `psql -f` from executing DROPs
+-- that follow it. One statement = the RAISE genuinely aborts the drops.
+-- Remove ONLY the RAISE line as part of the Phase 6 task above, with the
+-- preconditions checked off.
 DO $$
 BEGIN
   RAISE EXCEPTION '#890: deferred to Phase 6 task kws85p45pvjnivoz3uxs83yp — pre-cutover analytics history is not backfilled to ClickHouse; see header before removing this guard';
+
+  -- Indexes, sequences, and FK constraints owned by these tables drop with
+  -- them. No inbound FKs exist (telemetry tables; verified at authoring time).
+  DROP TABLE IF EXISTS "api_metrics";
+  DROP TABLE IF EXISTS "system_logs";
+  DROP TABLE IF EXISTS "user_activities";
+  DROP TABLE IF EXISTS "error_logs";
 END
 $$;
-
--- Indexes, sequences, and FK constraints owned by these tables drop with them.
--- No inbound FKs exist (telemetry tables; verified at authoring time).
-DROP TABLE IF EXISTS "api_metrics";
-DROP TABLE IF EXISTS "system_logs";
-DROP TABLE IF EXISTS "user_activities";
-DROP TABLE IF EXISTS "error_logs";

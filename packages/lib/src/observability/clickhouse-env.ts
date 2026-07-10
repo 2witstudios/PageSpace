@@ -37,6 +37,29 @@ export type ClickHouseModeDecision =
   | { mode: 'enabled'; reason: string; config: ClickHouseClientConfig }
   | { mode: 'misconfigured'; reason: string };
 
+/**
+ * Typed misconfiguration failure, so callers (the insert adapters, startup
+ * probes) can distinguish "this deploy is half-configured" from a transient
+ * flush/network failure. Never absorbed as routine noise.
+ */
+export class ClickHouseMisconfiguredError extends Error {
+  constructor(reason: string) {
+    super(`ClickHouse misconfigured: ${reason}`);
+    this.name = 'ClickHouseMisconfiguredError';
+  }
+}
+
+/**
+ * GDPR availability: where subject analytics rows COULD live, independent of
+ * the write-cutover flag. Export/erasure must reach CH whenever connection
+ * config exists — a flag rollback after rows landed in CH must not orphan
+ * them from Art 15/17 (#890 Phase 3 FIX).
+ */
+export type ClickHouseGdprModeDecision =
+  | { mode: 'unconfigured'; reason: string }
+  | { mode: 'configured'; reason: string; config: ClickHouseClientConfig }
+  | { mode: 'misconfigured'; reason: string };
+
 // Fail-closed: only the exact string 'true' enables. 'TRUE', '1', ' true ',
 // '' etc. do not — mirrors CODE_EXECUTION_ENABLED and ADMIN_DB_BREAK_GLASS.
 export const isClickHouseEnabledFlag = (flag: string | undefined): boolean =>
@@ -61,15 +84,11 @@ const resolveUrl = (host: string): { url: string } | { error: string } => {
 const isSet = (value: string | undefined): value is string =>
   value !== undefined && value !== '';
 
-export const resolveClickHouseMode = (env: ClickHouseEnv): ClickHouseModeDecision => {
-  if (!isClickHouseEnabledFlag(env.CLICKHOUSE_ENABLED)) {
-    return {
-      mode: 'disabled',
-      reason:
-        "CLICKHOUSE_ENABLED is not 'true' — the analytics tier is off; the 4 analytics tables keep writing to the main PG",
-    };
-  }
+type ConnectionConfigResolution =
+  | { ok: true; config: ClickHouseClientConfig; sourceName: 'CLICKHOUSE_URL' | 'CLICKHOUSE_HOST' }
+  | { ok: false; reason: string };
 
+const resolveConnectionConfig = (env: ClickHouseEnv): ConnectionConfigResolution => {
   const username = env.CLICKHOUSE_USER;
   const password = env.CLICKHOUSE_PASSWORD;
   const database = env.CLICKHOUSE_DATABASE;
@@ -89,8 +108,8 @@ export const resolveClickHouseMode = (env: ClickHouseEnv): ClickHouseModeDecisio
       !isSet(database) && 'CLICKHOUSE_DATABASE',
     ].filter((name): name is string => typeof name === 'string');
     return {
-      mode: 'misconfigured',
-      reason: `CLICKHOUSE_ENABLED='true' but ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set. Set the missing config or turn the flag off.`,
+      ok: false,
+      reason: `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set.`,
     };
   }
 
@@ -101,15 +120,73 @@ export const resolveClickHouseMode = (env: ClickHouseEnv): ClickHouseModeDecisio
         : { error: 'must be an http:// or https:// URL' }
       : resolveUrl(source.value);
   if ('error' in resolved) {
+    return { ok: false, reason: `${source.name} ${resolved.error}.` };
+  }
+
+  return {
+    ok: true,
+    sourceName: source.name,
+    config: { url: resolved.url, username, password, database },
+  };
+};
+
+export const resolveClickHouseMode = (env: ClickHouseEnv): ClickHouseModeDecision => {
+  if (!isClickHouseEnabledFlag(env.CLICKHOUSE_ENABLED)) {
+    return {
+      mode: 'disabled',
+      reason:
+        "CLICKHOUSE_ENABLED is not 'true' — the analytics tier is off; the 4 analytics tables keep writing to the main PG",
+    };
+  }
+
+  const resolved = resolveConnectionConfig(env);
+  if (!resolved.ok) {
     return {
       mode: 'misconfigured',
-      reason: `${source.name} ${resolved.error}.`,
+      reason: `CLICKHOUSE_ENABLED='true' but ${resolved.reason} Set the missing config or turn the flag off.`,
     };
   }
 
   return {
     mode: 'enabled',
-    reason: `CLICKHOUSE_ENABLED='true' with connection config from ${source.name}`,
-    config: { url: resolved.url, username, password, database },
+    reason: `CLICKHOUSE_ENABLED='true' with connection config from ${resolved.sourceName}`,
+    config: resolved.config,
+  };
+};
+
+export const resolveClickHouseGdprMode = (env: ClickHouseEnv): ClickHouseGdprModeDecision => {
+  const anyConnectionVarSet = [
+    env.CLICKHOUSE_URL,
+    env.CLICKHOUSE_HOST,
+    env.CLICKHOUSE_USER,
+    env.CLICKHOUSE_PASSWORD,
+    env.CLICKHOUSE_DATABASE,
+  ].some(isSet);
+  const flagOn = isClickHouseEnabledFlag(env.CLICKHOUSE_ENABLED);
+
+  if (!anyConnectionVarSet && !flagOn) {
+    return {
+      mode: 'unconfigured',
+      reason:
+        'no ClickHouse connection config is set — subject analytics rows can only live in the main PG',
+    };
+  }
+
+  // Any CH env at all means CH is presumed in play; failing to build a client
+  // from it is misconfiguration, never a silent skip (fail-closed for GDPR).
+  const resolved = resolveConnectionConfig(env);
+  if (!resolved.ok) {
+    return {
+      mode: 'misconfigured',
+      reason: `ClickHouse is partially configured but ${resolved.reason} GDPR export/erasure cannot skip a store that may hold subject rows.`,
+    };
+  }
+
+  return {
+    mode: 'configured',
+    reason: flagOn
+      ? `connection config from ${resolved.sourceName}`
+      : `connection config from ${resolved.sourceName} (CLICKHOUSE_ENABLED is off — rollback window; CH may still hold subject rows)`,
+    config: resolved.config,
   };
 };

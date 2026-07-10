@@ -32,6 +32,7 @@ import { createResendSuppressionClient } from '@pagespace/lib/compliance/erasure
 import { eraseAiProviderData } from '@pagespace/lib/compliance/erasure/ai-provider-erasure';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
 import { logActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { isClickHouseAnalyticsInPlay } from '@pagespace/lib/observability/clickhouse-client';
 import { isOnPrem, isTenantMode } from '@pagespace/lib/deployment-mode';
 import type { AccountErasureJobData } from '../types';
 import { deleteUserAvatars } from '../api/avatar';
@@ -186,7 +187,13 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
 
   // Stripe lives in the web app (its SDK isn't bundled here); the web records
   // that step on the DSR row at enqueue time, so the durable job skips it.
-  const steps: RunnableStep[] = buildErasurePlan({ deploymentMode: mode })
+  const steps: RunnableStep[] = buildErasurePlan({
+    deploymentMode: mode,
+    // With CH configured at all (flag-independent), purge-monitoring becomes
+    // fatal: a CH purge failure must fail the run for retry, not complete it
+    // with the subject's error rows retained forever (error_logs has no TTL).
+    clickHouseInPlay: isClickHouseAnalyticsInPlay(),
+  })
     .filter((step) => step.id !== 'stripe-customer')
     .map((step) => ({
       id: step.id,
