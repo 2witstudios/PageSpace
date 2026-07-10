@@ -87,6 +87,14 @@ describe('generate-tenant-env.sh', () => {
     it('given the output, DEPLOYMENT_MODE should be tenant', () => {
       expect(env.get('DEPLOYMENT_MODE')).toBe('tenant');
     });
+
+    it('given the output, ADMIN_POSTGRES_DB should be pagespace_admin', () => {
+      expect(env.get('ADMIN_POSTGRES_DB')).toBe('pagespace_admin');
+    });
+
+    it('given the output, ADMIN_POSTGRES_USER should be pagespace', () => {
+      expect(env.get('ADMIN_POSTGRES_USER')).toBe('pagespace');
+    });
   });
 
   describe('secret generation', () => {
@@ -107,11 +115,18 @@ describe('generate-tenant-env.sh', () => {
       expect(val).toMatch(/^[a-zA-Z0-9]+$/);
     });
 
+    it('given ADMIN_POSTGRES_PASSWORD, should be at least 24 alphanumeric characters', () => {
+      const val = env.get('ADMIN_POSTGRES_PASSWORD') ?? '';
+      expect(val.length).toBeGreaterThanOrEqual(24);
+      expect(val).toMatch(/^[a-zA-Z0-9]+$/);
+    });
+
     it('given all secrets, should all be unique (no reuse)', () => {
       const secrets = [
         env.get('ENCRYPTION_KEY'),
         env.get('CSRF_SECRET'),
         env.get('POSTGRES_PASSWORD'),
+        env.get('ADMIN_POSTGRES_PASSWORD'),
         env.get('CRON_SECRET'),
         env.get('REALTIME_BROADCAST_SECRET'),
       ];

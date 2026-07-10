@@ -49,6 +49,7 @@ describe('Tenant env template', () => {
     'ENCRYPTION_KEY',
     'CSRF_SECRET',
     'POSTGRES_PASSWORD',
+    'ADMIN_POSTGRES_PASSWORD',
     'CRON_SECRET',
     'REALTIME_BROADCAST_SECRET',
   ];

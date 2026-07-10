@@ -44,7 +44,7 @@ describe('Tenant docker-compose configuration', () => {
 
   describe('services', () => {
     const requiredServices = [
-      'postgres', 'migrate',
+      'postgres', 'postgres-admin', 'migrate',
       'web', 'processor', 'realtime', 'cron',
     ];
 
@@ -95,6 +95,10 @@ describe('Tenant docker-compose configuration', () => {
       expect(compose.services.postgres.image).toBe('postgres:17.5-alpine');
     });
 
+    it('given the postgres-admin service, should pin the SAME image as the main postgres service', () => {
+      expect(compose.services['postgres-admin'].image).toBe(compose.services.postgres.image);
+    });
+
     it('given the raw YAML, should not contain any redis image references', () => {
       expect(getRawYaml()).not.toMatch(/redis:/i);
     });
@@ -103,6 +107,7 @@ describe('Tenant docker-compose configuration', () => {
   describe('resource limits', () => {
     const limits: [string, string][] = [
       ['postgres', '200M'],
+      ['postgres-admin', '200M'],
       ['web', '768M'],
       ['processor', '1280M'],
       ['realtime', '256M'],
@@ -122,6 +127,17 @@ describe('Tenant docker-compose configuration', () => {
     it('given the migrate service, should depend on postgres being healthy', () => {
       const deps = compose.services.migrate.depends_on;
       expect(deps?.postgres?.condition).toBe('service_healthy');
+    });
+
+    it('given the migrate service, should depend on postgres-admin being healthy', () => {
+      const deps = compose.services.migrate.depends_on;
+      expect(deps?.['postgres-admin']?.condition).toBe('service_healthy');
+    });
+
+    it('given the migrate service, should run db:migrate:admin after db:migrate', () => {
+      const command = String(compose.services.migrate.command);
+      expect(command).toContain('db:migrate:admin');
+      expect(command.indexOf('db:migrate')).toBeLessThan(command.indexOf('db:migrate:admin'));
     });
 
     it('given the web service, should depend on migrate completed and processor healthy only', () => {
@@ -231,7 +247,7 @@ describe('Tenant docker-compose configuration', () => {
       }
     });
 
-    const internalOnly = ['postgres', 'migrate', 'processor', 'cron'];
+    const internalOnly = ['postgres', 'postgres-admin', 'migrate', 'processor', 'cron'];
 
     it.each(internalOnly)(
       'given the %s service, should only join the internal network',
@@ -301,7 +317,7 @@ describe('Tenant docker-compose configuration', () => {
 
     it('given the raw YAML, all secret references should use variable interpolation', () => {
       const raw = getRawYaml();
-      const secretVars = ['ENCRYPTION_KEY', 'CSRF_SECRET', 'POSTGRES_PASSWORD'];
+      const secretVars = ['ENCRYPTION_KEY', 'CSRF_SECRET', 'POSTGRES_PASSWORD', 'ADMIN_POSTGRES_PASSWORD'];
       for (const v of secretVars) {
         const lines = raw.split('\n').filter(l => !l.trim().startsWith('#'));
         for (const line of lines) {
@@ -355,6 +371,17 @@ describe('Tenant docker-compose configuration', () => {
       expect(dbUrl).toContain('${POSTGRES_PASSWORD');
     });
 
+    const adminDbServices = ['web', 'processor', 'realtime', 'migrate'];
+
+    it.each(adminDbServices)(
+      'given the %s service, ADMIN_DATABASE_URL should reference internal postgres-admin with interpolated credentials',
+      (svc) => {
+        const url = getEnv(svc).ADMIN_DATABASE_URL;
+        expect(url).toContain('@postgres-admin:');
+        expect(url).toContain('${ADMIN_POSTGRES_PASSWORD');
+      },
+    );
+
     const redisEnvVars = ['REDIS_URL', 'REDIS_SESSION_URL', 'REDIS_RATE_LIMIT_URL', 'REDIS_PASSWORD'];
     const jwtEnvVars = ['JWT_SECRET', 'JWT_ISSUER', 'JWT_AUDIENCE'];
     const servicesWithEnv = Object.keys(compose.services).filter(
@@ -383,6 +410,12 @@ describe('Tenant docker-compose configuration', () => {
       expect(testStr).toContain('pg_isready');
     });
 
+    it('given the postgres-admin service, should use pg_isready', () => {
+      const test = compose.services['postgres-admin'].healthcheck?.test;
+      const testStr = Array.isArray(test) ? test.join(' ') : test;
+      expect(testStr).toContain('pg_isready');
+    });
+
     it('given the processor service, should check HTTP health on port 3003', () => {
       const test = compose.services.processor.healthcheck?.test;
       const testStr = Array.isArray(test) ? test.join(' ') : test;
@@ -393,6 +426,7 @@ describe('Tenant docker-compose configuration', () => {
   describe('volumes', () => {
     const requiredVolumes = [
       'postgres_data',
+      'postgres_admin_data',
       'file_storage',
       'cache_storage',
     ];

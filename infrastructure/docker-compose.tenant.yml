@@ -31,17 +31,50 @@ services:
     networks:
       - internal
 
+  # Trust plane: dedicated Admin Postgres for the tamper-evident security audit
+  # chain, isolated from the app database in every deployment mode (#890).
+  postgres-admin:
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    volumes:
+      - postgres_admin_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${ADMIN_POSTGRES_DB:-pagespace_admin}
+      POSTGRES_USER: ${ADMIN_POSTGRES_USER:-pagespace}
+      POSTGRES_PASSWORD: ${ADMIN_POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ADMIN_POSTGRES_USER:-pagespace} -d ${ADMIN_POSTGRES_DB:-pagespace_admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+
   migrate:
     image: ghcr.io/2witstudios/pagespace-migrate:${IMAGE_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-admin:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
+      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
         bun run db:migrate &&
+        echo 'Starting admin database migrations...' &&
+        bun run db:migrate:admin &&
         echo 'Migrations complete'
       "
     networks:
@@ -80,6 +113,7 @@ services:
       - cache_storage:/data/cache
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
+      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
       FILE_STORAGE_PATH: /data/files
       CACHE_PATH: /data/cache
       PORT: "3003"
@@ -135,6 +169,7 @@ services:
       DEPLOYMENT_MODE: tenant
       NEXT_PUBLIC_DEPLOYMENT_MODE: tenant
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
+      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
       FILE_STORAGE_PATH: /app/storage
       PROCESSOR_URL: http://processor:3003
       CRON_SECRET: ${CRON_SECRET}
@@ -183,6 +218,7 @@ services:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
+      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
       PORT: "3001"
       CORS_ORIGIN: ${CORS_ORIGIN}
       REALTIME_BROADCAST_SECRET: ${REALTIME_BROADCAST_SECRET}
@@ -236,5 +272,6 @@ networks:
 
 volumes:
   postgres_data:
+  postgres_admin_data:
   file_storage:
   cache_storage:

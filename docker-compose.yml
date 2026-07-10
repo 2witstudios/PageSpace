@@ -21,6 +21,30 @@ services:
         limits:
           memory: 200M
 
+  # Trust plane: dedicated Admin Postgres for the tamper-evident security audit
+  # chain, isolated from the app database in every deployment mode (#890).
+  postgres-admin:
+    image: postgres:17.5-alpine
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_admin_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=pagespace_admin
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d pagespace_admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+
   migrate:
     build:
       context: .
@@ -28,13 +52,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-admin:
+        condition: service_healthy
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - ADMIN_DATABASE_URL=postgresql://user:password@postgres-admin:5432/pagespace_admin
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
         bun run db:migrate &&
+        echo 'Starting admin database migrations...' &&
+        bun run db:migrate:admin &&
         echo 'Migrations complete, starting services...'
       "
     healthcheck:
@@ -75,6 +104,7 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - ADMIN_DATABASE_URL=postgresql://user:password@postgres-admin:5432/pagespace_admin
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
       - PROCESSOR_URL=http://processor:3003
       - PORT=3000
@@ -99,6 +129,7 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - ADMIN_DATABASE_URL=postgresql://user:password@postgres-admin:5432/pagespace_admin
       - ADMIN_URL=${ADMIN_URL:-http://localhost:3005}
       - NEXT_PUBLIC_WEB_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       - WEB_APP_INTERNAL_URL=http://web:3000
@@ -134,6 +165,7 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - ADMIN_DATABASE_URL=postgresql://user:password@postgres-admin:5432/pagespace_admin
       - PORT=3003
       - NODE_OPTIONS=--max-old-space-size=1024
       - ENABLE_OCR=${ENABLE_OCR:-false}
@@ -179,6 +211,7 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - ADMIN_DATABASE_URL=postgresql://user:password@postgres-admin:5432/pagespace_admin
       - PORT=${REALTIME_PORT}
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
     deploy:
@@ -272,4 +305,5 @@ networks:
 
 volumes:
   postgres_data:
+  postgres_admin_data:
   cron_logs:
