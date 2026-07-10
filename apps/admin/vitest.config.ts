@@ -29,6 +29,7 @@ export default defineConfig({
       { find: '@pagespace/db/schema/subscriptions', replacement: path.resolve(repoRoot, 'packages/db/src/schema/subscriptions.ts') },
       { find: '@pagespace/db/schema/contact', replacement: path.resolve(repoRoot, 'packages/db/src/schema/contact.ts') },
       { find: '@pagespace/db/schema/members', replacement: path.resolve(repoRoot, 'packages/db/src/schema/members.ts') },
+      { find: /^@pagespace\/db\/(.+)$/, replacement: path.resolve(repoRoot, 'packages/db/src/$1') },
       { find: '@pagespace/db', replacement: path.resolve(repoRoot, 'packages/db/src/index.ts') },
       { find: '@pagespace/lib/auth/session-service', replacement: path.resolve(repoRoot, 'packages/lib/src/auth/session-service.ts') },
       { find: '@pagespace/lib/auth/magic-link-service', replacement: path.resolve(repoRoot, 'packages/lib/src/auth/magic-link-service.ts') },

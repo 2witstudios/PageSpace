@@ -117,6 +117,21 @@
       "import": "./dist/observability/analytics-inserts.js",
       "require": "./dist/observability/analytics-inserts.js"
     },
+    "./observability/analytics-read-core": {
+      "types": "./dist/observability/analytics-read-core.d.ts",
+      "import": "./dist/observability/analytics-read-core.js",
+      "require": "./dist/observability/analytics-read-core.js"
+    },
+    "./observability/analytics-reads": {
+      "types": "./dist/observability/analytics-reads.d.ts",
+      "import": "./dist/observability/analytics-reads.js",
+      "require": "./dist/observability/analytics-reads.js"
+    },
+    "./observability/error-resolutions": {
+      "types": "./dist/observability/error-resolutions.d.ts",
+      "import": "./dist/observability/error-resolutions.js",
+      "require": "./dist/observability/error-resolutions.js"
+    },
     "./billing/credit-pricing": {
       "types": "./dist/billing/credit-pricing.d.ts",
       "import": "./dist/billing/credit-pricing.js",
