@@ -6,28 +6,40 @@ import type {
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 
 /**
- * Pick the live interactive shell to reattach to from a Sprite's exec sessions.
- * A terminal owns exactly one TTY shell per Sprite (one page = one Sprite), so
- * match on `tty` rather than on `isActive` — the API's `is_active` semantics
- * (process-alive vs client-attached) are undocumented, and a detached-but-running
- * shell may report `is_active: false`. `isActive` is used only as a tiebreaker.
+ * The Sprite's live shell (tty) sessions, active ones first — the single source
+ * of the "which shell" ordering that both `pickShellSession` (takes the first)
+ * and `liveShellSessionIds` (maps to ids) build on, so the tiebreaker can never
+ * silently diverge between them. Match on `tty` rather than `isActive` — the
+ * API's `is_active` semantics (process-alive vs client-attached) are
+ * undocumented and a detached-but-running shell may report `is_active: false`;
+ * `isActive` is only the ordering tiebreaker.
  */
-export function pickShellSession(sessions: SpriteSessionInfo[]): SpriteSessionInfo | undefined {
-  const shells = sessions.filter((s) => s.tty);
-  return shells.find((s) => s.isActive) ?? shells[0];
-}
-
-/**
- * Live shell (tty) session ids ordered so index 0 mirrors `pickShellSession`'s
- * pick (active first, else the first shell). The full ordered list lets
- * `planReconnect` test whether a persisted id is still among the live sessions
- * while also naming a fallback to attach to when the known id is unset.
- */
-export function liveShellSessionIds(sessions: SpriteSessionInfo[]): string[] {
+function orderedShellSessions(sessions: SpriteSessionInfo[]): SpriteSessionInfo[] {
   const shells = sessions.filter((s) => s.tty);
   const active = shells.filter((s) => s.isActive);
   const inactive = shells.filter((s) => !s.isActive);
-  return [...active, ...inactive].map((s) => s.id);
+  return [...active, ...inactive];
+}
+
+/**
+ * Pick the live interactive shell to reattach to from a Sprite's exec sessions
+ * (active first, else the first shell). One page = one Sprite, but a Sprite can
+ * host several tty sessions across concurrent terminals — see
+ * `agent-terminal-handler`'s module doc — so this "any live shell" pick is only
+ * safe when the caller has no better id; prefer a persisted/diffed id.
+ */
+export function pickShellSession(sessions: SpriteSessionInfo[]): SpriteSessionInfo | undefined {
+  return orderedShellSessions(sessions)[0];
+}
+
+/**
+ * Live shell (tty) session ids ordered so index 0 equals `pickShellSession`'s
+ * pick. The full ordered list lets `planReconnect` test whether a persisted id
+ * is still among the live sessions while also naming a fallback to attach to
+ * when the known id is unset.
+ */
+export function liveShellSessionIds(sessions: SpriteSessionInfo[]): string[] {
+  return orderedShellSessions(sessions).map((s) => s.id);
 }
 
 /**
@@ -36,12 +48,15 @@ export function liveShellSessionIds(sessions: SpriteSessionInfo[]): string[] {
  * sessions at once (one per concurrent terminal — see agent-terminal-handler's
  * module doc), so "any tty session" is ambiguous; only a before/after diff
  * reliably names OUR freshly created shell (mirrors the connect path's
- * `discoverNewSessionId`). Returns undefined when the diff is empty/ambiguous —
- * the caller then persists nothing rather than risk another terminal's id.
+ * `discoverNewSessionId`). Returns undefined when the diff is empty OR when more
+ * than one new tty session appeared — a concurrent terminal creating its own
+ * shell in the same window is indistinguishable from ours, so we persist nothing
+ * rather than risk overwriting the DB with another terminal's id.
  */
 export function newTtySessionId(beforeIds: string[], after: SpriteSessionInfo[]): string | undefined {
   const before = new Set(beforeIds);
-  return after.find((s) => s.tty && !before.has(s.id))?.id;
+  const created = after.filter((s) => s.tty && !before.has(s.id));
+  return created.length === 1 ? created[0].id : undefined;
 }
 
 export type ReconnectPlan =
@@ -167,6 +182,12 @@ export function openPtyShell({
   let closed = false; // a real exit (or exhausted reconnects) — stop everything
   let reconnecting = false;
   let consecutiveFailures = 0;
+  // Bumped on every session (re)establishment (attach or fresh-create). A
+  // fresh session resolves its id via a fire-and-forget listSessions(); if a
+  // LATER establishment supersedes it before that resolves, the stale resolver
+  // must not clobber currentSessionId / persist a now-dead id, so it checks the
+  // generation it captured against this counter.
+  let sessionGeneration = 0;
 
   function fatal(exitCode: number, message?: string): void {
     if (closed) return;
@@ -213,6 +234,7 @@ export function openPtyShell({
   // in-session reattach and leaves persistence to the connect path's own diff.
   function launchFreshSession(before: SpriteSessionInfo[] | undefined): void {
     currentSessionId = undefined;
+    const gen = (sessionGeneration += 1);
     current = sprite.createSession(command, args, {
       tty: true,
       cols: lastCols,
@@ -224,6 +246,10 @@ export function openPtyShell({
     void sprite
       .listSessions()
       .then((after) => {
+        // A newer establishment (another reconnect) superseded this one, or the
+        // shell was killed, while listSessions was in flight — don't clobber
+        // currentSessionId or persist an id that no longer names the live shell.
+        if (closed || gen !== sessionGeneration) return;
         if (beforeIds !== undefined) {
           // Reconnect fallback: diff-only. An ambiguous/empty diff persists
           // nothing (next reconnect just creates fresh again) rather than risk
@@ -257,7 +283,33 @@ export function openPtyShell({
       // any retry — exec sessions don't survive a pause, so a persisted id can be
       // dangling. Skipping this re-query is exactly the stale-id-retry bug that
       // loops a dead id to fatal(-1) instead of falling back to a fresh shell.
-      const before = await sprite.listSessions();
+      let before: SpriteSessionInfo[] | undefined;
+      try {
+        before = await sprite.listSessions();
+      } catch {
+        before = undefined;
+      }
+      // kill() may have fired while listSessions was in flight — never (re)open a
+      // session for a terminal the user already closed (that would leak a running,
+      // billable Sprite shell with no client attached).
+      if (closed) { reconnecting = false; return; }
+      if (before === undefined) {
+        // The control-plane listSessions is transiently unavailable (rate-limited /
+        // cold-waking). Don't burn the retry budget killing a shell that's fine: if
+        // we still hold a known id, optimistically reattach to it (the pre-verify
+        // behavior) — a dead id just errors and re-enters reconnect once listing
+        // recovers. With no id to reattach, fall back to a bounded retry.
+        if (currentSessionId !== undefined) {
+          sessionGeneration += 1;
+          current = sprite.attachSession(currentSessionId, { cols: lastCols, rows: lastRows });
+          wire(current);
+          reconnecting = false;
+          return;
+        }
+        reconnecting = false;
+        void reconnect();
+        return;
+      }
       const liveIds = liveShellSessionIds(before);
       const plan = planReconnect({
         knownId: currentSessionId,
@@ -283,6 +335,7 @@ export function openPtyShell({
         reconnecting = false;
         return;
       }
+      sessionGeneration += 1;
       currentSessionId = plan.id;
       current = sprite.attachSession(plan.id, { cols: lastCols, rows: lastRows });
       wire(current);
