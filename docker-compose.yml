@@ -23,10 +23,14 @@ services:
 
   # Trust plane: dedicated Admin Postgres for the tamper-evident security audit
   # chain, isolated from the app database in every deployment mode (#890).
-  # CREDENTIAL MODEL (Phase 1): the owner/bootstrap role goes ONLY to this
-  # container and the migrate one-shot — runtime services hold no admin
-  # credentials (the owner would bypass the drizzle-admin/0001 zero-trust
-  # grants). Phase 2 wires per-service LOGIN roles with the audit cutover.
+  # CREDENTIAL MODEL (Phase 2): the owner/bootstrap role goes ONLY to this
+  # container and the migrate one-shot (the owner would bypass the
+  # drizzle-admin/0001 zero-trust grants). Runtime services connect as
+  # per-service LOGIN users provisioned by db:provision:admin-users:
+  #   web       → admin_app_user       (admin_app: SELECT+INSERT audit chain)
+  #   processor → admin_processor_user (admin_chainer + admin_siem)
+  #   admin     → admin_reader_user    (admin_reader: read-only)
+  #   realtime  → none (no audit path)
   postgres-admin:
     image: postgres:17.5-alpine
     ports:
@@ -62,12 +66,18 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
       - ADMIN_DATABASE_URL=postgresql://user:password@postgres-admin:5432/pagespace_admin
+      # Dev passwords for the per-service admin LOGIN users (provisioned below).
+      - ADMIN_APP_PASSWORD=admin-app-password
+      - ADMIN_PROCESSOR_PASSWORD=admin-processor-password
+      - ADMIN_READER_PASSWORD=admin-reader-password
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
         bun run db:migrate &&
         echo 'Starting admin database migrations...' &&
         bun run db:migrate:admin &&
+        echo 'Provisioning admin login users...' &&
+        bun run db:provision:admin-users &&
         echo 'Migrations complete, starting services...'
       "
     healthcheck:
@@ -108,6 +118,7 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - ADMIN_DATABASE_URL=postgresql://admin_app_user:admin-app-password@postgres-admin:5432/pagespace_admin
       - NEXT_PUBLIC_REALTIME_URL=${NEXT_PUBLIC_REALTIME_URL}
       - PROCESSOR_URL=http://processor:3003
       - PORT=3000
@@ -132,6 +143,7 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - ADMIN_DATABASE_URL=postgresql://admin_reader_user:admin-reader-password@postgres-admin:5432/pagespace_admin
       - ADMIN_URL=${ADMIN_URL:-http://localhost:3005}
       - NEXT_PUBLIC_WEB_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       - WEB_APP_INTERNAL_URL=http://web:3000
@@ -167,6 +179,7 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/pagespace
+      - ADMIN_DATABASE_URL=postgresql://admin_processor_user:admin-processor-password@postgres-admin:5432/pagespace_admin
       - PORT=3003
       - NODE_OPTIONS=--max-old-space-size=1024
       - ENABLE_OCR=${ENABLE_OCR:-false}

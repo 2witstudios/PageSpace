@@ -16,6 +16,8 @@ import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import { asc, count, and, gte, lte, type SQL } from 'drizzle-orm';
 import { loggers } from '../logging/logger-config';
 import { computeSecurityEventHash, type AuditEvent } from './security-audit';
+import type { AdminDatabase } from '@pagespace/db/admin-db';
+import type { SecurityAuditDatabase } from './security-audit-repository';
 
 export interface SecurityChainBreakPoint {
   entryId: string;
@@ -50,8 +52,11 @@ export interface VerifySecurityChainOptions {
 }
 
 export interface VerifySecurityChainDeps {
-  /** Drizzle client to read from. Defaults to the main app db. */
-  db?: typeof defaultDb;
+  /**
+   * Drizzle client to read from — the main app db or the Admin PG client
+   * (#890 Phase 2). Defaults to the main app db.
+   */
+  db?: SecurityAuditDatabase;
 }
 
 /**
@@ -152,7 +157,12 @@ export async function verifySecurityAuditChain(
 
       if (currentBatchSize <= 0) break;
 
-      const entries = await db.query.securityAuditLog.findMany({
+      // Both union members expose query.securityAuditLog over the same table,
+      // but their .d.ts signatures don't unify into a callable union when lib
+      // builds against packages/db/dist. Narrow to the AdminDatabase view —
+      // the least capable of the two (no relations) — which cannot widen what
+      // this call can do.
+      const entries = await (db as AdminDatabase).query.securityAuditLog.findMany({
         where: conditions.length > 0 ? and(...conditions) : undefined,
         orderBy: [asc(securityAuditLog.chainSeq)],
         offset,

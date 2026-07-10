@@ -98,12 +98,39 @@ export type AdminMigrateDecision =
   | { ok: false; reason: string };
 
 /**
+ * Env contract for the migrate/provision one-shots (#890 Phase 2, leaf 0).
+ * The runtime ADMIN_DATABASE_URL is a least-privilege LOGIN (admin_app etc.),
+ * which cannot run DDL — so the owner-credential path gets its own variable,
+ * ADMIN_DATABASE_URL_MIGRATE, that never reaches any runtime service (compose
+ * hands it to the migrate one-shot only; on Fly it is passed to the one-shot
+ * machine, not stored in any app's runtime secrets).
+ */
+export interface AdminMigrateEnv extends AdminDbEnv {
+  ADMIN_DATABASE_URL_MIGRATE?: string | undefined;
+}
+
+/**
+ * Prefer the dedicated migrate URL when set (empty string = unset, matching
+ * the ADMIN_DATABASE_URL contract). Invalid values are NOT silently skipped —
+ * they flow into resolveAdminDbMode and fail there, so a misconfigured
+ * migrate URL can never fall back to running DDL as the runtime login.
+ */
+export const resolveAdminMigrateEnv = (env: AdminMigrateEnv): AdminDbEnv => {
+  const migrateUrl = env.ADMIN_DATABASE_URL_MIGRATE;
+  if (migrateUrl !== undefined && migrateUrl !== '') {
+    return { ...env, ADMIN_DATABASE_URL: migrateUrl };
+  }
+  return env;
+};
+
+/**
  * db:migrate:admin gate — only 'dedicated' may migrate. Break-glass degrades
  * audit WRITES to the main DB at runtime, but running admin migrations there
  * would plant the drizzle_admin journal inside the app plane, so it refuses.
  */
-export const resolveAdminMigrateDecision = (env: AdminDbEnv): AdminMigrateDecision => {
-  const decision = resolveAdminDbMode(env);
+export const resolveAdminMigrateDecision = (env: AdminMigrateEnv): AdminMigrateDecision => {
+  const resolvedEnv = resolveAdminMigrateEnv(env);
+  const decision = resolveAdminDbMode(resolvedEnv);
   if (decision.mode === 'break-glass') {
     return {
       ok: false,
@@ -115,5 +142,5 @@ export const resolveAdminMigrateDecision = (env: AdminDbEnv): AdminMigrateDecisi
   if (decision.mode === 'fail') {
     return { ok: false, reason: decision.reason };
   }
-  return { ok: true, poolConfig: resolveAdminPoolConfig(env) };
+  return { ok: true, poolConfig: resolveAdminPoolConfig(resolvedEnv) };
 };

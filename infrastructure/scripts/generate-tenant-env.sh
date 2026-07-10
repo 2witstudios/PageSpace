@@ -67,6 +67,9 @@ POSTGRES_PASSWORD=$(alnum_secret 32)
 ADMIN_POSTGRES_DB=pagespace_admin
 ADMIN_POSTGRES_USER=pagespace
 ADMIN_POSTGRES_PASSWORD=$(alnum_secret 32)
+ADMIN_APP_PASSWORD=$(alnum_secret 32)
+ADMIN_PROCESSOR_PASSWORD=$(alnum_secret 32)
+ADMIN_READER_PASSWORD=$(alnum_secret 32)
 
 # --- Security Secrets ---
 ENCRYPTION_KEY=$(hex_secret 32)

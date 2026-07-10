@@ -379,17 +379,74 @@ describe('Tenant docker-compose configuration', () => {
 
     // Owner/bootstrap credentials would bypass the drizzle-admin/0001
     // zero-trust grants (the owner can DELETE/TRUNCATE its own tables), so
-    // runtime services must not receive them. Per-service LOGIN roles
-    // (admin_app / admin_chainer / admin_siem members) arrive with the
-    // Phase 2 audit-write cutover.
-    const runtimeServices = ['web', 'processor', 'realtime'];
+    // runtime services never receive them. Phase 2 (#890): each runtime
+    // service connects as its own least-privilege LOGIN user — web →
+    // admin_app_user (admin_app), processor → admin_processor_user
+    // (admin_chainer + admin_siem). The tenant stack has no admin app.
+    const serviceLogins: [string, string, string][] = [
+      ['web', 'admin_app_user', 'ADMIN_APP_PASSWORD'],
+      ['processor', 'admin_processor_user', 'ADMIN_PROCESSOR_PASSWORD'],
+    ];
 
-    it.each(runtimeServices)(
-      'given the %s runtime service, should NOT receive ADMIN_DATABASE_URL (owner creds are migrate-only in Phase 1)',
-      (svc) => {
-        expect(getEnv(svc)).not.toHaveProperty('ADMIN_DATABASE_URL');
+    it.each(serviceLogins)(
+      'given the %s runtime service, ADMIN_DATABASE_URL should connect as %s with a required-var %s',
+      (svc, loginUser, passwordVar) => {
+        const url = getEnv(svc).ADMIN_DATABASE_URL;
+        expect(url).toContain(`://${loginUser}:`);
+        expect(url).toContain(`\${${passwordVar}:?`);
+        expect(url).toContain('@postgres-admin:');
       },
     );
+
+    it.each(serviceLogins.map(([svc]) => svc))(
+      'given the %s runtime service, ADMIN_DATABASE_URL should NOT interpolate the owner credentials',
+      (svc) => {
+        const url = getEnv(svc).ADMIN_DATABASE_URL;
+        expect(url).not.toContain('ADMIN_POSTGRES_USER');
+        expect(url).not.toContain('ADMIN_POSTGRES_PASSWORD');
+      },
+    );
+
+    it('given the realtime service, should NOT receive ADMIN_DATABASE_URL (no audit path in realtime)', () => {
+      expect(getEnv('realtime')).not.toHaveProperty('ADMIN_DATABASE_URL');
+    });
+
+    it('given the raw YAML, owner credentials (ADMIN_POSTGRES_USER/PASSWORD) should be interpolated ONLY by postgres-admin and migrate', () => {
+      const raw = getRawYaml();
+      const serviceNames = Object.keys(compose.services);
+      const lines = raw.split('\n');
+      let currentService: string | null = null;
+      const offenders: string[] = [];
+      for (const line of lines) {
+        const svcMatch = line.match(/^ {2}([a-z-]+):\s*$/);
+        if (svcMatch && serviceNames.includes(svcMatch[1])) {
+          currentService = svcMatch[1];
+          continue;
+        }
+        if (line.trim().startsWith('#')) continue;
+        if (/\$\{ADMIN_POSTGRES_(USER|PASSWORD)/.test(line)) {
+          if (currentService !== 'postgres-admin' && currentService !== 'migrate') {
+            offenders.push(`${currentService}: ${line.trim()}`);
+          }
+        }
+      }
+      expect(offenders).toEqual([]);
+    });
+
+    it('given the migrate service, should receive the three per-service login passwords with required-var guards', () => {
+      const env = getEnv('migrate');
+      for (const v of ['ADMIN_APP_PASSWORD', 'ADMIN_PROCESSOR_PASSWORD', 'ADMIN_READER_PASSWORD']) {
+        expect(env[v]).toContain(`\${${v}:?`);
+      }
+    });
+
+    it('given the migrate service, should run db:provision:admin-users after db:migrate:admin', () => {
+      const command = String(compose.services.migrate.command);
+      expect(command).toContain('db:provision:admin-users');
+      expect(command.indexOf('db:migrate:admin')).toBeLessThan(
+        command.indexOf('db:provision:admin-users'),
+      );
+    });
 
     const redisEnvVars = ['REDIS_URL', 'REDIS_SESSION_URL', 'REDIS_RATE_LIMIT_URL', 'REDIS_PASSWORD'];
     const jwtEnvVars = ['JWT_SECRET', 'JWT_ISSUER', 'JWT_AUDIENCE'];
@@ -426,13 +483,14 @@ describe('Tenant docker-compose configuration', () => {
       );
     });
 
-    it('given every ADMIN_DATABASE_URL derivation, should use required-var syntax on the admin password', () => {
+    it('given every ADMIN_DATABASE_URL derivation, should use required-var syntax on its password', () => {
       const lines = getRawYaml()
         .split('\n')
         .filter((l) => !l.trim().startsWith('#') && l.includes('ADMIN_DATABASE_URL:'));
-      expect(lines.length).toBe(1); // migrate only — runtime services hold no admin creds in Phase 1
+      // migrate (owner) + web (admin_app_user) + processor (admin_processor_user)
+      expect(lines.length).toBe(3);
       for (const line of lines) {
-        expect(line).toMatch(/\$\{ADMIN_POSTGRES_PASSWORD:\?/);
+        expect(line).toMatch(/\$\{ADMIN_(POSTGRES|APP|PROCESSOR)_PASSWORD:\?/);
       }
     });
 

@@ -77,3 +77,71 @@ ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admi
 - `ADMIN_DB_BREAK_GLASS=true` is a break-glass rollback flag only (audit
   writes fall back to the main DB and alert loudly). It is not a supported
   steady state — do not set it during a normal upgrade.
+
+## 2026-07 — Phase 2 per-service admin login users (issue #890)
+
+Runtime services no longer touch the admin database as its owner. The
+`migrate` one-shot now runs `db:provision:admin-users` after
+`db:migrate:admin`, creating one least-privilege LOGIN user per service and
+attaching it to the NOLOGIN role templates from `drizzle-admin/0001`:
+
+| login user             | granted templates          | used by             |
+|------------------------|----------------------------|---------------------|
+| `admin_app_user`       | `admin_app`                | web                 |
+| `admin_processor_user` | `admin_chainer`, `admin_siem` | processor        |
+| `admin_reader_user`    | `admin_reader`             | admin app (read-only) |
+
+`ADMIN_POSTGRES_*` (the owner) is now consumed **only** by the
+`postgres-admin` container and the `migrate` one-shot. The compose stack
+**refuses to start** without the three new password variables:
+
+```
+required variable ADMIN_APP_PASSWORD is missing a value:
+ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)
+```
+
+### Steps (tenant / self-host)
+
+1. Generate three passwords (alphanumeric is **required** — the compose stack
+   embeds them in `ADMIN_DATABASE_URL` without URL-encoding):
+
+   ```bash
+   for i in 1 2 3; do openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32; echo; done
+   ```
+
+2. **Append** to the **existing** `.env` (mirroring the
+   `--- Admin Database (trust plane) ---` section of `env.tenant.template`;
+   as always, never re-run `generate-tenant-env.sh` on a live deployment):
+
+   ```dotenv
+   ADMIN_APP_PASSWORD=<generated password 1>
+   ADMIN_PROCESSOR_PASSWORD=<generated password 2>
+   ADMIN_READER_PASSWORD=<generated password 3>
+   ```
+
+3. Pull and restart the stack as usual. Provisioning is idempotent and
+   rotation-safe: re-running with a changed password rotates that login
+   user's password.
+
+### Fly (cloud) secret matrix
+
+Owner credentials never sit in any Fly app's runtime secrets. The CI admin
+migrate machine takes the owner URL from a **GitHub Actions secret** passed
+to the one-shot machine only (`migrate-admin.ts` prefers
+`ADMIN_DATABASE_URL_MIGRATE` over any inherited runtime URL):
+
+| where                              | secret                       | value (connects as)      |
+|------------------------------------|------------------------------|--------------------------|
+| GitHub Actions (repo secret)       | `ADMIN_DATABASE_URL_MIGRATE` | owner — migrations + provisioning only |
+| Fly `pagespace-web`                | `ADMIN_DATABASE_URL`         | `admin_app_user`         |
+| Fly `pagespace-processor`          | `ADMIN_DATABASE_URL`         | `admin_processor_user`   |
+| Fly `pagespace-admin`              | `ADMIN_DATABASE_URL`         | `admin_reader_user`      |
+| Fly `pagespace-realtime`           | — (no audit path)            | —                        |
+
+Provisioning the login users on Fly: run `bun run db:provision:admin-users`
+once (e.g. on a one-shot machine or via `fly ssh console`) with
+`ADMIN_DATABASE_URL_MIGRATE` set to the owner URL and the three
+`ADMIN_*_PASSWORD` values exported for that run — then set each app's
+runtime `ADMIN_DATABASE_URL` from the matrix above. With
+`ADMIN_DB_MIGRATIONS_ENABLED=true`, the CI step fails fast if
+`ADMIN_DATABASE_URL_MIGRATE` is missing.

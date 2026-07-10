@@ -50,4 +50,37 @@ describe('infrastructure/UPGRADE.md (operator upgrade note)', () => {
     expect(doc).toMatch(/append/i);
     expect(doc).toMatch(/existing/i);
   });
+
+  // #890 Phase 2 (leaf 0): per-service Admin PG LOGIN users + the Fly/CI
+  // owner-credential scoping. Operators upgrading a live tenant need the new
+  // password vars; cloud ops needs the secret matrix.
+  describe('Phase 2 section (per-service admin login users)', () => {
+    it('given the Phase 2 section, should show the three per-service password lines to append', () => {
+      expect(doc).toMatch(/ADMIN_APP_PASSWORD=/);
+      expect(doc).toMatch(/ADMIN_PROCESSOR_PASSWORD=/);
+      expect(doc).toMatch(/ADMIN_READER_PASSWORD=/);
+    });
+
+    it('given the Phase 2 section, should name the per-service login users and their role templates', () => {
+      for (const user of ['admin_app_user', 'admin_processor_user', 'admin_reader_user']) {
+        expect(doc).toContain(user);
+      }
+      for (const role of ['admin_app', 'admin_chainer', 'admin_siem', 'admin_reader']) {
+        expect(doc).toContain(role);
+      }
+    });
+
+    it('given the Fly secret matrix, should map each app to its URL and reserve ADMIN_DATABASE_URL_MIGRATE for the migrate one-shot', () => {
+      for (const app of ['pagespace-web', 'pagespace-processor', 'pagespace-admin']) {
+        expect(doc).toContain(app);
+      }
+      expect(doc).toContain('ADMIN_DATABASE_URL_MIGRATE');
+      // The owner URL must be described as GitHub-secret-only, never a Fly runtime secret.
+      expect(doc).toMatch(/GitHub/);
+    });
+
+    it('given the provisioning mechanism, should document db:provision:admin-users', () => {
+      expect(doc).toContain('db:provision:admin-users');
+    });
+  });
 });

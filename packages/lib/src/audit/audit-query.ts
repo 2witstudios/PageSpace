@@ -10,13 +10,17 @@ import { desc, and, or, gte, lte, eq } from '@pagespace/db/operators';
 import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import type { SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
 import type { QueryEventsOptions } from './security-audit';
+import type { SecurityAuditDatabase } from './security-audit-repository';
 import { deriveIndexKey } from '../encryption/blind-index';
 import { auditIpBlindIndex } from '../encryption/audit-ip-crypto';
 import { decryptField } from '../encryption/field-crypto';
 
 export interface AuditQueryDeps {
-  /** Drizzle client to query. Defaults to the main app db. */
-  db?: typeof defaultDb;
+  /**
+   * Drizzle client to query — the main app db or the Admin PG client
+   * (#890 Phase 2). Defaults to the main app db.
+   */
+  db?: SecurityAuditDatabase;
 }
 
 /**

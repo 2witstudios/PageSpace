@@ -59,4 +59,24 @@ describe('docker-images.yml admin-DB migrate step', () => {
   it('given the main migrations step, should NOT be conditional (main DB always migrates)', () => {
     expect(steps[mainIdx].if).toBeUndefined();
   });
+
+  // #890 Phase 2 (leaf 0): the machine runs in the pagespace-web app, whose
+  // runtime ADMIN_DATABASE_URL secret is the least-privilege admin_app LOGIN.
+  // Migrations need the OWNER role, so the workflow passes a dedicated
+  // ADMIN_DATABASE_URL_MIGRATE from a GitHub secret to the one-shot machine —
+  // owner credentials never live in any Fly app's runtime secrets.
+  describe('owner-credential scoping (ADMIN_DATABASE_URL_MIGRATE)', () => {
+    it('given the admin migrations step, should pass ADMIN_DATABASE_URL_MIGRATE to the one-shot machine via --env', () => {
+      expect(adminStep.run).toMatch(/--env\s+ADMIN_DATABASE_URL_MIGRATE=/);
+    });
+
+    it('given the admin migrations step, should source ADMIN_DATABASE_URL_MIGRATE from GitHub secrets', () => {
+      expect(adminStep.env?.ADMIN_DATABASE_URL_MIGRATE).toContain('secrets.ADMIN_DATABASE_URL_MIGRATE');
+    });
+
+    it('given the admin migrations step, should fail fast when the migrate secret is missing (never fall back to the runtime login)', () => {
+      expect(adminStep.run).toMatch(/-z\s+"?\$\{?ADMIN_DATABASE_URL_MIGRATE\}?"?/);
+      expect(adminStep.run).toContain('exit 1');
+    });
+  });
 });

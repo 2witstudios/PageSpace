@@ -49,4 +49,59 @@ describe('resolveAdminMigrateDecision', () => {
       expect(decision.reason).toMatch(/postgres/);
     }
   });
+
+  // Phase 2 leaf 0 (gate): the runtime ADMIN_DATABASE_URL becomes a
+  // least-privilege LOGIN (admin_app etc.), so the migrate/provision path —
+  // which needs the OWNER role — takes a dedicated ADMIN_DATABASE_URL_MIGRATE
+  // that never reaches any runtime service.
+  describe('ADMIN_DATABASE_URL_MIGRATE preference', () => {
+    it('given both URLs set, should migrate against the dedicated migrate URL, not the runtime one', () => {
+      const decision = resolveAdminMigrateDecision({
+        ADMIN_DATABASE_URL: 'postgresql://admin_app_user:app-pw@host:5432/pagespace_admin',
+        ADMIN_DATABASE_URL_MIGRATE: 'postgresql://owner:owner-pw@host:5432/pagespace_admin',
+      });
+      expect(decision.ok).toBe(true);
+      if (decision.ok) {
+        expect(decision.poolConfig.connectionString).toBe(
+          'postgresql://owner:owner-pw@host:5432/pagespace_admin',
+        );
+      }
+    });
+
+    it('given only ADMIN_DATABASE_URL_MIGRATE set, should migrate against it', () => {
+      const decision = resolveAdminMigrateDecision({
+        ADMIN_DATABASE_URL_MIGRATE: 'postgresql://owner:owner-pw@host:5432/pagespace_admin',
+      });
+      expect(decision.ok).toBe(true);
+      if (decision.ok) {
+        expect(decision.poolConfig.connectionString).toBe(
+          'postgresql://owner:owner-pw@host:5432/pagespace_admin',
+        );
+      }
+    });
+
+    it('given an empty-string migrate URL, should fall back to ADMIN_DATABASE_URL (compose path unchanged)', () => {
+      const decision = resolveAdminMigrateDecision({
+        ADMIN_DATABASE_URL: 'postgresql://owner:owner-pw@postgres-admin:5432/pagespace_admin',
+        ADMIN_DATABASE_URL_MIGRATE: '',
+      });
+      expect(decision.ok).toBe(true);
+      if (decision.ok) {
+        expect(decision.poolConfig.connectionString).toBe(
+          'postgresql://owner:owner-pw@postgres-admin:5432/pagespace_admin',
+        );
+      }
+    });
+
+    it('given an invalid migrate URL scheme, should refuse rather than silently fall back to the runtime URL', () => {
+      const decision = resolveAdminMigrateDecision({
+        ADMIN_DATABASE_URL: 'postgresql://admin_app_user:app-pw@host:5432/pagespace_admin',
+        ADMIN_DATABASE_URL_MIGRATE: 'mysql://root@host:3306/nope',
+      });
+      expect(decision.ok).toBe(false);
+      if (!decision.ok) {
+        expect(decision.reason).toMatch(/postgres/);
+      }
+    });
+  });
 });
