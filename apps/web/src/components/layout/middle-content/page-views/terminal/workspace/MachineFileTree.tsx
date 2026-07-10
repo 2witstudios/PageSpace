@@ -38,7 +38,7 @@ import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 export interface MachineFileTreeProps {
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
   /** Called with the clicked file's path RELATIVE to the branch checkout root (e.g. `src/index.ts`). Omit to render files as non-interactive rows. */
@@ -81,13 +81,13 @@ export default function MachineFileTree(props: MachineFileTreeProps) {
   // reset together — a different branch is a different tree.
   return (
     <FileTreeRoot
-      key={`${props.terminalId}\u0000${props.projectName}\u0000${props.branchName}`}
+      key={`${props.machineId}\u0000${props.projectName}\u0000${props.branchName}`}
       {...props}
     />
   );
 }
 
-function FileTreeRoot({ terminalId, projectName, branchName, onSelectFile, selectedPath }: MachineFileTreeProps) {
+function FileTreeRoot({ machineId, projectName, branchName, onSelectFile, selectedPath }: MachineFileTreeProps) {
   // The ref is the canonical cache — synchronously readable, so two renders
   // racing the same path (e.g. a collapse/re-expand while the listing is still
   // in flight) can never issue a duplicate fetch. The state map is a snapshot
@@ -108,7 +108,7 @@ function FileTreeRoot({ terminalId, projectName, branchName, onSelectFile, selec
       if (existing !== undefined && existing.status !== 'error') return;
       setDirectoryState(path, { status: 'loading' });
       try {
-        const search = new URLSearchParams({ terminalId, projectName, branchName });
+        const search = new URLSearchParams({ machineId, projectName, branchName });
         if (path.length > 0) search.set('path', path);
         const res = await fetchWithAuth(`/api/machines/files?${search.toString()}`);
         if (!res.ok) {
@@ -128,7 +128,7 @@ function FileTreeRoot({ terminalId, projectName, branchName, onSelectFile, selec
         });
       }
     },
-    [terminalId, projectName, branchName, setDirectoryState],
+    [machineId, projectName, branchName, setDirectoryState],
   );
 
   const toggleExpanded = useCallback((path: string) => {

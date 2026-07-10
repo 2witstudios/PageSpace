@@ -5,7 +5,7 @@
  * scope-aware endpoint; all scope semantics live in the PURE
  * `machine-diff-scope.ts` and are executed by the DI'd `machine-diff.ts`.
  *
- * GET ?terminalId=&projectName=&branchName=&scope=uncommitted|committed|branch
+ * GET ?machineId=&projectName=&branchName=&scope=uncommitted|committed|branch
  *   → { notApplicable: false, scope, files: [{ path, status, previousPath? }],
  *       truncated, mergeBase }
  *     the changed-file list for the scope; `mergeBase` (committed/branch
@@ -75,8 +75,8 @@ export async function GET(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const { searchParams } = new URL(request.url);
-  const terminalId = requireString(searchParams.get('terminalId'), 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(searchParams.get('machineId'), 'machineId');
+  if (!machineId.ok) return machineId.error;
   const projectName = requireString(searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
   const branchName = requireString(searchParams.get('branchName'), 'branchName');
@@ -84,7 +84,7 @@ export async function GET(request: Request) {
 
   // Authorize BEFORE parsing scope/path, so a user without view access gets a
   // uniform 403 and can never probe scope/path handling.
-  if (!(await canViewMachine(auth.userId, terminalId.value))) {
+  if (!(await canViewMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
@@ -132,7 +132,7 @@ export async function GET(request: Request) {
   const status = rawStatus !== null && isMachineDiffFileStatus(rawStatus) ? rawStatus : undefined;
 
   const resolved = await resolveBranchMachineHandle({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     projectName: projectName.value,
     branchName: branchName.value,
   });
@@ -144,7 +144,7 @@ export async function GET(request: Request) {
   }
 
   const actor = await resolveMachineActorContext(auth.userId);
-  const scopeKey = `${terminalId.value}:${projectName.value}:${branchName.value}:diff`;
+  const scopeKey = `${machineId.value}:${projectName.value}:${branchName.value}:diff`;
   const ctx = buildDiffActorContext(scopeKey, actor);
   const deps = buildDiffGitDepsForHandle(resolved.handle);
 
