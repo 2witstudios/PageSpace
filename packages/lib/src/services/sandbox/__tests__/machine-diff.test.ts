@@ -175,10 +175,12 @@ describe('listMachineDiffFiles', () => {
     });
   });
 
-  it('branch: runs the --merge-base working-tree diff (one ref, no second side)', async () => {
+  it('branch: unions the --merge-base tracked diff with untracked working-tree files, then resolves the merge-base', async () => {
     const { deps, calls } = makeDeps(
       scriptGit({
         'diff --name-status -z --merge-base origin/HEAD': { exitCode: 0, stdout: 'M\0src/a.ts\0', stderr: '' },
+        // `git diff` omits untracked files — the supplement supplies the brand-new one.
+        'status --porcelain -z': { exitCode: 0, stdout: ' M src/a.ts\0?? brand-new.ts\0', stderr: '' },
         'merge-base origin/HEAD HEAD': { exitCode: 0, stdout: `${MERGE_BASE_SHA}\n`, stderr: '' },
       }),
     );
@@ -190,8 +192,62 @@ describe('listMachineDiffFiles', () => {
       ctx: makeCtx(),
       deps,
     });
-    expect(calls[0]).toEqual({ cmd: 'git', args: ['diff', '--name-status', '-z', '--merge-base', 'origin/HEAD'] });
-    expect(result).toMatchObject({ ok: true, notApplicable: false, mergeBase: MERGE_BASE_SHA });
+    expect(calls.map((c) => c.args)).toEqual([
+      ['diff', '--name-status', '-z', '--merge-base', 'origin/HEAD'],
+      ['status', '--porcelain', '-z'],
+      ['merge-base', 'origin/HEAD', 'HEAD'],
+    ]);
+    expect(result).toEqual({
+      ok: true,
+      notApplicable: false,
+      // tracked diff entry first, then the appended untracked file (never a tracked one)
+      files: [
+        { path: 'src/a.ts', status: 'modified' },
+        { path: 'brand-new.ts', status: 'added' },
+      ],
+      truncated: false,
+      mergeBase: MERGE_BASE_SHA,
+    });
+  });
+
+  it('branch: an output-capped untracked supplement flags the whole list truncated', async () => {
+    // runGitInSandbox recomputes `truncated` from real byte length (256 KB cap),
+    // so the untracked run must genuinely overflow it to exercise the OR.
+    const oversized = `?? ${'a'.repeat(270 * 1024)}\0`;
+    const { deps } = makeDeps(
+      scriptGit({
+        'diff --name-status -z --merge-base origin/HEAD': { exitCode: 0, stdout: 'M\0src/a.ts\0', stderr: '' },
+        'status --porcelain -z': { exitCode: 0, stdout: oversized, stderr: '' },
+        'merge-base origin/HEAD HEAD': { exitCode: 0, stdout: `${MERGE_BASE_SHA}\n`, stderr: '' },
+      }),
+    );
+    const result = await listMachineDiffFiles({
+      branchName: 'feature/x',
+      isMainBranch: false,
+      scope: 'branch',
+      cwd: CWD,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true, notApplicable: false, truncated: true });
+  });
+
+  it('branch: a failing untracked supplement fails the whole list (exec_failed)', async () => {
+    const { deps } = makeDeps(
+      scriptGit({
+        'diff --name-status -z --merge-base origin/HEAD': { exitCode: 0, stdout: 'M\0src/a.ts\0', stderr: '' },
+        'status --porcelain -z': { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n' },
+      }),
+    );
+    const result = await listMachineDiffFiles({
+      branchName: 'feature/x',
+      isMainBranch: false,
+      scope: 'branch',
+      cwd: CWD,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'exec_failed', detail: 'fatal: not a git repository' });
   });
 
   it('committed on the main branch: notApplicable, and git is never invoked', async () => {
@@ -336,6 +392,69 @@ describe('readMachineDiffPair', () => {
       notApplicable: false,
       original: { content: 'base content', truncated: false },
       modified: { content: 'tree content', truncated: false },
+    });
+  });
+
+  it('renamed file (committed): reads the original from previousPath, the modified from the target path', async () => {
+    const { deps, calls } = makeDeps(
+      scriptGit({
+        'merge-base origin/HEAD HEAD': { exitCode: 0, stdout: `${MERGE_BASE_SHA}\n`, stderr: '' },
+        // original side is addressed at the PRE-rename source, not the target:
+        [`show ${MERGE_BASE_SHA}:src/old-name.ts`]: { exitCode: 0, stdout: 'base content', stderr: '' },
+        'show HEAD:src/new-name.ts': { exitCode: 0, stdout: 'head content', stderr: '' },
+      }),
+    );
+    const { handle, reads } = makeHandle({});
+    const result = await readMachineDiffPair({
+      branchName: 'feature/x',
+      isMainBranch: false,
+      scope: 'committed',
+      path: 'src/new-name.ts',
+      previousPath: 'src/old-name.ts',
+      workingTreePath: `${CWD}/src/new-name.ts`,
+      cwd: CWD,
+      handle,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(calls.map((c) => c.args)).toEqual([
+      ['merge-base', 'origin/HEAD', 'HEAD'],
+      ['show', `${MERGE_BASE_SHA}:src/old-name.ts`],
+      ['show', 'HEAD:src/new-name.ts'],
+    ]);
+    expect(reads).toHaveLength(0);
+    expect(result).toEqual({
+      ok: true,
+      notApplicable: false,
+      original: { content: 'base content', truncated: false },
+      modified: { content: 'head content', truncated: false },
+    });
+  });
+
+  it('renamed file (uncommitted): original = HEAD blob at previousPath, modified = working tree at the target', async () => {
+    const { deps, calls } = makeDeps(
+      scriptGit({ 'show HEAD:src/old-name.ts': { exitCode: 0, stdout: 'old content', stderr: '' } }),
+    );
+    const { handle, reads } = makeHandle({ [`${CWD}/src/new-name.ts`]: 'renamed content' });
+    const result = await readMachineDiffPair({
+      branchName: 'feature/x',
+      isMainBranch: false,
+      scope: 'uncommitted',
+      path: 'src/new-name.ts',
+      previousPath: 'src/old-name.ts',
+      workingTreePath: `${CWD}/src/new-name.ts`,
+      cwd: CWD,
+      handle,
+      ctx: makeCtx(),
+      deps,
+    });
+    expect(calls).toEqual([{ cmd: 'git', args: ['show', 'HEAD:src/old-name.ts'] }]);
+    expect(reads).toEqual([`${CWD}/src/new-name.ts`]);
+    expect(result).toEqual({
+      ok: true,
+      notApplicable: false,
+      original: { content: 'old content', truncated: false },
+      modified: { content: 'renamed content', truncated: false },
     });
   });
 

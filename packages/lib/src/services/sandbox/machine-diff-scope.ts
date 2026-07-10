@@ -23,7 +23,13 @@
  *     uncommitted working-tree changes.
  *     File list: `git diff --name-status -z --merge-base <base>` (one ref, no
  *     second side — `--merge-base <commit>` compares the WORKING TREE against
- *     merge-base(<commit>, HEAD)).
+ *     merge-base(<commit>, HEAD)) UNIONED with the untracked working-tree
+ *     files from `git status --porcelain -z`. `git diff` lists only TRACKED
+ *     differences, so a brand-new never-added file would otherwise be missing
+ *     from a scope that is documented to include all uncommitted working-tree
+ *     changes; `untrackedArgs` on the resolution below supplies exactly that
+ *     gap. Untracked paths cannot collide with the diff's tracked paths, so
+ *     the shell simply appends them (no dedup needed).
  *     original = blob at the merge-base, modified = working-tree file.
  *
  * On the main branch itself, 'committed' and 'branch' are meaningless — the
@@ -73,7 +79,19 @@ export function isMainBranchName(branchName: string): boolean {
   return branchName === 'master' || branchName === 'main';
 }
 
-export type MachineDiffScopeResolution = { gitArgs: string[] } | { notApplicable: true };
+export type MachineDiffScopeResolution =
+  | {
+      /** The git argv whose stdout is the scope's primary changed-file list. */
+      gitArgs: string[];
+      /**
+       * Present ONLY for 'branch' scope: a second git argv whose untracked
+       * (`??`) entries are appended to the list (parsed via
+       * `parseUntrackedPorcelainZ`), because `gitArgs`' `git diff` omits
+       * untracked working-tree files. See the module docstring.
+       */
+      untrackedArgs?: string[];
+    }
+  | { notApplicable: true };
 
 /**
  * Resolve a requested Diff scope to the exact `git` argv that produces its
@@ -100,7 +118,10 @@ export function resolveDiffScope(
     case 'committed':
       return { gitArgs: ['diff', '--name-status', '-z', `${DIFF_BASE_REF}...HEAD`] };
     case 'branch':
-      return { gitArgs: ['diff', '--name-status', '-z', '--merge-base', DIFF_BASE_REF] };
+      return {
+        gitArgs: ['diff', '--name-status', '-z', '--merge-base', DIFF_BASE_REF],
+        untrackedArgs: ['status', '--porcelain', '-z'],
+      };
   }
 }
 
@@ -193,6 +214,39 @@ export function parseStatusPorcelainZ(stdout: string): MachineDiffFile[] {
       status: statusFromPorcelainXY(x, y),
       ...(previousPath !== undefined ? { previousPath } : {}),
     });
+  }
+  return files;
+}
+
+/**
+ * Parse ONLY the untracked (`?? <path>`) entries from `git status
+ * --porcelain -z`, each as an 'added' file. This is the 'branch' scope's
+ * untracked-file supplement: `git diff --merge-base` lists every TRACKED
+ * difference from the merge-base but omits untracked working-tree files, so
+ * these are appended to complete the scope (see the module docstring).
+ *
+ * Tracked entries (modified/deleted/added/renamed) are skipped — they are
+ * already covered by the diff. A rename/copy entry (never untracked) carries a
+ * trailing source field, so its second token is stepped over to keep the
+ * source path from being mis-read as a standalone entry. A truncated trailing
+ * entry is dropped via `splitZDroppingTruncatedTail`.
+ */
+export function parseUntrackedPorcelainZ(stdout: string): MachineDiffFile[] {
+  const tokens = splitZDroppingTruncatedTail(stdout);
+  const files: MachineDiffFile[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.length < 4 || token[2] !== ' ') continue;
+    const x = token[0];
+    const y = token[1];
+    // Rename/copy entries carry a NUL-separated source path as the next token.
+    if (x === 'R' || x === 'C') {
+      i++;
+      continue;
+    }
+    if (x === '?' && y === '?') {
+      files.push({ path: token.slice(3), status: 'added' });
+    }
   }
   return files;
 }

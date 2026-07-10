@@ -5,6 +5,7 @@ import {
   isMainBranchName,
   parseNameStatusZ,
   parseStatusPorcelainZ,
+  parseUntrackedPorcelainZ,
   resolveDiffScope,
   DIFF_BASE_REF,
   type MachineDiffScope,
@@ -55,11 +56,14 @@ describe('resolveDiffScope', () => {
       expected: { notApplicable: true },
     },
     {
-      name: 'branch on a feature branch → --merge-base working-tree diff against the default branch',
+      name: 'branch on a feature branch → --merge-base working-tree diff plus an untracked-file supplement',
       branchName: 'feature/x',
       isMainBranch: false,
       scope: 'branch',
-      expected: { gitArgs: ['diff', '--name-status', '-z', '--merge-base', DIFF_BASE_REF] },
+      expected: {
+        gitArgs: ['diff', '--name-status', '-z', '--merge-base', DIFF_BASE_REF],
+        untrackedArgs: ['status', '--porcelain', '-z'],
+      },
     },
     {
       name: 'branch on the main branch → notApplicable',
@@ -90,6 +94,15 @@ describe('resolveDiffScope', () => {
     for (const scope of ['uncommitted', 'committed', 'branch'] as const) {
       const resolution = resolveDiffScope('feature/x', false, scope);
       expect('gitArgs' in resolution && resolution.gitArgs.length > 0).toBe(true);
+    }
+  });
+
+  it('attaches untrackedArgs ONLY to branch scope (the diff-omits-untracked supplement)', () => {
+    const branch = resolveDiffScope('feature/x', false, 'branch');
+    expect('gitArgs' in branch && branch.untrackedArgs).toEqual(['status', '--porcelain', '-z']);
+    for (const scope of ['uncommitted', 'committed'] as const) {
+      const resolution = resolveDiffScope('feature/x', false, scope);
+      expect('gitArgs' in resolution && resolution.untrackedArgs).toBeUndefined();
     }
   });
 });
@@ -223,5 +236,40 @@ describe('parseNameStatusZ', () => {
     // rename cut before its target field:
     expect(parseNameStatusZ('M\0full.ts\0R100\0old.ts\0')).toEqual([{ path: 'full.ts', status: 'modified' }]);
     expect(parseNameStatusZ('M\0full.ts\0R100\0old.ts\0new')).toEqual([{ path: 'full.ts', status: 'modified' }]);
+  });
+});
+
+describe('parseUntrackedPorcelainZ', () => {
+  it('returns [] for empty output', () => {
+    expect(parseUntrackedPorcelainZ('')).toEqual([]);
+  });
+
+  it('keeps only the untracked (??) entries, each as added, skipping tracked changes', () => {
+    const stdout = ' M src/a.ts\0?? new.ts\0M  staged.ts\0?? dir/other.ts\0 D gone.ts\0';
+    expect(parseUntrackedPorcelainZ(stdout)).toEqual([
+      { path: 'new.ts', status: 'added' },
+      { path: 'dir/other.ts', status: 'added' },
+    ]);
+  });
+
+  it('steps over a rename/copy source field so it is never mis-read as an untracked entry', () => {
+    // 'R  to.ts\0from.ts' — the source 'from.ts' must not be treated as a file.
+    expect(parseUntrackedPorcelainZ('R  to.ts\0from.ts\0?? really-new.ts\0')).toEqual([
+      { path: 'really-new.ts', status: 'added' },
+    ]);
+    expect(parseUntrackedPorcelainZ('C75 copy.ts\0base.ts\0?? really-new.ts\0')).toEqual([
+      { path: 'really-new.ts', status: 'added' },
+    ]);
+  });
+
+  it('handles untracked paths with spaces and non-ASCII (-z never C-quotes)', () => {
+    expect(parseUntrackedPorcelainZ('?? über dir/naïve file.ts\0')).toEqual([
+      { path: 'über dir/naïve file.ts', status: 'added' },
+    ]);
+  });
+
+  it('drops a truncated trailing entry instead of guessing', () => {
+    expect(parseUntrackedPorcelainZ('?? full.ts\0?? par')).toEqual([{ path: 'full.ts', status: 'added' }]);
+    expect(parseUntrackedPorcelainZ('?? full.ts\0??')).toEqual([{ path: 'full.ts', status: 'added' }]);
   });
 });

@@ -12,12 +12,15 @@
  *     scopes) is the concrete SHA a client may pass as `ref` to
  *     `/api/machines/git-blob` for 'original' sides.
  *
- * GET …&path=<repo-relative file>
+ * GET …&path=<repo-relative file>[&previousPath=<repo-relative source>]
  *   → { notApplicable: false, scope, path, original, modified }
  *     ONE file's diff pair, each side read from the scope's source
  *     (merge-base blob / HEAD blob / working tree); a side is null when the
  *     file does not exist there (added file's original, deleted file's
- *     modified).
+ *     modified). For a RENAMED file the client passes `previousPath` (the
+ *     rename source from the list entry) so the 'original' side is read from
+ *     the pre-rename location instead of resolving to null and mis-showing the
+ *     rename as an add.
  *
  * On the main branch ('master'/'main' — the literal default-branch names,
  * there is no schema flag), the 'committed' and 'branch' scopes are
@@ -100,6 +103,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'path escapes the branch checkout root' }, { status: 400 });
   }
 
+  // `previousPath` (the rename source) addresses ONLY the 'original' blob side
+  // via git's `<ref>:<path>` syntax, which resolves inside the ref's own tree
+  // and cannot escape onto the host filesystem — so it needs no working-tree
+  // confinement (unlike `path`, whose working-tree side is a real fs path).
+  const rawPreviousPath = url.searchParams.get('previousPath');
+  const previousPath = rawPreviousPath !== null && rawPreviousPath.length > 0 ? rawPreviousPath : undefined;
+
   const resolved = await resolveBranchMachineHandle({
     terminalId: terminalId.value,
     projectName: projectName.value,
@@ -123,6 +133,7 @@ export async function GET(request: Request) {
       isMainBranch,
       scope,
       path: rawPath,
+      previousPath,
       workingTreePath,
       cwd: BRANCH_REPO_PATH,
       handle: resolved.handle,

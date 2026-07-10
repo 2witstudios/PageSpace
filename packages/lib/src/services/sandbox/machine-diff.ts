@@ -38,6 +38,7 @@ import {
   diffScopeSides,
   parseNameStatusZ,
   parseStatusPorcelainZ,
+  parseUntrackedPorcelainZ,
   resolveDiffScope,
   DIFF_BASE_REF,
   type MachineDiffFile,
@@ -133,6 +134,22 @@ export async function listMachineDiffFiles({
     return { ok: false, reason: 'exec_failed', detail: run.stderr.trim() || undefined };
   }
   const files = scope === 'uncommitted' ? parseStatusPorcelainZ(run.stdout) : parseNameStatusZ(run.stdout);
+  let truncated = run.truncated;
+
+  // 'branch' scope: `git diff --merge-base` lists only tracked differences, so
+  // append the untracked working-tree files (a second run) — otherwise a
+  // brand-new never-added file is invisible in a scope documented to include
+  // all uncommitted working-tree changes. Untracked paths can't collide with
+  // the diff's tracked paths, so they simply extend the list.
+  if (resolution.untrackedArgs) {
+    const untracked = await runGitInSandbox({ cmd: 'git', args: resolution.untrackedArgs, cwd, ctx, deps });
+    if (!untracked.success) return { ok: false, reason: 'exec_failed', detail: untracked.error };
+    if (untracked.exitCode !== 0) {
+      return { ok: false, reason: 'exec_failed', detail: untracked.stderr.trim() || undefined };
+    }
+    files.push(...parseUntrackedPorcelainZ(untracked.stdout));
+    truncated = truncated || untracked.truncated;
+  }
 
   let mergeBase: string | null = null;
   if (scope !== 'uncommitted') {
@@ -140,7 +157,7 @@ export async function listMachineDiffFiles({
     if (!resolved.ok) return resolved;
     mergeBase = resolved.sha;
   }
-  return { ok: true, notApplicable: false, files, truncated: run.truncated, mergeBase };
+  return { ok: true, notApplicable: false, files, truncated, mergeBase };
 }
 
 export interface MachineDiffSideContent {
@@ -173,12 +190,20 @@ const MAX_WORKING_TREE_READ_BYTES = 2 * 1024 * 1024;
  * or working tree). A side that does not exist (`not_found`) is `null` — an
  * added file legitimately has no original and a deleted file no modified —
  * only a real execution failure is an error.
+ *
+ * RENAMES: `path` is the file's CURRENT location (the rename target — where it
+ * lives in HEAD/working tree), but its ORIGINAL side lives at the pre-rename
+ * source. So the 'original' blob side reads from `previousPath` when given; the
+ * 'modified' side (HEAD blob or working tree) always uses `path`. Without this,
+ * a pure rename's original blob would not resolve at `path` in the old ref and
+ * the file would be mis-presented as an add.
  */
 export async function readMachineDiffPair({
   branchName,
   isMainBranch,
   scope,
   path,
+  previousPath,
   workingTreePath,
   cwd,
   handle,
@@ -188,8 +213,14 @@ export async function readMachineDiffPair({
   branchName: string;
   isMainBranch: boolean;
   scope: MachineDiffScope;
-  /** Repo-relative path — addresses blobs inside a ref's own git tree. */
+  /** Repo-relative path — the file's CURRENT location; addresses the 'modified' blob side inside a ref's own git tree. */
   path: string;
+  /**
+   * Repo-relative rename/copy SOURCE, when the file list reported one. The
+   * 'original' blob side reads from here (the file's pre-rename location);
+   * absent for non-renamed files, where the original side falls back to `path`.
+   */
+  previousPath?: string;
   /** Absolute working-tree path, ALREADY confined under the checkout root by the caller. */
   workingTreePath: string;
   cwd: string;
@@ -211,6 +242,8 @@ export async function readMachineDiffPair({
 
   const readSide = async (
     source: MachineDiffSideSource,
+    /** Repo-relative path for a blob side (rename source for 'original', target for 'modified'). */
+    blobPath: string,
   ): Promise<{ ok: true; content: MachineDiffSideContent | null } | MachineDiffFailure> => {
     if (source === 'working-tree') {
       const result = await readMachineFile({ handle, path: workingTreePath });
@@ -224,15 +257,18 @@ export async function readMachineDiffPair({
     // mergeBase is always resolved above when a side needs it; the fallback
     // 'HEAD' is unreachable but keeps the ref a plain string for the compiler.
     const ref = source === 'head-blob' ? 'HEAD' : (mergeBase ?? 'HEAD');
-    const result = await readMachineGitBlob({ ref, path, cwd, ctx, deps });
+    const result = await readMachineGitBlob({ ref, path: blobPath, cwd, ctx, deps });
     if (result.ok) return { ok: true, content: { content: result.content, truncated: result.truncated } };
     if (result.reason === 'not_found') return { ok: true, content: null };
     return { ok: false, reason: 'exec_failed', detail: result.detail };
   };
 
-  const original = await readSide(sides.original);
+  // The original side lives at the pre-rename source when the list reported
+  // one; the modified side is always the file's current path. A working-tree
+  // side ignores its blobPath argument (it reads `workingTreePath`).
+  const original = await readSide(sides.original, previousPath ?? path);
   if (!original.ok) return original;
-  const modified = await readSide(sides.modified);
+  const modified = await readSide(sides.modified, path);
   if (!modified.ok) return modified;
 
   return { ok: true, notApplicable: false, original: original.content, modified: modified.content };

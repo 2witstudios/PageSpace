@@ -250,6 +250,32 @@ describe('GET /api/machines/diff — per-file pair form', () => {
     );
   });
 
+  it('forwards previousPath (rename source) so the original side reads the pre-rename blob', async () => {
+    const res = await GET(get({ path: 'src/new-name.ts', previousPath: 'src/old-name.ts' }));
+    expect(res.status).toBe(200);
+    expect(readMachineDiffPair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'src/new-name.ts',
+        previousPath: 'src/old-name.ts',
+        workingTreePath: '/workspace/repo/src/new-name.ts',
+      }),
+    );
+  });
+
+  it('omits previousPath (undefined) when absent or empty', async () => {
+    await GET(get({ path: 'src/a.ts' }));
+    expect(readMachineDiffPair).toHaveBeenCalledWith(expect.objectContaining({ previousPath: undefined }));
+    vi.clearAllMocks();
+    readMachineDiffPair.mockResolvedValue({
+      ok: true,
+      notApplicable: false,
+      original: { content: 'old', truncated: false },
+      modified: { content: 'new', truncated: false },
+    });
+    await GET(get({ path: 'src/a.ts', previousPath: '' }));
+    expect(readMachineDiffPair).toHaveBeenCalledWith(expect.objectContaining({ previousPath: undefined }));
+  });
+
   it('passes null sides through (added file has no original)', async () => {
     readMachineDiffPair.mockResolvedValue({
       ok: true,
