@@ -125,8 +125,8 @@ function getApnsJwtToken(): string {
 // APNs is HTTP/2-only. Node's global fetch (undici) speaks HTTP/1.1 and does not
 // upgrade, so a POST to api.push.apple.com fails with an opaque "fetch failed".
 // We use node:http2 with a long-lived, multiplexed session per host — APNs
-// strongly prefers reusing a single connection across many sends. A dead session
-// is evicted from the cache so the next send transparently reconnects.
+// strongly prefers reusing a single connection across many sends. A failed
+// session is evicted and closed so the next send transparently reconnects.
 const apnsSessions = new Map<string, http2.ClientHttp2Session>();
 
 function getApnsSession(host: string): http2.ClientHttp2Session {
