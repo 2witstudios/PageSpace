@@ -16,6 +16,7 @@ import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth/request-auth';
 import { isAuthError } from '@/lib/auth/auth-core';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth/principal-permissions';
+import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -219,7 +220,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     },
   });
 
-  let tasks = await query;
+  let tasks = await decryptTaskUserRelations(await query);
 
   // Sort by page.position (source of truth), fallback to task.position
   tasks.sort((a, b) => {
@@ -521,7 +522,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   });
 
   // Fetch task with relations (including assignees)
-  const taskWithRelations = await db.query.taskItems.findFirst({
+  const fetchedTask = await db.query.taskItems.findFirst({
     where: eq(taskItems.id, result.task.id),
     with: {
       assignee: {
@@ -548,6 +549,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       },
     },
   });
+  const taskWithRelations = await decryptTaskUserRelationsOne(fetchedTask);
 
   const createdTitle = result.page.title;
 

@@ -12,6 +12,7 @@ import {
   verifySecurityAuditChain,
   type SecurityChainVerificationResult,
   type VerifySecurityChainOptions,
+  type VerifySecurityChainDeps,
 } from './security-audit-chain-verifier';
 
 /**
@@ -83,13 +84,15 @@ export function getChainAlertHandler(): ChainAlertHandler | null {
  *
  * @param source - Whether triggered by periodic cron or manual invocation
  * @param options - Verification options passed to verifySecurityAuditChain
+ * @param deps - Injected client passed through to verifySecurityAuditChain (defaults to the main app db)
  * @returns The verification result
  */
 export async function verifyAndAlert(
   source: 'periodic' | 'manual' = 'manual',
-  options?: VerifySecurityChainOptions
+  options?: VerifySecurityChainOptions,
+  deps?: VerifySecurityChainDeps
 ): Promise<SecurityChainVerificationResult> {
-  const result = await verifySecurityAuditChain(options);
+  const result = await verifySecurityAuditChain(options, deps);
 
   if (!result.isValid && alertHandler) {
     const alert: ChainVerificationAlert = {

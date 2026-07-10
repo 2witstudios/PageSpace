@@ -90,7 +90,13 @@ export type SpawnBranchResult =
   | { ok: true; sandboxId: string; resumed: boolean }
   | { ok: false; reason: SpawnBranchDenialReason | FullEgressDenialReason; detail?: string };
 
-function buildActorCtx(scopeKey: string, actor: MachineActorContext): SandboxActorContext {
+/**
+ * Exported so other Machine-scope callers that build a `SandboxActorContext`
+ * for a branch-terminal op (e.g. `machine-git-blob-runtime.ts`) share this one
+ * definition instead of re-typing the same literal — a future required field
+ * on `SandboxActorContext` then only needs fixing here.
+ */
+export function buildActorCtx(scopeKey: string, actor: MachineActorContext): SandboxActorContext {
   return {
     userId: actor.userId,
     tenantId: actor.tenantId,

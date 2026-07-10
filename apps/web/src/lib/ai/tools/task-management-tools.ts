@@ -18,6 +18,7 @@ import {
 import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { checkSubTasksComplete, toToolFailure } from '@/lib/tasks/completion-guard';
+import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import {
   normalizeTaskAgentTriggerInput,
@@ -618,7 +619,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         );
 
         // Filter out tasks with trashed pages, inaccessible drives, and optionally by driveId
-        const filteredTasks = tasks.filter(task => {
+        const matchingTasks = tasks.filter(task => {
           if (task.page?.isTrashed) return false;
           const parentId = task.page?.parentId;
           const taskDriveId = parentId ? taskListPageInfoMap.get(parentId)?.driveId : undefined;
@@ -628,6 +629,9 @@ This helps agents understand their responsibilities and coordinate work with oth
           if (driveId && taskDriveId !== driveId) return false;
           return true;
         });
+
+        // Decrypt after filtering — none of the filters read PII, so skip crypto work for dropped rows
+        const filteredTasks = await decryptTaskUserRelations(matchingTasks);
 
         // Build group lookup from status configs across all task lists
         const uniqueTaskListIds = taskListsInfo.map(tl => tl.id);

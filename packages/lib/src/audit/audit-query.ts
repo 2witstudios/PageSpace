@@ -5,7 +5,7 @@
  * so callers don't need a class instance or initialization ceremony.
  */
 
-import { db } from '@pagespace/db/db';
+import { db as defaultDb } from '@pagespace/db/db';
 import { desc, and, or, gte, lte, eq } from '@pagespace/db/operators';
 import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import type { SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
@@ -14,13 +14,20 @@ import { deriveIndexKey } from '../encryption/blind-index';
 import { auditIpBlindIndex } from '../encryption/audit-ip-crypto';
 import { decryptField } from '../encryption/field-crypto';
 
+export interface AuditQueryDeps {
+  /** Drizzle client to query. Defaults to the main app db. */
+  db?: typeof defaultDb;
+}
+
 /**
  * Query audit events with filtering options.
  * Standalone equivalent of SecurityAuditService.queryEvents().
  */
 export async function queryAuditEvents(
-  options: QueryEventsOptions
+  options: QueryEventsOptions,
+  deps: AuditQueryDeps = {}
 ): Promise<SelectSecurityAuditLog[]> {
+  const db = deps.db ?? defaultDb;
   const conditions = [];
 
   if (options.userId) {
