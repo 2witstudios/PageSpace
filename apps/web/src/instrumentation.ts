@@ -16,17 +16,18 @@ export async function register() {
     const chMode = probeClickHouseStartup();
     console.log(`[Instrumentation] ClickHouse analytics tier: ${chMode.mode}`);
 
-    // Drain the CH insert buffers on shutdown — deploys must not lose the
-    // up-to-500-rows/table in-memory window. The logger's own SIGTERM/SIGINT
-    // handler sequences flush→drain→exit when database logging is on; this
-    // registration covers stdout-only processes where that handler never
-    // installs.
-    const { drainAnalyticsInserts } = await import('@pagespace/lib/observability/analytics-inserts');
-    for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-      process.on(signal, () => {
-        void drainAnalyticsInserts();
-      });
-    }
+    // Initialize the shared logger in this composition root. Constructing the
+    // singleton (module top-level `Logger.getInstance()`) installs its
+    // flush → drain → exit shutdown handler (logging/logger.ts →
+    // createShutdownHandler): on SIGTERM/SIGINT it flushes buffered logs, then
+    // drains the ClickHouse insert buffers (up to 500 rows/table — including
+    // rows buffered by direct adapter calls), then exits. It is the single,
+    // terminating owner of graceful shutdown; initializing it deterministically
+    // at boot means even an idle process that receives a signal before serving
+    // any request still drains its analytics buffers and terminates — rather
+    // than a bespoke drain-only listener that suppresses Node's default
+    // termination but never exits (#890 Phase 3).
+    await import('@pagespace/lib/logging/logger');
 
     const { setActivityBroadcastHook } = await import('@pagespace/lib/monitoring/activity-logger');
     const { broadcastActivityEvent } = await import('@/lib/websocket/socket-utils');

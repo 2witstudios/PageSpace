@@ -15,11 +15,15 @@ export async function register() {
     const chMode = probeClickHouseStartup();
     console.log(`[Instrumentation] ClickHouse analytics tier: ${chMode.mode}`);
 
-    const { drainAnalyticsInserts } = await import('@pagespace/lib/observability/analytics-inserts');
-    for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-      process.on(signal, () => {
-        void drainAnalyticsInserts();
-      });
-    }
+    // Initialize the shared logger so its flush → drain → exit shutdown handler
+    // (logging/logger.ts → createShutdownHandler) is installed at boot. That
+    // handler is the single, terminating owner of graceful shutdown: on
+    // SIGTERM/SIGINT it flushes buffered logs, drains the ClickHouse insert
+    // buffers (up to 500 rows/table, including direct adapter inserts), then
+    // exits. Initializing it here means an idle process that receives a signal
+    // before serving any request still drains and terminates, rather than a
+    // bespoke drain-only listener that suppresses Node's default termination
+    // without ever exiting.
+    await import('@pagespace/lib/logging/logger');
   }
 }

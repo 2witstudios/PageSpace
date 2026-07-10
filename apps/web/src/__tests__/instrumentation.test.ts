@@ -3,8 +3,10 @@ import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } fr
 // #890 Phase 3 FIX: the composition root must (1) crash a half-configured
 // deploy at startup — flag on + creds missing would otherwise silently black
 // out all 4 analytics tables while enqueue() absorbs per-row errors — and
-// (2) drain the CH insert buffers on SIGTERM/SIGINT so deploys don't lose
-// up to 500 buffered rows per table.
+// (2) initialize the shared logger so its flush → drain → exit shutdown
+// handler (the single, terminating owner of graceful shutdown) is installed
+// at boot, draining the CH insert buffers on SIGTERM/SIGINT. The composition
+// root itself registers no bespoke signal listener.
 
 vi.mock('@sentry/nextjs', () => ({ captureRequestError: vi.fn() }));
 vi.mock('../../sentry.server.config', () => ({}));
@@ -16,13 +18,16 @@ vi.mock('@/lib/websocket/socket-utils', () => ({ broadcastActivityEvent: vi.fn()
 vi.mock('@pagespace/lib/observability/clickhouse-client', () => ({
   probeClickHouseStartup: vi.fn(() => ({ mode: 'disabled', reason: 'flag off' })),
 }));
-vi.mock('@pagespace/lib/observability/analytics-inserts', () => ({
-  drainAnalyticsInserts: vi.fn(() => Promise.resolve()),
+// Mocked so register()'s init import does not construct the real logger
+// singleton (which would register real signal handlers + a flush timer on the
+// test process). Its shutdown-owner behavior is covered by
+// packages/lib graceful-shutdown.test.ts.
+vi.mock('@pagespace/lib/logging/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 import { register } from '../instrumentation';
 import { probeClickHouseStartup } from '@pagespace/lib/observability/clickhouse-client';
-import { drainAnalyticsInserts } from '@pagespace/lib/observability/analytics-inserts';
 
 describe('web instrumentation — ClickHouse composition-root wiring (#890 Phase 3 FIX)', () => {
   let onSpy: MockInstance;
@@ -56,21 +61,14 @@ describe('web instrumentation — ClickHouse composition-root wiring (#890 Phase
     await expect(register()).rejects.toThrow('ClickHouse misconfigured');
   });
 
-  it.each(['SIGTERM', 'SIGINT'] as const)(
-    'given %s, the registered handler should drain the analytics insert buffers',
-    async (signal) => {
-      await register();
+  it('given nodejs startup, register() should NOT register a bespoke SIGTERM/SIGINT listener — graceful shutdown (flush → drain → exit) is owned by the shared logger, which register() initializes', async () => {
+    await register();
 
-      const handlers = onSpy.mock.calls
-        .filter(([event]) => event === signal)
-        .map(([, handler]) => handler as () => unknown);
-      expect(handlers.length).toBeGreaterThan(0);
-
-      for (const handler of handlers) await handler();
-
-      expect(drainAnalyticsInserts).toHaveBeenCalled();
-    },
-  );
+    const signalListeners = onSpy.mock.calls.filter(
+      ([event]) => event === 'SIGTERM' || event === 'SIGINT',
+    );
+    expect(signalListeners).toHaveLength(0);
+  });
 
   it('given the edge runtime, register() should not touch the ClickHouse wiring', async () => {
     vi.stubEnv('NEXT_RUNTIME', 'edge');

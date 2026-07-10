@@ -2,19 +2,24 @@ import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } fr
 
 // #890 Phase 3 FIX: admin is a ClickHouse composition root too (its
 // monitoring readers and logger-database writers run in this process) —
-// a half-configured deploy must crash at boot, and SIGTERM/SIGINT must
-// drain the CH insert buffers.
+// a half-configured deploy must crash at boot, and graceful shutdown must
+// drain the CH insert buffers. Draining + termination is owned by the shared
+// logger's flush → drain → exit handler, which register() initializes; the
+// composition root registers no bespoke signal listener.
 
 vi.mock('@pagespace/lib/observability/clickhouse-client', () => ({
   probeClickHouseStartup: vi.fn(() => ({ mode: 'disabled', reason: 'flag off' })),
 }));
-vi.mock('@pagespace/lib/observability/analytics-inserts', () => ({
-  drainAnalyticsInserts: vi.fn(() => Promise.resolve()),
+// Mocked so register()'s init import does not construct the real logger
+// singleton (which would register real signal handlers + a flush timer on the
+// test process). Its shutdown-owner behavior is covered by
+// packages/lib graceful-shutdown.test.ts.
+vi.mock('@pagespace/lib/logging/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 import { register } from '../instrumentation';
 import { probeClickHouseStartup } from '@pagespace/lib/observability/clickhouse-client';
-import { drainAnalyticsInserts } from '@pagespace/lib/observability/analytics-inserts';
 
 describe('admin instrumentation — ClickHouse composition-root wiring (#890 Phase 3 FIX)', () => {
   let onSpy: MockInstance;
@@ -48,21 +53,14 @@ describe('admin instrumentation — ClickHouse composition-root wiring (#890 Pha
     await expect(register()).rejects.toThrow('ClickHouse misconfigured');
   });
 
-  it.each(['SIGTERM', 'SIGINT'] as const)(
-    'given %s, the registered handler should drain the analytics insert buffers',
-    async (signal) => {
-      await register();
+  it('given nodejs startup, register() should NOT register a bespoke SIGTERM/SIGINT listener — graceful shutdown (flush → drain → exit) is owned by the shared logger, which register() initializes', async () => {
+    await register();
 
-      const handlers = onSpy.mock.calls
-        .filter(([event]) => event === signal)
-        .map(([, handler]) => handler as () => unknown);
-      expect(handlers.length).toBeGreaterThan(0);
-
-      for (const handler of handlers) await handler();
-
-      expect(drainAnalyticsInserts).toHaveBeenCalled();
-    },
-  );
+    const signalListeners = onSpy.mock.calls.filter(
+      ([event]) => event === 'SIGTERM' || event === 'SIGINT',
+    );
+    expect(signalListeners).toHaveLength(0);
+  });
 
   it('given the edge runtime, register() should not touch the ClickHouse wiring', async () => {
     vi.stubEnv('NEXT_RUNTIME', 'edge');
