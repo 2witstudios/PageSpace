@@ -70,7 +70,7 @@ describe('createSandboxTools', () => {
     // resolve it as the default), but the actor's page-view access to that
     // Terminal page has since been revoked.
     const machines: MachineDirectoryDeps = {
-      listMachines: async () => [{ kind: 'existing', terminalId: 't1' }],
+      listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
       describeMachine: async () => ({ name: 'Shared Terminal' }),
       isMachineAccessible: async () => false,
     };
@@ -261,7 +261,7 @@ describe('createSandboxTools', () => {
 
     it('given multiple configured machines and no prior switch, should default the active flag to machines[0]', async () => {
       const machines: MachineDirectoryDeps = {
-        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) =>
           m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal', description: 'Team box' },
         isMachineAccessible: async () => true,
@@ -279,12 +279,12 @@ describe('createSandboxTools', () => {
 
     it('given a rawContext.activeMachine already set to a configured machine, should reflect it as active', async () => {
       const machines: MachineDirectoryDeps = {
-        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
         isMachineAccessible: async () => true,
       };
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
-      const rawContext: ToolExecutionContext = { userId: 'u1', activeMachine: { kind: 'existing', terminalId: 't1' } };
+      const rawContext: ToolExecutionContext = { userId: 'u1', activeMachine: { kind: 'existing', machineId: 't1' } };
       const result = (await exec(tools.list_machines, {}, rawContext)) as {
         success: true;
         machines: Array<{ id: string; active: boolean }>;
@@ -295,7 +295,7 @@ describe('createSandboxTools', () => {
 
     it('given a configured machine the actor can no longer access, should exclude it instead of exposing its name', async () => {
       const machines: MachineDirectoryDeps = {
-        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 'revoked' }],
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 'revoked' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Should Not Appear' }),
         isMachineAccessible: async (_c, m) => m.kind === 'own',
       };
@@ -309,7 +309,7 @@ describe('createSandboxTools', () => {
   describe('switch_machine', () => {
     it('given a configured and accessible machine, should mutate rawContext.activeMachine and return success', async () => {
       const machines: MachineDirectoryDeps = {
-        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
         isMachineAccessible: async () => true,
       };
@@ -317,12 +317,12 @@ describe('createSandboxTools', () => {
       const rawContext: ToolExecutionContext = { userId: 'u1' };
       const result = await exec(tools.switch_machine, { machine: 't1' }, rawContext);
       expect(result).toEqual({ success: true, active: 't1', name: 'Shared Terminal' });
-      expect(rawContext.activeMachine).toEqual({ kind: 'existing', terminalId: 't1' });
+      expect(rawContext.activeMachine).toEqual({ kind: 'existing', machineId: 't1' });
     });
 
     it('given the same rawContext reused by a later call in the run, should carry the switched machine forward', async () => {
       const machines: MachineDirectoryDeps = {
-        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
         isMachineAccessible: async () => true,
       };
@@ -345,7 +345,7 @@ describe('createSandboxTools', () => {
 
     it('given a configured but inaccessible machine, should reject as inaccessible', async () => {
       const machines: MachineDirectoryDeps = {
-        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async () => ({ name: 'Shared Terminal' }),
         isMachineAccessible: async (_c, m) => m.kind === 'own',
       };
@@ -358,7 +358,7 @@ describe('createSandboxTools', () => {
 
     it('given a switch_machine call followed by bash, should route the acquire request to the switched machine', async () => {
       const machines: MachineDirectoryDeps = {
-        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+        listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
         isMachineAccessible: async () => true,
       };
@@ -375,7 +375,7 @@ describe('createSandboxTools', () => {
       await exec(tools.bash, { command: 'echo hi' }, rawContext);
 
       expect(seenAcquisitions).toEqual([
-        expect.objectContaining({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+        expect.objectContaining({ activeMachine: { kind: 'existing', machineId: 't1' } }),
       ]);
     });
 
@@ -421,7 +421,7 @@ describe('createSandboxTools', () => {
         return { ok: true, sandboxId: 'sbx', resumed: false };
       };
       const machines: MachineDirectoryDeps = {
-        listMachines: async () => [{ kind: 'existing', terminalId: 't1' }],
+        listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
         describeMachine: async () => ({ name: 'Shared Terminal' }),
         isMachineAccessible: async () => true,
         resolveDriveId: async () => 'home-drive-1',
@@ -451,7 +451,7 @@ describe('createSandboxTools', () => {
         return { ok: true, sandboxId: 'sbx', resumed: false };
       };
       const machines: MachineDirectoryDeps = {
-        listMachines: async () => [{ kind: 'existing', terminalId: 't1' }],
+        listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
         describeMachine: async () => ({ name: 'Shared Terminal' }),
         isMachineAccessible: async () => true,
         resolveDriveId: async () => 'home-drive-1',

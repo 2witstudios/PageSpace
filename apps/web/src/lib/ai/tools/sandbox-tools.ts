@@ -37,7 +37,7 @@ export const MAX_PATH_LENGTH = 1024;
 
 /** Stable id for a MachineRef, used as the agent-facing handle in list_machines/switch_machine. */
 export function machineRefId(machine: MachineRef): string {
-  return machine.kind === 'own' ? 'own' : machine.terminalId;
+  return machine.kind === 'own' ? 'own' : machine.machineId;
 }
 
 export function machineRefEquals(a: MachineRef, b: MachineRef): boolean {

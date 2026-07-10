@@ -22,7 +22,7 @@ export function validateTerminalConnectPayload(payload: unknown): Result {
 }
 
 export type AgentTerminalConnectPayload = {
-  terminalId: string;
+  machineId: string;
   /** Neither set → machine scope, projectName alone → project scope, both → branch scope (see `agent-terminals.ts`). */
   projectName?: string;
   branchName?: string;
@@ -66,8 +66,8 @@ export function validateAgentTerminalConnectPayload(payload: unknown): AgentResu
   }
   const p = payload as Record<string, unknown>;
 
-  const terminalId = requireNonEmptyString(p.terminalId, 'terminalId');
-  if (!terminalId.ok) return terminalId;
+  const machineId = requireNonEmptyString(p.machineId, 'machineId');
+  if (!machineId.ok) return machineId;
   const projectName = optionalNonEmptyString(p.projectName, 'projectName');
   if (!projectName.ok) return projectName;
   const branchName = optionalNonEmptyString(p.branchName, 'branchName');
@@ -87,7 +87,7 @@ export function validateAgentTerminalConnectPayload(payload: unknown): AgentResu
   return {
     ok: true,
     value: {
-      terminalId: terminalId.value,
+      machineId: machineId.value,
       projectName: projectName.value,
       branchName: branchName.value,
       name: name.value,

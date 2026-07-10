@@ -1359,6 +1359,13 @@
       "when": 1783634938593,
       "tag": "0193_awesome_titania",
       "breakpoints": true
+    },
+    {
+      "idx": 194,
+      "version": "7",
+      "when": 1783717757121,
+      "tag": "0194_slim_monster_badoon",
+      "breakpoints": true
     }
   ]
 }

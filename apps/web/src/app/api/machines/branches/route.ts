@@ -2,9 +2,9 @@
  * Machine Branches API — the navigator UI's surface onto a Project's
  * branch-terminals (Terminal — Workspace, Branches tier).
  *
- * GET    ?terminalId=&projectName=                       → list
- * POST   { terminalId, projectName, branchName }         → spawn (provisions its OWN Sprite, clones, checks out)
- * DELETE ?terminalId=&projectName=&branchName=           → kill (DELETEs the Sprite, drops the tracking row)
+ * GET    ?machineId=&projectName=                       → list
+ * POST   { machineId, projectName, branchName }         → spawn (provisions its OWN Sprite, clones, checks out)
+ * DELETE ?machineId=&projectName=&branchName=           → kill (DELETEs the Sprite, drops the tracking row)
  *
  * Session-only (no MCP/agent tokens) — this is a human/UI surface. Every
  * request re-checks access for the named Machine page (view-level for GET,
@@ -50,17 +50,17 @@ export async function GET(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  if (!machineId.ok) return machineId.error;
   const projectName = requireString(url.searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
 
-  if (!(await canViewMachine(auth.userId, terminalId.value))) {
+  if (!(await canViewMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
   const store = await createDbMachineBranchStore();
-  const branches = await listBranches({ terminalId: terminalId.value, projectName: projectName.value, store });
+  const branches = await listBranches({ machineId: machineId.value, projectName: projectName.value, store });
   return NextResponse.json({
     branches: branches.map((b) => ({ branchName: b.branchName, createdAt: b.createdAt })),
   });
@@ -70,28 +70,28 @@ export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  let body: { terminalId?: unknown; projectName?: unknown; branchName?: unknown };
+  let body: { machineId?: unknown; projectName?: unknown; branchName?: unknown };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const terminalId = requireString(body.terminalId, 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(body.machineId, 'machineId');
+  if (!machineId.ok) return machineId.error;
   const projectName = requireString(body.projectName, 'projectName');
   if (!projectName.ok) return projectName.error;
   const branchName = requireString(body.branchName, 'branchName');
   if (!branchName.ok) return branchName.error;
 
-  if (!(await canAccessMachine(auth.userId, terminalId.value))) {
+  if (!(await canAccessMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
   const [actor, deps] = [await resolveMachineActorContext(auth.userId), buildMachineBranchesDeps()];
 
   const result = await spawnBranch({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     projectName: projectName.value,
     branchName: branchName.value,
     actor,
@@ -114,21 +114,21 @@ export async function DELETE(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  if (!machineId.ok) return machineId.error;
   const projectName = requireString(url.searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
   const branchName = requireString(url.searchParams.get('branchName'), 'branchName');
   if (!branchName.ok) return branchName.error;
 
-  if (!(await canAccessMachine(auth.userId, terminalId.value))) {
+  if (!(await canAccessMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
   const store = await createDbMachineBranchStore();
   const host = await getMachineHostForBranches();
   const result = await killBranch({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     projectName: projectName.value,
     branchName: branchName.value,
     store,

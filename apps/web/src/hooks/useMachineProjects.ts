@@ -21,8 +21,8 @@ const fetcher = (url: string) =>
   });
 
 /** Projects tier of the Terminal workspace navigator — git repos tracked on a Machine. */
-export function useMachineProjects(terminalId: string | null) {
-  const key = terminalId ? `/api/machines/projects?terminalId=${encodeURIComponent(terminalId)}` : null;
+export function useMachineProjects(machineId: string | null) {
+  const key = machineId ? `/api/machines/projects?machineId=${encodeURIComponent(machineId)}` : null;
 
   const { data, error, isLoading, mutate } = useSWR(key, fetcher, {
     revalidateOnFocus: false,
@@ -30,23 +30,23 @@ export function useMachineProjects(terminalId: string | null) {
 
   const addProject = useCallback(
     async (name: string, repoUrl: string) => {
-      if (!terminalId) throw new Error('No active machine');
+      if (!machineId) throw new Error('No active machine');
       // The POST route returns only `{ name, repoUrl, path }` — no `createdAt`
       // (that's set by the DB and only surfaced by the GET list route).
-      const result = await post<{ project: Omit<MachineProject, 'createdAt'> }>('/api/machines/projects', { terminalId, name, repoUrl });
+      const result = await post<{ project: Omit<MachineProject, 'createdAt'> }>('/api/machines/projects', { machineId, name, repoUrl });
       await mutate();
       return result.project;
     },
-    [terminalId, mutate],
+    [machineId, mutate],
   );
 
   const removeProject = useCallback(
     async (name: string) => {
-      if (!terminalId) throw new Error('No active machine');
-      await del(`/api/machines/projects?terminalId=${encodeURIComponent(terminalId)}&name=${encodeURIComponent(name)}`);
+      if (!machineId) throw new Error('No active machine');
+      await del(`/api/machines/projects?machineId=${encodeURIComponent(machineId)}&name=${encodeURIComponent(name)}`);
       await mutate();
     },
-    [terminalId, mutate],
+    [machineId, mutate],
   );
 
   return {

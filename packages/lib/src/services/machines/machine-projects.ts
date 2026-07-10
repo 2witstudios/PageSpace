@@ -2,7 +2,7 @@
  * Machine Projects: add / list / remove git repos on a Machine's persistent
  * filesystem (IO, dependency-injected where it touches the sandbox/DB).
  *
- * A Machine's identity is its backing page (`terminalId`) — the SAME page
+ * A Machine's identity is its backing page (`machineId`) — the SAME page
  * whose persistent Sprite session (`terminal_sessions`, see
  * services/sandbox/terminal-session-manager.ts) a live Terminal shell, or a
  * page-agent's "own machine" tool calls (services/sandbox/machine-session.ts),
@@ -23,7 +23,7 @@
  *
  * `SandboxActorContext.conversationId` is a required field designed around
  * conversation-scoped sandboxes; a Machine op has no conversation, so it is
- * repurposed here as an opaque scope key (the terminalId) that the injected
+ * repurposed here as an opaque scope key (the machineId) that the injected
  * `acquireSandbox` closure ignores in favor of the actual bound machine —
  * documented at the call site below.
  */
@@ -73,7 +73,7 @@ export interface MachineProjectsDeps {
   isEnabled: () => boolean;
   now: () => Date;
   /** Acquire a live, authorized sandbox for this machine's backing page — pre-bound to tenant/owner/canRun by the caller. */
-  acquireMachineSandbox: (terminalId: string) => Promise<MachineAcquireResult>;
+  acquireMachineSandbox: (machineId: string) => Promise<MachineAcquireResult>;
   reconnect: (sandboxId: string) => Promise<ExecutableSandbox | null>;
   resolveGitHubToken: (userId: string) => Promise<string | null>;
   quota: SandboxQuotaDeps;
@@ -82,12 +82,12 @@ export interface MachineProjectsDeps {
   screenOutput?: (text: string) => Promise<string>;
 }
 
-function buildGitRunDeps(terminalId: string, deps: MachineProjectsDeps): GitSandboxRunDeps {
+function buildGitRunDeps(machineId: string, deps: MachineProjectsDeps): GitSandboxRunDeps {
   return {
     isEnabled: deps.isEnabled,
     resolveGitHubToken: deps.resolveGitHubToken,
     acquireSandbox: async () => {
-      const result = await deps.acquireMachineSandbox(terminalId);
+      const result = await deps.acquireMachineSandbox(machineId);
       if (!result.ok) return { ok: false, reason: 'provision_failed' };
       return { ok: true, sandboxId: result.sandboxId, resumed: result.resumed };
     },
@@ -100,14 +100,14 @@ function buildGitRunDeps(terminalId: string, deps: MachineProjectsDeps): GitSand
   };
 }
 
-function buildCtx(terminalId: string, actor: MachineActorContext): SandboxActorContext {
+function buildCtx(machineId: string, actor: MachineActorContext): SandboxActorContext {
   return {
     userId: actor.userId,
     tenantId: actor.tenantId,
     driveId: undefined,
     // See module doc: a Machine op has no conversation, so this opaque scope
     // key (ignored by the acquireSandbox closure above) just satisfies the field.
-    conversationId: terminalId,
+    conversationId: machineId,
     actorEmail: actor.actorEmail,
     actorDisplayName: actor.actorDisplayName,
     tier: actor.tier,
@@ -118,12 +118,12 @@ function buildCtx(terminalId: string, actor: MachineActorContext): SandboxActorC
 // throws — used both to clean up a failed/partial clone and to remove a
 // project's checkout on `removeProject`.
 async function safeRemoveDirectory(
-  terminalId: string,
+  machineId: string,
   path: string,
   deps: MachineProjectsDeps,
 ): Promise<void> {
   try {
-    const acquired = await deps.acquireMachineSandbox(terminalId);
+    const acquired = await deps.acquireMachineSandbox(machineId);
     if (!acquired.ok) return;
     const sandbox = await deps.reconnect(acquired.sandboxId);
     if (!sandbox) return;
@@ -143,13 +143,13 @@ export type AddProjectResult =
   | { ok: false; reason: AddProjectDenialReason | 'kill_switch_off' | 'clone_failed' | 'error'; detail?: string };
 
 export async function addProject({
-  terminalId,
+  machineId,
   actor,
   name,
   repoUrl,
   deps,
 }: {
-  terminalId: string;
+  machineId: string;
   actor: MachineActorContext;
   name: string;
   repoUrl: string;
@@ -157,12 +157,12 @@ export async function addProject({
 }): Promise<AddProjectResult> {
   if (!deps.isEnabled()) return { ok: false, reason: 'kill_switch_off' };
 
-  const existing = await deps.store.list(terminalId);
+  const existing = await deps.store.list(machineId);
   const plan = planAddProject({ name, repoUrl, existingNames: existing.map((p) => p.name) });
   if (!plan.ok) return plan;
 
-  const ctx = buildCtx(terminalId, actor);
-  const gitDeps = buildGitRunDeps(terminalId, deps);
+  const ctx = buildCtx(machineId, actor);
+  const gitDeps = buildGitRunDeps(machineId, deps);
 
   const result = await runGitInSandbox({
     cmd: 'git',
@@ -175,14 +175,14 @@ export async function addProject({
     return { ok: false, reason: 'clone_failed', detail: result.error };
   }
   if (result.exitCode !== 0) {
-    await safeRemoveDirectory(terminalId, plan.path, deps);
+    await safeRemoveDirectory(machineId, plan.path, deps);
     return { ok: false, reason: 'clone_failed', detail: result.stderr || result.stdout };
   }
 
   try {
     const project = await deps.store.create({
       ownerId: actor.userId,
-      terminalId,
+      machineId,
       name,
       repoUrl,
       path: plan.path,
@@ -196,37 +196,37 @@ export async function addProject({
 }
 
 export async function listProjects({
-  terminalId,
+  machineId,
   store,
 }: {
-  terminalId: string;
+  machineId: string;
   store: MachineProjectStore;
 }): Promise<MachineProjectRecord[]> {
-  return store.list(terminalId);
+  return store.list(machineId);
 }
 
 export type RemoveProjectResult = { ok: true } | { ok: false; reason: 'not_found' | 'error' };
 
 export async function removeProject({
-  terminalId,
+  machineId,
   name,
   deps,
 }: {
-  terminalId: string;
+  machineId: string;
   name: string;
   deps: MachineProjectsDeps;
 }): Promise<RemoveProjectResult> {
-  const existing = await deps.store.findByName(terminalId, name);
+  const existing = await deps.store.findByName(machineId, name);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   // Best-effort filesystem cleanup — the tracking row is removed regardless of
   // whether `rm -rf` succeeds, since the user asked for the project gone from
   // their list; a lingering directory is far less surprising than a project
   // the user can never remove because the machine is briefly unreachable.
-  await safeRemoveDirectory(terminalId, existing.path, deps);
+  await safeRemoveDirectory(machineId, existing.path, deps);
 
   try {
-    await deps.store.remove(terminalId, name);
+    await deps.store.remove(machineId, name);
     return { ok: true };
   } catch {
     return { ok: false, reason: 'error' };

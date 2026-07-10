@@ -7,10 +7,10 @@ import TerminalPanes from './TerminalPanes';
 
 interface TerminalWorkspaceProps {
   /** The Terminal page's own id — this page IS the Machine (tasks/terminal.md). */
-  terminalId: string;
+  machineId: string;
 }
 
-export default function TerminalWorkspace({ terminalId }: TerminalWorkspaceProps) {
+export default function TerminalWorkspace({ machineId }: TerminalWorkspaceProps) {
   const socket = useSocket();
   const ensureWorkspace = useTerminalWorkspaceStore((state) => state.ensureWorkspace);
   const disposeWorkspace = useTerminalWorkspaceStore((state) => state.disposeWorkspace);
@@ -19,9 +19,9 @@ export default function TerminalWorkspace({ terminalId }: TerminalWorkspaceProps
   // workspace by composition through the store — no common parent to hold
   // local state now that they live in different parts of the layout.
   useEffect(() => {
-    ensureWorkspace(terminalId);
-    return () => disposeWorkspace(terminalId);
-  }, [terminalId, ensureWorkspace, disposeWorkspace]);
+    ensureWorkspace(machineId);
+    return () => disposeWorkspace(machineId);
+  }, [machineId, ensureWorkspace, disposeWorkspace]);
 
-  return <TerminalPanes terminalId={terminalId} socket={socket} />;
+  return <TerminalPanes machineId={machineId} socket={socket} />;
 }

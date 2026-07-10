@@ -14,16 +14,16 @@ const XtermTerminal = dynamic(() => import('../XtermTerminal'), { ssr: false });
 export type { TerminalPaneState };
 
 interface TerminalPanesProps {
-  terminalId: string;
+  machineId: string;
   socket: Socket | null | undefined;
 }
 
-function paneSessionId(terminalId: string, scope: OpenTerminalScope): string {
-  return `agent-terminal:${terminalId}:${scope.projectName ?? ''}:${scope.branchName ?? ''}:${scope.name}`;
+function paneSessionId(machineId: string, scope: OpenTerminalScope): string {
+  return `agent-terminal:${machineId}:${scope.projectName ?? ''}:${scope.branchName ?? ''}:${scope.name}`;
 }
 
-export default function TerminalPanes({ terminalId, socket }: TerminalPanesProps) {
-  const workspace = useTerminalWorkspaceStore(selectWorkspace(terminalId));
+export default function TerminalPanes({ machineId, socket }: TerminalPanesProps) {
+  const workspace = useTerminalWorkspaceStore(selectWorkspace(machineId));
   const splitRight = useTerminalWorkspaceStore((state) => state.splitRight);
   const splitDown = useTerminalWorkspaceStore((state) => state.splitDown);
   const closePane = useTerminalWorkspaceStore((state) => state.closePane);
@@ -50,14 +50,14 @@ export default function TerminalPanes({ terminalId, socket }: TerminalPanesProps
                     <ResizablePanel defaultSize={100 / column.panes.length} minSize={15}>
                       <TerminalPane
                         socket={socket}
-                        terminalId={terminalId}
+                        machineId={machineId}
                         pane={pane}
                         isActive={pane.id === activePaneId}
                         canClose={canClose}
-                        onSelect={() => selectPane(terminalId, pane.id)}
-                        onSplitRight={() => splitRight(terminalId, pane.id)}
-                        onSplitDown={() => splitDown(terminalId, pane.id)}
-                        onClose={() => closePane(terminalId, pane.id)}
+                        onSelect={() => selectPane(machineId, pane.id)}
+                        onSplitRight={() => splitRight(machineId, pane.id)}
+                        onSplitDown={() => splitDown(machineId, pane.id)}
+                        onClose={() => closePane(machineId, pane.id)}
                       />
                     </ResizablePanel>
                   </Fragment>
@@ -81,7 +81,7 @@ export default function TerminalPanes({ terminalId, socket }: TerminalPanesProps
  */
 function TerminalPane({
   socket,
-  terminalId,
+  machineId,
   pane,
   isActive,
   canClose,
@@ -91,7 +91,7 @@ function TerminalPane({
   onClose,
 }: {
   socket: Socket | null | undefined;
-  terminalId: string;
+  machineId: string;
   pane: TerminalPaneState;
   isActive: boolean;
   canClose: boolean;
@@ -100,7 +100,7 @@ function TerminalPane({
   onSplitDown(): void;
   onClose(): void;
 }) {
-  const sessionId = pane.scope ? paneSessionId(terminalId, pane.scope) : null;
+  const sessionId = pane.scope ? paneSessionId(machineId, pane.scope) : null;
 
   return (
     <div className="group/pane relative flex h-full flex-col" onClick={onSelect}>
@@ -149,7 +149,7 @@ function TerminalPane({
         {!pane.scope || !sessionId ? (
           <EmptyState title="No terminal open" description="Select a terminal from the navigator, or add one from any node." />
         ) : (
-          <TerminalPaneStream key={sessionId} socket={socket} terminalId={terminalId} scope={pane.scope} sessionId={sessionId} />
+          <TerminalPaneStream key={sessionId} socket={socket} machineId={machineId} scope={pane.scope} sessionId={sessionId} />
         )}
       </div>
     </div>
@@ -165,12 +165,12 @@ function TerminalPane({
  */
 function TerminalPaneStream({
   socket,
-  terminalId,
+  machineId,
   scope,
   sessionId,
 }: {
   socket: Socket | null | undefined;
-  terminalId: string;
+  machineId: string;
   scope: OpenTerminalScope;
   sessionId: string;
 }) {
@@ -186,7 +186,7 @@ function TerminalPaneStream({
         <XtermTerminal
           socket={socket}
           sessionId={sessionId}
-          connectPayload={{ terminalId, projectName: scope.projectName, branchName: scope.branchName, name: scope.name }}
+          connectPayload={{ machineId, projectName: scope.projectName, branchName: scope.branchName, name: scope.name }}
           onReady={handleReady}
           onError={handleError}
         />

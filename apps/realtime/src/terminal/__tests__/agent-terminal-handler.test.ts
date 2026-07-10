@@ -66,7 +66,7 @@ function makeBilling(over: Partial<{
   };
 }
 
-const validPayload = { terminalId: 't1', projectName: 'repo', branchName: 'feature-x', name: 'cli', cols: 80, rows: 24 };
+const validPayload = { machineId: 't1', projectName: 'repo', branchName: 'feature-x', name: 'cli', cols: 80, rows: 24 };
 
 describe('resolveAgentTerminalCommand', () => {
   const ORIGINAL_SHELL = process.env.SHELL;
@@ -150,7 +150,7 @@ describe('buildAgentTerminalHandlers', () => {
     it('given a machine-scoped agent terminal, should launch inside the resolved SANDBOX_ROOT cwd', async () => {
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ cwd: SANDBOX_ROOT })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
-      await onConnect({ terminalId: 't1', name: 'cli', cols: 80, rows: 24 });
+      await onConnect({ machineId: 't1', name: 'cli', cols: 80, rows: 24 });
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ cwd: SANDBOX_ROOT }));
     });
@@ -158,7 +158,7 @@ describe('buildAgentTerminalHandlers', () => {
     it('given a project-scoped agent terminal, should launch inside the resolved project path cwd', async () => {
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ cwd: '/workspace/projects/my-repo' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
-      await onConnect({ terminalId: 't1', projectName: 'repo', name: 'cli', cols: 80, rows: 24 });
+      await onConnect({ machineId: 't1', projectName: 'repo', name: 'cli', cols: 80, rows: 24 });
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/workspace/projects/my-repo' }));
     });
@@ -177,7 +177,7 @@ describe('buildAgentTerminalHandlers', () => {
       process.env.SHELL = '/bin/zsh';
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ command: 'shell', args: [], cwd: SANDBOX_ROOT })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
-      await onConnect({ terminalId: 't1', name: 'shell', cols: 80, rows: 24 });
+      await onConnect({ machineId: 't1', name: 'shell', cols: 80, rows: 24 });
 
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ command: '/bin/zsh', args: [] }));
       process.env.SHELL = originalShell;
@@ -238,10 +238,10 @@ describe('buildAgentTerminalHandlers', () => {
 
     it('given a payload with neither projectName nor branchName (machine scope), should call checkAuth with both undefined', async () => {
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
-      await onConnect({ terminalId: 't1', name: 'shell', cols: 80, rows: 24 });
+      await onConnect({ machineId: 't1', name: 'shell', cols: 80, rows: 24 });
 
       expect(checkAuth).toHaveBeenCalledWith(
-        expect.objectContaining({ terminalId: 't1', projectName: undefined, branchName: undefined, name: 'shell' }),
+        expect.objectContaining({ machineId: 't1', projectName: undefined, branchName: undefined, name: 'shell' }),
       );
     });
 

@@ -60,7 +60,7 @@ export type AgentTerminalCheckAuthResult =
 
 export type AgentTerminalCheckAuthFn = (args: {
   userId: string;
-  terminalId: string;
+  machineId: string;
   projectName?: string;
   branchName?: string;
   name: string;
@@ -353,12 +353,12 @@ export function buildAgentTerminalHandlers({
         socket.emit('agent-terminal:error', { message: validation.error });
         return;
       }
-      const { terminalId, projectName, branchName, name, cols, rows } = validation.value;
+      const { machineId, projectName, branchName, name, cols, rows } = validation.value;
       const connectionId = validation.value.connectionId ?? socket.id;
       const { cols: clampedCols, rows: clampedRows } = clampTerminalDimensions({ cols, rows });
 
       const userId = socket.data.user?.id ?? '';
-      const authResult = await checkAuth({ userId, terminalId, projectName, branchName, name });
+      const authResult = await checkAuth({ userId, machineId, projectName, branchName, name });
       if (!authResult.ok) {
         socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${authResult.reason}`, connectionId });
         return;
@@ -419,7 +419,7 @@ export function buildAgentTerminalHandlers({
         payerId: authResult.payerId,
         holdId,
         connectedAt,
-        pageId: terminalId,
+        pageId: machineId,
         outputFn: (data) => socket.emit('agent-terminal:output', { data, connectionId }),
         closedFn: (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
         scrollback: [],
@@ -492,7 +492,7 @@ export function buildAgentTerminalHandlers({
       const reAuthInterval = setInterval(async () => {
         const liveSession = sessionMap.getByKey(sessionKey);
         if (!liveSession) { clearInterval(reAuthInterval); return; }
-        const result = await checkAuth({ userId, terminalId, projectName, branchName, name });
+        const result = await checkAuth({ userId, machineId, projectName, branchName, name });
         // Re-check liveness after the await: another actor (heartbeat insolvency,
         // PTY exit, idle reap) may have torn the session down while checkAuth ran —
         // acting on the stale reference would double releaseSlot/kill/closedFn.

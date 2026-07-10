@@ -60,31 +60,31 @@ export const globalTerminalConfigRepository = {
     return db
       .select({ id: pages.id, title: pages.title })
       .from(pages)
-      .where(and(inArray(pages.id, accessiblePageIds), eq(pages.type, 'TERMINAL'), eq(pages.isTrashed, false)));
+      .where(and(inArray(pages.id, accessiblePageIds), eq(pages.type, 'MACHINE'), eq(pages.isTrashed, false)));
   },
 
   /**
-   * Verify every 'existing' terminalId resolves to a non-trashed TERMINAL
+   * Verify every 'existing' machineId resolves to a non-trashed TERMINAL
    * page in the user's Home drive that they can access — mirrors
    * agent-config/route.ts's scoping, substituting the Home drive for "the
    * agent's own drive".
    */
   async validateMachines(userId: string, machines: MachineRef[]): Promise<ValidateMachinesResult> {
-    const terminalIds = machines
-      .filter((m): m is { kind: 'existing'; terminalId: string } => m.kind === 'existing')
-      .map((m) => m.terminalId);
-    if (terminalIds.length === 0) return { ok: true };
+    const machineIds = machines
+      .filter((m): m is { kind: 'existing'; machineId: string } => m.kind === 'existing')
+      .map((m) => m.machineId);
+    if (machineIds.length === 0) return { ok: true };
 
     const homeDrive = await getHomeDrive(userId);
-    if (!homeDrive) return { ok: false, invalidIds: terminalIds };
+    if (!homeDrive) return { ok: false, invalidIds: machineIds };
 
     const accessiblePageIds = new Set(await getUserAccessiblePagesInDrive(userId, homeDrive.id));
     const validTerminals = await db
       .select({ id: pages.id })
       .from(pages)
-      .where(and(inArray(pages.id, terminalIds), eq(pages.type, 'TERMINAL'), eq(pages.isTrashed, false)));
+      .where(and(inArray(pages.id, machineIds), eq(pages.type, 'MACHINE'), eq(pages.isTrashed, false)));
     const validIds = new Set(validTerminals.filter((t) => accessiblePageIds.has(t.id)).map((t) => t.id));
-    const invalidIds = terminalIds.filter((id) => !validIds.has(id));
+    const invalidIds = machineIds.filter((id) => !validIds.has(id));
     return invalidIds.length === 0 ? { ok: true } : { ok: false, invalidIds };
   },
 
@@ -112,15 +112,15 @@ export const globalTerminalConfigRepository = {
 
       if (locked?.ownMachinePageId) {
         const existing = await pageRepository.findById(locked.ownMachinePageId);
-        if (existing && existing.type === PageType.TERMINAL) return existing.id;
+        if (existing && existing.type === PageType.MACHINE) return existing.id;
       }
 
       const { driveId } = await provisionHomeDriveIfNeeded(userId);
       const position = await pageRepository.getNextPosition(driveId, null);
       const page = await pageRepository.create({
         title: 'My Machine',
-        type: PageType.TERMINAL,
-        content: getDefaultContent(PageType.TERMINAL),
+        type: PageType.MACHINE,
+        content: getDefaultContent(PageType.MACHINE),
         driveId,
         parentId: null,
         position,

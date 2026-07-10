@@ -55,7 +55,7 @@ import { GET } from '../route';
 
 function get(query: Record<string, string>): Request {
   const params = new URLSearchParams({
-    terminalId: 't1',
+    machineId: 't1',
     projectName: 'p1',
     branchName: 'b1',
     ref: 'origin/master',
@@ -79,10 +79,10 @@ beforeEach(() => {
 });
 
 describe('/api/machines/git-blob request contract', () => {
-  it('requires terminalId, projectName, branchName, ref, and path', async () => {
-    for (const missing of ['terminalId', 'projectName', 'branchName', 'ref', 'path']) {
+  it('requires machineId, projectName, branchName, ref, and path', async () => {
+    for (const missing of ['machineId', 'projectName', 'branchName', 'ref', 'path']) {
       const params = new URLSearchParams({
-        terminalId: 't1',
+        machineId: 't1',
         projectName: 'p1',
         branchName: 'b1',
         ref: 'origin/master',
