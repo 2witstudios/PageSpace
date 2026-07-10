@@ -102,6 +102,21 @@
       "import": "./dist/observability/clickhouse-env.js",
       "require": "./dist/observability/clickhouse-env.js"
     },
+    "./observability/clickhouse-ddl": {
+      "types": "./dist/observability/clickhouse-ddl.d.ts",
+      "import": "./dist/observability/clickhouse-ddl.js",
+      "require": "./dist/observability/clickhouse-ddl.js"
+    },
+    "./observability/analytics-rows": {
+      "types": "./dist/observability/analytics-rows.d.ts",
+      "import": "./dist/observability/analytics-rows.js",
+      "require": "./dist/observability/analytics-rows.js"
+    },
+    "./observability/analytics-inserts": {
+      "types": "./dist/observability/analytics-inserts.d.ts",
+      "import": "./dist/observability/analytics-inserts.js",
+      "require": "./dist/observability/analytics-inserts.js"
+    },
     "./billing/credit-pricing": {
       "types": "./dist/billing/credit-pricing.d.ts",
       "import": "./dist/billing/credit-pricing.js",
