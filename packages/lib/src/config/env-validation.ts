@@ -52,6 +52,22 @@ export const serverEnvSchema = z
     // arm break-glass only on the exact value 'true' (fail-closed otherwise).
     ADMIN_DB_BREAK_GLASS: z.string().optional(),
 
+    // ClickHouse analytics tier (#890 Phase 3) — off by default. Only the
+    // exact value CLICKHOUSE_ENABLED='true' turns it on (accept any string so
+    // a stray value never fails app-wide env validation; the exact-match gate
+    // lives in observability/clickhouse-env.ts). All connection vars are
+    // optional at the schema level: the three-state fail-fast (off → no CH /
+    // on+configured → client / on+misconfigured → throw) is enforced by the
+    // client shell at init, not here, so non-analytics code paths still
+    // validate env. Credentials are server-side secrets — never NEXT_PUBLIC_,
+    // placeholders only in .env.example.
+    CLICKHOUSE_ENABLED: z.string().optional(),
+    CLICKHOUSE_URL: z.string().optional(),
+    CLICKHOUSE_HOST: z.string().optional(),
+    CLICKHOUSE_USER: z.string().optional(),
+    CLICKHOUSE_PASSWORD: z.string().optional(),
+    CLICKHOUSE_DATABASE: z.string().optional(),
+
     // CSRF Protection (required in production/development, optional in test)
     CSRF_SECRET: z.string().optional(),
 

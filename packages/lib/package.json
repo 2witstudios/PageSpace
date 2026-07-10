@@ -87,6 +87,21 @@
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
     },
+    "./observability/clickhouse-buffer": {
+      "types": "./dist/observability/clickhouse-buffer.d.ts",
+      "import": "./dist/observability/clickhouse-buffer.js",
+      "require": "./dist/observability/clickhouse-buffer.js"
+    },
+    "./observability/clickhouse-client": {
+      "types": "./dist/observability/clickhouse-client.d.ts",
+      "import": "./dist/observability/clickhouse-client.js",
+      "require": "./dist/observability/clickhouse-client.js"
+    },
+    "./observability/clickhouse-env": {
+      "types": "./dist/observability/clickhouse-env.d.ts",
+      "import": "./dist/observability/clickhouse-env.js",
+      "require": "./dist/observability/clickhouse-env.js"
+    },
     "./billing/credit-pricing": {
       "types": "./dist/billing/credit-pricing.d.ts",
       "import": "./dist/billing/credit-pricing.js",
@@ -2154,6 +2169,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
+    "@clickhouse/client": "^1.23.1",
     "@fly/sprites": "0.0.1-rc37",
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",
