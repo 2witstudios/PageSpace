@@ -116,11 +116,16 @@ describe('Root (dev/self-host) docker-compose configuration', () => {
   describe('ADMIN_DATABASE_URL wiring', () => {
     const appServices = ['web', 'admin', 'processor', 'realtime'];
 
+    // Owner/bootstrap credentials bypass the drizzle-admin/0001 zero-trust
+    // grants, so only the migrate one-shot may hold them. Runtime services
+    // get per-service LOGIN roles with the Phase 2 audit-write cutover.
+    // (This pins the compose environment map; the dev stack's `env_file: .env`
+    // may still carry the var — the hard guarantee is the tenant stack, which
+    // uses explicit environment maps only.)
     it.each(appServices)(
-      'given the %s service, should receive ADMIN_DATABASE_URL pointing at postgres-admin',
+      'given the %s runtime service, should NOT wire ADMIN_DATABASE_URL in the environment map (owner creds are migrate-only in Phase 1)',
       (svc) => {
-        const url = getEnv(compose, svc).ADMIN_DATABASE_URL;
-        expect(url).toContain('@postgres-admin:5432/pagespace_admin');
+        expect(getEnv(compose, svc)).not.toHaveProperty('ADMIN_DATABASE_URL');
       },
     );
 

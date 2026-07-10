@@ -371,14 +371,23 @@ describe('Tenant docker-compose configuration', () => {
       expect(dbUrl).toContain('${POSTGRES_PASSWORD');
     });
 
-    const adminDbServices = ['web', 'processor', 'realtime', 'migrate'];
+    it('given the migrate service, ADMIN_DATABASE_URL should reference internal postgres-admin with interpolated credentials', () => {
+      const url = getEnv('migrate').ADMIN_DATABASE_URL;
+      expect(url).toContain('@postgres-admin:');
+      expect(url).toContain('${ADMIN_POSTGRES_PASSWORD');
+    });
 
-    it.each(adminDbServices)(
-      'given the %s service, ADMIN_DATABASE_URL should reference internal postgres-admin with interpolated credentials',
+    // Owner/bootstrap credentials would bypass the drizzle-admin/0001
+    // zero-trust grants (the owner can DELETE/TRUNCATE its own tables), so
+    // runtime services must not receive them. Per-service LOGIN roles
+    // (admin_app / admin_chainer / admin_siem members) arrive with the
+    // Phase 2 audit-write cutover.
+    const runtimeServices = ['web', 'processor', 'realtime'];
+
+    it.each(runtimeServices)(
+      'given the %s runtime service, should NOT receive ADMIN_DATABASE_URL (owner creds are migrate-only in Phase 1)',
       (svc) => {
-        const url = getEnv(svc).ADMIN_DATABASE_URL;
-        expect(url).toContain('@postgres-admin:');
-        expect(url).toContain('${ADMIN_POSTGRES_PASSWORD');
+        expect(getEnv(svc)).not.toHaveProperty('ADMIN_DATABASE_URL');
       },
     );
 
@@ -421,7 +430,7 @@ describe('Tenant docker-compose configuration', () => {
       const lines = getRawYaml()
         .split('\n')
         .filter((l) => !l.trim().startsWith('#') && l.includes('ADMIN_DATABASE_URL:'));
-      expect(lines.length).toBeGreaterThanOrEqual(4); // web, processor, realtime, migrate
+      expect(lines.length).toBe(1); // migrate only — runtime services hold no admin creds in Phase 1
       for (const line of lines) {
         expect(line).toMatch(/\$\{ADMIN_POSTGRES_PASSWORD:\?/);
       }

@@ -69,6 +69,10 @@ ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admi
   strictly required. Set all three anyway so the `.env` matches the template.
 - The admin database gets its own volume (`postgres_admin_data`); no existing
   data is touched.
+- `ADMIN_POSTGRES_*` is the owner/bootstrap role and is handed only to the
+  `postgres-admin` container and the `migrate` one-shot. Runtime services
+  (web/processor/realtime) hold no admin credentials in Phase 1 — per-service
+  least-privilege LOGIN roles arrive with the Phase 2 audit-write cutover.
 - `ADMIN_DB_BREAK_GLASS=true` is a break-glass rollback flag only (audit
   writes fall back to the main DB and alert loudly). It is not a supported
   steady state — do not set it during a normal upgrade.
