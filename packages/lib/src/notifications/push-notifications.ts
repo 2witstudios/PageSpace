@@ -134,17 +134,32 @@ function getApnsSession(host: string): http2.ClientHttp2Session {
   if (existing && !existing.closed && !existing.destroyed) return existing;
 
   const session = http2.connect(`https://${host}`);
-  session.on('error', () => { apnsSessions.delete(host); });
-  session.on('close', () => { apnsSessions.delete(host); });
+  // Only drop this session from the cache if it's still the cached one — a newer
+  // session may have replaced it, and we must not evict that healthy replacement.
+  const evictIfCurrent = () => {
+    if (apnsSessions.get(host) === session) apnsSessions.delete(host);
+  };
+  session.on('error', evictIfCurrent);
+  session.on('close', evictIfCurrent);
   session.on('goaway', () => {
     try { session.close(); } catch { /* noop */ }
-    apnsSessions.delete(host);
+    evictIfCurrent();
   });
   // Don't let the pooled connection keep the process alive / block shutdown.
   session.socket?.unref?.();
 
   apnsSessions.set(host, session);
   return session;
+}
+
+// Evict a session after a transport failure AND gracefully close it. req.close()
+// only cancels the stream; without this the underlying HTTP/2 socket stays open,
+// so repeated APNs stalls/outages would leak connections/FDs as each retry opens
+// a fresh session. close() lets any other in-flight streams drain, then releases
+// the socket; the next send transparently reconnects.
+function evictApnsSession(host: string, session: http2.ClientHttp2Session): void {
+  if (apnsSessions.get(host) === session) apnsSessions.delete(host);
+  try { session.close(); } catch { /* noop */ }
 }
 
 interface ApnsTransportResult {
@@ -214,6 +229,10 @@ async function sendToApns(
     ? 'api.push.apple.com'
     : 'api.sandbox.push.apple.com';
 
+  // Only set once a session is actually opened, so a JWT-signing failure (which
+  // happens before any connection) never evicts/closes a healthy cached session.
+  let usedSession: http2.ClientHttp2Session | null = null;
+
   try {
     const jwtToken = getApnsJwtToken();
 
@@ -249,6 +268,7 @@ async function sendToApns(
     });
 
     const session = getApnsSession(apnsHost);
+    usedSession = session;
     const requestHeaders: http2.OutgoingHttpHeaders = {
       ':method': 'POST',
       ':path': `/3/device/${deviceToken}`,
@@ -303,9 +323,10 @@ async function sendToApns(
       shouldRemoveToken: invalidTokenReasons.includes(reason),
     };
   } catch (error) {
-    // A stream/session-level failure may have poisoned the cached session; evict
-    // it so the next send reconnects cleanly.
-    apnsSessions.delete(apnsHost);
+    // A transport failure (stream error/timeout) may have poisoned the session,
+    // and req.close() only cancels the stream — evict AND close the specific
+    // session used so its socket is released and the next send reconnects.
+    if (usedSession) evictApnsSession(apnsHost, usedSession);
 
     // The original `fetch failed` bug was opaque because only error.message was
     // logged — surface the stack and any transport error code for legibility.

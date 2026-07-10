@@ -61,11 +61,13 @@ const h2 = vi.hoisted(() => {
     lastRequestHeaders: Record<string, unknown> | null;
     lastRequestBody: string | null;
     connectedHosts: string[];
+    sessionCloseCount: number;
   } = {
     behavior: () => {},
     lastRequestHeaders: null,
     lastRequestBody: null,
     connectedHosts: [],
+    sessionCloseCount: 0,
   };
   return state;
 });
@@ -102,7 +104,7 @@ vi.mock('node:http2', async () => {
     session.closed = false;
     session.destroyed = false;
     session.socket = { unref: vi.fn() };
-    session.close = vi.fn();
+    session.close = vi.fn(() => { h2.sessionCloseCount += 1; });
     session.request = vi.fn((headers: Record<string, unknown>) => {
       h2.lastRequestHeaders = headers;
       const stream = makeStream();
@@ -190,6 +192,17 @@ function apnsStreamError(error: Error = new Error('fetch failed')) {
   h2.behavior = (stream) => {
     stream.emit('error', error);
   };
+}
+
+// Reset the shared h2 mock state between tests and default to an accepted (200)
+// response. The module-level session cache persists across tests, so state must
+// be cleared explicitly rather than relying on vi.clearAllMocks().
+function resetH2() {
+  h2.connectedHosts = [];
+  h2.lastRequestHeaders = null;
+  h2.lastRequestBody = null;
+  h2.sessionCloseCount = 0;
+  apnsRespond(200, {});
 }
 
 // Force getApnsJwtToken() to produce a token by returning a well-formed DER
@@ -336,10 +349,7 @@ describe('getUserPushTokens', () => {
 describe('sendPushNotification', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h2.connectedHosts = [];
-    h2.lastRequestHeaders = null;
-    h2.lastRequestBody = null;
-    apnsRespond(200, {}); // default: accepted
+    resetH2();
   });
 
   afterEach(() => {
@@ -531,6 +541,9 @@ describe('sendPushNotification', () => {
       failedAttempts: '1',
       isActive: true,
     }));
+    // The poisoned session must be closed (not just uncached) so its HTTP/2
+    // socket is released and doesn't leak on repeated stalls.
+    expect(h2.sessionCloseCount).toBeGreaterThan(0);
   });
 });
 
@@ -544,10 +557,7 @@ describe('sendPushNotification', () => {
 describe('APNs JWT token generation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h2.connectedHosts = [];
-    h2.lastRequestHeaders = null;
-    h2.lastRequestBody = null;
-    apnsRespond(200, {}); // default: accepted
+    resetH2();
   });
 
   afterEach(() => {
@@ -580,6 +590,9 @@ describe('APNs JWT token generation', () => {
       expect(result.failed).toBe(1);
       // Error will be caught by the catch block in sendToApns
       expect(result.errors.length).toBeGreaterThan(0);
+      // A signing failure happens before any connection is opened, so it must
+      // not evict/close a (possibly healthy) cached session.
+      expect(h2.sessionCloseCount).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -743,10 +756,7 @@ describe('APNs JWT token generation', () => {
 describe('silent push payload', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h2.connectedHosts = [];
-    h2.lastRequestHeaders = null;
-    h2.lastRequestBody = null;
-    apnsRespond(200, {}); // default: accepted
+    resetH2();
   });
 
   afterEach(() => {
