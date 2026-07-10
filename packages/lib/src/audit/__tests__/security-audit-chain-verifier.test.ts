@@ -87,8 +87,10 @@ vi.mock('@pagespace/db/schema/security-audit', () => ({
 import {
   verifySecurityAuditChain,
   type SecurityChainVerificationResult,
+  type VerifySecurityChainDeps,
 } from '../security-audit-chain-verifier';
 import { computeSecurityEventHash, type AuditEvent } from '../security-audit';
+import { db as mockDefaultDb } from '@pagespace/db/db';
 
 describe('security-audit-chain-verifier', () => {
   beforeEach(() => {
@@ -305,6 +307,50 @@ describe('security-audit-chain-verifier', () => {
 
       expect(result.isValid).toBe(true);
       expect(result.breakPoint).toBeNull();
+    });
+
+    describe('given an injected db client', () => {
+      function createInjectedDb(entries: MockSecurityAuditEntry[]) {
+        const select = vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([{ count: entries.length }]),
+          }),
+        });
+        const findMany = vi.fn().mockImplementation(async (opts) => {
+          let result = [...entries].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+          if (opts?.offset) result = result.slice(opts.offset);
+          if (opts?.limit) result = result.slice(0, opts.limit);
+          return result;
+        });
+        return { select, query: { securityAuditLog: { findMany } } };
+      }
+
+      it('should use the injected client exclusively, never the module-level singleton', async () => {
+        mockEntries = [];
+        const injectedEntries = createValidSecurityChain(3);
+        const injectedDb = createInjectedDb(injectedEntries);
+        const deps: VerifySecurityChainDeps = { db: injectedDb as unknown as VerifySecurityChainDeps['db'] };
+
+        const result = await verifySecurityAuditChain({}, deps);
+
+        expect(injectedDb.select).toHaveBeenCalled();
+        expect(injectedDb.query.securityAuditLog.findMany).toHaveBeenCalled();
+        expect(mockDefaultDb.select).not.toHaveBeenCalled();
+        expect(mockDefaultDb.query.securityAuditLog.findMany).not.toHaveBeenCalled();
+        expect(result.isValid).toBe(true);
+        expect(result.totalEntries).toBe(3);
+      });
+
+      it('given no injected client, should fall back to the default db (parity with today)', async () => {
+        mockEntries = createValidSecurityChain(2);
+
+        const result = await verifySecurityAuditChain();
+
+        expect(mockDefaultDb.select).toHaveBeenCalled();
+        expect(mockDefaultDb.query.securityAuditLog.findMany).toHaveBeenCalled();
+        expect(result.isValid).toBe(true);
+        expect(result.entriesVerified).toBe(2);
+      });
     });
   });
 });

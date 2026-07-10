@@ -77,6 +77,8 @@ import {
   isPeriodicVerificationRunning,
   type ChainVerificationAlert,
 } from '../security-audit-alerting';
+import type { VerifySecurityChainDeps } from '../security-audit-chain-verifier';
+import { db as mockDefaultDb } from '@pagespace/db/db';
 
 describe('security-audit-alerting (#544)', () => {
   beforeEach(() => {
@@ -175,6 +177,31 @@ describe('security-audit-alerting (#544)', () => {
         expect.stringContaining('[SecurityAuditAlerting] Alert handler failed:'),
         expect.objectContaining({ error: expect.any(Error) })
       );
+    });
+
+    it('threads an injected db client through to verifySecurityAuditChain, never touching the module-level singleton', async () => {
+      const injectedEntries = createValidSecurityChain(2);
+      const select = vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ count: injectedEntries.length }]),
+        }),
+      });
+      const findMany = vi.fn().mockImplementation(async (opts) => {
+        let result = [...injectedEntries].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+        if (opts?.offset) result = result.slice(opts.offset);
+        if (opts?.limit) result = result.slice(0, opts.limit);
+        return result;
+      });
+      const injectedDb = { select, query: { securityAuditLog: { findMany } } };
+      const deps: VerifySecurityChainDeps = { db: injectedDb as unknown as VerifySecurityChainDeps['db'] };
+
+      const result = await verifyAndAlert('manual', undefined, deps);
+
+      expect(select).toHaveBeenCalled();
+      expect(findMany).toHaveBeenCalled();
+      expect(mockDefaultDb.select).not.toHaveBeenCalled();
+      expect(result.isValid).toBe(true);
+      expect(result.totalEntries).toBe(2);
     });
 
     it('returns verification result on empty chain without alert', async () => {
