@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
 // #890 Phase 3 FIX: the composition root must (1) crash a half-configured
 // deploy at startup — flag on + creds missing would otherwise silently black
@@ -25,7 +25,7 @@ import { probeClickHouseStartup } from '@pagespace/lib/observability/clickhouse-
 import { drainAnalyticsInserts } from '@pagespace/lib/observability/analytics-inserts';
 
 describe('web instrumentation — ClickHouse composition-root wiring (#890 Phase 3 FIX)', () => {
-  let onSpy: ReturnType<typeof vi.spyOn>;
+  let onSpy: MockInstance;
 
   beforeEach(() => {
     vi.clearAllMocks();

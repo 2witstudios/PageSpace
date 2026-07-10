@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
 // #890 Phase 3 FIX: admin is a ClickHouse composition root too (its
 // monitoring readers and logger-database writers run in this process) —
@@ -17,7 +17,7 @@ import { probeClickHouseStartup } from '@pagespace/lib/observability/clickhouse-
 import { drainAnalyticsInserts } from '@pagespace/lib/observability/analytics-inserts';
 
 describe('admin instrumentation — ClickHouse composition-root wiring (#890 Phase 3 FIX)', () => {
-  let onSpy: ReturnType<typeof vi.spyOn>;
+  let onSpy: MockInstance;
 
   beforeEach(() => {
     vi.clearAllMocks();

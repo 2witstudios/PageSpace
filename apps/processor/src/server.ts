@@ -415,12 +415,11 @@ async function start() {
       await queueManager.shutdown();
       process.exit(0);
     };
-    process.on('SIGTERM', () => {
-      void shutdown('SIGTERM');
-    });
-    process.on('SIGINT', () => {
-      void shutdown('SIGINT');
-    });
+    // Return the shutdown promise so callers/tests can await the full
+    // drain → queue-shutdown → exit chain; Node ignores the handler's
+    // return value at runtime (same fire-and-forget as an async handler).
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
 
   } catch (error) {
     console.error('Failed to start processor service:', error);
