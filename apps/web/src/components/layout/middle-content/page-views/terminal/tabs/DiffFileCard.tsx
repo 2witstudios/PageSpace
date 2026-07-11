@@ -5,7 +5,9 @@ import dynamic from 'next/dynamic';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useMachineDiffPair, type MachineDiffPairResponse } from '@/hooks/useMachineDiff';
+import { useMobile } from '@/hooks/useMobile';
 import type { MachineDiffFile, MachineDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
+import { Spinner } from './tab-states';
 
 // Monaco owns `window`/`document` at import time — never SSR it.
 const MonacoDiffEditor = dynamic(() => import('@/components/editors/MonacoDiffEditor'), { ssr: false });
@@ -27,6 +29,14 @@ const BINARY_SNIFF_CHARS = 8000;
  * (a fresh literal each render would re-run the editor's options effect).
  */
 const MONACO_OPTIONS = { automaticLayout: true } as const;
+
+/**
+ * A side-by-side diff on a phone gives each side ~180px — two columns of ellipsis.
+ * Monaco's inline mode shows the same changes stacked in one full-width column, so
+ * narrow viewports get that instead. Module-level for the same stable-identity
+ * reason as above.
+ */
+const MONACO_OPTIONS_INLINE = { automaticLayout: true, renderSideBySide: false } as const;
 
 function looksBinary(side: { content: string } | null): boolean {
   return side !== null && side.content.slice(0, BINARY_SNIFF_CHARS).includes('\u0000');
@@ -116,12 +126,19 @@ function DiffBody({
   error: Error | undefined;
 }) {
   const note = cn(NOTE_CLASS, 'text-muted-foreground');
+  const isMobile = useMobile();
 
   if (error) return <div className={cn(NOTE_CLASS, 'text-destructive')}>Failed to load diff: {error.message}</div>;
   // Error FIRST, then no-data-yet: SWR's isLoading is "in flight AND no data",
   // regardless of a cached error, so checking it first would flicker
   // Loading <-> Failed while an errored key auto-retries.
-  if (!data) return <div className={note}>Loading diff…</div>;
+  if (!data)
+    return (
+      <div className={cn(note, 'flex items-center gap-1.5')}>
+        <Spinner className="size-3" />
+        Loading diff…
+      </div>
+    );
   if (data.notApplicable) {
     // Near-unreachable (the toggle doesn't offer a not-applicable scope), but an
     // expanded card with a blank body would be worse than saying so.
@@ -151,7 +168,7 @@ function DiffBody({
           original={data.original?.content ?? ''}
           modified={data.modified?.content ?? ''}
           filename={path}
-          options={MONACO_OPTIONS}
+          options={isMobile ? MONACO_OPTIONS_INLINE : MONACO_OPTIONS}
         />
       </div>
     </>

@@ -82,8 +82,13 @@ export interface ResolveTerminalSandboxTarget {
 export interface ResolveTerminalSandboxDeps {
   /** Resolve the named agent terminal to its Sprite + cwd + launch metadata. */
   resolveAgentTerminal: (target: ResolveTerminalSandboxTarget) => Promise<ResolveAgentTerminalResult>;
-  /** Read the resolved Sprite handle. Called EXACTLY ONCE here (full getSprite
-   * collapse across resolve/wake is leaf 1-4). */
+  /**
+   * Read the resolved Sprite handle. Called exactly once here — and the caller
+   * (`apps/realtime/src/index.ts`) backs this with a per-connect
+   * `createSpriteHandleCache` shared with the machine acquire above, so the
+   * WHOLE connect (acquire + auth + launch resolution) costs ONE underlying
+   * `sdk.getSprite`, not three.
+   */
   getSprite: (sandboxId: string) => Promise<SpriteInstanceLike>;
 }
 

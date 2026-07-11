@@ -53,6 +53,18 @@ export type ReconnectPlan =
  *   socket's `session_info` frame), never to one we inferred; an unidentified
  *   session is abandoned in favour of a fresh, identifiable one.
  *
+ * This also SUBSUMES the `preOpenDrop` flag leaf 1-4 added here. A Sprite has no
+ * wake API — an incoming request wakes it (docs.sprites.dev/concepts/lifecycle) —
+ * so the first `createSession` against a hibernated VM IS its wake, and Fly's
+ * wake-on-request can drop that connection before it ever opens. That left no
+ * known id and nothing live, which used to read as `fatal`, handing the user
+ * `exit -1` instead of a prompt; 1-4 special-cased it. With no-id now meaning
+ * `create` unconditionally, the cold wake simply retries — no flag required. The
+ * distinction 1-4 drew still matters, but one level up: `openPtyShell` uses it
+ * (structurally, via the absence of an open — never by matching the error text)
+ * to tell a connection that never started from a session that was left running,
+ * which is what `abandonedUnnamedSessions` bounds.
+ *
  * There is deliberately no `fatal` verdict: giving up is a property of the retry
  * BUDGET, not of the session state, and the budget is enforced by the caller
  * before it ever gets here (see `reconnect`). Every reachable state now has a
@@ -177,6 +189,10 @@ export function openPtyShell({
   let closed = false; // a real exit (or exhausted reconnects) — stop everything
   let reconnecting = false;
   let consecutiveFailures = 0;
+  // Whether the failure that triggered the pending reconnect was a cold-start
+  // pre-open drop (the Sprite wake handshake) rather than a post-open death.
+  // Set structurally, from the absence of an open — see the 'error' handler.
+  let lastErrorWasPreOpenDrop = false;
   // How many sessions this shell has created but had to ABANDON without ever
   // learning their id. Such a session is unreachable in every direction: we
   // can't reattach to it (no id), and we can't kill it (`kill()` signals over
@@ -184,18 +200,16 @@ export function openPtyShell({
   // a tty session is detachable and keeps running, and billing, regardless. So
   // each one is an orphan, and creating its replacement is what strands it.
   //
+  // Only counted when the dead socket had actually OPENED (`!lastErrorWasPreOpenDrop`):
+  // a connection that never came up started nothing server-side, so there is
+  // nothing out there to strand — that is the cold-wake retry, not an orphan.
+  //
   // Tracked SEPARATELY from `consecutiveFailures` because that budget is reset
   // by 'spawn'/stdout — a replacement whose socket opens fine (and it does; the
   // shell is healthy, we merely never heard its name) zeroes it. Without its own
   // counter, an id we never learn produces a fresh orphan on every keepalive
   // cycle, forever.
   let abandonedUnnamedSessions = 0;
-  // Whether the CURRENT fresh session's socket ever opened ('spawn'). Only an
-  // opened socket implies the server actually started a session — and therefore
-  // that dropping it without an id strands something. A create whose socket dies
-  // before it opens started nothing, so it is an ordinary (budgeted) retry, not
-  // an orphan.
-  let currentSessionOpened = false;
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -218,17 +232,33 @@ export function openPtyShell({
     // instant it errors so the trailing close/exit it produces can't tear the
     // session down while reconnect() is replacing it.
     let stale = false;
+    // Whether THIS command's socket ever opened. The SDK emits 'spawn' exactly
+    // when `start()` resolves, and any inbound byte proves the same thing. This is
+    // the structural boundary the reconnect keys on — see the 'error' handler.
+    let opened = false;
     cmd.stdout.on('data', (chunk) => {
       // Any inbound data proves the connection recovered; reset the failure budget.
+      opened = true;
       consecutiveFailures = 0;
       onOutput(toStr(chunk));
     });
-    cmd.stderr.on('data', (chunk) => onOutput(toStr(chunk)));
+    cmd.stderr.on('data', (chunk) => {
+      opened = true;
+      onOutput(toStr(chunk));
+    });
     // The SDK emits 'spawn' only AFTER the WebSocket actually opens. A confirmed
     // open is the authoritative signal the connection is healthy — reset the
     // bounded reconnect budget here so an idle shell that reattaches cleanly but
     // stays quiet (no stdout) doesn't slowly exhaust the budget and get killed.
-    cmd.on('spawn', () => { consecutiveFailures = 0; });
+    cmd.on('spawn', () => {
+      opened = true;
+      consecutiveFailures = 0;
+      // A confirmed open retires the previous failure's classification. Without
+      // this, a later reconnect entered WITHOUT a fresh error (listSessions
+      // unavailable, or the catch-all retry) would consult a stale verdict from
+      // whatever failed last.
+      lastErrorWasPreOpenDrop = false;
+    });
     cmd.on('exit', (code) => {
       // Ignore the stale exit that trails a keepalive 'error' on the same dead
       // command — only an exit WITHOUT a preceding error is a real shell exit.
@@ -248,6 +278,17 @@ export function openPtyShell({
     cmd.on('error', () => {
       if (stale) return;
       stale = true;
+      // Remember WHY this command died, STRUCTURALLY: if it never reported an open
+      // (no 'spawn', no byte of output), its socket never came up, so the session
+      // was never started — re-creating it is safe (that is the cold Sprite wake)
+      // and nothing was stranded by doing so.
+      //
+      // Deliberately not inferred from the error's text. `@fly/sprites` drives the
+      // global (undici) WebSocket and registers its 'error' listener before its
+      // 'close' one, so a failed handshake surfaces an opaque `WebSocket error: …`
+      // FIRST — the SDK's own `closed before open` string is only emitted
+      // afterwards, and a substring test would miss the real cold-start drop.
+      lastErrorWasPreOpenDrop = !opened;
       void reconnect();
     });
   }
@@ -264,7 +305,6 @@ export function openPtyShell({
   // replacing a dangling one).
   function launchFreshSession(): void {
     currentSessionId = undefined;
-    currentSessionOpened = false;
     const gen = (sessionGeneration += 1);
     current = sprite.createSession(command, args, {
       tty: true,
@@ -272,12 +312,6 @@ export function openPtyShell({
       rows: lastRows,
       cwd,
       env: TERMINAL_ENV,
-    });
-    // An open socket means the server started this session — so if it drops before
-    // naming itself, something real is left running out there (see
-    // `abandonedUnnamedSessions`). A socket that never opens started nothing.
-    current.on('spawn', () => {
-      if (gen === sessionGeneration) currentSessionOpened = true;
     });
     current.on('message', (message) => {
       const id = readSessionInfoId(message);
@@ -321,7 +355,7 @@ export function openPtyShell({
       // or SDK regression), every keepalive cycle would mint another orphan. Fail
       // loudly after a bounded number instead, so the user sees a dead terminal and
       // we see it in the logs, rather than quietly burning a Sprite forever.
-      if (currentSessionId === undefined && currentSessionOpened) {
+      if (currentSessionId === undefined && !lastErrorWasPreOpenDrop) {
         abandonedUnnamedSessions += 1;
         if (abandonedUnnamedSessions > MAX_UNNAMED_ABANDONS) {
           reconnecting = false;
@@ -385,6 +419,12 @@ export function openPtyShell({
       reconnecting = false;
     } catch {
       reconnecting = false;
+      // The SDK threw while (re)opening — no socket came up, so no session was
+      // started and nothing is stranded. Say so explicitly: this path re-enters
+      // reconnect WITHOUT a fresh 'error' event, so it would otherwise inherit the
+      // classification the last real drop left behind and could charge
+      // `abandonedUnnamedSessions` for a session that never existed.
+      lastErrorWasPreOpenDrop = true;
       // Reattach itself failed; retry until the bounded budget is exhausted.
       void reconnect();
     }

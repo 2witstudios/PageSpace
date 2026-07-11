@@ -394,11 +394,18 @@ describe('openPtyShell', () => {
       expect(onOutput).toHaveBeenCalledWith('back\r\n');
     });
 
-    it('given a drop before the session announced its id, creates ONE replacement and never attaches to a SIBLING terminal\'s live shell', async () => {
-      // The id can be lost to a socket that dies pre-announce. The production shape:
-      // one Sprite hosts every terminal on the machine, so a live tty session may
-      // well be someone else's — the retired pickShellSession would have handed this
-      // user that PTY. We create our own instead, and tolerate the one strand.
+    it('given a POST-open drop before the session announced its id, creates ONE replacement and never attaches to a SIBLING terminal\'s live shell', async () => {
+      // Supersedes leaf 1-4's "post-open drop + nothing live => exit -1". That
+      // exit existed because a fresh session could not be identified, so an
+      // unnamed shell was indistinguishable from a dead one. It can be identified
+      // now (the create socket announces it), so the right move is to replace it
+      // and learn the new id — the user gets a prompt instead of a dead terminal.
+      // Bounded: the replacement strands the unnameable session it left behind, so
+      // a SECOND consecutive one fails loudly (see the ids-never-arrive test).
+      //
+      // The production shape: one Sprite hosts every terminal on the machine, so a
+      // live tty session may well be someone else's — the retired pickShellSession
+      // would have handed this user that PTY.
       const cmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
       const sibling: SpriteSessionInfo = { id: 'sess-sibling', command: 'claude', isActive: true, tty: true };
@@ -408,7 +415,14 @@ describe('openPtyShell', () => {
       const onExit = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
-      cmd._emitter.emit('spawn'); // the socket DID open — a session exists out there
+      // The socket OPENED first — a keepalive timeout is by definition a post-open
+      // failure (the watchdog only fires after 45s of an established connection).
+      // The real SDK emits 'spawn' at that open, and the shell keys on it: a
+      // post-open death means a session WAS started, so replacing it strands that
+      // session and is charged against the strand budget. (Contrast the cold-start
+      // PRE-open drop, which never opened, started nothing, and is freely retried —
+      // see cold-session-open-retry.test.ts.)
+      cmd._emitter.emit('spawn');
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
 

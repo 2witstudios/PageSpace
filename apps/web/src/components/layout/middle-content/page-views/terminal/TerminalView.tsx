@@ -64,13 +64,19 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
                 <TabsTrigger
                   key={value}
                   value={value}
+                  // The four labels don't fit a phone-width row, so below `sm` the
+                  // triggers are icon-only. `aria-label` carries the name that the
+                  // (display:none) label no longer contributes to the accessible
+                  // name, and `title` gives a pointer user the same thing.
+                  aria-label={label}
+                  title={label}
                   className={cn(
-                    'gap-1.5 px-3 py-1.5 text-muted-foreground',
+                    'gap-1.5 px-2.5 py-1.5 text-muted-foreground sm:px-3',
                     'data-[state=active]:bg-muted data-[state=active]:text-foreground',
                   )}
                 >
                   <Icon className="size-4" />
-                  {label}
+                  <span className="hidden sm:inline">{label}</span>
                 </TabsTrigger>
               ))}
             </TabsList>
