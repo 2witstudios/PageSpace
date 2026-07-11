@@ -262,24 +262,24 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto flex max-w-2xl flex-col gap-6 p-6">
+        {/* Form-level, not per-card: any field or toggle below can be the one
+            saving. An in-flight save is SURFACED, never ENFORCED — disabling the
+            controls would swallow the very click that triggered the save (a
+            field's blur-commit fires before the mouseup lands on a switch, so the
+            switch would already be disabled by the time the click resolved). */}
+        <div className="flex h-4 items-center justify-end">
+          {pendingSaves > 0 && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Saving…
+            </span>
+          )}
+        </div>
+
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <CardTitle className="text-lg">General</CardTitle>
-                <CardDescription>The Machine&apos;s name and description.</CardDescription>
-              </div>
-              {/* An in-flight save is surfaced, never enforced: disabling the
-                  controls would swallow the very click that triggered the save
-                  (a field's blur-commit fires before the mouseup lands on a
-                  switch, so the switch would already be disabled). */}
-              {pendingSaves > 0 && (
-                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Saving…
-                </span>
-              )}
-            </div>
+            <CardTitle className="text-lg">General</CardTitle>
+            <CardDescription>The Machine&apos;s name and description.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
