@@ -106,6 +106,15 @@ export interface RenderCanvasDocumentInput {
    * keep the unchanged `BASELINE_CSP` (`form-action 'none'`, no `connect-src`).
    */
   formActionOrigin?: string;
+  /**
+   * When true, injects a lightweight <script> into <head> that listens for
+   * `pagespace-theme` postMessage from the parent and toggles a `dark` class
+   * on the iframe's `<html>`. Used by the in-app canvas view so the canvas
+   * matches the app's theme (the sandboxed iframe is an opaque origin with no
+   * access to the parent's DOM). Published pages omit this — they are
+   * standalone documents and use `prefers-color-scheme` for OS-level matching.
+   */
+  injectThemeBridge?: boolean;
 }
 
 /**
@@ -143,6 +152,38 @@ export const BASELINE_CSP =
  * targeting html/body still win because the author CSS is concatenated after.
  */
 export const BASELINE_RESET = 'html,body{margin:0;padding:0;}';
+
+/**
+ * Inline script injected when `injectThemeBridge` is true. Provides dark-mode
+ * support for canvas pages in BOTH contexts:
+ *
+ * 1. **Published pages**: uses `prefers-color-scheme` media query to detect the
+ *    OS theme and toggles a `dark` class on `<html>`. Listens for changes so
+ *    toggling OS dark mode updates the page live.
+ *
+ * 2. **In-app iframe**: receives `{ type: 'pagespace-theme', isDark: boolean }`
+ *    postMessage from the parent (CanvasFrame), which overrides the OS preference
+ *    with the user's PageSpace app theme setting. Also sends a theme request on
+ *    load so the initial render matches before the parent's effect fires.
+ *
+ * The `dark` class matches the convention used by next-themes (attribute="class")
+ * and the PageSpace ThemeProvider, so authors write standard dark-mode CSS:
+ *   `:root { --bg: #fff; } .dark { --bg: #000; }`
+ */
+export const THEME_BRIDGE_SCRIPT =
+  "<script>(function(){" +
+  // prefers-color-scheme: works standalone (published) and as in-app fallback
+  "var mq=window.matchMedia('(prefers-color-scheme: dark)');" +
+  "document.documentElement.classList.toggle('dark',mq.matches);" +
+  "mq.addEventListener('change',function(e){" +
+  "document.documentElement.classList.toggle('dark',e.matches);});" +
+  // postMessage: in-app override from parent (takes precedence over OS preference)
+  "window.addEventListener('message',function(e){" +
+  "if(e.data&&e.data.type==='pagespace-theme'&&typeof e.data.isDark==='boolean'){" +
+  "document.documentElement.classList.toggle('dark',e.data.isDark);}});" +
+  // Request current theme from parent on load (in-app only; harmless on published)
+  "try{window.parent.postMessage({type:'pagespace-theme-request'},'*');}catch(e){}" +
+  "})();</script>";
 
 // Re-exported for existing consumers — the implementation lives in a
 // dependency-free shared module so non-canvas modules (e.g. forms) don't
@@ -273,7 +314,7 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], no
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, nonce } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, nonce } = input;
   const csp = buildBaselineCsp(formActionOrigin);
 
   const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce);
@@ -316,6 +357,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     ogTags +
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<style>${BASELINE_RESET}${css}</style>` +
+    (injectThemeBridge ? THEME_BRIDGE_SCRIPT : '') +
     '</head><body>' +
     body +
     '</body></html>'

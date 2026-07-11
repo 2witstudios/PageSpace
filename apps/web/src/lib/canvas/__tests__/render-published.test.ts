@@ -154,4 +154,10 @@ describe('renderPublishedPage — SEO + social passthrough', () => {
     const out = renderPublishedPage({ html: '<p>x</p>', pageUrl, lang: 'es' });
     expect(out).toContain('<html lang="es">');
   });
+
+  it('given published page, should ALWAYS inject the theme bridge (for prefers-color-scheme support)', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>', pageUrl });
+    expect(out).toContain('prefers-color-scheme');
+    expect(out).toContain('pagespace-theme');
+  });
 });

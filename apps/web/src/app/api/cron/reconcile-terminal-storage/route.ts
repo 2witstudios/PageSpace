@@ -5,11 +5,13 @@ import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
- * Cron endpoint that meters Terminal Machines' persistent-storage cost
- * (Terminal Epic 3's idle-storage node). Sprites' storage volume is NOT free
- * while a Machine is hibernating (only CPU/mem are), so this bills EVERY known
- * machine — active or hibernating — for its accrued storage window since the
- * last run, to the machine's actual page owner.
+ * Cron endpoint that meters Terminal Machines' persistent-storage cost (Sprites
+ * Platform Alignment 6-1). The platform bills for the bytes a machine has
+ * ACTUALLY written (TRIM-friendly), not the provisioned allocation, so this
+ * bills EVERY known machine — active or hibernating — from its last PERSISTED
+ * MEASURED footprint (captured opportunistically while the sprite was awake for
+ * real work), to the machine's actual page owner. It NEVER wakes a sprite to
+ * measure; a never-measured machine bills a conservative 0 for that window.
  *
  * Idempotent / drift-correcting: each machine tracks its own last-billed
  * watermark, so overlapping or repeated runs never double-bill and a missed
@@ -29,7 +31,7 @@ export async function GET(request: Request) {
     const result = await reconcileTerminalStorage(defaultReconcileTerminalStorageDeps);
 
     console.log(
-      `[Cron] Terminal storage reconcile: processed ${result.processed}, charged ${result.charged}, skipped ${result.skipped}, failed ${result.failed}, total $${result.totalCostDollars.toFixed(6)}`,
+      `[Cron] Terminal storage reconcile: processed ${result.processed}, charged ${result.charged}, skipped ${result.skipped}, failed ${result.failed}, stale ${result.staleMeasurements}, total $${result.totalCostDollars.toFixed(6)}`,
     );
 
     audit({
@@ -41,6 +43,7 @@ export async function GET(request: Request) {
         charged: result.charged,
         skipped: result.skipped,
         failed: result.failed,
+        staleMeasurements: result.staleMeasurements,
         totalCostDollars: result.totalCostDollars,
       },
     });
