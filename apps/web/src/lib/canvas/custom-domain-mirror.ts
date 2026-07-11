@@ -339,6 +339,19 @@ export async function deletePageFromCustomHosts(params: {
  *
  * Per-copy best-effort: individual failures are logged and do not abort the
  * overall backfill — a partial mirror is always better than no mirror.
+ *
+ * KNOWN LIMITATION: this function is invoked fire-and-forget from several
+ * independent, unsynchronized call sites (domain create/verify routes, cert
+ * reconciliation, the override-change API route) with no locking per
+ * (driveId, host). Two overlapping invocations racing on stale vs. fresh DB
+ * reads could in principle interleave such that a later-finishing call with
+ * a stale read deletes root content a fresher call just correctly wrote. This
+ * predates the stale-root delete added here (the copy path already had the
+ * same unsynchronized-call shape) but the delete makes a bad interleaving
+ * destructive instead of merely redundant. Not fixed in this PR — a proper
+ * fix needs per-host serialization, which is a larger change than this
+ * feature's scope. If this proves to matter in practice, the next backfill
+ * (routinely triggered by cert reconciliation) self-heals it.
  */
 export async function mirrorDriveToCustomHost(
   driveId: string,
@@ -379,11 +392,19 @@ export async function mirrorDriveToCustomHost(
   const paths = published.map((r) => r.path);
 
   let homeRootExists = false;
+  // Distinct from "confirmed false" — a probe failure (transient S3/Tigris
+  // error) means we don't actually know the root's state, not that it's
+  // absent. Conflating the two used to be harmless (a null rootCopy was a
+  // pure no-op), but now that a null rootCopy triggers the stale-root delete
+  // below, treating a probe failure as "confirmed absent" would delete a
+  // live, currently-correct root over a transient blip. Skip the delete too
+  // in that case and let the next backfill re-resolve it.
+  let homeRootProbeFailed = false;
   if (!publishLandingPageId && drive.homePageId && published.some((r) => r.pageId === drive.homePageId)) {
     try {
       homeRootExists = await publishedArtifactExists(buildPublishedKey(subdomain, ''));
     } catch {
-      // Probe failure — skip root; it will be backfilled on next publish.
+      homeRootProbeFailed = true;
     }
   }
 
@@ -454,7 +475,11 @@ export async function mirrorDriveToCustomHost(
   // than silently continuing to serve a prior override or prior home-page
   // mirror. Idempotent (a missing key is a no-op), so safe to call
   // unconditionally on every no-root-copy backfill, not just transitions.
-  if (!rootCopy) {
+  // Skipped when the home-root probe itself failed (see homeRootProbeFailed
+  // above) — a transient read error must never be treated as license to
+  // delete a potentially-live root; leave it for the next backfill to
+  // re-resolve once the probe can actually succeed.
+  if (!rootCopy && !homeRootProbeFailed) {
     try {
       await deletePublishedArtifact(buildPublishedKey(host, ''));
     } catch (err) {

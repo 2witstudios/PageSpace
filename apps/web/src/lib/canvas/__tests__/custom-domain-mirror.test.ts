@@ -585,6 +585,21 @@ describe('mirrorDriveToCustomHost', () => {
     expect(deletePublishedArtifact).toHaveBeenCalledWith('published/www.example.com/index.html');
   });
 
+  it('does NOT clear the root when the home-root existence probe fails (transient error, not confirmed absence)', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'acme',
+      homePageId: 'p1',
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'p1', path: 'home' },
+    ]));
+    vi.mocked(publishedArtifactExists).mockRejectedValue(new Error('S3 timeout'));
+
+    await mirrorDriveToCustomHost('drive-1', 'www.example.com');
+
+    expect(deletePublishedArtifact).not.toHaveBeenCalledWith('published/www.example.com/index.html');
+  });
+
   it('clears a stale root object when an override is set but its target page is not yet published', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
       publishSubdomain: 'acme',
