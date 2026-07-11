@@ -27,21 +27,16 @@ function fakeCommand(
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
   const killed: string[] = [];
-  // Whether the socket has already opened. Several tests build their command
-  // BEFORE the code under test attaches its listeners, so a one-shot 'spawn'
-  // would fire into the void and the consumer would wait for an open that
-  // already happened. A real open is a STATE, not just an event — so replay it
-  // to a late subscriber, exactly as an already-open socket would present.
-  let spawned = false;
   if (error) {
     // A failed/flapping connection emits 'error' and never 'spawn'.
     setTimeout(() => events.emit('error', error), 0);
   }
   if (autoSpawn) {
-    setTimeout(() => {
-      spawned = true;
-      events.emit('spawn');
-    }, 0);
+    // One-shot, exactly like the real SDK's `cmd.start().then(() => cmd.emit('spawn'))`.
+    // Deliberately NOT replayed to a late subscriber: the consumer under test must
+    // register its listener synchronously, before this macrotask runs, and a fake
+    // that replayed the event would hide a regression that stopped doing so.
+    setTimeout(() => events.emit('spawn'), 0);
   }
   if (autoExit) {
     setTimeout(() => events.emit('exit', 0), 0);
@@ -50,13 +45,7 @@ function fakeCommand(
     stdout: { on: (event, listener) => stdout.on(event, listener) },
     stderr: { on: (event, listener) => stderr.on(event, listener) },
     stdin: { write: () => {} },
-    on: (event, listener) => {
-      if (event === 'spawn' && spawned) {
-        setTimeout(() => (listener as () => void)(), 0);
-        return events;
-      }
-      return events.on(event, listener as (...args: unknown[]) => void);
-    },
+    on: (event, listener) => events.on(event, listener as (...args: unknown[]) => void),
     kill: (signal) => {
       killed.push(signal ?? 'SIGTERM');
     },
@@ -186,14 +175,20 @@ describe('createSpriteMachineHost', () => {
   });
 
   it('given stream with no sessionId, should create a fresh interactive session and stream its combined stdout/stderr', async () => {
-    const { command, emitStdout, emitStderr } = fakeCommand();
+    // Built LAZILY, inside createSession — exactly when the real SDK builds it, so
+    // its one-shot 'spawn' cannot fire before `stream()` has attached its listener.
+    let emitStdout!: (chunk: string) => void;
+    let emitStderr!: (chunk: string) => void;
     const created: { command: string; args: string[] }[] = [];
     const { sdk } = makeSdk({
       getSprite: async () =>
         fakeSprite({
           createSession: (cmd, args) => {
             created.push({ command: cmd, args: args ?? [] });
-            return command;
+            const fake = fakeCommand({ autoExit: false });
+            emitStdout = fake.emitStdout;
+            emitStderr = fake.emitStderr;
+            return fake.command;
           },
         }),
     });
@@ -351,11 +346,21 @@ describe('createSpriteMachineHost', () => {
   it('given a MachineStream, should write/resize/kill through to the underlying command', async () => {
     const writes: unknown[] = [];
     const resizes: Array<[number, number]> = [];
-    const { command } = fakeCommand({
-      stdin: { write: (data) => writes.push(data) },
-      resize: (c, r) => resizes.push([c, r]),
+    let killed: string[] = [];
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          createSession: () => {
+            const fake = fakeCommand({
+              autoExit: false,
+              stdin: { write: (data) => writes.push(data) },
+              resize: (c, r) => resizes.push([c, r]),
+            });
+            killed = (fake.command as unknown as { killed: string[] }).killed;
+            return fake.command;
+          },
+        }),
     });
-    const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: () => command }) });
     const client = createSpritesSandboxClient({ sdk });
     const host = createSpriteMachineHost({ sdk, client });
     const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
@@ -367,12 +372,13 @@ describe('createSpriteMachineHost', () => {
 
     expect(writes).toEqual(['ls\n']);
     expect(resizes).toEqual([[100, 40]]);
-    expect((command as unknown as { killed: string[] }).killed).toEqual(['SIGKILL']);
+    expect(killed).toEqual(['SIGKILL']);
   });
 
   it('given a MachineStream with no stdin (batch command reused as a stream), should throw on write rather than silently drop input', async () => {
-    const { command } = fakeCommand({ stdin: undefined });
-    const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: () => command }) });
+    const { sdk } = makeSdk({
+      getSprite: async () => fakeSprite({ createSession: () => fakeCommand({ autoExit: false, stdin: undefined }).command }),
+    });
     const client = createSpritesSandboxClient({ sdk });
     const host = createSpriteMachineHost({ sdk, client });
     const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });

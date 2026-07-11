@@ -1083,7 +1083,7 @@ describe('killAgentTerminal', () => {
     expect(rows.size).toBe(1);
   });
 
-  it('given the stream never reports whether it opened (timeout), should KEEP the row rather than orphan a possibly-live PTY', async () => {
+  it('given the stream never reports whether it opened (timeout), should KEEP the row EVEN IF the listing claims the session is gone — a silent machine has not earned trust in its own listing', async () => {
     const { store, rows } = makeStore([
       {
         id: 'agent-terminal-1',
@@ -1108,7 +1108,12 @@ describe('killAgentTerminal', () => {
             stream: async () => {
               throw new MachineStreamOpenTimeoutError(20_000);
             },
-            listStreams: async () => [{ id: 'sess-abc', command: 'bash', isActive: true }],
+            // Deliberately reports the session as GONE. For any OTHER failure this
+            // listing would be positive evidence and the row would be dropped — so
+            // this test only passes if the timeout genuinely short-circuits ahead
+            // of the listing, rather than passing for the same reason the
+            // transient-failure test above does.
+            listStreams: async () => [],
           }),
       }),
     });

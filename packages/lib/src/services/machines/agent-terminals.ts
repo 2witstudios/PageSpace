@@ -36,7 +36,12 @@
  * reconnected or resumed from hibernation.
  */
 
-import type { MachineHandle, MachineHost, MachineStreamSessionInfo } from '../sandbox/machine-host';
+import {
+  MachineStreamOpenTimeoutError,
+  type MachineHandle,
+  type MachineHost,
+  type MachineStreamSessionInfo,
+} from '../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
 import {
@@ -466,11 +471,20 @@ async function killAtLocation(
       try {
         const stream = await handle.stream({ sessionId: row.streamSessionId });
         stream.kill('SIGKILL');
-      } catch {
-        // The stream would not open. That alone says NOTHING about whether the PTY
-        // is alive: the WebSocket API cannot surface an HTTP status (see
-        // `isPreOpenWakeError`), so a vanished session, a 429, a 5xx mid-deploy and
-        // a socket hang-up are indistinguishable at this layer.
+      } catch (error) {
+        // A TIMEOUT is the one failure we refuse to reason further about. The
+        // machine went silent for the entire cap — it told us neither that the
+        // stream opened nor that it failed. A machine that will not answer the
+        // exec socket has not earned our trust in its session LISTING either, so
+        // we do not go on to ask: we keep the row and let a retry settle it.
+        if (error instanceof MachineStreamOpenTimeoutError) {
+          return { ok: false, reason: 'error' };
+        }
+
+        // Otherwise the stream would not open, and that alone says NOTHING about
+        // whether the PTY is alive: the WebSocket API cannot surface an HTTP status
+        // (see `isPreOpenWakeError`), so a vanished session, a 429, a 5xx
+        // mid-deploy and a socket hang-up are indistinguishable at this layer.
         //
         // So we ask the one API that CAN answer: the session LIST. If the machine
         // tells us this session is not among its live ones, that is positive

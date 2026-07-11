@@ -342,12 +342,17 @@ function markPreOpenDrop(error: unknown): unknown {
  * Pure: is this failure a drop that happened BEFORE the connection opened (and so
  * provably never ran the command, making a re-run safe)?
  *
- * Answers structurally when it can — a failure observed while still waiting for
- * the SDK's `spawn` event, which fires exactly when `start()` resolves. Falls back
- * to the SDK's own `closed before open` text for the one case that produces it
- * without a preceding `error` event: a socket that opened at the transport level
- * and was then closed inside the pre-open window (an attach whose `session_info`
- * never arrives).
+ * Answers structurally: a failure observed while still waiting for the SDK's
+ * `spawn` event — which fires exactly when `start()` resolves — never ran the
+ * command. Every pre-open failure is marked at the point it is observed, so
+ * production relies on the mark alone.
+ *
+ * The `closed before open` text check below is a DEFENSIVE fallback, not a
+ * load-bearing one: the SDK emits that string as an `error` event inside the
+ * pre-open window too, so it is already marked structurally by the time anyone
+ * asks. It survives only to classify an error that reached a caller without
+ * having been observed pre-open (a hand-constructed one, or a future SDK that
+ * stops emitting `spawn`). Do not add new signals here — mark at the source.
  *
  * A timeout or an output overflow is never retryable: the command may already
  * have run.

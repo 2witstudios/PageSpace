@@ -61,12 +61,14 @@ export interface MachineStreamSessionInfo {
  * `stream()` waited the full wall-clock cap without the machine reporting EITHER
  * that the stream opened or that it failed.
  *
- * This is the "we genuinely do not know" outcome, and callers must treat it as
- * such. It is distinct from a stream that FAILED to open (a dangling session id
- * — the process is gone), because the two demand opposite responses: a failed
- * open means there is nothing left to kill, while a timeout may mean the process
- * is alive and merely unreachable, so tearing down its bookkeeping would orphan
- * it.
+ * This is the "we genuinely do not know" outcome, and it is distinct from a
+ * stream that FAILED to open. A failure is an ANSWER — the caller can go on to
+ * corroborate it (e.g. `killAgentTerminal` asks `listStreams()` whether the
+ * session still exists). A timeout is the absence of one, from a machine that
+ * would not answer at all for the full cap — so a caller must NOT go on to trust
+ * that same machine's other answers. It should do nothing destructive and let a
+ * retry settle it: the process may well be alive and merely unreachable, and
+ * tearing down its bookkeeping would orphan it.
  */
 export class MachineStreamOpenTimeoutError extends Error {
   constructor(public readonly timeoutMs: number) {
