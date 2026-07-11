@@ -177,6 +177,7 @@ function BranchDiffPane({
             onClick={refresh}
             disabled={refreshing}
             title="Refresh diff"
+            aria-label="Refresh diff"
           >
             {/* Without this the click has no visible effect until the sandbox
                 answers — SWR keeps the stale data and only flips isValidating. */}
@@ -267,7 +268,11 @@ function DiffFileList({
       )}
       {data.files.map((file) => (
         <DiffFileCard
-          key={`${file.status}:${file.previousPath ?? ''}:${file.path}`}
+          // Keyed by IDENTITY (path + rename source), deliberately not by status:
+          // a refresh that flips a file modified -> deleted would otherwise change
+          // its key, remount the card, and silently collapse it under the user.
+          // Status is already a prop, so it still re-renders in place.
+          key={`${file.previousPath ?? ''}:${file.path}`}
           machineId={machineId}
           projectName={projectName}
           branchName={branchName}

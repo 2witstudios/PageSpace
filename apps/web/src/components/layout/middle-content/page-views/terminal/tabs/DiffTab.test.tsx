@@ -215,6 +215,29 @@ describe('DiffTab', () => {
     });
   });
 
+  test('clicking a scope switches the list to that scope', async () => {
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+    await waitFor(() => screen.getByText('src/uncommitted.ts'));
+
+    await userEvent.click(screen.getByText('Committed'));
+
+    // `value` is fully controlled by `active`, so without this the toggle could
+    // render all three options while `setScope` did nothing and every other test
+    // still passed — the options are asserted everywhere, the SWITCH nowhere.
+    // The files mock names each file after its scope, so the list proves it.
+    await waitFor(() => screen.getByText('src/committed.ts'));
+    assert({
+      given: 'the Committed scope trigger clicked',
+      should: "re-fetch and render THAT scope's changed files, not the previous scope's",
+      actual: {
+        committed: screen.queryByText('src/committed.ts') !== null,
+        uncommittedGone: screen.queryByText('src/uncommitted.ts') === null,
+      },
+      expected: { committed: true, uncommittedGone: true },
+    });
+  });
+
   test('an ERRORED probe keeps the full toggle — a failed request is not a main-branch answer', async () => {
     probeErrors = true;
     render(<DiffTab machineId="m1" />);
