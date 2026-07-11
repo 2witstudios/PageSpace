@@ -72,8 +72,8 @@ const buildSigninUrl = (req: NextRequest): URL => {
   const explicitNext = req.nextUrl.searchParams.get('next');
 
   let candidate: string;
-  if (isSafeNextPath({ path: explicitNext, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })) {
-    candidate = explicitNext as string;
+  if (explicitNext && isSafeNextPath({ path: explicitNext, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })) {
+    candidate = explicitNext;
   } else {
     // Reconstruct from the request, minus any `next` we just rejected — leaving a
     // tainted one in the query string would make the rebuilt path fail validation

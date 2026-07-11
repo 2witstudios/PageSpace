@@ -46,10 +46,12 @@ export function resolveSigninNext(input: {
   paramNext: string | null | undefined;
   browserPath: string | null | undefined;
 }): string | undefined {
-  if (isAllowed(input.paramNext)) return input.paramNext as string;
-  if (!input.browserPath) return undefined;
+  const { paramNext, browserPath } = input;
 
-  const fallback = stripNextParam(input.browserPath);
+  if (paramNext && isAllowed(paramNext)) return paramNext;
+  if (!browserPath) return undefined;
+
+  const fallback = stripNextParam(browserPath);
 
   return isAllowed(fallback) ? fallback : undefined;
 }

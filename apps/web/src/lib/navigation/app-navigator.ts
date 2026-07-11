@@ -1,13 +1,14 @@
 type Navigate = (path: string) => void;
 
-let navigator: Navigate | null = null;
+// NOT named `navigator`: that would shadow the DOM global inside this module.
+let routerNavigate: Navigate | null = null;
 
 /**
  * Registers Next's client router so non-React modules can navigate through it.
  * Called once from useAuth().
  */
 export function setAppNavigator(navigate: Navigate | null): void {
-  navigator = navigate;
+  routerNavigate = navigate;
 }
 
 /**
@@ -25,8 +26,8 @@ export function setAppNavigator(navigate: Navigate | null): void {
  * there is no router to route through anyway.
  */
 export function navigateInApp(path: string): void {
-  if (navigator) {
-    navigator(path);
+  if (routerNavigate) {
+    routerNavigate(path);
     return;
   }
 
