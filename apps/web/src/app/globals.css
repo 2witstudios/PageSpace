@@ -55,9 +55,15 @@ svg.lucide {
   pointer-events: auto;
 }
 
-/* Display-based reveals (`hidden group-hover:inline`), not opacity-based. Only
-   `inline` is in use today; the others are the natural forms for the next such
-   control, covered now so it can't silently re-break.
+/* Display-based reveals (`hidden group-hover:flex`), not opacity-based.
+
+   These have ZERO live matches today, and that is deliberate rather than an
+   oversight: the repo's only `hidden group-hover:inline` is TabItem's Cmd+N
+   shortcut hint, which is a keyboard affordance and is opted out. The rules stay
+   as the standing policy, so the next display-based control — `hidden
+   group-hover:flex` is the idiomatic way to hide a button row — is revealed on
+   touch instead of silently disappearing, which is the entire bug class this file
+   exists to close.
 
    These match the exact class token (`~=`), NOT a substring. Substring matching
    is correct for the opacity rules above — it is what catches `sm:` and
