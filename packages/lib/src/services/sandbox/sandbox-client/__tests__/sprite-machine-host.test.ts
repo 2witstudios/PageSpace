@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createSpriteMachineHost } from '../sprite-machine-host';
+import { MachineStreamOpenTimeoutError, MachineStreamSessionGoneError } from '../../machine-host';
 import { createSpritesSandboxClient, type SpriteCommandLike, type SpriteInstanceLike, type SpritesSdk } from '../sprites';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 
@@ -271,7 +272,9 @@ describe('createSpriteMachineHost', () => {
         fakeSprite({
           attachSession: () => {
             attempts += 1;
-            return fakeCommand({ autoExit: false, autoSpawn: false, error: new Error('session is gone') }).command;
+            // Deliberately NOT a not-found: a transport failure that says nothing
+            // about whether the session exists.
+            return fakeCommand({ autoExit: false, autoSpawn: false, error: new Error('socket hang up') }).command;
           },
         }),
     });
@@ -279,7 +282,55 @@ describe('createSpriteMachineHost', () => {
     const host = createSpriteMachineHost({ sdk, client });
     const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
 
-    await expect(handle.stream({ sessionId: 'existing-session' })).rejects.toThrow('session is gone');
+    await expect(handle.stream({ sessionId: 'existing-session' })).rejects.toThrow('socket hang up');
+    expect(attempts).toBe(1);
+  });
+
+  // The PRODUCER of the timeout. Without this, a regression to the old
+  // "resolve optimistically at the cap" behavior would pass every other test in
+  // the suite — and silently hand killAtLocation a stream whose socket never
+  // opened, whose SIGKILL goes nowhere, and whose row it would then delete.
+  it('given a stream that never reports whether it opened, should reject with MachineStreamOpenTimeoutError (never resolve optimistically)', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          // Reports NOTHING: no spawn, no exit, no error. A socket in limbo.
+          attachSession: () => fakeCommand({ autoExit: false, autoSpawn: false }).command,
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    // Inject a short cap rather than faking timers: provisioning's own egress
+    // `mkdir` needs real timers to settle, so a global fake-timer swap here would
+    // deadlock the setup instead of testing the wait.
+    const host = createSpriteMachineHost({ sdk, client, streamOpenTimeoutMs: 20 });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    await expect(handle.stream({ sessionId: 'sess-limbo' })).rejects.toBeInstanceOf(MachineStreamOpenTimeoutError);
+  });
+
+  it('given the machine answers 404 for the session, should reject with MachineStreamSessionGoneError (positive evidence, not a wake drop)', async () => {
+    let attempts = 0;
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          attachSession: () => {
+            attempts += 1;
+            // How the SDK surfaces a rejected upgrade: websocket.js emits
+            // `WebSocket error: Unexpected server response: <status>`.
+            return fakeCommand({
+              autoExit: false,
+              autoSpawn: false,
+              error: new Error('WebSocket error: Unexpected server response: 404 (url: wss://…/exec/sess-gone)'),
+            }).command;
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    await expect(handle.stream({ sessionId: 'sess-gone' })).rejects.toBeInstanceOf(MachineStreamSessionGoneError);
+    // A 404 is an ANSWER, not a wake drop — retrying it would be pointless.
     expect(attempts).toBe(1);
   });
 

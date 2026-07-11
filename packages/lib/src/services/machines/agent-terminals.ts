@@ -36,7 +36,7 @@
  * reconnected or resumed from hibernation.
  */
 
-import { MachineStreamOpenTimeoutError, type MachineHandle, type MachineHost } from '../sandbox/machine-host';
+import { MachineStreamSessionGoneError, type MachineHandle, type MachineHost } from '../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
 import {
@@ -467,19 +467,21 @@ async function killAtLocation(
         const stream = await handle.stream({ sessionId: row.streamSessionId });
         stream.kill('SIGKILL');
       } catch (error) {
-        // A TIMEOUT is the one outcome we must not act on: the stream never told
-        // us whether it opened, so the PTY may well be alive and merely
-        // unreachable. Dropping its row would orphan a running, billable process.
-        if (error instanceof MachineStreamOpenTimeoutError) {
+        // Drop this terminal's bookkeeping ONLY on positive evidence that its
+        // session is already gone (the machine answered 404/410 for it — see
+        // `MachineStreamSessionGoneError`). Then there is genuinely nothing left
+        // to kill, and keeping the row would strand the terminal unkillable.
+        //
+        // EVERY other failure is an unknown, and unknowns must not be acted on: a
+        // 429, a 5xx during a deploy, a socket hang-up, a control-plane blip
+        // resolving the machine, or an open that never reported either way are all
+        // indistinguishable from "the PTY is alive and we simply could not reach
+        // it". Deleting the row in those cases would leave a running, billable
+        // agent process with nothing pointing at it — silent and unrecoverable,
+        // where keeping the row is merely a retryable annoyance.
+        if (!(error instanceof MachineStreamSessionGoneError)) {
           return { ok: false, reason: 'error' };
         }
-        // Any other failure means the session could not be attached even after
-        // the bounded cold-start retry — and that retry's first attempt WOKE the
-        // Sprite, so this is not a cold VM. Exec sessions do not survive a pause
-        // (docs.sprites.dev/concepts/lifecycle), so a `streamSessionId` that will
-        // not attach on a woken Sprite is dangling: the process is already gone.
-        // There is nothing left to kill, and keeping the row would strand the
-        // terminal permanently unkillable. Fall through and drop it.
       }
     }
   }

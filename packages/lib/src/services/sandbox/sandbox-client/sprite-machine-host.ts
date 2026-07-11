@@ -18,13 +18,14 @@
 
 import {
   MachineStreamOpenTimeoutError,
+  MachineStreamSessionGoneError,
   type MachineHandle,
   type MachineHost,
   type MachineStream,
   type MachineStreamSessionInfo,
 } from '../machine-host';
 import type { ExecSandboxClient, ExecutableSandbox } from './types';
-import { withWakeRetry, type SpriteCommandLike, type SpritesSdk } from './sprites';
+import { withWakeRetry, isSpriteNotFoundError, type SpriteCommandLike, type SpritesSdk } from './sprites';
 
 function toBuffer(chunk: Buffer | string): Buffer {
   return typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
@@ -75,14 +76,14 @@ function awaitStreamOpen(command: SpriteCommandLike, timeoutMs: number): Promise
   });
 }
 
-/** Tear down a stream attempt we are abandoning, so its socket does not leak. */
-function discardCommand(command: SpriteCommandLike): void {
-  try {
-    command.close?.();
-  } catch {
-    // Best-effort: an already-dead socket is exactly what we wanted.
-  }
-}
+// NOTE: an abandoned attempt's WebSocket cannot be torn down through the SDK's
+// public API — `SpriteCommand` exposes only start/wait/kill/signal/resize, and
+// `kill` is `signal`, which no-ops unless the socket is already OPEN; the
+// underlying `WSCommand.close()` is private. A socket that failed with "closed
+// before open" is already closed by definition, so the residue is limited to the
+// pathological case where the transport reports nothing at all and we abandon it
+// at the wall-clock cap. Bounded by kill frequency, and not fixable here without
+// an SDK change.
 
 function wrapSpriteStream(command: SpriteCommandLike): MachineStream {
   return {
@@ -114,7 +115,15 @@ function wrapSpriteStream(command: SpriteCommandLike): MachineStream {
   };
 }
 
-function wrapSpriteHandle({ sdk, exec }: { sdk: SpritesSdk; exec: ExecutableSandbox }): MachineHandle {
+function wrapSpriteHandle({
+  sdk,
+  exec,
+  streamOpenTimeoutMs,
+}: {
+  sdk: SpritesSdk;
+  exec: ExecutableSandbox;
+  streamOpenTimeoutMs: number;
+}): MachineHandle {
   return {
     machineId: exec.sandboxId,
     exec: (args) => exec.runCommand(args),
@@ -149,9 +158,18 @@ function wrapSpriteHandle({ sdk, exec }: { sdk: SpritesSdk; exec: ExecutableSand
                 rows: args.rows,
               });
         try {
-          await awaitStreamOpen(command, STREAM_OPEN_TIMEOUT_MS);
+          await awaitStreamOpen(command, streamOpenTimeoutMs);
         } catch (error) {
-          discardCommand(command);
+          // Translate the ONE failure that carries positive evidence — the exec
+          // endpoint answering 404/410 — into the typed "session is gone" signal.
+          // The SDK reports a rejected upgrade as `WebSocket error: Unexpected
+          // server response: <status>`, so the status is recoverable from the
+          // message. Everything else (a 429, a 5xx mid-deploy, a socket hang-up,
+          // a timeout) stays exactly as it is: an UNKNOWN, on which no caller may
+          // tear down a session's bookkeeping.
+          if (args.sessionId !== undefined && isSpriteNotFoundError(error)) {
+            throw new MachineStreamSessionGoneError(args.sessionId, error);
+          }
           throw error;
         }
         return wrapSpriteStream(command);
@@ -187,22 +205,25 @@ function wrapSpriteHandle({ sdk, exec }: { sdk: SpritesSdk; exec: ExecutableSand
 export function createSpriteMachineHost({
   sdk,
   client,
+  streamOpenTimeoutMs = STREAM_OPEN_TIMEOUT_MS,
 }: {
   sdk: SpritesSdk;
   client: ExecSandboxClient;
+  /** Injectable so the open-wait is testable without fake timers (which would also stall provisioning). Production uses the default. */
+  streamOpenTimeoutMs?: number;
 }): MachineHost {
   return {
     // `substrate.size` is intentionally unused here — see the file header:
     // Sprite has one resource tier, driven entirely by `options.caps`.
     async provision({ name, options }) {
       const exec = await client.getOrCreate({ name, options });
-      return wrapSpriteHandle({ sdk, exec });
+      return wrapSpriteHandle({ sdk, exec, streamOpenTimeoutMs });
     },
 
     async attach({ machineId }) {
       const exec = await client.get({ sandboxId: machineId });
       if (!exec) return null;
-      return wrapSpriteHandle({ sdk, exec });
+      return wrapSpriteHandle({ sdk, exec, streamOpenTimeoutMs });
     },
 
     async kill({ machineId }) {
