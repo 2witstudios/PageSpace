@@ -1,14 +1,24 @@
 /**
  * Pure-core tests for the Admin PG (trust plane) connection registry decision
- * logic (#890 Phase 1). The three-state contract:
+ * logic (#890). The FIVE-state contract (post prod audit-write incident):
  *
- *   ADMIN_DATABASE_URL set               → 'dedicated'  (connect to Admin PG)
- *   URL unset + ADMIN_DB_BREAK_GLASS
- *     exactly 'true'                     → 'break-glass' (degrade to main DB, alert)
- *   URL unset + no armed flag            → 'fail'        (fail-fast at init)
+ *   URL set + VALID postgres URL                    → 'dedicated'
+ *   URL set + INVALID URL                           → 'fail'   (positive misconfig)
+ *   URL unset + AUDIT_TRUST_PLANE_REQUIRED='true'   → 'fail'   (declared, not configured)
+ *   URL unset + ADMIN_DB_BREAK_GLASS='true'         → 'break-glass' (main DB + LOUD alert)
+ *   URL unset + neither flag                        → 'main-db' (NEW DEFAULT: main DB, SILENT)
  *
- * Break-glass arming is fail-closed: any value other than the exact string
- * 'true' ('TRUE', '1', ' true ', '') does NOT arm the fallback.
+ * Precedence when several apply:
+ *   invalid-URL fail > TRUST_PLANE_REQUIRED fail > break-glass > main-db.
+ *
+ * The 'main-db' default is the incident fix: before this, an unconfigured
+ * ADMIN_DATABASE_URL resolved to 'fail', so every prod audit write threw and
+ * was swallowed by the fire-and-forget audit() wrapper — security audit
+ * logging was silently broken. Unconfigured now means silent, pre-epic
+ * main-DB behavior; loud failure is opt-in via AUDIT_TRUST_PLANE_REQUIRED.
+ *
+ * Both flags are fail-closed: only the exact string 'true' arms them
+ * ('TRUE', '1', ' true ', '' do not).
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -39,6 +49,14 @@ describe('resolveAdminDbMode', () => {
       });
       expect(decision.mode).toBe('dedicated');
     });
+
+    it('given ADMIN_DATABASE_URL set AND AUDIT_TRUST_PLANE_REQUIRED armed, should resolve dedicated (the trust plane IS configured)', () => {
+      const decision = resolveAdminDbMode({
+        ADMIN_DATABASE_URL: 'postgresql://admin:pw@host:5432/pagespace_admin',
+        AUDIT_TRUST_PLANE_REQUIRED: 'true',
+      });
+      expect(decision.mode).toBe('dedicated');
+    });
   });
 
   describe('URL validation (validate-on-init)', () => {
@@ -58,9 +76,14 @@ describe('resolveAdminDbMode', () => {
       expect(decision.mode).toBe('fail');
     });
 
-    it('given an empty-string URL and no flag, should fail (empty is treated as unset)', () => {
-      const decision = resolveAdminDbMode({ ADMIN_DATABASE_URL: '' });
+    it('given an invalid URL, should fail even when neither flag is set (positive misconfig beats the main-db default)', () => {
+      const decision = resolveAdminDbMode({ ADMIN_DATABASE_URL: 'mysql://host/db' });
       expect(decision.mode).toBe('fail');
+    });
+
+    it('given an empty-string URL and no flag, should resolve main-db (empty is treated as unset → silent default)', () => {
+      const decision = resolveAdminDbMode({ ADMIN_DATABASE_URL: '' });
+      expect(decision.mode).toBe('main-db');
     });
 
     it('given an empty-string URL and armed break-glass, should resolve break-glass (empty is treated as unset)', () => {
@@ -72,32 +95,58 @@ describe('resolveAdminDbMode', () => {
     });
   });
 
+  describe('main-db default (THE incident fix — unconfigured is silent, not fatal)', () => {
+    it('given URL unset and no flags, should resolve main-db (pre-epic silent behavior)', () => {
+      const decision = resolveAdminDbMode({});
+      expect(decision.mode).toBe('main-db');
+    });
+
+    it('given main-db, reason should describe the silent unconfigured default without demanding an alert', () => {
+      const decision = resolveAdminDbMode({});
+      expect(decision.mode).toBe('main-db');
+      expect(decision.reason).toContain('ADMIN_DATABASE_URL');
+      expect(decision.reason.toLowerCase()).toContain('main');
+    });
+
+    it.each(['TRUE', 'True', '1', ' true ', 'yes', 'false', ''])(
+      "given URL unset and a non-'true' break-glass value %j, should resolve main-db (flag not armed, silent default)",
+      (flag) => {
+        const decision = resolveAdminDbMode({ ADMIN_DB_BREAK_GLASS: flag });
+        expect(decision.mode).toBe('main-db');
+      },
+    );
+
+    it.each(['TRUE', '1', ' true ', 'yes', 'false', ''])(
+      "given a non-'true' AUDIT_TRUST_PLANE_REQUIRED value %j, should NOT force fail (fail-closed → main-db)",
+      (flag) => {
+        const decision = resolveAdminDbMode({ AUDIT_TRUST_PLANE_REQUIRED: flag });
+        expect(decision.mode).toBe('main-db');
+      },
+    );
+  });
+
   describe('break-glass arming (fail-closed)', () => {
     it("given URL unset and flag exactly 'true', should resolve break-glass", () => {
       const decision = resolveAdminDbMode({ ADMIN_DB_BREAK_GLASS: 'true' });
       expect(decision.mode).toBe('break-glass');
     });
-
-    it.each(['TRUE', 'True', '1', ' true ', 'yes', 'false', ''])(
-      "given URL unset and flag %j, should NOT arm break-glass (fail-closed)",
-      (flag) => {
-        const decision = resolveAdminDbMode({ ADMIN_DB_BREAK_GLASS: flag });
-        expect(decision.mode).toBe('fail');
-      },
-    );
   });
 
-  describe('fail-fast mode', () => {
-    it('given URL unset and no flag, should fail', () => {
-      const decision = resolveAdminDbMode({});
+  describe("AUDIT_TRUST_PLANE_REQUIRED='true' (operator DECLARED enforcement but did not configure)", () => {
+    it('given URL unset and required armed, should fail loudly', () => {
+      const decision = resolveAdminDbMode({ AUDIT_TRUST_PLANE_REQUIRED: 'true' });
       expect(decision.mode).toBe('fail');
+      expect(decision.reason).toContain('AUDIT_TRUST_PLANE_REQUIRED');
+      expect(decision.reason).toContain('ADMIN_DATABASE_URL');
     });
 
-    it('given fail, reason should name both ADMIN_DATABASE_URL and ADMIN_DB_BREAK_GLASS so the operator knows both exits', () => {
-      const decision = resolveAdminDbMode({});
+    it('given required armed AND break-glass armed (no URL), fail should win — the stricter declared intent is honored', () => {
+      const decision = resolveAdminDbMode({
+        AUDIT_TRUST_PLANE_REQUIRED: 'true',
+        ADMIN_DB_BREAK_GLASS: 'true',
+      });
       expect(decision.mode).toBe('fail');
-      expect(decision.reason).toContain('ADMIN_DATABASE_URL');
-      expect(decision.reason).toContain('ADMIN_DB_BREAK_GLASS');
+      expect(decision.reason).toContain('AUDIT_TRUST_PLANE_REQUIRED');
     });
   });
 });

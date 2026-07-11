@@ -8,14 +8,21 @@
  *                 lock-free ingest writer; reads (queries, chain verifier,
  *                 cron) hit the admin store.
  *   break-glass → the MAIN db client, i.e. the pre-cutover legacy path,
- *                 both writes (advisory-lock chained append) and reads.
- *                 Deliberately NOT getAdminDb()'s main-pool client: that one
- *                 is admin-schema-typed and maps emission_hash (admin
- *                 migration 0005, admin plane only), so its generated
- *                 SELECTs would 42703 against the main-plane table.
- *   fail        → throw the actionable reason. A process without a trust
- *                 plane and without the armed break-glass flag must not
- *                 write or read audit data as if nothing were wrong.
+ *                 both writes (advisory-lock chained append) and reads, with
+ *                 LOUD observability at the write bind point.
+ *   main-db     → the MAIN db client too, but SILENT — the pre-trust-plane
+ *                 default for deployments that never adopted the Admin PG.
+ *                 Identical DB target to break-glass; the difference is
+ *                 purely observability (see security-audit.ts).
+ *   fail        → throw the actionable reason. A process that DECLARED the
+ *                 trust plane required (AUDIT_TRUST_PLANE_REQUIRED) but did
+ *                 not configure it must not write or read audit data as if
+ *                 nothing were wrong.
+ *
+ * Both main-DB bindings deliberately use the plain `db` client, NOT
+ * getAdminDb()'s main-pool client: that one is admin-schema-typed and maps
+ * emission_hash (admin migration 0005, admin plane only), so its generated
+ * SELECTs would 42703 against the main-plane table.
  *
  * Break-glass OBSERVABILITY (security event + alert) is owned by the write
  * bind point in security-audit.ts — this module only decides and reports.
@@ -26,7 +33,8 @@ import { getAdminDb, getAdminDbMode, type AdminDatabase } from '@pagespace/db/ad
 
 export type AuditDbBinding =
   | { mode: 'dedicated'; reason: string; db: AdminDatabase }
-  | { mode: 'break-glass'; reason: string; db: typeof mainDb };
+  | { mode: 'break-glass'; reason: string; db: typeof mainDb }
+  | { mode: 'main-db'; reason: string; db: typeof mainDb };
 
 let cached: AuditDbBinding | null = null;
 
@@ -44,6 +52,9 @@ export function resolveAuditDbBinding(): AuditDbBinding {
       return cached;
     case 'break-glass':
       cached = { mode: 'break-glass', reason: decision.reason, db: mainDb };
+      return cached;
+    case 'main-db':
+      cached = { mode: 'main-db', reason: decision.reason, db: mainDb };
       return cached;
     case 'fail':
       throw new Error(`audit db binding failed: ${decision.reason}`);
