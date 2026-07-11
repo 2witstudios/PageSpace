@@ -102,10 +102,15 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
        * INVARIANT: once the OpenRouter round-trip COMPLETES we have been charged, so the
        * spend must be recorded — even if a later step (saving the file) fails. Releasing
        * the hold there instead would leave real provider spend with no ai_usage_logs row
-       * and no debit. `success` marks whether the user got a usable image; the cost is
-       * billed either way (trackAIUsage bills when success is true OR tokens were used,
-       * and image calls carry no tokens — so failed-but-billable spend passes success:true
-       * with an `error` tag to stay billable while remaining auditable).
+       * and no debit.
+       *
+       * Every settle passes `success: true` — including failed-but-billable spend — because
+       * trackAIUsage only bills when `success` is true OR tokens were consumed, and image
+       * calls carry no token counts. Marking these rows `success: false` would therefore
+       * skip billing entirely and reintroduce the leak. The tradeoff is that a failed-but-
+       * billed generation is invisible to the success/failure analytics that filter on
+       * `success = false` (error-pattern detection, successRate): use the `error` tag and
+       * `metadata.outcome` (`store_failed` / `no_image_returned`) to find them instead.
        */
       const settleSpend = async (args: {
         providerCostDollars?: number;
@@ -136,29 +141,43 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
             costSource: resolved.costSource,
             ...(args.error ? { outcome: args.error } : {}),
           },
-        }).catch(async (metErr) => {
-          // trackUsage is what settles the hold; if it threw, the hold was neither settled
-          // nor released and would strand the reserved credits until TTL expiry. Release it
-          // explicitly. The spend is then UNBILLED — log loudly so the gap is visible during
-          // the rollout, but never fail the user-facing result over a metering error.
-          imageLogger.error('Failed to record image usage — spend is UNBILLED', metErr as Error, {
+        }).catch((metErr) => {
+          // Never fail the user-facing result over a metering error.
+          imageLogger.error('Failed to record image usage', metErr as Error, {
             userId: maskIdentifier(userId),
             model,
             costDollars: resolved.costDollars,
-            costSource: resolved.costSource,
             generationIds: args.generationIds,
           });
-          if (holdId) await releaseHold(holdId).catch(() => {});
         });
+
+        // Belt-and-braces hold cleanup. trackAIUsage SWALLOWS its own errors (every branch
+        // is wrapped in a logging try/catch), so a rejection is NOT a reliable signal that
+        // the settle landed: if `writeAiUsage` throws, the throw is caught internally and
+        // the settle/release branches below it never run, leaving the hold neither settled
+        // nor released — it would strand the user's reserved credits until TTL expiry.
+        // Deleting the hold here is idempotent: consumeCredits already removes it inside its
+        // settle transaction (and in the zero-charge branch), so on the happy path this is a
+        // no-op DELETE; on the swallowed-failure path it is the real cleanup.
+        if (holdId) await releaseHold(holdId).catch(() => {});
       };
 
       let image;
       try {
         image = await generateImageBytes({ prompt, model, aspectRatio });
       } catch (error) {
-        // A completed-but-empty generation was still billed by OpenRouter → settle it.
+        // A completed-but-empty generation was still billed by OpenRouter → settle it, but
+        // ONLY with evidence of that spend (an authoritative cost, or a generation id the
+        // reconcile cron can price later). With neither, settling would charge the flat
+        // estimate for a generation we cannot show we were billed for — and, since
+        // reconcileStatus requires a generation id, nothing would ever correct it. No
+        // evidence → treat as a failed call and release the hold.
         // A transport/auth failure never reached the provider → release the hold.
-        if (error instanceof ImageGenerationError && error.billable) {
+        const hasSpendEvidence =
+          error instanceof ImageGenerationError &&
+          error.billable &&
+          (error.providerCostDollars !== undefined || error.generationIds.length > 0);
+        if (hasSpendEvidence && error instanceof ImageGenerationError) {
           await settleSpend({
             providerCostDollars: error.providerCostDollars,
             generationIds: error.generationIds,

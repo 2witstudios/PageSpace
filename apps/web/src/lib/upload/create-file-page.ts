@@ -82,14 +82,17 @@ export function sha256Hex(buffer: Buffer): string {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-/** Pure: file extension for a generated-image media type (used for the download filename). */
+/**
+ * Pure: file extension for a generated-image media type (used for the download filename).
+ * Limited to the raster types `isAllowedImageType` accepts — SVG is deliberately absent
+ * (it isn't an allowed image type, so a generated .svg would never render or be readable).
+ */
 export function extensionForMediaType(mediaType: string): string {
   const map: Record<string, string> = {
     'image/png': '.png',
     'image/jpeg': '.jpg',
     'image/webp': '.webp',
     'image/gif': '.gif',
-    'image/svg+xml': '.svg',
   };
   return map[mediaType.toLowerCase()] ?? '';
 }

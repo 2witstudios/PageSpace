@@ -96,7 +96,8 @@ describe('generate_image execute', () => {
     expect(trackUsage).toHaveBeenCalledOnce();
     const usage = trackUsage.mock.calls[0][0] as { holdId: string; providerCostDollars: number; source: string };
     expect(usage).toMatchObject({ holdId: 'hold-1', providerCostDollars: 0.068, source: 'image_generation' });
-    expect(releaseHold).not.toHaveBeenCalled();
+    // The post-settle hold delete is an idempotent no-op (consumeCredits already removed it).
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
   });
 
   it('denies a non-admin user without any OpenRouter call or hold', async () => {
@@ -116,7 +117,7 @@ describe('generate_image execute', () => {
     expect(createImageFilePage).not.toHaveBeenCalled();
   });
 
-  it('SETTLES (does not release) when the image saves fail — OpenRouter was already billed', async () => {
+  it('SETTLES the spend when saving the image fails — OpenRouter was already billed', async () => {
     canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-store' });
     generateImageBytes.mockResolvedValue({
       bytes: new Uint8Array([1]),
@@ -135,10 +136,9 @@ describe('generate_image execute', () => {
     expect(trackUsage).toHaveBeenCalledOnce();
     const usage = trackUsage.mock.calls[0][0] as { holdId: string; providerCostDollars: number; error?: string };
     expect(usage).toMatchObject({ holdId: 'hold-store', providerCostDollars: 0.07, error: 'store_failed' });
-    expect(releaseHold).not.toHaveBeenCalled();
   });
 
-  it('SETTLES when the model completed but returned no image (billable), releases when the call never landed', async () => {
+  it('SETTLES an empty-but-billed generation, releases when the call never reached the provider', async () => {
     // billable: completed round-trip, no image → settle the real cost
     canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-empty' });
     const billable = new ImageGenerationError('Image model returned no image for the given prompt.', {
@@ -158,7 +158,6 @@ describe('generate_image execute', () => {
       providerCostDollars: 0.02,
       error: 'no_image_returned',
     });
-    expect(releaseHold).not.toHaveBeenCalled();
 
     // non-billable: transport failure, never reached the provider → release
     trackUsage.mockClear();
@@ -195,7 +194,12 @@ describe('generate_image execute', () => {
     expect(res.success).toBe(true);
   });
 
-  it('releases the hold when metering fails, without failing the user-facing result', async () => {
+  it('always clears the hold after settling, so a swallowed metering failure cannot strand credits', async () => {
+    // trackAIUsage swallows its own errors: if writeAiUsage throws, the settle/release
+    // branches inside it never run and the hold would be stranded until TTL. The tool
+    // therefore ALWAYS deletes the hold after settling (idempotent — consumeCredits
+    // already removed it on the happy path). Modelled here by a trackUsage that resolves
+    // without having settled anything, exactly like the swallowed-failure case.
     canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-3' });
     generateImageBytes.mockResolvedValue({
       bytes: new Uint8Array([1]),
@@ -204,15 +208,35 @@ describe('generate_image execute', () => {
       generationIds: [],
     });
     createImageFilePage.mockResolvedValue({ pageId: 'p1', driveId: 'd1', parentId: 'g1' });
-    // trackUsage normally settles the hold; if it throws, the hold must not be stranded.
-    trackUsage.mockRejectedValue(new Error('db down'));
 
     const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
       success: boolean;
     };
 
     expect(res.success).toBe(true);
+    expect(trackUsage).toHaveBeenCalledOnce();
     expect(releaseHold).toHaveBeenCalledWith('hold-3');
+  });
+
+  it('does NOT bill an empty generation with no evidence of spend (nothing could ever reconcile it)', async () => {
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-noev' });
+    // Completed round-trip, no image, but OpenRouter returned neither a cost nor a
+    // generation id — charging the flat estimate here would be a permanent overcharge.
+    generateImageBytes.mockRejectedValue(
+      new ImageGenerationError('Image model returned no image for the given prompt.', {
+        billable: true,
+        providerCostDollars: undefined,
+        generationIds: [],
+      }),
+    );
+
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+
+    expect(res.success).toBe(false);
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-noev');
   });
 
   it('fails softly when credits are exhausted', async () => {
