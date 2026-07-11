@@ -700,7 +700,6 @@ export async function POST(request: Request) {
       generate_image: imageGenToolDef,
       ...baseToolsWithoutOverrides
     } = baseTools as Record<string, ToolSet[string]>;
-    const baseToolsWithoutWebSearch = baseToolsWithoutOverrides;
 
     // Step 3: Apply per-agent PageSpace tool allowlist.
     // null/undefined = unconfigured page — no restriction (backwards compat).
@@ -710,10 +709,10 @@ export async function POST(request: Request) {
     let filteredTools: ToolSet;
     if (agentEnabledTools != null) {
       filteredTools = Object.fromEntries(
-        Object.entries(baseToolsWithoutWebSearch).filter(([name]) => agentEnabledTools.includes(name))
+        Object.entries(baseToolsWithoutOverrides).filter(([name]) => agentEnabledTools.includes(name))
       ) as ToolSet;
     } else {
-      filteredTools = baseToolsWithoutWebSearch as ToolSet;
+      filteredTools = baseToolsWithoutOverrides as ToolSet;
     }
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
